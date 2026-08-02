@@ -188,6 +188,12 @@ test("activates each exact semantic link or button without returning page state"
             : [{ method: "locator", selector: WORKDAY_ACCOUNT_FACT_SELECTORS.exists }]),
           {
             method: "locator",
+            selector: action === "submit_sign_in"
+              ? '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]'
+              : '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
+          },
+          {
+            method: "locator",
             selector: [
               action === "submit_sign_in"
                 ? '[data-automation-id="createAccountPage"]'
@@ -258,6 +264,7 @@ test("a submit that remains visible never claims a settled effect", async () => 
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
     ...SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector })),
+    { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
     ...SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS.map((selector) => ({ method: "locator", selector })),
   ]);
   assert.deepEqual(locator.waitForArguments, [
@@ -716,10 +723,21 @@ test("a hidden attached submit owner cannot beat a known destination", async () 
     editable: false,
     attachedWaitYields: true,
   });
+  const opposingCreateOwner = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
 
   await new PlaywrightAccountPageAdapter({
     trace: (event) => events.push(event),
-  }).activate(new FakePage(submit, destination), "submit_sign_in");
+  }).activate(new FakePage(submit, destination, new Map([
+    [
+      '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
+      opposingCreateOwner,
+    ],
+  ])), "submit_sign_in");
 
   assert.deepEqual(submit.waitForArguments, [
     { state: "hidden", timeout: 10_000 },
@@ -904,6 +922,80 @@ test("submit stabilization excludes the stale current account container", async 
     assert.equal(destination.includes(`[data-automation-id="${staleMarker}"]`), false);
     assert.equal(destination.includes('[data-automation-id="authPage"]'), false);
   }
+});
+
+test("create-account submit admits a newly visible semantic sign-in destination", async () => {
+  const signInOwnerSelector =
+    '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absentStructuralDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const signInOwner = new FakeLocator({
+    count: 1,
+    visible: false,
+    visibleResults: [false],
+    enabled: true,
+    editable: false,
+  });
+
+  await new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absentStructuralDestination, new Map([
+      [signInOwnerSelector, signInOwner],
+    ])),
+    "submit_create_account",
+  );
+
+  assert.deepEqual(signInOwner.waitForArguments, [
+    { state: "visible", timeout: 10_000 },
+  ]);
+});
+
+test("hidden attached semantic sign-in markup cannot settle create-account submit", async () => {
+  const signInOwnerSelector =
+    '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absentStructuralDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const hiddenSignInOwner = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absentStructuralDestination, new Map([
+      [signInOwnerSelector, hiddenSignInOwner],
+    ])),
+    "submit_create_account",
+  ));
+
+  assert.deepEqual(hiddenSignInOwner.waitForArguments, [
+    { state: "visible", timeout: 10_000 },
+  ]);
 });
 
 test("submit stabilization fails closed when no known state appears", async () => {

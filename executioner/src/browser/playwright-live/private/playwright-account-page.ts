@@ -83,6 +83,10 @@ export interface PlaywrightAccountPageAdapterOptions {
 }
 
 const WORKDAY_VISIBLE_ALERT_SELECTOR = '[role="alert"]';
+const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
+  '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
+const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
+  '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
@@ -168,6 +172,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       const submit = action === "submit_sign_in" || action === "submit_create_account";
       let postClickExactFactLocators: readonly Locator[] = [];
       let credentialsOrLockedCanSettle = false;
+      let opposingSubmitOwner: Locator | undefined;
+      let opposingSubmitOwnerCanSettle = false;
       if (submit) {
         const factSelectors = postSubmitExactFactSelectors(action);
         const candidates = factSelectors.map((selector) =>
@@ -183,6 +189,11 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked &&
           !visibleBeforeClick[index]
         );
+        opposingSubmitOwner = semanticLocator(
+          page,
+          action === "submit_sign_in" ? "submit_create_account" : "submit_sign_in",
+        ).locator;
+        opposingSubmitOwnerCanSettle = !await opposingSubmitOwner.isVisible();
         const hitTarget = await inspectSubmitHitTarget(locator);
         this.#emit(hitTarget);
         this.#emit("submit_click_started");
@@ -263,6 +274,14 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
                   .first()
                   .waitFor({ state: "attached", timeout: 10_000 })
                   .then(() => "destination" as const),
+                ...(opposingSubmitOwnerCanSettle
+                  ? [
+                      opposingSubmitOwner!.waitFor({
+                        state: "visible",
+                        timeout: 10_000,
+                      }).then(() => "destination" as const),
+                    ]
+                  : []),
                 locator.waitFor({ state: "visible", timeout: 10_000 })
                   .then(() => "rejection" as const),
               ]);
@@ -528,16 +547,12 @@ function semanticLocator(
       };
     case "submit_sign_in":
       return {
-        locator: semanticPage.locator(
-          '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
-        ),
+        locator: semanticPage.locator(WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR),
         field: false,
       };
     case "submit_create_account":
       return {
-        locator: semanticPage.locator(
-          '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
-        ),
+        locator: semanticPage.locator(WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR),
         field: false,
       };
     case "accept_terms":
