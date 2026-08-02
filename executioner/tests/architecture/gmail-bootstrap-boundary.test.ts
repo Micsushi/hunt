@@ -7,6 +7,7 @@ test("Gmail bootstrap has no provider query, secret arguments, or enumeration su
     readFile("src/composition/s2-gmail-bootstrap.ts", "utf8"),
     readFile("src/composition/s2-gmail-bootstrap-cli.ts", "utf8"),
     readFile("scripts/provision-s2-gmail.ts", "utf8"),
+    readFile("scripts/revoke-s2-gmail-grant.ts", "utf8"),
   ])).join("\n");
   assert.doesNotMatch(source, /messages|mailbox\/providers|readdir|glob|opendir/iu);
   assert.doesNotMatch(source, /--(?:email|sender|password|token|secret|client-secret)/iu);

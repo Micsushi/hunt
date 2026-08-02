@@ -7,6 +7,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
     child,
     coordinator,
     cli,
+    revokeCli,
     ownership,
     ownerContract,
     mailboxEvidence,
@@ -16,6 +17,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
     readFile("src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts", "utf8"),
     readFile("src/composition/s2-gmail-bootstrap.ts", "utf8"),
     readFile("src/composition/s2-gmail-bootstrap-cli.ts", "utf8"),
+    readFile("scripts/revoke-s2-gmail-grant.ts", "utf8"),
     readFile("tests/security/privacy/fixtures/gmail-bootstrap-ownership.json", "utf8"),
     readFile("src/live/preflight/types.ts", "utf8"),
     readFile("src/live/evidence/mailbox-candidate-evidence.ts", "utf8"),
@@ -40,6 +42,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
       ordinaryNodeSurface,
       coordinator,
       cli,
+      revokeCli,
       ownerContract,
       mailboxEvidence,
       accountEvidence,
@@ -50,6 +53,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
   assert.match(child, /env:\s*\{\s*SystemRoot:/u);
   assert.doesNotMatch(coordinator, /access_token|refresh_token|client_secret|senderAddress|recipientAddress/u);
   assert.doesNotMatch(cli, /readFile\([^)]*(?:installedClient|senderPolicy)|client_secret|senderAddress/iu);
+  assert.doesNotMatch(revokeCli, /client_secret|refresh_token|senderAddress|recipientAddress|login_hint/iu);
   assert.doesNotMatch(cli, /environment\[[^\]]+\]|process\.env\./u);
   assert.match(cli, /SECRET_ENVIRONMENT/u);
   assert.deepEqual(JSON.parse(ownership), [
@@ -92,7 +96,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
     {
       value: "gmail_refresh_grant",
       ordinaryNode: "none",
-      trustedWindowsHelper: "oauth_refresh_and_credential_manager_only",
+      trustedWindowsHelper: "oauth_refresh_revocation_and_credential_manager_only",
       durableOutput: "maximum_512_byte_current_user_generic_credential_scope_bound_opaque_target",
     },
   ]);

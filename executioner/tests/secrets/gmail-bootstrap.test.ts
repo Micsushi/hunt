@@ -7,13 +7,18 @@ import test from "node:test";
 import {
   bootstrapS2GmailAuthorization,
   type GmailCiphertextSealer,
+  revokeS2GmailRefreshGrant,
+  type GmailRefreshGrantRevoker,
 } from "../../src/composition/s2-gmail-bootstrap.ts";
 import type { RealRunOwnerInputsV1 } from "../../src/live/preflight/types.ts";
 import type {
   WindowsAclAdmissionPaths,
   WindowsAclAdmissionResult,
 } from "../../src/live/preflight/private/windows-acl.ts";
-import type { GmailOAuthSealRequest } from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
+import type {
+  GmailOAuthSealRequest,
+  GmailRefreshGrantRevokeRequest,
+} from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
 import { writeSecretRecord } from "../../src/secrets/windows-dpapi/record.ts";
 
 const NOW = "2026-08-01T12:00:00.000Z";
@@ -49,6 +54,29 @@ class Sealer implements GmailCiphertextSealer {
       accountCiphertext: Uint8Array.from(value.accountCiphertext),
     };
     return Uint8Array.from([31, 37, 41]);
+  }
+}
+
+class GrantRevoker implements GmailRefreshGrantRevoker {
+  calls = 0;
+  liveRequest?: GmailRefreshGrantRevokeRequest;
+  request?: GmailRefreshGrantRevokeRequest;
+  readonly #result: "revoked" | "absent" | Error;
+
+  constructor(result: "revoked" | "absent" | Error = "revoked") {
+    this.#result = result;
+  }
+
+  async revoke(value: GmailRefreshGrantRevokeRequest): Promise<"revoked" | "absent"> {
+    this.calls += 1;
+    this.liveRequest = value;
+    this.request = {
+      ...value,
+      accountMetadata: Uint8Array.from(value.accountMetadata),
+      accountCiphertext: Uint8Array.from(value.accountCiphertext),
+    };
+    if (this.#result instanceof Error) throw this.#result;
+    return this.#result;
   }
 }
 
@@ -454,6 +482,113 @@ test("maps sender-policy ACL and trusted-child parse failures without values", a
     );
     assert.deepEqual(childFailure, { ok: false, error: { code: "gmail_sender_policy_invalid" } });
     assert.equal(JSON.stringify(childFailure).includes(record.senderPolicyConfigPath), false);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("revokes or accepts an absent exact Gmail refresh grant through the trusted child", async () => {
+  for (const outcome of ["revoked", "absent"] as const) {
+    const record = await fixture();
+    try {
+      const revoker = new GrantRevoker(outcome);
+      const result = await revokeS2GmailRefreshGrant(
+        record.owner,
+        record.bootstrap,
+        {
+          now: NOW,
+          ownerConfigPath: record.ownerConfigPath,
+          bootstrapInputPath: record.bootstrapInputPath,
+          forbiddenRoots: [record.repository],
+          aclAdmission: new AclAdmission(),
+          revoker,
+        },
+        new AbortController().signal,
+      );
+      assert.deepEqual(result, {
+        ok: true,
+        value: {
+          schemaVersion: 1,
+          kind: outcome === "revoked"
+            ? "gmail_refresh_grant_revoked"
+            : "gmail_refresh_grant_absent",
+        },
+      });
+      assert.equal(revoker.calls, 1);
+      assert.equal(revoker.request?.clientId, record.bootstrap.desktopClientId);
+      assert.equal(
+        revoker.request?.installedClientConfigPath,
+        record.installedClientConfigPath,
+      );
+      assert.equal(
+        revoker.liveRequest?.accountMetadata.every((value) => value === 0),
+        true,
+      );
+      assert.equal(
+        revoker.liveRequest?.accountCiphertext.every((value) => value === 0),
+        true,
+      );
+    } finally {
+      rmSync(record.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("refresh-grant revocation preflights exact bindings before the trusted child", async () => {
+  const record = await fixture();
+  try {
+    for (const [bootstrap, acl] of [
+      [{ ...record.bootstrap, journeyId: "journey_fedcba9876543210" }, new AclAdmission()],
+      [record.bootstrap, new AclAdmission([
+        { ok: true },
+        { ok: false, failure: { target: "oauth_client_config", reason: "other_principal" } },
+      ])],
+    ] as const) {
+      const revoker = new GrantRevoker();
+      const result = await revokeS2GmailRefreshGrant(
+        record.owner,
+        bootstrap,
+        {
+          now: NOW,
+          ownerConfigPath: record.ownerConfigPath,
+          bootstrapInputPath: record.bootstrapInputPath,
+          forbiddenRoots: [record.repository],
+          aclAdmission: acl,
+          revoker,
+        },
+        new AbortController().signal,
+      );
+      assert.equal(result.ok, false);
+      assert.equal(revoker.calls, 0);
+    }
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("refresh-grant revocation preserves exact value-free child failures", async () => {
+  const record = await fixture();
+  try {
+    for (const [message, code] of [
+      ["Gmail refresh grant invalid", "gmail_refresh_grant_invalid"],
+      ["Gmail refresh unavailable", "gmail_refresh_unavailable"],
+    ] as const) {
+      const result = await revokeS2GmailRefreshGrant(
+        record.owner,
+        record.bootstrap,
+        {
+          now: NOW,
+          ownerConfigPath: record.ownerConfigPath,
+          bootstrapInputPath: record.bootstrapInputPath,
+          forbiddenRoots: [record.repository],
+          aclAdmission: new AclAdmission(),
+          revoker: new GrantRevoker(new Error(message)),
+        },
+        new AbortController().signal,
+      );
+      assert.deepEqual(result, { ok: false, error: { code } });
+      assert.equal(JSON.stringify(result).includes(record.bootstrap.desktopClientId), false);
+    }
   } finally {
     rmSync(record.root, { recursive: true, force: true });
   }
