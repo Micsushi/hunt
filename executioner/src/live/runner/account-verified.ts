@@ -1,4 +1,8 @@
 import type { JourneyId } from "../../contracts/index.ts";
+import {
+  s2StableErrorPolicy,
+  type S2StableErrorCode,
+} from "../../contracts/s2-common-wire.ts";
 
 export interface Stage2AccountVerifiedInput {
   readonly sourceRevision: string;
@@ -37,7 +41,11 @@ export interface AccountVerifiedLifecycleSuccess {
 }
 
 export type AccountVerifiedLifecycleResult =
-  | { readonly ok: true; readonly value: AccountVerifiedLifecycleSuccess | unknown }
+  | {
+      readonly ok: true;
+      readonly cleanup: "pass";
+      readonly value: AccountVerifiedLifecycleSuccess | unknown;
+    }
   | { readonly ok: false; readonly error: { readonly code: string } };
 
 export interface AccountVerifiedLifecycleRunner {
@@ -55,7 +63,23 @@ export interface Stage2AccountVerifiedDependencies {
 
 export type Stage2AccountVerifiedResult =
   | { readonly ok: true; readonly acceptance: AccountVerifiedAcceptance }
-  | { readonly ok: false; readonly code: string };
+  | {
+      readonly ok: false;
+      readonly code: string;
+      readonly fact?: AccountVerifiedFact;
+    };
+
+export type AccountVerifiedFact =
+  | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
+  | { readonly kind: "target_ambiguous" }
+  | {
+      readonly kind: "posting_unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+    }
+  | {
+      readonly kind: "manual_intervention";
+      readonly reason: "captcha" | "mfa" | "access_control";
+    };
 
 export async function runStage2AccountVerified(
   input: Stage2AccountVerifiedInput,
@@ -69,10 +93,12 @@ export async function runStage2AccountVerified(
   } catch {
     return failure(signal.aborted ? "operation_cancelled" : "account_proof_invalid");
   }
-  if (!lifecycle.ok) return failure(lifecycle.error.code);
-  const factual = factualCode(lifecycle.value);
-  if (factual !== null) return failure(factual);
-  if (!exactVerified(lifecycle.value)) return failure("account_proof_invalid");
+  if (!lifecycle.ok) return failure(stableCode(lifecycle.error.code));
+  const factual = factualResult(lifecycle.value);
+  if (factual !== null) return failure(factual.code, factual.fact);
+  if (lifecycle.cleanup !== "pass" || !exactVerified(lifecycle.value)) {
+    return failure("account_proof_invalid");
+  }
 
   const acceptance = Object.freeze({
     schemaVersion: 1 as const,
@@ -114,20 +140,88 @@ function exactVerified(value: unknown): value is AccountVerifiedLifecycleSuccess
     value.verificationCandidateCount === 1 && value.verificationConsumed === true;
 }
 
-function factualCode(value: unknown): string | null {
-  if (!record(value) || value.kind !== "blocked" || !record(value.factualOutcome) ||
-      !record(value.factualOutcome.result)) return null;
-  const kind = value.factualOutcome.result.kind;
-  return typeof kind === "string" && [
-    "mailbox_none", "mailbox_ambiguous", "mailbox_expired", "mailbox_consumed",
-    "verification_target_unavailable", "manual_intervention",
-  ].includes(kind) ? kind : "account_proof_invalid";
+function factualResult(
+  value: unknown,
+): { readonly code: string; readonly fact?: AccountVerifiedFact } | null {
+  if (!record(value) || value.kind !== "blocked") return null;
+  if (!exactKeys(value, ["kind", "factualOutcome"]) ||
+      !record(value.factualOutcome) ||
+      !exactKeys(value.factualOutcome, ["source", "result"]) ||
+      !record(value.factualOutcome.result)) return { code: "account_proof_invalid" };
+  const source = value.factualOutcome.source;
+  const result = value.factualOutcome.result;
+  if (source === "mailbox_verification" && exactKeys(result, ["kind"]) &&
+      typeof result.kind === "string" && [
+        "mailbox_none", "mailbox_ambiguous", "mailbox_expired", "mailbox_consumed",
+      ].includes(result.kind)) return { code: result.kind };
+  if (source === "verification_navigation" && exactKeys(result, ["kind"]) &&
+      result.kind === "verification_target_unavailable") {
+    return { code: "verification_target_unavailable" };
+  }
+  if (source === "ats_family" && exactKeys(result, ["kind"]) &&
+      typeof result.kind === "string" &&
+      ["ats_unsupported", "ats_unknown", "ats_ambiguous"].includes(result.kind)) {
+    return { code: result.kind };
+  }
+  if (source === "workday_page_type" && exactKeys(result, ["kind"]) &&
+      typeof result.kind === "string" &&
+      ["workday_page_unknown", "workday_page_ambiguous"].includes(result.kind)) {
+    return { code: result.kind };
+  }
+  if (source === "account_access" &&
+      exactKeys(result, ["kind", "reason"]) &&
+      result.kind === "manual_intervention" &&
+      (result.reason === "captcha" || result.reason === "mfa" ||
+        result.reason === "access_control")) {
+    return {
+      code: "manual_intervention",
+      fact: { kind: result.kind, reason: result.reason },
+    };
+  }
+  if (source === "target_identity") return targetFact(result);
+  return { code: "account_proof_invalid" };
+}
+
+function targetFact(
+  result: Record<string, unknown>,
+): { readonly code: string; readonly fact?: AccountVerifiedFact } {
+  if (exactKeys(result, ["kind", "dimension"]) &&
+      result.kind === "target_mismatch" &&
+      (result.dimension === "host" || result.dimension === "tenant" ||
+        result.dimension === "posting")) {
+    return { code: result.kind, fact: { kind: result.kind, dimension: result.dimension } };
+  }
+  if (exactKeys(result, ["kind"]) && result.kind === "target_ambiguous") {
+    return { code: result.kind, fact: { kind: result.kind } };
+  }
+  if (exactKeys(result, ["kind", "reason"]) &&
+      result.kind === "posting_unavailable" &&
+      (result.reason === "not_found" || result.reason === "closed" ||
+        result.reason === "removed" || result.reason === "unavailable")) {
+    return { code: result.kind, fact: { kind: result.kind, reason: result.reason } };
+  }
+  return { code: "account_proof_invalid" };
+}
+
+function stableCode(value: unknown): S2StableErrorCode | "account_proof_invalid" {
+  return typeof value === "string" && Object.hasOwn(s2StableErrorPolicy, value)
+    ? value as S2StableErrorCode
+    : "account_proof_invalid";
 }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function failure(code: string): Stage2AccountVerifiedResult {
-  return Object.freeze({ ok: false, code });
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length &&
+    expected.every((key, index) => keys[index] === key);
+}
+
+function failure(
+  code: string,
+  fact?: AccountVerifiedFact,
+): Stage2AccountVerifiedResult {
+  return Object.freeze({ ok: false, code, ...(fact === undefined ? {} : { fact }) });
 }

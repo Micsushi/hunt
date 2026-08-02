@@ -1,4 +1,5 @@
 import type { AccountAccessTargetFact } from "./account-access.ts";
+import type { AccountVerifiedFact } from "./account-verified.ts";
 
 export type Stage2TerminalResult =
   | {
@@ -12,7 +13,7 @@ export type Stage2TerminalResult =
   | {
       readonly ok: false;
       readonly code: string;
-      readonly fact?: AccountAccessTargetFact;
+      readonly fact?: AccountAccessTargetFact | AccountVerifiedFact;
     };
 
 export function formatStage2TerminalResult(result: Stage2TerminalResult): string {

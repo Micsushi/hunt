@@ -18,6 +18,7 @@ function input(): Stage2AccountVerifiedInput {
 
 const verified = {
   ok: true as const,
+  cleanup: "pass" as const,
   value: {
     kind: "account_ready" as const,
     path: "verified_account" as const,
@@ -76,6 +77,62 @@ test("account-verified runner rejects non-verification ready paths and widened s
   }
 });
 
+test("account-verified runner requires cleanup proof and rejects secret-shaped dependency errors", async () => {
+  assert.deepEqual(await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({ ok: true, value: verified.value } as never) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal), { ok: false, code: "account_proof_invalid" });
+
+  assert.deepEqual(await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: false,
+      error: { code: "https://private.invalid/?token=secret" },
+    }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal), { ok: false, code: "account_proof_invalid" });
+});
+
+test("account-verified runner admits only exact source-owned factual outcomes", async () => {
+  const manual = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: true,
+      cleanup: "pass",
+      value: {
+        kind: "blocked",
+        factualOutcome: {
+          source: "account_access",
+          result: { kind: "manual_intervention", reason: "captcha" },
+        },
+      },
+    }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal);
+  assert.deepEqual(manual, {
+    ok: false,
+    code: "manual_intervention",
+    fact: { kind: "manual_intervention", reason: "captcha" },
+  });
+
+  for (const value of [
+    {
+      kind: "blocked",
+      factualOutcome: { source: "account_access", result: { kind: "mailbox_none" } },
+    },
+    {
+      kind: "blocked",
+      factualOutcome: {
+        source: "account_access",
+        result: { kind: "manual_intervention", reason: "private" },
+      },
+    },
+  ]) {
+    assert.deepEqual(await runStage2AccountVerified(input(), {
+      lifecycle: { run: async () => ({ ok: true, cleanup: "pass", value } as never) },
+      evidence: { write: async () => undefined },
+    }, new AbortController().signal), { ok: false, code: "account_proof_invalid" });
+  }
+});
+
 test("account-verified runner preserves exact errors, factual stops, cancellation, and evidence failure", async () => {
   const failed = await runStage2AccountVerified(input(), {
     lifecycle: { run: async () => ({ ok: false, error: { code: "browser_timeout", retryable: true } }) },
@@ -86,6 +143,7 @@ test("account-verified runner preserves exact errors, factual stops, cancellatio
   const blocked = await runStage2AccountVerified(input(), {
     lifecycle: { run: async () => ({
       ok: true,
+      cleanup: "pass",
       value: {
         kind: "blocked",
         factualOutcome: { source: "mailbox_verification", result: { kind: "mailbox_none" } },
