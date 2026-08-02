@@ -2,13 +2,20 @@
   "schemaVersion": 1,
   "stage": "s2",
   "feature": "s2-f2-t3",
-  "assemblyBaseRevision": "7479b9fc89bc7853ab8a19b3f1096854d3fb2baf",
+  "assemblyBaseRevision": "99ad4fd70363d9e17f98505f3dce201046b663ec",
   "acceptedInputs": {
     "s2F0": "730846b57a8ab7901a9818794921f8f9da01e0ed",
     "s2F1T5": "d6602abf41f181376164eac2d32d587fc6bf5a5b",
     "s2F2T1": "1493a1dcf26bc53666d47385a5b4984dc842b026",
     "s2F2T2Atomic": "523c3d78131a13692e3ba6c3e0afb3c7734ed2d2",
-    "s2F2IntegratedPrerequisites": "7479b9fc89bc7853ab8a19b3f1096854d3fb2baf"
+    "s2F2IntegratedPrerequisites": "7479b9fc89bc7853ab8a19b3f1096854d3fb2baf",
+    "s2F2AtomicNavigator": "92803a501d1245fa900046bcc4a862967c994db4",
+    "s2F2BrowserNavigation": "c3a05fb444b030b832c2b9a40270956439ab4867",
+    "s2F2AccountLifecycle": "17a04ce0f3abf205b841926e7a449d4f6fa32f8a",
+    "s2F2AcceptanceBoundary": "9148ea427434ee1bd4608443c95f43c930f345ae",
+    "s2F2ProductionComposition": "0e2404b03c6b01d6f76e1186b96ae0db50ab047a",
+    "s2F2LifecycleOwnership": "bc56b99249410754ca8a9d0bc9c15b5c397b0a5f",
+    "s2F0FrozenTreeRepair": "cc0965f9ad23a1f1571f0980399a84eeabead46f"
   },
   "frozenContractRevision": "100b6bbf360f2c2e3cd93384e1fba7c115a92f15",
   "frozenContractTree": "13a8406e9c296b77aead3a0f961beba1110fba61"
