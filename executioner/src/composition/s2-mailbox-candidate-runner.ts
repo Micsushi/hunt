@@ -65,7 +65,7 @@ export function createMailboxCandidateBindings(
     tenantId: `tenant_${suffix}` as TargetTenantId,
     postingId: `posting_${suffix}` as TargetPostingId,
   });
-  const notBefore = new Date(Date.parse(now) - 60 * 60 * 1_000).toISOString();
+  const notBefore = new Date(Date.parse(now) - 24 * 60 * 60 * 1_000).toISOString();
   const notAfter = now;
   const input: Stage2MailboxCandidateInput = Object.freeze({
     sourceRevision,
