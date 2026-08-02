@@ -6,6 +6,8 @@ const DEFAULT_BOUND = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1_000;
 const INPUT_MAGIC = Buffer.from("HAGI", "ascii");
 const OUTPUT_MAGIC = Buffer.from("HAGS", "ascii");
+const REVOKE_INPUT_MAGIC = Buffer.from("HAGR", "ascii");
+const REVOKE_OUTPUT_MAGIC = Buffer.from("HAGR", "ascii");
 
 const INTERACTIVE_GMAIL_OAUTH_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -38,6 +40,11 @@ public interface IHuntGmailOAuthClient
     string ProfileEmail(string accessValue, bool usedExistingGrant);
 }
 
+public interface IHuntGmailGrantRevocationClient
+{
+    void Revoke(byte[] grant);
+}
+
 public sealed class HuntGmailRefreshUnavailableException : Exception
 {
 }
@@ -62,6 +69,7 @@ public sealed class HuntGmailToken
 public static class HuntInteractiveGmailOAuthSealer
 {
     private const string Scope = "https://www.googleapis.com/auth/gmail.readonly";
+    private const string RevocationEndpoint = "https://oauth2.googleapis.com/revoke";
     private const int MaximumRefreshGrantBytes = 512;
     private const string AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
     private const string InstalledClientAuthUri = "https://accounts.google.com/o/oauth2/auth";
@@ -102,6 +110,14 @@ public static class HuntInteractiveGmailOAuthSealer
                 accessValue,
                 usedExistingGrant
             );
+        }
+    }
+
+    private sealed class WindowsGmailGrantRevocationClient : IHuntGmailGrantRevocationClient
+    {
+        public void Revoke(byte[] grant)
+        {
+            RevokeToken(grant);
         }
     }
 
@@ -244,6 +260,7 @@ public static class HuntInteractiveGmailOAuthSealer
     public static int Run()
     {
         byte[][] input = null;
+        bool revoke = false;
         byte[] account = null;
         byte[] bundle = null;
         byte[] framedBundle = null;
@@ -253,7 +270,12 @@ public static class HuntInteractiveGmailOAuthSealer
         string sender = null;
         try
         {
-            input = ReadInput();
+            input = ReadInput(out revoke);
+            if (revoke)
+            {
+                WriteRevokeOutput(RevokeFromInput(input));
+                return 0;
+            }
             account = ProtectedData.Unprotect(input[2], input[1], DataProtectionScope.CurrentUser);
             string accountEmail = ReadAccountEmail(account);
             string clientId = StrictUtf8(input[3]);
@@ -308,6 +330,32 @@ public static class HuntInteractiveGmailOAuthSealer
             if (installedClient != null) installedClient.Clear();
             sender = null;
             if (input != null) foreach (byte[] section in input) Clear(section);
+        }
+    }
+
+    private static bool RevokeFromInput(byte[][] input)
+    {
+        byte[] account = null;
+        InstalledClient installedClient = null;
+        try
+        {
+            account = ProtectedData.Unprotect(input[1], input[0], DataProtectionScope.CurrentUser);
+            string accountEmail = ReadAccountEmail(account);
+            string clientId = StrictUtf8(input[2]);
+            string installedClientConfigPath = StrictUtf8(input[3]);
+            ValidateClient(clientId);
+            installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
+            return RevokeGrant(
+                clientId,
+                accountEmail,
+                new WindowsCredentialManagerGrantStore(),
+                new WindowsGmailGrantRevocationClient()
+            );
+        }
+        finally
+        {
+            Clear(account);
+            if (installedClient != null) installedClient.Clear();
         }
     }
 
@@ -380,6 +428,35 @@ public static class HuntInteractiveGmailOAuthSealer
         }
     }
 
+    private static bool RevokeGrant(
+        string clientId,
+        string accountEmail,
+        IHuntGmailGrantStore grants,
+        IHuntGmailGrantRevocationClient revoker
+    )
+    {
+        string target = GrantTarget(clientId, accountEmail);
+        byte[] grant = null;
+        try
+        {
+            try { grant = grants.Read(target); }
+            catch (InvalidDataException) { throw new FlowException(11); }
+            if (grant == null) return false;
+            if (!ValidGrant(grant)) throw new FlowException(11);
+            try { revoker.Revoke(grant); }
+            catch (HuntGmailRefreshUnavailableException) { throw new FlowException(12); }
+            catch { throw new FlowException(11); }
+            grants.Delete(target);
+            return true;
+        }
+        finally
+        {
+            Clear(grant);
+            accountEmail = null;
+            target = null;
+        }
+    }
+
     private static bool DeleteGrant(
         string clientId,
         string accountEmail,
@@ -436,14 +513,17 @@ public static class HuntInteractiveGmailOAuthSealer
         catch { return false; }
     }
 
-    private static byte[][] ReadInput()
+    private static byte[][] ReadInput(out bool revoke)
     {
         BinaryReader reader = new BinaryReader(Console.OpenStandardInput());
         byte[] magic = reader.ReadBytes(4);
-        if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 71 || magic[3] != 73)
+        if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 71 ||
+            (magic[3] != 73 && magic[3] != 82))
             throw new InvalidDataException();
-        if (reader.ReadByte() != 1 || reader.ReadByte() != 7) throw new InvalidDataException();
-        byte[][] sections = new byte[7][];
+        revoke = magic[3] == 82;
+        int count = revoke ? 4 : 7;
+        if (reader.ReadByte() != 1 || reader.ReadByte() != count) throw new InvalidDataException();
+        byte[][] sections = new byte[count][];
         for (int index = 0; index < sections.Length; index++)
         {
             int length = reader.ReadInt32();
@@ -673,6 +753,90 @@ public static class HuntInteractiveGmailOAuthSealer
             refresh = null;
             clientSecret = null;
         }
+    }
+
+    private static void RevokeToken(byte[] grant)
+    {
+        if (!ValidGrant(grant)) throw new FlowException(11);
+        string token = null;
+        byte[] payload = null;
+        try
+        {
+            token = StrictUtf8(grant);
+            payload = Encoding.UTF8.GetBytes(Form(new Dictionary<string, string> {
+                { "token", token }
+            }));
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(RevocationEndpoint);
+            request.Method = "POST";
+            request.AllowAutoRedirect = false;
+            request.Timeout = 30000;
+            request.ReadWriteTimeout = 30000;
+            request.Accept = "application/json";
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.ContentLength = payload.Length;
+            try
+            {
+                using (Stream stream = request.GetRequestStream())
+                    stream.Write(payload, 0, payload.Length);
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    if (response.StatusCode != HttpStatusCode.OK)
+                    {
+                        if (RefreshResponseUnavailable(
+                            WebExceptionStatus.ProtocolError,
+                            (int)response.StatusCode
+                        )) throw new HuntGmailRefreshUnavailableException();
+                        throw new FlowException(11);
+                    }
+                    byte[] responseBytes = ReadBounded(response.GetResponseStream(), 4096);
+                    Clear(responseBytes);
+                }
+            }
+            catch (WebException error)
+            {
+                HttpWebResponse response = error.Response as HttpWebResponse;
+                int statusCode = response == null ? 0 : (int)response.StatusCode;
+                try
+                {
+                    if (RefreshResponseUnavailable(error.Status, statusCode))
+                        throw new HuntGmailRefreshUnavailableException();
+                    if (response != null && ProviderInvalidToken(response)) return;
+                    throw new FlowException(11);
+                }
+                finally { if (response != null) response.Close(); }
+            }
+        }
+        finally
+        {
+            Clear(payload);
+            token = null;
+        }
+    }
+
+    private static bool ProviderInvalidToken(HttpWebResponse response)
+    {
+        if (response.StatusCode != HttpStatusCode.BadRequest ||
+            response.ContentType == null ||
+            !response.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+            return false;
+        byte[] bytes = ReadBounded(response.GetResponseStream(), 4096);
+        try
+        {
+            IDictionary<string, object> value = ExactObject(StrictUtf8(bytes));
+            return ExactProviderInvalidToken(value);
+        }
+        catch { return false; }
+        finally { Clear(bytes); }
+    }
+
+    private static bool ExactProviderInvalidToken(IDictionary<string, object> value)
+    {
+        try
+        {
+            ExactKeys(value, new string[] { "error" });
+            return StringField(value, "error", 13, 13) == "invalid_token";
+        }
+        catch { return false; }
     }
 
     private static HuntGmailToken ParseTokenResponse(
@@ -1037,6 +1201,15 @@ public static class HuntInteractiveGmailOAuthSealer
         writer.Flush();
     }
 
+    private static void WriteRevokeOutput(bool revoked)
+    {
+        BinaryWriter writer = new BinaryWriter(Console.OpenStandardOutput());
+        writer.Write(new byte[] { 72, 65, 71, 82 });
+        writer.Write((byte)1);
+        writer.Write((byte)(revoked ? 1 : 0));
+        writer.Flush();
+    }
+
     private static byte[] FrameBundle(byte[] bundle)
     {
         if (bundle == null || bundle.Length < 1 || bundle.Length > MaximumSection - 8)
@@ -1092,6 +1265,53 @@ export interface WindowsInteractiveGmailOAuthSealerOptions {
   readonly timeoutMs?: number;
 }
 
+export interface GmailRefreshGrantRevokeRequest {
+  readonly accountMetadata: Readonly<Uint8Array>;
+  readonly accountCiphertext: Readonly<Uint8Array>;
+  readonly clientId: string;
+  readonly installedClientConfigPath: string;
+}
+
+export interface WindowsGmailRefreshGrantRevokerOptions {
+  readonly process?: InteractiveGmailOAuthProcess;
+  readonly executable?: string;
+  readonly timeoutMs?: number;
+}
+
+export class WindowsGmailRefreshGrantRevoker {
+  readonly #process: InteractiveGmailOAuthProcess;
+
+  constructor(options: WindowsGmailRefreshGrantRevokerOptions = {}) {
+    this.#process = options.process ?? new PowerShellInteractiveGmailOAuthProcess({
+      executable: options.executable,
+      maxOutputBytes: 6,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+    });
+  }
+
+  async revoke(
+    request: GmailRefreshGrantRevokeRequest,
+    signal: AbortSignal,
+  ): Promise<"revoked" | "absent"> {
+    if (signal.aborted) throw new Error("Gmail OAuth cancelled");
+    const sections = encodeRevokeSections(request);
+    try {
+      const framed = await this.#process.run(sections, signal);
+      try {
+        return parseRevokeResult(framed);
+      } finally {
+        framed.fill(0);
+      }
+    } catch (error) {
+      if (recognized(error)) throw error;
+      throw new Error(signal.aborted ? "Gmail OAuth cancelled" : "Gmail OAuth sealing failed");
+    } finally {
+      sections.fill(0);
+    }
+  }
+}
+
 export class WindowsInteractiveGmailOAuthSealer {
   readonly #process: InteractiveGmailOAuthProcess;
   readonly #bound: number;
@@ -1102,6 +1322,7 @@ export class WindowsInteractiveGmailOAuthSealer {
       executable: options.executable,
       maxOutputBytes: this.#bound + 9,
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      windowsHide: false,
     });
   }
 
@@ -1128,18 +1349,21 @@ interface ProcessOptions {
   readonly executable?: string;
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
+  readonly windowsHide: boolean;
 }
 
 class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthProcess {
   readonly #executable: string;
   readonly #maxOutputBytes: number;
   readonly #timeoutMs: number;
+  readonly #windowsHide: boolean;
 
   constructor(options: ProcessOptions) {
     this.#executable = options.executable ??
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
     this.#maxOutputBytes = options.maxOutputBytes;
     this.#timeoutMs = options.timeoutMs;
+    this.#windowsHide = options.windowsHide;
   }
 
   run(input: Uint8Array, signal: AbortSignal): Promise<Uint8Array> {
@@ -1149,7 +1373,7 @@ class PowerShellInteractiveGmailOAuthProcess implements InteractiveGmailOAuthPro
         "-Command", INTERACTIVE_GMAIL_OAUTH_SCRIPT,
       ], {
         shell: false,
-        windowsHide: false,
+        windowsHide: this.#windowsHide,
         stdio: ["pipe", "pipe", "ignore"],
         env: { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" },
       });
@@ -1237,6 +1461,46 @@ function encodeSections(request: GmailOAuthSealRequest): Buffer {
   } finally {
     for (const value of values) value.fill(0);
   }
+}
+
+function encodeRevokeSections(request: GmailRefreshGrantRevokeRequest): Buffer {
+  const values = [
+    Buffer.from(request.accountMetadata),
+    Buffer.from(request.accountCiphertext),
+    Buffer.from(request.clientId, "utf8"),
+    Buffer.from(request.installedClientConfigPath, "utf8"),
+  ];
+  try {
+    if (values.some((value) => value.byteLength < 1 || value.byteLength > DEFAULT_BOUND)) {
+      throw new Error("Gmail OAuth sealing failed");
+    }
+    const output = Buffer.allocUnsafe(
+      6 + values.reduce((sum, value) => sum + 4 + value.byteLength, 0),
+    );
+    REVOKE_INPUT_MAGIC.copy(output, 0);
+    output.writeUInt8(1, 4);
+    output.writeUInt8(values.length, 5);
+    let offset = 6;
+    for (const value of values) {
+      output.writeUInt32LE(value.byteLength, offset);
+      value.copy(output, offset + 4);
+      offset += 4 + value.byteLength;
+    }
+    return output;
+  } finally {
+    for (const value of values) value.fill(0);
+  }
+}
+
+function parseRevokeResult(value: Uint8Array): "revoked" | "absent" {
+  const input = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  if (
+    input.byteLength !== 6 ||
+    !input.subarray(0, 4).equals(REVOKE_OUTPUT_MAGIC) ||
+    input.readUInt8(4) !== 1 ||
+    (input.readUInt8(5) !== 0 && input.readUInt8(5) !== 1)
+  ) throw new Error("Gmail OAuth sealing failed");
+  return input.readUInt8(5) === 1 ? "revoked" : "absent";
 }
 
 function parseCiphertext(value: Uint8Array, bound: number): Uint8Array {

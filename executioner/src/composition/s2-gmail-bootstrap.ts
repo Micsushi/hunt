@@ -23,7 +23,9 @@ import {
 } from "../secrets/windows-dpapi/record.ts";
 import { ExactSealedGmailCustodian } from "../secrets/windows-dpapi/private/exact-sealed-gmail-custodian.ts";
 import {
+  WindowsGmailRefreshGrantRevoker,
   WindowsInteractiveGmailOAuthSealer,
+  type GmailRefreshGrantRevokeRequest,
   type GmailOAuthSealRequest,
 } from "../secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
 import { WindowsDpapiSecretStore } from "../secrets/windows-dpapi/store.ts";
@@ -36,6 +38,13 @@ export interface GmailCiphertextSealer {
   seal(request: GmailOAuthSealRequest, signal: AbortSignal): Promise<Uint8Array>;
 }
 
+export interface GmailRefreshGrantRevoker {
+  revoke(
+    request: GmailRefreshGrantRevokeRequest,
+    signal: AbortSignal,
+  ): Promise<"revoked" | "absent">;
+}
+
 export interface GmailBootstrapOptions {
   readonly now: string;
   readonly ownerConfigPath: string;
@@ -45,6 +54,17 @@ export interface GmailBootstrapOptions {
     admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
   };
   readonly sealer?: GmailCiphertextSealer;
+}
+
+export interface GmailGrantRevocationOptions {
+  readonly now: string;
+  readonly ownerConfigPath: string;
+  readonly bootstrapInputPath: string;
+  readonly forbiddenRoots: readonly string[];
+  readonly aclAdmission?: {
+    admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
+  };
+  readonly revoker?: GmailRefreshGrantRevoker;
 }
 
 export type GmailBootstrapErrorCode =
@@ -84,13 +104,47 @@ export type GmailBootstrapResult =
     }
   | { readonly ok: false; readonly error: { readonly code: GmailBootstrapErrorCode } };
 
-export async function bootstrapS2GmailAuthorization(
+export type GmailGrantRevocationResult =
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly schemaVersion: 1;
+        readonly kind: "gmail_refresh_grant_revoked" | "gmail_refresh_grant_absent";
+      };
+    }
+  | { readonly ok: false; readonly error: { readonly code: GmailBootstrapErrorCode } };
+
+interface GmailOperationOptions {
+  readonly now: string;
+  readonly ownerConfigPath: string;
+  readonly bootstrapInputPath: string;
+  readonly forbiddenRoots: readonly string[];
+  readonly aclAdmission?: {
+    admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
+  };
+}
+
+type AdmittedGmailOperation = {
+  readonly acl: {
+    admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
+  };
+  readonly owner: RealRunOwnerInputsV1;
+  readonly bootstrap: NonNullable<ReturnType<typeof admitGmailBootstrapInput>>;
+  readonly installedClientConfigPath: string;
+  readonly senderPolicyConfigPath: string;
+  readonly accountRecordPath: string;
+  readonly gmailRecordPath: string;
+  readonly account: NonNullable<Awaited<ReturnType<typeof readSecretRecord>>>;
+};
+
+async function admitGmailOperation(
   ownerValue: unknown,
   bootstrapValue: unknown,
-  options: GmailBootstrapOptions,
-  signal: AbortSignal,
-): Promise<GmailBootstrapResult> {
-  if (signal.aborted) return failure("operation_cancelled");
+  options: GmailOperationOptions,
+): Promise<
+  | { readonly ok: true; readonly value: AdmittedGmailOperation }
+  | { readonly ok: false; readonly code: GmailBootstrapErrorCode }
+> {
   const acl = options.aclAdmission ?? new WindowsCurrentUserAclAdmission();
   const admitted = createPrivateRealRunAdmission(ownerValue, {
     now: options.now,
@@ -98,19 +152,21 @@ export async function bootstrapS2GmailAuthorization(
     ownerConfigPath: options.ownerConfigPath,
     aclAdmission: acl,
   });
-  if (!admitted.ok) return failure(admitted.error.code);
+  if (!admitted.ok) return { ok: false, code: admitted.error.code };
   const owner = ownerValue as RealRunOwnerInputsV1;
   const bootstrap = admitGmailBootstrapInput(bootstrapValue, {
     revisionId: owner.revisionId,
     journeyId: owner.journeyId,
     gmailHandleId: owner.gmailAuthorization.handleId,
   });
-  if (bootstrap === null) return failure("gmail_bootstrap_input_invalid");
+  if (bootstrap === null) return { ok: false, code: "gmail_bootstrap_input_invalid" };
   const installedClientConfigPath = admitProtectedConfigPath(
     bootstrap.installedClientConfigPath,
     options.forbiddenRoots,
   );
-  if (installedClientConfigPath === null) return failure("gmail_oauth_client_invalid");
+  if (installedClientConfigPath === null) {
+    return { ok: false, code: "gmail_oauth_client_invalid" };
+  }
   const senderPolicyConfigPath = admitProtectedConfigPath(
     bootstrap.senderPolicyConfigPath,
     options.forbiddenRoots,
@@ -118,10 +174,10 @@ export async function bootstrapS2GmailAuthorization(
   if (
     senderPolicyConfigPath === null ||
     comparable(senderPolicyConfigPath) === comparable(installedClientConfigPath)
-  ) return failure("gmail_sender_policy_invalid");
+  ) return { ok: false, code: "gmail_sender_policy_invalid" };
   const accountRecordPath = recordPath(owner, owner.accountSecret.handleId);
   const gmailRecordPath = recordPath(owner, owner.gmailAuthorization.handleId);
-  if (!existsSync(accountRecordPath)) return failure("account_handle_invalid");
+  if (!existsSync(accountRecordPath)) return { ok: false, code: "account_handle_invalid" };
   const policyAcl = acl.admit({
     runtime: owner.roots.runtime.path,
     secrets: owner.roots.secrets.path,
@@ -133,25 +189,58 @@ export async function bootstrapS2GmailAuthorization(
   });
   if (!policyAcl.ok) {
     if (policyAcl.failure.target === "owner_config") {
-      return failure("gmail_bootstrap_input_invalid");
+      return { ok: false, code: "gmail_bootstrap_input_invalid" };
     }
     if (policyAcl.failure.target === "oauth_client_config") {
-      return failure("gmail_oauth_client_invalid");
+      return { ok: false, code: "gmail_oauth_client_invalid" };
     }
     if (policyAcl.failure.target === "sender_policy_config") {
-      return failure("gmail_sender_policy_invalid");
+      return { ok: false, code: "gmail_sender_policy_invalid" };
     }
-    return failure("secret_root_invalid");
+    return { ok: false, code: "secret_root_invalid" };
   }
-
   const account = await readSecretRecord(
     owner.roots.secrets.path,
     owner.accountSecret.handleId,
   );
   if (account === null || !exactAccountMetadata(account.metadata, owner)) {
     clearRecord(account);
-    return failure("account_handle_invalid");
+    return { ok: false, code: "account_handle_invalid" };
   }
+  return {
+    ok: true,
+    value: {
+      acl,
+      owner,
+      bootstrap,
+      installedClientConfigPath,
+      senderPolicyConfigPath,
+      accountRecordPath,
+      gmailRecordPath,
+      account,
+    },
+  };
+}
+
+export async function bootstrapS2GmailAuthorization(
+  ownerValue: unknown,
+  bootstrapValue: unknown,
+  options: GmailBootstrapOptions,
+  signal: AbortSignal,
+): Promise<GmailBootstrapResult> {
+  if (signal.aborted) return failure("operation_cancelled");
+  const admission = await admitGmailOperation(ownerValue, bootstrapValue, options);
+  if (!admission.ok) return failure(admission.code);
+  const {
+    acl,
+    owner,
+    bootstrap,
+    installedClientConfigPath,
+    senderPolicyConfigPath,
+    accountRecordPath,
+    gmailRecordPath,
+    account,
+  } = admission.value;
 
   let prepared;
   try {
@@ -242,6 +331,40 @@ export async function bootstrapS2GmailAuthorization(
       schemaVersion: 1,
       kind: "gmail_authorization_provisioned",
       handleId: owner.gmailAuthorization.handleId,
+    }),
+  });
+}
+
+export async function revokeS2GmailRefreshGrant(
+  ownerValue: unknown,
+  bootstrapValue: unknown,
+  options: GmailGrantRevocationOptions,
+  signal: AbortSignal,
+): Promise<GmailGrantRevocationResult> {
+  if (signal.aborted) return failure("operation_cancelled");
+  const admission = await admitGmailOperation(ownerValue, bootstrapValue, options);
+  if (!admission.ok) return failure(admission.code);
+  const { owner, bootstrap, installedClientConfigPath, account } = admission.value;
+  let outcome: "revoked" | "absent";
+  try {
+    outcome = await (options.revoker ?? new WindowsGmailRefreshGrantRevoker()).revoke({
+      accountMetadata: account.metadataBytes,
+      accountCiphertext: account.sealedBytes,
+      clientId: bootstrap.desktopClientId,
+      installedClientConfigPath,
+    }, signal);
+  } catch (error) {
+    return failure(sealerError(error, signal));
+  } finally {
+    clearRecord(account);
+  }
+  return Object.freeze({
+    ok: true,
+    value: Object.freeze({
+      schemaVersion: 1,
+      kind: outcome === "revoked"
+        ? "gmail_refresh_grant_revoked"
+        : "gmail_refresh_grant_absent",
     }),
   });
 }
@@ -376,6 +499,9 @@ function comparable(path: string): string {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
-function failure(code: GmailBootstrapErrorCode): GmailBootstrapResult {
+function failure(code: GmailBootstrapErrorCode): {
+  readonly ok: false;
+  readonly error: { readonly code: GmailBootstrapErrorCode };
+} {
   return Object.freeze({ ok: false, error: Object.freeze({ code }) });
 }

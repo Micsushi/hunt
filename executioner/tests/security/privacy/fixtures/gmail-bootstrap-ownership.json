@@ -38,7 +38,7 @@
   {
     "value": "gmail_refresh_grant",
     "ordinaryNode": "none",
-    "trustedWindowsHelper": "oauth_refresh_and_credential_manager_only",
+    "trustedWindowsHelper": "oauth_refresh_revocation_and_credential_manager_only",
     "durableOutput": "maximum_512_byte_current_user_generic_credential_scope_bound_opaque_target"
   }
 ]

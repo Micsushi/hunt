@@ -188,8 +188,21 @@ profile denial, malformed profile, or wrong mailbox identity instead keeps the
 existing grant and returns `gmail_refresh_grant_invalid`. Neither failure deletes the grant. The
 provider can invalidate a grant at any time, so `gmail_refresh_grant_invalid`
 requires explicit deletion followed by a separately initiated bootstrap. The
-implementation includes a tested exact-target deletion boundary; an operator-facing
-revocation command remains the next bounded task.
+operator can revoke the exact provider grant and its matching local credential
+with the same protected owner and bootstrap files:
+
+```text
+npm run revoke:s2-gmail-grant -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
+```
+
+The command never opens a browser. The trusted child is the sole reader of the
+account, installed-client secret, and refresh grant. It posts only the grant to
+Google's exact HTTPS revocation endpoint and deletes only the derived exact-target
+credential after HTTP success or the exact provider `invalid_token` response. A
+missing credential is idempotent success. Network and timeout failures, HTTP 408,
+429, and 5xx return `gmail_refresh_unavailable` and preserve the credential;
+malformed or unexpected responses return `gmail_refresh_grant_invalid` and also
+preserve it. Output is limited to the value-free revoked or absent result.
 
 | Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
 | --- | --- | --- | --- |
@@ -199,7 +212,7 @@ revocation command remains the next bounded task.
 | sender-policy canonical path | admission and ACL only | bounded file open | none |
 | sender address | none | sole reader; current bundle binding | DPAPI ciphertext only |
 | Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
-| Gmail refresh grant | none | OAuth refresh and Windows Credential Manager only | current-user Generic Credential, maximum 512 bytes, under a scope-bound opaque target |
+| Gmail refresh grant | none | OAuth refresh, revocation, and Windows Credential Manager only | current-user Generic Credential, maximum 512 bytes, under a scope-bound opaque target |
 
 ### Mailbox-candidate acceptance slice
 

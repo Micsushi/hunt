@@ -10,7 +10,9 @@ import type { TargetIdentityV1 } from "../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../src/testing/live/index.ts";
 
 import {
+  WindowsGmailRefreshGrantRevoker,
   WindowsInteractiveGmailOAuthSealer,
+  type GmailRefreshGrantRevokeRequest,
   type InteractiveGmailOAuthProcess,
 } from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
 import { WindowsDpapiBridge } from "../../src/secrets/windows-dpapi/bridge.ts";
@@ -80,6 +82,22 @@ const request = {
   },
 };
 
+const revokeRequest: GmailRefreshGrantRevokeRequest = {
+  accountMetadata: new TextEncoder().encode('{"purpose":"account_credentials"}'),
+  accountCiphertext: Uint8Array.from([3, 5, 7]),
+  clientId: "1234567890-example1.apps.googleusercontent.com",
+  installedClientConfigPath:
+    "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
+};
+
+function revokeFrame(outcome: "absent" | "revoked"): Uint8Array {
+  return Uint8Array.from([
+    72, 65, 71, 82,
+    1,
+    outcome === "revoked" ? 1 : 0,
+  ]);
+}
+
 test("accepts only one bounded ciphertext frame and clears its child input", async () => {
   const process = new ReplyProcess(frame([11, 13, 17]));
   const sealed = await new WindowsInteractiveGmailOAuthSealer({ process }).seal(
@@ -95,6 +113,44 @@ test("accepts only one bounded ciphertext frame and clears its child input", asy
   assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from("notifications@example.invalid")), false);
   assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from("synthetic-client-secret")), false);
   assert.deepEqual([...request.accountCiphertext], [3, 5, 7]);
+});
+
+test("refresh-grant revoker emits one value-free operation frame and clears child input", async () => {
+  for (const outcome of ["absent", "revoked"] as const) {
+    const process = new ReplyProcess(revokeFrame(outcome));
+    const result = await new WindowsGmailRefreshGrantRevoker({ process }).revoke(
+      revokeRequest,
+      new AbortController().signal,
+    );
+    assert.equal(result, outcome);
+    assert.equal(process.input?.every((value) => value === 0), true);
+    const captured = Buffer.from(process.capturedInput ?? []);
+    assert.equal(captured.subarray(0, 4).toString("ascii"), "HAGR");
+    assert.equal(captured[4], 1);
+    assert.equal(captured[5], 4);
+    assert.equal(captured.includes(Buffer.from(revokeRequest.clientId)), true);
+    assert.equal(
+      captured.includes(Buffer.from(revokeRequest.installedClientConfigPath)),
+      true,
+    );
+    assert.equal(captured.includes(Buffer.from("person@example.invalid")), false);
+    assert.equal(captured.includes(Buffer.from("refresh")), false);
+    assert.deepEqual([...revokeRequest.accountCiphertext], [3, 5, 7]);
+  }
+});
+
+test("refresh-grant revoker preserves exact value-free child errors", async () => {
+  for (const message of [
+    "Gmail refresh grant invalid",
+    "Gmail refresh unavailable",
+  ]) {
+    await assert.rejects(
+      new WindowsGmailRefreshGrantRevoker({
+        process: new ReplyProcess(new Error(message)),
+      }).revoke(revokeRequest, new AbortController().signal),
+      new RegExp(message, "u"),
+    );
+  }
 });
 
 test("trusted helper frames the Gmail bundle for the resolver's exact one-item decoder", async () => {
@@ -843,6 +899,147 @@ public sealed class HuntProfileRepairOAuth : IHuntGmailOAuthClient
       invalid: { exitCode: 11, ...failure },
       mismatch: { exitCode: 11, ...failure },
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted revocation flow covers missing, success, provider-invalid, transient, and malformed grants", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const fakes = String.raw`
+public sealed class HuntRevokeStore : IHuntGmailGrantStore
+{
+    public byte[] Value;
+    public byte[] LastRead;
+    public string LastTarget;
+    public int Reads;
+    public int Writes;
+    public int Deletes;
+
+    public byte[] Read(string target)
+    {
+        Reads++;
+        LastTarget = target;
+        if (Value == null) return null;
+        LastRead = (byte[])Value.Clone();
+        return LastRead;
+    }
+
+    public void Write(string target, byte[] value) { Writes++; }
+
+    public bool Delete(string target)
+    {
+        Deletes++;
+        LastTarget = target;
+        bool existed = Value != null;
+        if (Value != null) Array.Clear(Value, 0, Value.Length);
+        Value = null;
+        return existed;
+    }
+}
+
+public sealed class HuntRevokeClient : IHuntGmailGrantRevocationClient
+{
+    public string Scenario;
+    public int Calls;
+    public byte[] LastGrant;
+
+    public HuntRevokeClient(string scenario) { Scenario = scenario; }
+
+    public void Revoke(byte[] grant)
+    {
+        Calls++;
+        LastGrant = grant;
+        if (Scenario == "transient") throw new HuntGmailRefreshUnavailableException();
+        if (Scenario == "invalid") throw new InvalidOperationException();
+    }
+}
+`;
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-revoke-flow-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const outputPath = join(root, "result.json");
+    await writeFile(sourcePath, `${csharp}\n${fakes}`);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('RevokeGrant',[Reflection.BindingFlags]'NonPublic,Static'); if($null -eq $method) { exit 121 }; function Cleared($value) { if($null -eq $value) { return $false }; foreach($item in $value) { if($item -ne 0) { return $false } }; return $true }; function Case($scenario,$size) { $store=[HuntRevokeStore]::new(); if($size -gt 0) { $store.Value=[Text.Encoding]::ASCII.GetBytes('r'*$size) }; $client=[HuntRevokeClient]::new($scenario); $outcome=$false; $exitCode=0; try { $outcome=$method.Invoke($null,@('1234567890-example1.apps.googleusercontent.com','person@example.invalid',$store,$client)) } catch { $inner=$_.Exception.InnerException; $exitCode=if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { $inner.ExitCode } else { 99 } }; return [pscustomobject]@{ scenario=$scenario; exitCode=$exitCode; outcome=$outcome; calls=$client.Calls; reads=$store.Reads; writes=$store.Writes; deletes=$store.Deletes; readCleared=(Cleared $store.LastRead); clientViewCleared=(Cleared $client.LastGrant); preserved=($null -ne $store.Value); opaque=($store.LastTarget -match '^Hunt/C3/GmailRefresh/v1/[0-9a-f]{64}$' -and -not $store.LastTarget.Contains('person')) } }; $output=@((Case 'missing' 0),(Case 'success' 14),(Case 'provider_invalid' 14),(Case 'transient' 14),(Case 'invalid' 14),(Case 'malformed' 513)); $utf8=New-Object Text.UTF8Encoding($false); [IO.File]::WriteAllText($env:HUNT_TEST_OUTPUT,($output | ConvertTo-Json -Depth 5 -Compress),$utf8); exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_OUTPUT: outputPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), [
+      { scenario: "missing", exitCode: 0, outcome: false, calls: 0, reads: 1, writes: 0, deletes: 0, readCleared: false, clientViewCleared: false, preserved: false, opaque: true },
+      { scenario: "success", exitCode: 0, outcome: true, calls: 1, reads: 1, writes: 0, deletes: 1, readCleared: true, clientViewCleared: true, preserved: false, opaque: true },
+      { scenario: "provider_invalid", exitCode: 0, outcome: true, calls: 1, reads: 1, writes: 0, deletes: 1, readCleared: true, clientViewCleared: true, preserved: false, opaque: true },
+      { scenario: "transient", exitCode: 12, outcome: false, calls: 1, reads: 1, writes: 0, deletes: 0, readCleared: true, clientViewCleared: true, preserved: true, opaque: true },
+      { scenario: "invalid", exitCode: 11, outcome: false, calls: 1, reads: 1, writes: 0, deletes: 0, readCleared: true, clientViewCleared: true, preserved: true, opaque: true },
+      { scenario: "malformed", exitCode: 11, outcome: false, calls: 0, reads: 1, writes: 0, deletes: 0, readCleared: true, clientViewCleared: false, preserved: true, opaque: true },
+    ]);
+    const revokeBlock = /private static bool RevokeGrant[\s\S]*?private static bool DeleteGrant/u
+      .exec(source)?.[0] ?? "";
+    assert.doesNotMatch(revokeBlock, /Process\.Start|Authorize|ProfileEmail/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted revocation helper accepts only the exact provider invalid-token response", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-revoke-protocol-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $exact=[HuntInteractiveGmailOAuthSealer].GetMethod('ExactObject',$flags); $invalid=[HuntInteractiveGmailOAuthSealer].GetMethod('ExactProviderInvalidToken',$flags); if($null -eq $exact -or $null -eq $invalid) { exit 131 }; function IsInvalid($json) { $value=$exact.Invoke($null,@($json)); return $invalid.Invoke($null,@($value)) }; if(-not (IsInvalid '{"error":"invalid_token"}') -or (IsInvalid '{"error":"invalid_request"}') -or (IsInvalid '{"error":"invalid_token","extra":true}')) { exit 132 }; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(source, /RevocationEndpoint = "https:\/\/oauth2\.googleapis\.com\/revoke"/u);
+    const revokeToken = /private static void RevokeToken[\s\S]*?private static bool ProviderInvalidToken/u
+      .exec(source)?.[0] ?? "";
+    assert.match(revokeToken, /request\.Method = "POST"/u);
+    assert.match(revokeToken, /request\.AllowAutoRedirect = false/u);
+    assert.match(revokeToken, /ReadBounded\(response\.GetResponseStream\(\), 4096\)/u);
+    assert.doesNotMatch(revokeToken, /Process\.Start/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
