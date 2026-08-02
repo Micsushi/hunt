@@ -246,9 +246,14 @@ public static class HuntInteractiveGmailOAuthSealer
 
         private static void ValidateTarget(string target)
         {
-            const string prefix = "Hunt/C3/GmailRefresh/v1/";
-            if (target == null || !target.StartsWith(prefix, StringComparison.Ordinal) ||
-                target.Length != prefix.Length + 64)
+            const string grantPrefix = "Hunt/C3/GmailRefresh/v1/";
+            const string lookupPrefix = "Hunt/C3/GmailRefreshLookup/v1/";
+            string prefix = target != null && target.StartsWith(grantPrefix, StringComparison.Ordinal)
+                ? grantPrefix
+                : target != null && target.StartsWith(lookupPrefix, StringComparison.Ordinal)
+                    ? lookupPrefix
+                    : null;
+            if (prefix == null || target.Length != prefix.Length + 64)
                 throw new InvalidDataException();
             for (int index = prefix.Length; index < target.Length; index++)
             {
@@ -296,10 +301,11 @@ public static class HuntInteractiveGmailOAuthSealer
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
             sender = ReadSenderPolicy(senderPolicyConfigPath);
 
-            token = AcquireToken(
+            token = AcquireTokenWithLookup(
                 clientId,
                 installedClient.Secret,
                 accountEmail,
+                (string)binding["recipientBindingId"],
                 new WindowsCredentialManagerGrantStore(),
                 new WindowsGmailOAuthClient()
             );
@@ -343,26 +349,24 @@ public static class HuntInteractiveGmailOAuthSealer
 
     private static bool RevokeFromInput(byte[][] input)
     {
-        byte[] account = null;
         InstalledClient installedClient = null;
         try
         {
-            account = ProtectedData.Unprotect(input[1], input[0], DataProtectionScope.CurrentUser);
-            string accountEmail = ReadAccountEmail(account);
-            string clientId = StrictUtf8(input[2]);
-            string installedClientConfigPath = StrictUtf8(input[3]);
+            string recipientBindingId = StrictUtf8(input[0]);
+            string clientId = StrictUtf8(input[1]);
+            string installedClientConfigPath = StrictUtf8(input[2]);
+            if (!ValidRecipientBindingId(recipientBindingId)) throw new FlowException(11);
             ValidateClient(clientId);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
-            return RevokeGrant(
+            return RevokeGrantFromLookup(
                 clientId,
-                accountEmail,
+                recipientBindingId,
                 new WindowsCredentialManagerGrantStore(),
                 new WindowsGmailGrantRevocationClient()
             );
         }
         finally
         {
-            Clear(account);
             if (installedClient != null) installedClient.Clear();
         }
     }
@@ -377,11 +381,14 @@ public static class HuntInteractiveGmailOAuthSealer
             string accountEmail = ReadAccountEmail(account);
             string clientId = StrictUtf8(input[2]);
             string installedClientConfigPath = StrictUtf8(input[3]);
+            string recipientBindingId = StrictUtf8(input[4]);
+            if (!ValidRecipientBindingId(recipientBindingId)) throw new FlowException(11);
             ValidateClient(clientId);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
-            return DeleteGrant(
+            return DeleteGrantAndLookup(
                 clientId,
                 accountEmail,
+                recipientBindingId,
                 new WindowsCredentialManagerGrantStore()
             );
         }
@@ -461,6 +468,191 @@ public static class HuntInteractiveGmailOAuthSealer
         }
     }
 
+    private static HuntGmailToken AcquireTokenWithLookup(
+        string clientId,
+        string clientSecret,
+        string accountEmail,
+        string recipientBindingId,
+        IHuntGmailGrantStore grants,
+        IHuntGmailOAuthClient oauth
+    )
+    {
+        if (!ValidRecipientBindingId(recipientBindingId)) throw new FlowException(11);
+        string grantTarget = GrantTarget(clientId, accountEmail);
+        HuntGmailToken token = null;
+        try
+        {
+            token = AcquireToken(clientId, clientSecret, accountEmail, grants, oauth);
+            EnsureGrantLookup(clientId, recipientBindingId, grantTarget, grants);
+            return token;
+        }
+        catch
+        {
+            if (token != null) token.Clear();
+            throw;
+        }
+        finally
+        {
+            accountEmail = null;
+            recipientBindingId = null;
+            grantTarget = null;
+        }
+    }
+
+    private static void EnsureGrantLookup(
+        string clientId,
+        string recipientBindingId,
+        string grantTarget,
+        IHuntGmailGrantStore grants
+    )
+    {
+        string lookupTarget = LookupTarget(clientId, recipientBindingId);
+        string locator = GrantLocatorFromTarget(grantTarget);
+        byte[] expected = Encoding.ASCII.GetBytes(locator);
+        byte[] existing = null;
+        try
+        {
+            try { existing = grants.Read(lookupTarget); }
+            catch
+            {
+                DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                throw new FlowException(11);
+            }
+            if (existing == null)
+            {
+                try { grants.Write(lookupTarget, expected); }
+                catch
+                {
+                    DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                    throw new FlowException(11);
+                }
+                try { existing = grants.Read(lookupTarget); }
+                catch
+                {
+                    DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                    throw new FlowException(11);
+                }
+            }
+            if (!ValidLocator(existing) || !FixedEquals(existing, expected))
+            {
+                DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                throw new FlowException(11);
+            }
+        }
+        finally
+        {
+            Clear(existing);
+            Clear(expected);
+            clientId = null;
+            recipientBindingId = null;
+            grantTarget = null;
+            lookupTarget = null;
+            locator = null;
+        }
+    }
+
+    private static bool RevokeGrantFromLookup(
+        string clientId,
+        string recipientBindingId,
+        IHuntGmailGrantStore grants,
+        IHuntGmailGrantRevocationClient revoker
+    )
+    {
+        string lookupTarget = LookupTarget(clientId, recipientBindingId);
+        string grantTarget = null;
+        byte[] locator = null;
+        byte[] grant = null;
+        try
+        {
+            try { locator = grants.Read(lookupTarget); }
+            catch
+            {
+                try { grants.Delete(lookupTarget); } catch { }
+                throw new FlowException(11);
+            }
+            if (locator == null) return false;
+            if (!ValidLocator(locator))
+            {
+                grants.Delete(lookupTarget);
+                throw new FlowException(11);
+            }
+            grantTarget = GrantTargetFromLocator(StrictUtf8(locator));
+            try { grant = grants.Read(grantTarget); }
+            catch
+            {
+                DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                throw new FlowException(11);
+            }
+            if (grant == null)
+            {
+                grants.Delete(lookupTarget);
+                throw new FlowException(11);
+            }
+            if (!ValidGrant(grant))
+            {
+                DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+                throw new FlowException(11);
+            }
+            try { revoker.Revoke(grant); }
+            catch (HuntGmailRefreshUnavailableException) { throw new FlowException(12); }
+            catch { throw new FlowException(11); }
+            DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants);
+            return true;
+        }
+        finally
+        {
+            Clear(grant);
+            Clear(locator);
+            clientId = null;
+            recipientBindingId = null;
+            grantTarget = null;
+            lookupTarget = null;
+        }
+    }
+
+    private static bool DeleteGrantAndLookup(
+        string clientId,
+        string accountEmail,
+        string recipientBindingId,
+        IHuntGmailGrantStore grants
+    )
+    {
+        string grantTarget = GrantTarget(clientId, accountEmail);
+        string lookupTarget = LookupTarget(clientId, recipientBindingId);
+        try { return DeleteExactGrantAndLookup(grantTarget, lookupTarget, grants); }
+        finally
+        {
+            accountEmail = null;
+            recipientBindingId = null;
+            grantTarget = null;
+            lookupTarget = null;
+        }
+    }
+
+    private static bool DeleteExactGrantAndLookup(
+        string grantTarget,
+        string lookupTarget,
+        IHuntGmailGrantStore grants
+    )
+    {
+        bool deleted = false;
+        Exception failure = null;
+        try { deleted = grants.Delete(grantTarget); }
+        catch (Exception error) { failure = error; }
+        try { deleted = grants.Delete(lookupTarget) || deleted; }
+        catch (Exception error) { if (failure == null) failure = error; }
+        if (failure != null) throw failure;
+        return deleted;
+    }
+
+    private static bool FixedEquals(byte[] left, byte[] right)
+    {
+        if (left == null || right == null || left.Length != right.Length) return false;
+        int difference = 0;
+        for (int index = 0; index < left.Length; index++) difference |= left[index] ^ right[index];
+        return difference == 0;
+    }
+
     private static bool RevokeGrant(
         string clientId,
         string accountEmail,
@@ -531,6 +723,80 @@ public static class HuntInteractiveGmailOAuthSealer
         }
     }
 
+    private static string LookupTarget(string clientId, string recipientBindingId)
+    {
+        ValidateClient(clientId);
+        if (!ValidRecipientBindingId(recipientBindingId)) throw new FlowException(11);
+        byte[] binding = Encoding.UTF8.GetBytes(
+            "hunt-c3-gmail-refresh-lookup-v1\0" + clientId + "\0" + recipientBindingId +
+            "\0" + Scope
+        );
+        byte[] digest = null;
+        try
+        {
+            using (SHA256 algorithm = SHA256.Create()) digest = algorithm.ComputeHash(binding);
+            StringBuilder target = new StringBuilder("Hunt/C3/GmailRefreshLookup/v1/", 96);
+            foreach (byte value in digest) target.Append(value.ToString("x2", CultureInfo.InvariantCulture));
+            return target.ToString();
+        }
+        finally
+        {
+            Clear(digest);
+            Clear(binding);
+            recipientBindingId = null;
+        }
+    }
+
+    private static string GrantLocatorFromTarget(string target)
+    {
+        const string prefix = "Hunt/C3/GmailRefresh/v1/";
+        if (target == null || !target.StartsWith(prefix, StringComparison.Ordinal) ||
+            target.Length != prefix.Length + 64)
+            throw new FlowException(11);
+        string locator = target.Substring(prefix.Length);
+        if (!ValidLocator(locator)) throw new FlowException(11);
+        return locator;
+    }
+
+    private static string GrantTargetFromLocator(string locator)
+    {
+        if (!ValidLocator(locator)) throw new FlowException(11);
+        return "Hunt/C3/GmailRefresh/v1/" + locator;
+    }
+
+    private static bool ValidLocator(byte[] value)
+    {
+        if (value == null || value.Length != 64) return false;
+        try { return ValidLocator(Encoding.ASCII.GetString(value)); }
+        catch { return false; }
+    }
+
+    private static bool ValidLocator(string value)
+    {
+        if (value == null || value.Length != 64) return false;
+        foreach (char character in value)
+            if (!((character >= '0' && character <= '9') ||
+                (character >= 'a' && character <= 'f'))) return false;
+        return true;
+    }
+
+    private static bool ValidRecipientBindingId(string value)
+    {
+        const string prefix = "recipient_";
+        if (value == null || !value.StartsWith(prefix, StringComparison.Ordinal) ||
+            value.Length < prefix.Length + 16 || value.Length > prefix.Length + 64)
+            return false;
+        for (int index = prefix.Length; index < value.Length; index++)
+        {
+            char character = value[index];
+            if (!((character >= 'A' && character <= 'Z') ||
+                (character >= 'a' && character <= 'z') ||
+                (character >= '0' && character <= '9') || character == '_' || character == '-'))
+                return false;
+        }
+        return true;
+    }
+
     private static bool ValidGrant(byte[] value)
     {
         if (value == null || value.Length < 1 ||
@@ -555,7 +821,7 @@ public static class HuntInteractiveGmailOAuthSealer
             throw new InvalidDataException();
         revoke = magic[3] == 82;
         reconcile = magic[3] == 67;
-        int count = revoke || reconcile ? 4 : 7;
+        int count = revoke ? 3 : reconcile ? 5 : 7;
         if (reader.ReadByte() != 1 || reader.ReadByte() != count) throw new InvalidDataException();
         byte[][] sections = new byte[count][];
         for (int index = 0; index < sections.Length; index++)
@@ -1310,8 +1576,7 @@ export interface WindowsInteractiveGmailOAuthSealerOptions {
 }
 
 export interface GmailRefreshGrantRevokeRequest {
-  readonly accountMetadata: Readonly<Uint8Array>;
-  readonly accountCiphertext: Readonly<Uint8Array>;
+  readonly recipientBindingId: string;
   readonly clientId: string;
   readonly installedClientConfigPath: string;
 }
@@ -1545,8 +1810,7 @@ function encodeSections(request: GmailOAuthSealRequest): Buffer {
 
 function encodeRevokeSections(request: GmailRefreshGrantRevokeRequest): Buffer {
   const values = [
-    Buffer.from(request.accountMetadata),
-    Buffer.from(request.accountCiphertext),
+    Buffer.from(request.recipientBindingId, "utf8"),
     Buffer.from(request.clientId, "utf8"),
     Buffer.from(request.installedClientConfigPath, "utf8"),
   ];
@@ -1578,6 +1842,7 @@ function encodeReconcileSections(request: GmailOAuthSealRequest): Buffer {
     Buffer.from(request.accountCiphertext),
     Buffer.from(request.clientId, "utf8"),
     Buffer.from(request.installedClientConfigPath, "utf8"),
+    Buffer.from(request.binding.recipientBindingId, "utf8"),
   ];
   try {
     if (values.some((value) => value.byteLength < 1 || value.byteLength > DEFAULT_BOUND)) {

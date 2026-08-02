@@ -108,8 +108,7 @@ const request = {
 };
 
 const revokeRequest: GmailRefreshGrantRevokeRequest = {
-  accountMetadata: new TextEncoder().encode('{"purpose":"account_credentials"}'),
-  accountCiphertext: Uint8Array.from([3, 5, 7]),
+  recipientBindingId: "recipient_abcdefghijklmnop",
   clientId: "1234567890-example1.apps.googleusercontent.com",
   installedClientConfigPath:
     "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
@@ -152,7 +151,8 @@ test("refresh-grant revoker emits one value-free operation frame and clears chil
     const captured = Buffer.from(process.capturedInput ?? []);
     assert.equal(captured.subarray(0, 4).toString("ascii"), "HAGR");
     assert.equal(captured[4], 1);
-    assert.equal(captured[5], 4);
+    assert.equal(captured[5], 3);
+    assert.equal(captured.includes(Buffer.from(revokeRequest.recipientBindingId)), true);
     assert.equal(captured.includes(Buffer.from(revokeRequest.clientId)), true);
     assert.equal(
       captured.includes(Buffer.from(revokeRequest.installedClientConfigPath)),
@@ -160,7 +160,6 @@ test("refresh-grant revoker emits one value-free operation frame and clears chil
     );
     assert.equal(captured.includes(Buffer.from("person@example.invalid")), false);
     assert.equal(captured.includes(Buffer.from("refresh")), false);
-    assert.deepEqual([...revokeRequest.accountCiphertext], [3, 5, 7]);
   }
 });
 
@@ -305,7 +304,8 @@ test("timeout and cancellation reconcile an uncertain durable refresh grant befo
     const input = Buffer.from(process.reconcileInput ?? []);
     assert.equal(input.subarray(0, 4).toString("ascii"), "HAGC");
     assert.equal(input[4], 1);
-    assert.equal(input[5], 4);
+    assert.equal(input[5], 5);
+    assert.equal(input.includes(Buffer.from(request.binding.recipientBindingId)), true);
     assert.equal(input.includes(Buffer.from(request.clientId)), true);
     assert.equal(input.includes(Buffer.from(request.installedClientConfigPath)), true);
     assert.equal(input.includes(Buffer.from("person@example.invalid")), false);
@@ -340,7 +340,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /AuthorizationEndpoint = "https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth"/u);
   assert.match(source, /InstalledClientAuthUri = "https:\/\/accounts\.google\.com\/o\/oauth2\/auth"/u);
   assert.match(source, /CertificateEndpoint = "https:\/\/www\.googleapis\.com\/oauth2\/v1\/certs"/u);
-  assert.match(source, /AcquireToken\([\s\S]*new WindowsCredentialManagerGrantStore\(\)[\s\S]*new WindowsGmailOAuthClient\(\)/u);
+  assert.match(source, /AcquireTokenWithLookup\([\s\S]*new WindowsCredentialManagerGrantStore\(\)[\s\S]*new WindowsGmailOAuthClient\(\)/u);
   assert.match(source, /AuthorizationUrl\(clientId, redirect, state, challenge, loginHint\)/u);
   assert.match(source, /\{ "login_hint", loginHint \}/u);
   assert.match(
@@ -363,6 +363,10 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /WriteReconcileOutput\(DeleteFromInput\(input\)\)/u);
   assert.match(source, /LocalMachinePersistence = 2/u);
   assert.match(source, /MaximumRefreshGrantBytes = 512/u);
+  assert.match(source, /Hunt\/C3\/GmailRefreshLookup\/v1\//u);
+  assert.match(source, /AcquireTokenWithLookup/u);
+  assert.match(source, /EnsureGrantLookup/u);
+  assert.match(source, /DeleteExactGrantAndLookup/u);
   assert.match(source, /Comment = null/u);
   assert.match(source, /AttributeCount = 0/u);
   assert.match(source, /TargetAlias = null/u);
@@ -411,6 +415,9 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   );
   assert.doesNotMatch(source, /process\.env|refresh_token[^\n]*bundle/iu);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)/iu);
+  const revokeInputBlock = /private static bool RevokeFromInput[\s\S]*?private static bool DeleteFromInput/u
+    .exec(source)?.[0] ?? "";
+  assert.doesNotMatch(revokeInputBlock, /ProtectedData|ReadAccountEmail|accountCiphertext/u);
 });
 
 test("trusted authorization URL contains one encoded private login hint", async () => {
@@ -495,6 +502,150 @@ test("trusted helper derives one deterministic opaque grant target", async () =>
       .digest("hex");
     assert.equal(target, `Hunt/C3/GmailRefresh/v1/${digest}`);
     assert.doesNotMatch(target, /person|example|@/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted helper derives one scope-bound lookup target from only the value-free recipient binding", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-grant-lookup-target-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const outputPath = join(root, "target.txt");
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $target=[HuntInteractiveGmailOAuthSealer].GetMethod('LookupTarget',$flags); $valid=[HuntInteractiveGmailOAuthSealer].GetMethod('ValidRecipientBindingId',$flags); if($null -eq $target -or $null -eq $valid) { exit 53 }; if(-not $valid.Invoke($null,@('recipient_abcdefghijklmnop')) -or $valid.Invoke($null,@('recipient_short')) -or $valid.Invoke($null,@('recipient_abcdefghijklmnop.'))) { exit 54 }; $value=$target.Invoke($null,@($env:HUNT_TEST_CLIENT,'recipient_abcdefghijklmnop')); [IO.File]::WriteAllText($env:HUNT_TEST_OUTPUT,$value,[Text.Encoding]::ASCII); exit 0",
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_CLIENT: revokeRequest.clientId,
+          HUNT_TEST_OUTPUT: outputPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const target = await readFile(outputPath, "ascii");
+    const digest = createHash("sha256")
+      .update(
+        `hunt-c3-gmail-refresh-lookup-v1\0${revokeRequest.clientId}\0` +
+          `${revokeRequest.recipientBindingId}\0` +
+          "https://www.googleapis.com/auth/gmail.readonly",
+      )
+      .digest("hex");
+    assert.equal(target, `Hunt/C3/GmailRefreshLookup/v1/${digest}`);
+    assert.doesNotMatch(target, /recipient|person|example|@/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("successful acquisition installs an exact lookup and lookup failure removes both durable entries", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const fakes = String.raw`
+public sealed class HuntLookupStore : IHuntGmailGrantStore
+{
+    public Dictionary<string, byte[]> Values = new Dictionary<string, byte[]>();
+    public bool FailLookupWrite;
+    public int Deletes;
+
+    public byte[] Read(string target)
+    {
+        byte[] value;
+        return Values.TryGetValue(target, out value) ? (byte[])value.Clone() : null;
+    }
+
+    public void Write(string target, byte[] value)
+    {
+        if (FailLookupWrite && target.StartsWith("Hunt/C3/GmailRefreshLookup/v1/"))
+            throw new InvalidOperationException();
+        Values[target] = (byte[])value.Clone();
+    }
+
+    public bool Delete(string target)
+    {
+        Deletes++;
+        byte[] value;
+        if (!Values.TryGetValue(target, out value)) return false;
+        Array.Clear(value, 0, value.Length);
+        Values.Remove(target);
+        return true;
+    }
+}
+
+public sealed class HuntLookupOAuth : IHuntGmailOAuthClient
+{
+    public HuntGmailToken AuthorizeInteractive(string clientId, string clientSecret, string loginHint)
+    {
+        return Token("interactive", Encoding.UTF8.GetBytes("new-refresh"));
+    }
+
+    public HuntGmailToken Refresh(string clientId, string clientSecret, byte[] refreshValue)
+    {
+        return Token("refreshed", null);
+    }
+
+    public string ProfileEmail(string accessValue, bool usedExistingGrant)
+    {
+        return "person@example.invalid";
+    }
+
+    private static HuntGmailToken Token(string access, byte[] refresh)
+    {
+        return new HuntGmailToken {
+            AccessValue = access,
+            RefreshValue = refresh,
+            ExpiresIn = 3600,
+            ReceivedAt = DateTimeOffset.Parse("2026-08-01T12:00:00.000Z")
+        };
+    }
+}
+`;
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-lookup-flow-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, `${csharp}\n${fakes}`);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $type=[HuntInteractiveGmailOAuthSealer]; $acquire=$type.GetMethod('AcquireTokenWithLookup',$flags); $grantTarget=$type.GetMethod('GrantTarget',$flags); $lookupTarget=$type.GetMethod('LookupTarget',$flags); $cleanup=$type.GetMethod('DeleteGrantAndLookup',$flags); if($null -eq $acquire -or $null -eq $grantTarget -or $null -eq $lookupTarget -or $null -eq $cleanup) { exit 55 }; $client='1234567890-example1.apps.googleusercontent.com'; $email='person@example.invalid'; $recipient='recipient_abcdefghijklmnop'; $grant=[string]$grantTarget.Invoke($null,@($client,$email)); $lookup=[string]$lookupTarget.Invoke($null,@($client,$recipient)); function Acquire($store) { try { $token=$acquire.Invoke($null,@($client,'client-secret',$email,$recipient,$store,[HuntLookupOAuth]::new())); $token.Clear(); return 0 } catch { $inner=$_.Exception.InnerException; if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { return $inner.ExitCode }; return 99 } }; $fresh=[HuntLookupStore]::new(); if((Acquire $fresh) -ne 0 -or -not $fresh.Values.ContainsKey($grant) -or -not $fresh.Values.ContainsKey($lookup) -or [Text.Encoding]::ASCII.GetString($fresh.Values[$lookup]) -ne $grant.Substring($grant.Length-64)) { exit 56 }; $existing=[HuntLookupStore]::new(); $existing.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); if((Acquire $existing) -ne 0 -or -not $existing.Values.ContainsKey($grant) -or -not $existing.Values.ContainsKey($lookup)) { exit 57 }; $failed=[HuntLookupStore]::new(); $failed.FailLookupWrite=$true; if((Acquire $failed) -ne 11 -or $failed.Values.Count -ne 0 -or $failed.Deletes -lt 2) { exit 58 }; $mismatch=[HuntLookupStore]::new(); $mismatch.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $mismatch.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes(('0'*64)); if((Acquire $mismatch) -ne 11 -or $mismatch.Values.Count -ne 0 -or $mismatch.Deletes -lt 2) { exit 59 }; $cleanupStore=[HuntLookupStore]::new(); $cleanupStore.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $cleanupStore.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($grant.Substring($grant.Length-64)); if(-not $cleanup.Invoke($null,@($client,$email,$recipient,$cleanupStore)) -or $cleanupStore.Values.Count -ne 0 -or $cleanupStore.Deletes -ne 2) { exit 60 }; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1070,6 +1221,77 @@ public sealed class HuntRevokeClient : IHuntGmailGrantRevocationClient
     const revokeBlock = /private static bool RevokeGrant[\s\S]*?private static bool DeleteGrant/u
       .exec(source)?.[0] ?? "";
     assert.doesNotMatch(revokeBlock, /Process\.Start|Authorize|ProfileEmail/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("lookup revocation needs no account bytes and handles absent or rejected lookup state exactly", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const fakes = String.raw`
+public sealed class HuntLookupRevokeStore : IHuntGmailGrantStore
+{
+    public Dictionary<string, byte[]> Values = new Dictionary<string, byte[]>();
+    public int Deletes;
+    public byte[] Read(string target)
+    {
+        byte[] value;
+        return Values.TryGetValue(target, out value) ? (byte[])value.Clone() : null;
+    }
+    public void Write(string target, byte[] value) { Values[target] = (byte[])value.Clone(); }
+    public bool Delete(string target)
+    {
+        Deletes++;
+        byte[] value;
+        if (!Values.TryGetValue(target, out value)) return false;
+        Array.Clear(value, 0, value.Length);
+        Values.Remove(target);
+        return true;
+    }
+}
+
+public sealed class HuntLookupRevoker : IHuntGmailGrantRevocationClient
+{
+    public bool Transient;
+    public int Calls;
+    public byte[] LastGrant;
+    public void Revoke(byte[] grant)
+    {
+        Calls++;
+        LastGrant = grant;
+        if (Transient) throw new HuntGmailRefreshUnavailableException();
+    }
+}
+`;
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-lookup-revoke-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, `${csharp}\n${fakes}`);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $type=[HuntInteractiveGmailOAuthSealer]; $revoke=$type.GetMethod('RevokeGrantFromLookup',$flags); $lookupTarget=$type.GetMethod('LookupTarget',$flags); if($null -eq $revoke -or $null -eq $lookupTarget) { exit 122 }; $client='1234567890-example1.apps.googleusercontent.com'; $recipient='recipient_abcdefghijklmnop'; $lookup=[string]$lookupTarget.Invoke($null,@($client,$recipient)); $locator='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; $grant='Hunt/C3/GmailRefresh/v1/'+$locator; function InvokeRevoke($store,$client) { try { $value=$revoke.Invoke($null,@($script:client,$script:recipient,$store,$client)); return [pscustomobject]@{ code=0; value=$value } } catch { $inner=$_.Exception.InnerException; $code=if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { $inner.ExitCode } else { 99 }; return [pscustomobject]@{ code=$code; value=$false } } }; $absent=[HuntLookupRevokeStore]::new(); $absentClient=[HuntLookupRevoker]::new(); $a=InvokeRevoke $absent $absentClient; if($a.code -ne 0 -or $a.value -or $absentClient.Calls -ne 0 -or $absent.Deletes -ne 0) { exit 123 }; $success=[HuntLookupRevokeStore]::new(); $success.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($locator); $success.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $successClient=[HuntLookupRevoker]::new(); $s=InvokeRevoke $success $successClient; if($s.code -ne 0 -or -not $s.value -or $successClient.Calls -ne 1 -or $success.Values.Count -ne 0 -or $success.Deletes -ne 2) { exit 124 }; foreach($item in $successClient.LastGrant) { if($item -ne 0) { exit 125 } }; $malformed=[HuntLookupRevokeStore]::new(); $malformed.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes(('z'*64)); $malformedClient=[HuntLookupRevoker]::new(); $m=InvokeRevoke $malformed $malformedClient; if($m.code -ne 11 -or $malformed.Values.Count -ne 0 -or $malformedClient.Calls -ne 0) { exit 126 }; $missing=[HuntLookupRevokeStore]::new(); $missing.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($locator); $missingClient=[HuntLookupRevoker]::new(); $g=InvokeRevoke $missing $missingClient; if($g.code -ne 11 -or $missing.Values.Count -ne 0 -or $missingClient.Calls -ne 0) { exit 127 }; $transient=[HuntLookupRevokeStore]::new(); $transient.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($locator); $transient.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $transientClient=[HuntLookupRevoker]::new(); $transientClient.Transient=$true; $t=InvokeRevoke $transient $transientClient; if($t.code -ne 12 -or $transient.Values.Count -ne 2 -or $transient.Deletes -ne 0 -or $transientClient.Calls -ne 1) { exit 128 }; foreach($item in $transientClient.LastGrant) { if($item -ne 0) { exit 129 } }; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
