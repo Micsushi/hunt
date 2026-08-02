@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { OperationId } from "../../src/contracts/index.ts";
@@ -6,10 +7,10 @@ import type { RealRunOwnerInputsV1 } from "../../src/live/preflight/types.ts";
 import { deriveSenderPolicyId } from "../../src/composition/private/s2-gmail-bootstrap-binding.ts";
 import { createMailboxCandidateBindings } from "../../src/composition/s2-mailbox-candidate-runner.ts";
 
-const now = "2026-08-01T22:05:29.000Z";
+const now = "2026-08-02T02:05:29.000Z";
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 
-test("mailbox composition binds an exact trailing 60-minute interval containing the observed message", () => {
+test("mailbox composition binds an exact trailing 24-hour interval containing the existing message", () => {
   const owner = ownerInputs();
   const verificationOperationId = "operation_abcdefghijklmnop" as OperationId;
   const value = createMailboxCandidateBindings(
@@ -18,12 +19,13 @@ test("mailbox composition binds an exact trailing 60-minute interval containing 
     now,
     verificationOperationId,
   );
-  assert.equal(value.input.notBefore, "2026-08-01T21:05:29.000Z");
+  assert.equal(value.input.notBefore, "2026-08-01T02:05:29.000Z");
   assert.equal(value.input.notAfter, now);
   assert.equal(
     Date.parse(value.input.notAfter) - Date.parse(value.input.notBefore),
-    60 * 60 * 1_000,
+    24 * 60 * 60 * 1_000,
   );
+  assert.notEqual(value.input.notBefore, "2026-08-02T01:05:29.000Z");
   assert.equal(Date.parse("2026-08-01T21:44:48.000Z") >= Date.parse(value.input.notBefore), true);
   assert.equal(Date.parse("2026-08-01T21:44:48.000Z") <= Date.parse(value.input.notAfter), true);
   assert.notEqual(value.input.notBefore, owner.approval.approvedAt);
@@ -38,6 +40,12 @@ test("mailbox composition binds an exact trailing 60-minute interval containing 
     recipientBindingId: owner.recipientBindingId,
   }));
   assert.equal(JSON.stringify(value.input).includes(owner.target.url), false);
+});
+
+test("mailbox acceptance runbook pins the exact trailing 24-hour query window", () => {
+  const readme = readFileSync("README.md", "utf8");
+  assert.match(readme, /exact trailing 24-hour window/u);
+  assert.doesNotMatch(readme, /trailing 60-minute window/u);
 });
 
 function ownerInputs(): RealRunOwnerInputsV1 {
@@ -70,8 +78,8 @@ function ownerInputs(): RealRunOwnerInputsV1 {
       revisionId: "revision_abcdefghijklmnop",
       approved: true,
       liveAccess: true,
-      approvedAt: "2026-08-01T22:00:00.000Z",
-      expiresAt: "2026-08-01T22:30:00.000Z",
+      approvedAt: "2026-08-02T02:00:00.000Z",
+      expiresAt: "2026-08-02T02:30:00.000Z",
       ownerId: "owner_abcdefghijklmnop",
       runtimeOperatorId: "owner_abcdefghijklmnop",
       secretCustodianId: "owner_abcdefghijklmnop",
@@ -86,7 +94,7 @@ function ownerInputs(): RealRunOwnerInputsV1 {
       purpose: "account_credentials",
       consumer: "credential_mutation_adapter",
       scope: "account_access",
-      expiresAt: "2026-08-01T22:30:00.000Z",
+      expiresAt: "2026-08-02T02:30:00.000Z",
     },
     gmailAuthorization: {
       schemaVersion: 1,
@@ -96,7 +104,7 @@ function ownerInputs(): RealRunOwnerInputsV1 {
       purpose: "gmail_oauth",
       consumer: "gmail_auth_executor",
       scope: "mailbox_verification",
-      expiresAt: "2026-08-01T22:30:00.000Z",
+      expiresAt: "2026-08-02T02:30:00.000Z",
     },
   };
 }

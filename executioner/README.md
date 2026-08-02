@@ -189,7 +189,7 @@ npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after mailbox
 ```
 
 The runner queries only `gmail-api-v1` through the scoped Gmail handle and an
-exact trailing 60-minute window. Recipient, sender, tenant, target, and journey
+exact trailing 24-hour window. Recipient, sender, tenant, target, and journey
 remain independently bound. It passes only for one unexpired candidate, releases
 the process-local verification artifact, and seals value-free evidence with
 `messageBodyRetained: false`. It never launches the Workday browser or navigates
