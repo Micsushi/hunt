@@ -59,6 +59,7 @@ export type GmailBootstrapErrorCode =
   | "gmail_oauth_client_invalid"
   | "gmail_sender_policy_invalid"
   | "gmail_refresh_grant_invalid"
+  | "gmail_refresh_unavailable"
   | "gmail_oauth_cancelled"
   | "gmail_oauth_denied"
   | "gmail_identity_mismatch"
@@ -336,6 +337,7 @@ function sealerError(error: unknown, signal: AbortSignal): GmailBootstrapErrorCo
   if (message === "Gmail OAuth client invalid") return "gmail_oauth_client_invalid";
   if (message === "Gmail sender policy invalid") return "gmail_sender_policy_invalid";
   if (message === "Gmail refresh grant invalid") return "gmail_refresh_grant_invalid";
+  if (message === "Gmail refresh unavailable") return "gmail_refresh_unavailable";
   if (message === "Gmail mailbox identity mismatched") return "gmail_identity_mismatch";
   if (message === "Gmail OAuth scope invalid") return "gmail_scope_invalid";
   if (message === "Gmail OAuth token expiry invalid") return "gmail_token_expiry_invalid";

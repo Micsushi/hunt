@@ -202,6 +202,12 @@ test("fails closed for cancellation, helper failure, and malformed output", asyn
     }).seal(request, new AbortController().signal),
     /Gmail refresh grant invalid/u,
   );
+  await assert.rejects(
+    new WindowsInteractiveGmailOAuthSealer({
+      process: new ReplyProcess(new Error("Gmail refresh unavailable")),
+    }).seal(request, new AbortController().signal),
+    /Gmail refresh unavailable/u,
+  );
 });
 
 test("production helper pins PKCE loopback Gmail readonly profile equality and DPAPI", async () => {
@@ -235,6 +241,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /EntryPoint = "CredWriteW"/u);
   assert.match(source, /EntryPoint = "CredDeleteW"/u);
   assert.match(source, /LocalMachinePersistence = 2/u);
+  assert.match(source, /MaximumRefreshGrantBytes = 512/u);
   assert.match(source, /Comment = null/u);
   assert.match(source, /AttributeCount = 0/u);
   assert.match(source, /TargetAlias = null/u);
@@ -253,6 +260,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /code === 9[\s\S]*Gmail OAuth client invalid/u);
   assert.match(source, /code === 10[\s\S]*Gmail sender policy invalid/u);
   assert.match(source, /code === 11[\s\S]*Gmail refresh grant invalid/u);
+  assert.match(source, /code === 12[\s\S]*Gmail refresh unavailable/u);
   assert.equal(source.match(/\{ "client_secret", clientSecret \}/gu)?.length, 2);
   assert.match(source, /ExactKeys\(root, new string\[\] \{ "installed" \}\)/u);
   assert.match(source, /redirects\.Length < 1 \|\| redirects\.Length > 4/u);
@@ -351,10 +359,85 @@ test("trusted helper derives one deterministic opaque grant target", async () =>
     assert.equal(result.status, 0, result.stderr);
     const target = await readFile(outputPath, "ascii");
     const digest = createHash("sha256")
-      .update(`hunt-c3-gmail-refresh-grant-v1\0${clientId}\0${email}`)
+      .update(
+        `hunt-c3-gmail-refresh-grant-v1\0${clientId}\0${email}\0` +
+          "https://www.googleapis.com/auth/gmail.readonly",
+      )
       .digest("hex");
     assert.equal(target, `Hunt/C3/GmailRefresh/v1/${digest}`);
     assert.doesNotMatch(target, /person|example|@/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted helper enforces the exact 512-byte refresh-grant bound", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-grant-bound-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $valid=[HuntInteractiveGmailOAuthSealer].GetMethod('ValidGrant',$flags); $parse=[HuntInteractiveGmailOAuthSealer].GetMethod('ParseTokenResponse',$flags); $exact=[HuntInteractiveGmailOAuthSealer].GetMethod('ExactObject',$flags); if($null -eq $valid -or $null -eq $parse -or $null -eq $exact) { exit 81 }; $bytes512=[Text.Encoding]::ASCII.GetBytes('r'*512); $bytes513=[Text.Encoding]::ASCII.GetBytes('r'*513); if(-not $valid.Invoke($null,@(,$bytes512)) -or $valid.Invoke($null,@(,$bytes513))) { exit 82 }; function Parse($refresh) { $json='{"access_token":"access","expires_in":3600,"refresh_token":"'+$refresh+'","scope":"https://www.googleapis.com/auth/gmail.readonly","token_type":"Bearer"}'; $value=$exact.Invoke($null,@($json)); return $parse.Invoke($null,@($value,$true,[DateTimeOffset]::Parse('2026-08-01T12:00:00.000Z'))) }; try { $token=Parse ('r'*512); $token.Clear() } catch { exit 83 }; try { $token=Parse ('r'*513); $token.Clear(); exit 84 } catch {}; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted helper classifies exact transient refresh transport outcomes", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-refresh-classifier-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('RefreshResponseUnavailable',[Reflection.BindingFlags]'NonPublic,Static'); if($null -eq $method) { exit 91 }; function IsUnavailable($status,$http) { return $method.Invoke($null,@([Net.WebExceptionStatus]$status,$http)) }; if(-not (IsUnavailable 'ConnectFailure' 0) -or -not (IsUnavailable 'Timeout' 0) -or -not (IsUnavailable 'ProtocolError' 408) -or -not (IsUnavailable 'ProtocolError' 429) -or -not (IsUnavailable 'ProtocolError' 500) -or -not (IsUnavailable 'ProtocolError' 503) -or (IsUnavailable 'ProtocolError' 400) -or (IsUnavailable 'ProtocolError' 401) -or (IsUnavailable 'ProtocolError' 403)) { exit 92 }; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -530,6 +613,122 @@ public sealed class HuntTestOAuthClient : IHuntGmailOAuthClient
       { scenario: "mismatch", exitCode: 4, interactive: 1, refresh: 0, profile: 1, reads: 1, writes: 0, readCleared: false, writeCleared: false, issuedCleared: true, opaque: true },
     ]);
     assert.deepEqual(value.revoke, { deleted: true, deletes: 1, opaque: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted grant flow preserves stored grants across invalid and transient refresh failures", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const fakes = String.raw`
+public sealed class HuntRefreshRepairStore : IHuntGmailGrantStore
+{
+    public byte[] Value = Encoding.UTF8.GetBytes("stored-refresh");
+    public byte[] LastRead;
+    public int Reads;
+    public int Writes;
+    public int Deletes;
+
+    public byte[] Read(string target)
+    {
+        Reads++;
+        LastRead = (byte[])Value.Clone();
+        return LastRead;
+    }
+
+    public void Write(string target, byte[] value) { Writes++; }
+    public bool Delete(string target) { Deletes++; return true; }
+}
+
+public sealed class HuntRefreshRepairOAuth : IHuntGmailOAuthClient
+{
+    public string Scenario;
+    public int InteractiveCalls;
+    public int RefreshCalls;
+    public int ProfileCalls;
+
+    public HuntRefreshRepairOAuth(string scenario) { Scenario = scenario; }
+
+    public HuntGmailToken AuthorizeInteractive(string clientId, string clientSecret, string loginHint)
+    {
+        InteractiveCalls++;
+        throw new InvalidOperationException();
+    }
+
+    public HuntGmailToken Refresh(string clientId, string clientSecret, byte[] refreshValue)
+    {
+        RefreshCalls++;
+        if (Scenario == "invalid") throw new InvalidOperationException();
+        if (RefreshCalls == 1) throw new HuntGmailRefreshUnavailableException();
+        return new HuntGmailToken {
+            AccessValue = "refreshed-access",
+            RefreshValue = null,
+            ExpiresIn = 3600,
+            ReceivedAt = DateTimeOffset.Parse("2026-08-01T12:00:00.000Z")
+        };
+    }
+
+    public string ProfileEmail(string accessValue)
+    {
+        ProfileCalls++;
+        return "person@example.invalid";
+    }
+}
+`;
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-refresh-repair-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const outputPath = join(root, "result.json");
+    await writeFile(sourcePath, `${csharp}\n${fakes}`);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('AcquireToken',[Reflection.BindingFlags]'NonPublic,Static'); if($null -eq $method) { exit 101 }; function Cleared($value) { if($null -eq $value) { return $false }; foreach($item in $value) { if($item -ne 0) { return $false } }; return $true }; function InvokeAcquire($store,$oauth) { try { $token=$method.Invoke($null,@('1234567890-example1.apps.googleusercontent.com','client-secret','person@example.invalid',$store,$oauth)); $token.Clear(); return 0 } catch { $inner=$_.Exception.InnerException; if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { return $inner.ExitCode }; return 99 } }; $transientStore=[HuntRefreshRepairStore]::new(); $transientOauth=[HuntRefreshRepairOAuth]::new('unavailable_once'); $first=InvokeAcquire $transientStore $transientOauth; $firstReadCleared=Cleared $transientStore.LastRead; $second=InvokeAcquire $transientStore $transientOauth; $invalidStore=[HuntRefreshRepairStore]::new(); $invalidOauth=[HuntRefreshRepairOAuth]::new('invalid'); $invalid=InvokeAcquire $invalidStore $invalidOauth; $output=[pscustomobject]@{ transient=[pscustomobject]@{ first=$first; second=$second; interactive=$transientOauth.InteractiveCalls; refresh=$transientOauth.RefreshCalls; profile=$transientOauth.ProfileCalls; writes=$transientStore.Writes; deletes=$transientStore.Deletes; firstReadCleared=$firstReadCleared; preserved=([Text.Encoding]::UTF8.GetString($transientStore.Value) -eq 'stored-refresh') }; invalid=[pscustomobject]@{ exitCode=$invalid; interactive=$invalidOauth.InteractiveCalls; refresh=$invalidOauth.RefreshCalls; profile=$invalidOauth.ProfileCalls; writes=$invalidStore.Writes; deletes=$invalidStore.Deletes; readCleared=(Cleared $invalidStore.LastRead); preserved=([Text.Encoding]::UTF8.GetString($invalidStore.Value) -eq 'stored-refresh') } }; $utf8=New-Object Text.UTF8Encoding($false); [IO.File]::WriteAllText($env:HUNT_TEST_OUTPUT,($output | ConvertTo-Json -Depth 5 -Compress),$utf8); exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_OUTPUT: outputPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), {
+      transient: {
+        first: 12,
+        second: 0,
+        interactive: 0,
+        refresh: 2,
+        profile: 1,
+        writes: 0,
+        deletes: 0,
+        firstReadCleared: true,
+        preserved: true,
+      },
+      invalid: {
+        exitCode: 11,
+        interactive: 0,
+        refresh: 1,
+        profile: 0,
+        writes: 0,
+        deletes: 0,
+        readCleared: true,
+        preserved: true,
+      },
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

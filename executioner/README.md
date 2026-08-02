@@ -174,14 +174,19 @@ The first bootstrap for an exact desktop client and normalized Gmail account
 requests offline access with explicit consent and requires Google to return a
 refresh grant. After the profile email matches, the trusted child stores that
 grant as a bounded Generic Credential for the current Windows user. Its target
-contains only a versioned SHA-256 binding of the client ID and normalized email;
-it contains no raw email. Later bootstraps for the same binding refresh silently
-and do not open a browser. A missing grant starts the consent flow, but a malformed,
-revoked, or rejected existing grant fails as `gmail_refresh_grant_invalid` with no
-same-attempt interactive fallback. The provider can invalidate a grant at any
-time, so this error requires explicit deletion followed by a separately initiated
-bootstrap. The implementation includes a tested exact-target deletion boundary;
-an operator-facing revocation command remains the next bounded task.
+contains only a versioned SHA-256 binding of the client ID, normalized email, and
+exact `gmail.readonly` scope; it contains no raw email. The grant is limited to
+512 UTF-8 bytes. Later bootstraps for the same binding refresh silently and do not
+open a browser. A missing grant starts the consent flow, but a malformed, revoked,
+rejected, or wrong-scope existing grant fails as `gmail_refresh_grant_invalid`
+with no same-attempt interactive fallback. A network or timeout failure, or HTTP
+408, 429, or 5xx, fails as `gmail_refresh_unavailable`; it preserves the stored
+grant and permits a separately initiated later provisioning attempt, without
+opening a browser in the failed attempt. Neither failure deletes the grant. The
+provider can invalidate a grant at any time, so `gmail_refresh_grant_invalid`
+requires explicit deletion followed by a separately initiated bootstrap. The
+implementation includes a tested exact-target deletion boundary; an operator-facing
+revocation command remains the next bounded task.
 
 | Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
 | --- | --- | --- | --- |
@@ -191,7 +196,7 @@ an operator-facing revocation command remains the next bounded task.
 | sender-policy canonical path | admission and ACL only | bounded file open | none |
 | sender address | none | sole reader; current bundle binding | DPAPI ciphertext only |
 | Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
-| Gmail refresh grant | none | OAuth refresh and Windows Credential Manager only | bounded current-user Generic Credential under an opaque target |
+| Gmail refresh grant | none | OAuth refresh and Windows Credential Manager only | current-user Generic Credential, maximum 512 bytes, under a scope-bound opaque target |
 
 ### Mailbox-candidate acceptance slice
 

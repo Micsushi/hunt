@@ -38,6 +38,10 @@ public interface IHuntGmailOAuthClient
     string ProfileEmail(string accessValue);
 }
 
+public sealed class HuntGmailRefreshUnavailableException : Exception
+{
+}
+
 public sealed class HuntGmailToken
 {
     public string AccessValue;
@@ -58,6 +62,7 @@ public sealed class HuntGmailToken
 public static class HuntInteractiveGmailOAuthSealer
 {
     private const string Scope = "https://www.googleapis.com/auth/gmail.readonly";
+    private const int MaximumRefreshGrantBytes = 512;
     private const string AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
     private const string InstalledClientAuthUri = "https://accounts.google.com/o/oauth2/auth";
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
@@ -102,7 +107,6 @@ public static class HuntInteractiveGmailOAuthSealer
         private const uint GenericCredential = 1;
         private const uint LocalMachinePersistence = 2;
         private const int NotFound = 1168;
-        private const int MaximumGrantBytes = 2048;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct NativeCredential
@@ -165,7 +169,7 @@ public static class HuntInteractiveGmailOAuthSealer
                     !String.IsNullOrEmpty(credential.TargetAlias) ||
                     !String.IsNullOrEmpty(credential.UserName) ||
                     credential.CredentialBlob == IntPtr.Zero || credential.CredentialBlobSize < 1 ||
-                    credential.CredentialBlobSize > MaximumGrantBytes)
+                    credential.CredentialBlobSize > MaximumRefreshGrantBytes)
                     throw new InvalidDataException();
                 byte[] value = new byte[credential.CredentialBlobSize];
                 Marshal.Copy(credential.CredentialBlob, value, 0, value.Length);
@@ -328,6 +332,7 @@ public static class HuntInteractiveGmailOAuthSealer
             {
                 if (!ValidGrant(existing)) throw new FlowException(11);
                 try { token = oauth.Refresh(clientId, clientSecret, existing); }
+                catch (HuntGmailRefreshUnavailableException) { throw new FlowException(12); }
                 catch { throw new FlowException(11); }
                 if (token == null) throw new FlowException(11);
             }
@@ -382,7 +387,8 @@ public static class HuntInteractiveGmailOAuthSealer
         if (!ValidEmail(accountEmail)) throw new FlowException(3);
         string normalized = accountEmail.ToLowerInvariant();
         byte[] binding = Encoding.UTF8.GetBytes(
-            "hunt-c3-gmail-refresh-grant-v1\0" + clientId + "\0" + normalized
+            "hunt-c3-gmail-refresh-grant-v1\0" + clientId + "\0" + normalized +
+            "\0" + Scope
         );
         byte[] digest = null;
         try
@@ -403,11 +409,12 @@ public static class HuntInteractiveGmailOAuthSealer
 
     private static bool ValidGrant(byte[] value)
     {
-        if (value == null || value.Length < 1 || value.Length > 2048) return false;
+        if (value == null || value.Length < 1 ||
+            value.Length > MaximumRefreshGrantBytes) return false;
         try
         {
             string text = StrictUtf8(value);
-            if (text.Length < 1 || text.Length > 2048) return false;
+            if (text.Length < 1 || text.Length > MaximumRefreshGrantBytes) return false;
             foreach (char character in text)
                 if (Char.IsControl(character) || Char.IsWhiteSpace(character)) return false;
             return true;
@@ -602,7 +609,8 @@ public static class HuntInteractiveGmailOAuthSealer
                     { "grant_type", "authorization_code" }
                 }),
                 null,
-                65536
+                65536,
+                false
             );
             HuntGmailToken token = ParseTokenResponse(response, true, receivedAt);
             code = null;
@@ -639,10 +647,12 @@ public static class HuntInteractiveGmailOAuthSealer
                     { "refresh_token", refresh }, { "grant_type", "refresh_token" }
                 }),
                 null,
-                65536
+                65536,
+                true
             );
             return ParseTokenResponse(response, false, receivedAt);
         }
+        catch (HuntGmailRefreshUnavailableException) { throw; }
         catch { throw new FlowException(11); }
         finally
         {
@@ -675,7 +685,12 @@ public static class HuntInteractiveGmailOAuthSealer
         {
             if (hasRefresh)
             {
-                string raw = StringField(response, "refresh_token", 1, 2048);
+                string raw = StringField(
+                    response,
+                    "refresh_token",
+                    1,
+                    MaximumRefreshGrantBytes
+                );
                 if (!ValidTokenText(raw)) throw new FlowException(3);
                 refresh = new UTF8Encoding(false, true).GetBytes(raw);
                 if (!ValidGrant(refresh)) throw new FlowException(3);
@@ -778,13 +793,18 @@ public static class HuntInteractiveGmailOAuthSealer
     private static string ProfileEmail(string access)
     {
         IDictionary<string, object> profile = RequestJson(
-            ProfileEndpoint, "GET", null, "Bearer " + access, 16384
+            ProfileEndpoint, "GET", null, "Bearer " + access, 16384, false
         );
         return StringField(profile, "emailAddress", 3, 254);
     }
 
     private static IDictionary<string, object> RequestJson(
-        string url, string method, string body, string authorization, int bound)
+        string url,
+        string method,
+        string body,
+        string authorization,
+        int bound,
+        bool refreshRequest)
     {
         ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
         HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
@@ -794,19 +814,30 @@ public static class HuntInteractiveGmailOAuthSealer
         request.ReadWriteTimeout = 30000;
         request.Accept = "application/json";
         if (authorization != null) request.Headers[HttpRequestHeader.Authorization] = authorization;
-        if (body != null)
-        {
-            byte[] payload = Encoding.UTF8.GetBytes(body);
-            request.ContentType = "application/x-www-form-urlencoded";
-            request.ContentLength = payload.Length;
-            using (Stream stream = request.GetRequestStream()) stream.Write(payload, 0, payload.Length);
-            Clear(payload);
-        }
         try
         {
+            if (body != null)
+            {
+                byte[] payload = Encoding.UTF8.GetBytes(body);
+                try
+                {
+                    request.ContentType = "application/x-www-form-urlencoded";
+                    request.ContentLength = payload.Length;
+                    using (Stream stream = request.GetRequestStream())
+                        stream.Write(payload, 0, payload.Length);
+                }
+                finally { Clear(payload); }
+            }
             using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
             {
-                if (response.StatusCode != HttpStatusCode.OK) throw new FlowException(3);
+                if (response.StatusCode != HttpStatusCode.OK)
+                {
+                    if (refreshRequest && RefreshResponseUnavailable(
+                        WebExceptionStatus.ProtocolError,
+                        (int)response.StatusCode
+                    )) throw new HuntGmailRefreshUnavailableException();
+                    throw new FlowException(3);
+                }
                 if (response.ContentType == null || !response.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
                     throw new FlowException(3);
                 byte[] bytes = ReadBounded(response.GetResponseStream(), bound);
@@ -814,7 +845,25 @@ public static class HuntInteractiveGmailOAuthSealer
                 finally { Clear(bytes); }
             }
         }
-        catch (WebException) { throw new FlowException(3); }
+        catch (WebException error)
+        {
+            HttpWebResponse response = error.Response as HttpWebResponse;
+            int statusCode = response == null ? 0 : (int)response.StatusCode;
+            if (response != null) response.Close();
+            if (refreshRequest && RefreshResponseUnavailable(error.Status, statusCode))
+                throw new HuntGmailRefreshUnavailableException();
+            throw new FlowException(3);
+        }
+    }
+
+    private static bool RefreshResponseUnavailable(
+        WebExceptionStatus status,
+        int httpStatus
+    )
+    {
+        if (status != WebExceptionStatus.ProtocolError) return true;
+        return httpStatus == 408 || httpStatus == 429 ||
+            (httpStatus >= 500 && httpStatus <= 599);
     }
 
     private static void ValidateExpiry(IDictionary<string, object> metadata, int expiresIn, DateTimeOffset receivedAt)
@@ -1206,11 +1255,13 @@ function childFailure(code: number | null): Error {
                   ? "Gmail sender policy invalid"
                   : code === 11
                     ? "Gmail refresh grant invalid"
+                    : code === 12
+                      ? "Gmail refresh unavailable"
               : "Gmail OAuth sealing failed";
   return new Error(message);
 }
 
 function recognized(error: unknown): error is Error {
   return error instanceof Error &&
-    /^Gmail (?:OAuth|mailbox identity|refresh grant)/u.test(error.message);
+    /^Gmail (?:OAuth|mailbox identity|refresh (?:grant|unavailable))/u.test(error.message);
 }

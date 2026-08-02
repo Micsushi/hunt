@@ -93,7 +93,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
       value: "gmail_refresh_grant",
       ordinaryNode: "none",
       trustedWindowsHelper: "oauth_refresh_and_credential_manager_only",
-      durableOutput: "bounded_current_user_generic_credential_opaque_target",
+      durableOutput: "maximum_512_byte_current_user_generic_credential_scope_bound_opaque_target",
     },
   ]);
 });
