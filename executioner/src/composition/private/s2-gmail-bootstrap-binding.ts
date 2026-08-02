@@ -10,6 +10,7 @@ const EXACT_KEYS = [
   "gmailHandleId",
   "desktopClientId",
   "installedClientConfigPath",
+  "senderPolicyConfigPath",
   "verificationHost",
 ].sort();
 
@@ -19,22 +20,23 @@ export interface GmailBootstrapExpectedBinding {
   readonly gmailHandleId: string;
 }
 
-export interface GmailBootstrapInputV2 extends GmailBootstrapExpectedBinding {
+export interface GmailBootstrapInputV3 extends GmailBootstrapExpectedBinding {
   readonly schemaVersion: 1;
-  readonly contractRevision: "s2-gmail-bootstrap-v2";
+  readonly contractRevision: "s2-gmail-bootstrap-v3";
   readonly desktopClientId: string;
   readonly installedClientConfigPath: string;
+  readonly senderPolicyConfigPath: string;
   readonly verificationHost: string;
 }
 
 export function admitGmailBootstrapInput(
   value: unknown,
   expected: GmailBootstrapExpectedBinding,
-): GmailBootstrapInputV2 | null {
+): GmailBootstrapInputV3 | null {
   if (!record(value) || !exactKeys(value)) return null;
   if (
     value.schemaVersion !== 1 ||
-    value.contractRevision !== "s2-gmail-bootstrap-v2" ||
+    value.contractRevision !== "s2-gmail-bootstrap-v3" ||
     value.revisionId !== expected.revisionId ||
     value.journeyId !== expected.journeyId ||
     value.gmailHandleId !== expected.gmailHandleId ||
@@ -46,6 +48,11 @@ export function admitGmailBootstrapInput(
     value.installedClientConfigPath.length > 4096 ||
     !isAbsolute(value.installedClientConfigPath) ||
     normalize(value.installedClientConfigPath) !== value.installedClientConfigPath ||
+    typeof value.senderPolicyConfigPath !== "string" ||
+    value.senderPolicyConfigPath.length > 4096 ||
+    !isAbsolute(value.senderPolicyConfigPath) ||
+    normalize(value.senderPolicyConfigPath) !== value.senderPolicyConfigPath ||
+    value.senderPolicyConfigPath.toLowerCase() === value.installedClientConfigPath.toLowerCase() ||
     typeof value.verificationHost !== "string" ||
     !validHost(value.verificationHost)
   ) {
@@ -53,12 +60,13 @@ export function admitGmailBootstrapInput(
   }
   return Object.freeze({
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v2",
+    contractRevision: "s2-gmail-bootstrap-v3",
     revisionId: value.revisionId,
     journeyId: value.journeyId,
     gmailHandleId: value.gmailHandleId,
     desktopClientId: value.desktopClientId,
     installedClientConfigPath: value.installedClientConfigPath,
+    senderPolicyConfigPath: value.senderPolicyConfigPath,
     verificationHost: value.verificationHost,
   });
 }

@@ -105,6 +105,7 @@ export type WindowsAclTarget =
   | "evidence_root"
   | "owner_config"
   | "oauth_client_config"
+  | "sender_policy_config"
   | "secret_record";
 
 export type WindowsAclFailureReason =
@@ -132,6 +133,7 @@ export interface WindowsAclAdmissionPaths {
   readonly evidence: string;
   readonly ownerConfig: string;
   readonly oauthClientConfig?: string;
+  readonly senderPolicyConfig?: string;
   readonly accountRecord?: string;
   readonly gmailRecord?: string;
 }
@@ -288,6 +290,13 @@ function targetPaths(paths: WindowsAclAdmissionPaths): TargetPath[] {
     targets.push({
       target: "oauth_client_config",
       path: paths.oauthClientConfig,
+      directory: false,
+    });
+  }
+  if (paths.senderPolicyConfig !== undefined) {
+    targets.push({
+      target: "sender_policy_config",
+      path: paths.senderPolicyConfig,
       directory: false,
     });
   }

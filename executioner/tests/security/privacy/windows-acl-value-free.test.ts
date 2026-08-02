@@ -10,5 +10,6 @@ test("ACL failures expose only stable closed target and reason identifiers", asy
   assert.match(source, /"runtime_root"/u);
   assert.match(source, /"owner_config"/u);
   assert.match(source, /"oauth_client_config"/u);
+  assert.match(source, /"sender_policy_config"/u);
   assert.match(source, /"secret_record"/u);
 });

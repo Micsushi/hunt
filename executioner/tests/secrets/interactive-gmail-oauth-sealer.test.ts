@@ -44,6 +44,7 @@ const request = {
   accountCiphertext: Uint8Array.from([3, 5, 7]),
   clientId: "1234567890-example1.apps.googleusercontent.com",
   installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
+  senderPolicyConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\gmail-sender-policy.json",
   binding: {
     journeyId: "journey_abcdefghijklmnop",
     recipientBindingId: "recipient_abcdefghijklmnop",
@@ -70,8 +71,10 @@ test("accepts only one bounded ciphertext frame and clears its child input", asy
   assert.deepEqual([...sealed], [11, 13, 17]);
   assert.equal(Buffer.from(process.input?.subarray(0, 4) ?? []).toString("ascii"), "\0\0\0\0");
   assert.equal(process.input?.every((value) => value === 0), true);
-  assert.equal(process.capturedInput?.[5], 6);
+  assert.equal(process.capturedInput?.[5], 7);
   assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from(request.installedClientConfigPath)), true);
+  assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from(request.senderPolicyConfigPath)), true);
+  assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from("notifications@example.invalid")), false);
   assert.equal(Buffer.from(process.capturedInput ?? []).includes(Buffer.from("synthetic-client-secret")), false);
   assert.deepEqual([...request.accountCiphertext], [3, 5, 7]);
 });
@@ -121,6 +124,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /client_secret/u);
   assert.match(source, /\{ "client_secret", clientSecret \}/u);
   assert.match(source, /code === 9[\s\S]*Gmail OAuth client invalid/u);
+  assert.match(source, /code === 10[\s\S]*Gmail sender policy invalid/u);
   assert.equal(source.match(/\{ "client_secret", clientSecret \}/gu)?.length, 1);
   assert.match(source, /ExactKeys\(root, new string\[\] \{ "installed" \}\)/u);
   assert.match(source, /redirects\.Length < 1 \|\| redirects\.Length > 4/u);
@@ -130,7 +134,12 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
     source,
     /IntegerField\(value, "verificationTtlSeconds", 86400, 86400\) != 86400/u,
   );
-  assert.match(source, /InputBox/u);
+  assert.match(source, /ReadSenderPolicy/u);
+  assert.doesNotMatch(source, /InputBox|Microsoft\.VisualBasic|Interaction\./u);
+  assert.match(source, /exactBundle\["senderPolicyId"\] = binding\["senderPolicyId"\]/u);
+  assert.match(source, /exactBundle\["senderAddress"\] = sender/u);
+  const authorizeMethod = /private static Token Authorize[\s\S]*?private static string ReceiveCode/u.exec(source)?.[0] ?? "";
+  assert.doesNotMatch(authorizeMethod, /senderAddress|senderPolicy|notifications@/iu);
   assert.match(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
   assert.doesNotMatch(source, /process\.env|refresh_token[^\n]*bundle/iu);
@@ -149,7 +158,7 @@ test("embedded Gmail helper compiles without opening UI or network", async () =>
     [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-Command",
-      "$source=[Console]::In.ReadToEnd(); Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'",
+      "$source=[Console]::In.ReadToEnd(); Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'",
     ],
     {
       input: match?.[1] ?? "",
@@ -236,7 +245,7 @@ test("embedded helper exact-parses only the matching installed loopback client",
       [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command",
-        "$valid=$env:HUNT_TEST_VALIDS | ConvertFrom-Json; $invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadInstalledClient',[Reflection.BindingFlags]'NonPublic,Static'); foreach($path in $valid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)) } catch { exit 11 } }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)); exit 12 } catch {} }; exit 0",
+        "$valid=$env:HUNT_TEST_VALIDS | ConvertFrom-Json; $invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadInstalledClient',[Reflection.BindingFlags]'NonPublic,Static'); foreach($path in $valid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)) } catch { exit 11 } }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,$env:HUNT_TEST_CLIENT_ID)); exit 12 } catch {} }; exit 0",
       ],
       {
         shell: false,
@@ -264,6 +273,70 @@ test("embedded helper exact-parses only the matching installed loopback client",
             webRedirectPath,
             ...invalidProjectPaths,
           ]),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("embedded helper exact-parses one versioned lowercase sender policy", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-sender-policy-parser-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const validPath = join(root, "valid.json");
+    const bomPath = join(root, "bom.json");
+    const invalid = [
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "Notifications@example.invalid" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "invalid" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid", extra: true },
+      { schemaVersion: 2, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid" },
+    ];
+    const invalidPaths = invalid.map((_, index) => join(root, `invalid-${index}.json`));
+    await Promise.all([
+      writeFile(sourcePath, csharp),
+      writeFile(validPath, JSON.stringify({
+        schemaVersion: 1,
+        contractRevision: "s2-gmail-sender-policy-v1",
+        senderAddress: "notifications@example.invalid",
+      })),
+      writeFile(bomPath, Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(JSON.stringify({
+          schemaVersion: 1,
+          contractRevision: "s2-gmail-sender-policy-v1",
+          senderAddress: "notifications@example.invalid",
+        })),
+      ])),
+      ...invalid.map((value, index) => writeFile(invalidPaths[index]!, JSON.stringify(value))),
+    ]);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "$invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadSenderPolicy',[Reflection.BindingFlags]'NonPublic,Static'); try { $sender=$method.Invoke($null,@($env:HUNT_TEST_VALID)); if($sender -ne 'notifications@example.invalid') { exit 21 } } catch { exit 22 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path)); exit 23 } catch {} }; exit 0",
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_VALID: validPath,
+          HUNT_TEST_INVALIDS: JSON.stringify([bomPath, ...invalidPaths]),
         },
       },
     );

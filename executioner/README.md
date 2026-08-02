@@ -118,50 +118,65 @@ approval, account secret, and Gmail authorization must share one expiry no
 more than 30 minutes after the planned F2 bootstrap. Provision the new account
 handle first with the account command.
 
-Manually inspect the new verification email. Create a second JSON file outside
-every repository with exactly these fields:
+Create a bootstrap JSON file outside every repository with exactly these fields:
 
 ```json
 {
   "schemaVersion": 1,
-  "contractRevision": "s2-gmail-bootstrap-v2",
+  "contractRevision": "s2-gmail-bootstrap-v3",
   "revisionId": "revision_...",
   "journeyId": "journey_...",
   "gmailHandleId": "secret_handle_...",
   "desktopClientId": "...apps.googleusercontent.com",
   "installedClientConfigPath": "C:\\absolute\\protected\\google-installed-client.json",
+  "senderPolicyConfigPath": "C:\\absolute\\protected\\gmail-sender-policy.json",
   "verificationHost": "wd5.myworkday.com"
 }
 ```
 
+Create the sender-policy file at the configured path with exactly this stable,
+owner-approved policy:
+
+```json
+{
+  "schemaVersion": 1,
+  "contractRevision": "s2-gmail-sender-policy-v1",
+  "senderAddress": "notifications@example.com"
+}
+```
+
 Use an owner-approved Google Desktop OAuth client JSON with Gmail API access.
-Keep that regular, bounded file outside every repository under a protected
-current-user ACL. The bootstrap file contains only its canonical absolute path
-and expected client ID; never copy the client secret into the bootstrap file,
-arguments, environment, logs, or Node configuration. Enter only the verification
-link hostname, never the full link or token. Then run:
+Keep both referenced files regular, bounded, distinct, outside every repository,
+and under protected current-user ACLs. The bootstrap file contains only their
+canonical absolute paths and the expected client ID; never copy the client
+secret or sender address into bootstrap arguments, environment, logs, or Node
+configuration. Enter only the verification hostname in the bootstrap JSON,
+never a full link or token. Then run:
 
 ```text
 npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
 ```
 
-All path, ACL, and exact-handle checks finish before a browser or prompt. Node
-sees the canonical client-file path and expected client ID but never reads the
-client JSON. The trusted Windows child is its sole content reader: it accepts
-only the exact installed-client shape, matching client ID, pinned Google
-endpoints, bounded loopback redirects, and a bounded secret. The child uses the
-secret only in the token exchange, alongside an ephemeral IPv4 loopback
-callback, PKCE S256, and only `gmail.readonly`. It confirms the Gmail profile matches the
-DPAPI-protected Workday email and asks for the exact lowercase sender. OAuth,
-mailbox, sender, and bundle values stay in that child; Node receives only DPAPI
-CurrentUser ciphertext. Recreate both short-lived handles instead of mixing F1
-and F2 expiry values. This command does not query Gmail or consume the message.
+All path, ACL, and exact-handle checks finish before the system browser opens.
+Node sees only canonical paths and the expected client ID; it never reads either
+referenced JSON file. The trusted Windows child is their sole content reader. It
+accepts only the exact installed-client shape and one exact versioned lowercase
+sender address, then binds that address into the current derived sender policy,
+journey, recipient, and target bundle. There is no sender prompt. The child uses
+the client secret only in the token exchange, alongside an ephemeral IPv4
+loopback callback, PKCE S256, and only `gmail.readonly`. It confirms the Gmail
+profile matches the DPAPI-protected Workday email. OAuth, mailbox, sender, and
+bundle values stay in that child; Node receives only DPAPI CurrentUser
+ciphertext. Recreate both short-lived handles instead of mixing F1 and F2 expiry
+values. This command does not query Gmail or consume the message.
 
 | Value | Bootstrap/Node owner | Trusted Windows helper owner | Durable output |
 | --- | --- | --- | --- |
 | expected desktop client ID | exact equality input | exact equality check | none |
 | installed-client canonical path | admission and ACL only | bounded file open | none |
 | installed-client JSON and client secret | none | sole reader; token form only | none |
+| sender-policy canonical path | admission and ACL only | bounded file open | none |
+| sender address | none | sole reader; current bundle binding | DPAPI ciphertext only |
 | Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
 
 ### Mailbox-candidate acceptance slice
