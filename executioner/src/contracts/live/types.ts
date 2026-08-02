@@ -181,6 +181,8 @@ export type CredentialMutationResult =
       readonly kind:
         | "existing_account"
         | "create_account"
+        | "account_absent"
+        | "account_exists"
         | "verification_required"
         | "application_ready";
       readonly attemptedFields: readonly ("email" | "password")[];

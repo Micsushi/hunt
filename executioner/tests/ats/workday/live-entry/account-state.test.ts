@@ -53,3 +53,35 @@ test("conflicting account or challenge structures are factual ambiguity", () => 
     LIVE_ENTRY_TRAITS.challenge.mfa,
   ]).kind, "account_state_ambiguous");
 });
+
+test("exact account facts are retained without treating the page default as evidence", () => {
+  const absent = classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.signIn,
+    LIVE_ENTRY_TRAITS.accountFact.absent,
+  ]);
+  const exists = classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.create,
+    LIVE_ENTRY_TRAITS.accountFact.exists,
+  ]);
+  const defaultCreate = classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.create,
+  ]);
+
+  assert.equal(absent.kind, "existing_account");
+  assert.equal(absent.kind === "existing_account" && absent.accountFact, "absent");
+  assert.equal(exists.kind, "create_account");
+  assert.equal(exists.kind === "create_account" && exists.accountFact, "exists");
+  assert.equal(defaultCreate.kind === "create_account" && defaultCreate.accountFact, undefined);
+});
+
+test("misplaced or conflicting account facts are ambiguity", () => {
+  assert.equal(classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.create,
+    LIVE_ENTRY_TRAITS.accountFact.absent,
+  ]).kind, "account_state_ambiguous");
+  assert.equal(classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.signIn,
+    LIVE_ENTRY_TRAITS.accountFact.absent,
+    LIVE_ENTRY_TRAITS.accountFact.exists,
+  ]).kind, "account_state_ambiguous");
+});

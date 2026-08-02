@@ -138,20 +138,19 @@ test("verification consumes through one navigator call and never invalidates sep
   assert.equal(accountState.calls.length, 2);
 });
 
-test("create-account mode is selected from observation and then enters verification", async () => {
+test("fresh-create is login-first and creates only after independently confirmed absence", async () => {
   const credential = createCredentialMutationAdapterFake({
-    mutate: {
+    mutate: (_request, _signal, callIndex) => ({
       ok: true,
-      value: {
-        kind: "verification_required",
-        attemptedFields: ["email", "password"],
-      },
-    },
+      value: callIndex === 0
+        ? { kind: "account_absent", attemptedFields: ["email", "password"] }
+        : { kind: "verification_required", attemptedFields: ["email", "password"] },
+    }),
   });
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
   const artifacts = createVerificationArtifactFake();
   const navigator = createPrivilegedVerificationNavigatorFake();
-  const accountState = observer("create_account", "application_ready");
+  const accountState = observer("create_account", "account_absent", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     mailbox: mailbox.port,
@@ -160,15 +159,136 @@ test("create-account mode is selected from observation and then enters verificat
     accountState: accountState.port,
   });
 
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["sign_in", "create_account"],
+  );
+  assert.equal(mailbox.calls.length, 1);
+  assert.equal(navigator.calls.length, 1);
+});
+
+test("sign-in intent submits sign-in from a create-account page and never creates", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: {
+      ok: true,
+      value: { kind: "application_ready", attemptedFields: ["email", "password"] },
+    },
+  });
+  const accountState = observer("create_account", "application_ready");
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
   const result = await lifecycle.run(input(), new AbortController().signal);
 
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["create_account"],
+    ["sign_in"],
   );
-  assert.equal(mailbox.calls.length, 1);
-  assert.equal(navigator.calls.length, 1);
+});
+
+test("fresh-create stops after an ordinary sign-in rejection and never infers absence", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: {
+      ok: true,
+      value: { kind: "existing_account", attemptedFields: ["email", "password"] },
+    },
+  });
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer("create_account").port,
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.error.code, "credential_mutation_denied");
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["sign_in"],
+  );
+});
+
+test("exact account-exists after create switches to sign-in once", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: (_request, _signal, callIndex) => ({
+      ok: true,
+      value: [
+        { kind: "account_absent", attemptedFields: ["email", "password"] },
+        { kind: "account_exists", attemptedFields: ["email", "password"] },
+        { kind: "application_ready", attemptedFields: ["email", "password"] },
+      ][callIndex] as never,
+    }),
+  });
+  const accountState = observer(
+    "create_account",
+    "account_absent",
+    "account_exists",
+    "application_ready",
+  );
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["sign_in", "create_account", "sign_in"],
+  );
+});
+
+test("create completion requires an independent application-ready observation", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: (_request, _signal, callIndex) => ({
+      ok: true,
+      value: callIndex === 0
+        ? { kind: "account_absent", attemptedFields: ["email", "password"] }
+        : { kind: "application_ready", attemptedFields: ["email", "password"] },
+    }),
+  });
+  const accountState = observer("create_account", "account_absent", "application_ready");
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path, "created_account");
+  assert.equal(accountState.calls.length, 3);
 });
 
 test("post-navigation existing-account state signs in and is reclassified", async () => {

@@ -330,6 +330,33 @@ test("sign-in traces its semantic switch from an initial create page", async () 
   ]);
 });
 
+test("post-submit exact account facts survive while unchanged entry pages remain denials", async () => {
+  for (const [mode, fact, kind] of [
+    ["sign_in", "absent", "account_absent"],
+    ["create_account", "exists", "account_exists"],
+  ] as const) {
+    const pageKind = mode === "sign_in" ? "existing_account" : "create_account";
+    const fixture = accountFixture([
+      pageKind,
+      { kind: pageKind, accountFact: fact },
+    ]);
+
+    const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+      .mutate(request(mode), new AbortController().signal);
+
+    assert.deepEqual(result, {
+      ok: true,
+      value: { kind, attemptedFields: ["email", "password"] },
+    });
+    assert.equal(fixture.operations.includes("clear:email"), true);
+    assert.equal(fixture.operations.includes("clear:password"), true);
+    assert.equal(
+      fixture.operations.includes("clear:password_confirmation"),
+      mode === "create_account",
+    );
+  }
+});
+
 test("create-account that remains on an entry state clears every field and is denied", async () => {
   const fixture = accountFixture(["create_account", "create_account"]);
 
@@ -580,7 +607,12 @@ type ResolvedStateKind =
   | "verification_required"
   | "application_ready";
 
-function accountFixture(states: readonly ResolvedStateKind[]) {
+type ResolvedState = ResolvedStateKind | {
+  readonly kind: "existing_account" | "create_account";
+  readonly accountFact: "absent" | "exists";
+};
+
+function accountFixture(states: readonly ResolvedState[]) {
   const operations: string[] = [];
   let classificationCalls = 0;
   let resolverCalls = 0;
@@ -635,9 +667,15 @@ function accountFixture(states: readonly ResolvedStateKind[]) {
     classifiedAccount: {
       inspectClassifiedAccount: async () => {
         classificationCalls += 1;
-        const kind = states[Math.min(index, states.length - 1)]!;
+        const state = states[Math.min(index, states.length - 1)]!;
         index += 1;
-        return { ok: true, value: stateObservation(kind) };
+        return {
+          ok: true,
+          value: stateObservation(
+            typeof state === "string" ? state : state.kind,
+            typeof state === "string" ? undefined : state.accountFact,
+          ),
+        };
       },
     },
     accountPage: {
@@ -685,11 +723,13 @@ function accountFixture(states: readonly ResolvedStateKind[]) {
 
 function stateObservation(
   kind: ResolvedStateKind,
+  accountFact?: "absent" | "exists",
 ): Extract<ClassifiedAccountObservation, { readonly kind: "classified_account" }> {
   return {
     kind: "classified_account",
     state: {
       kind,
+      ...(accountFact === undefined ? {} : { accountFact }),
       classificationId: `classification_account_${kind}_v1` as never,
       sourceRevisionId: "classification_revision_live_entry_v1" as never,
     },

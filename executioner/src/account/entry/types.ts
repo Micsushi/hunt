@@ -37,6 +37,8 @@ export type AccountEntryTraceEvent =
   | "post_submit_classify_failed"
   | "post_submit_existing_account"
   | "post_submit_create_account"
+  | "post_submit_account_absent"
+  | "post_submit_account_exists"
   | "post_submit_no_progress"
   | "post_submit_verification_required"
   | "post_submit_application_ready"
@@ -81,7 +83,11 @@ type AccountState = {
   readonly classificationId: ClassificationId;
   readonly sourceRevisionId: ClassificationRevisionId;
 } & (
-  | { readonly kind: "existing_account" | "create_account" | "verification_required" | "application_ready" }
+  | {
+      readonly kind: "existing_account" | "create_account";
+      readonly accountFact?: "absent" | "exists";
+    }
+  | { readonly kind: "verification_required" | "application_ready" }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
 
@@ -130,6 +136,12 @@ export function accountStateResult(
   state: AccountState,
   attemptedFields: readonly ("email" | "password")[],
 ): CredentialMutationResult {
+  if (state.kind === "existing_account" && state.accountFact === "absent") {
+    return { kind: "account_absent", attemptedFields };
+  }
+  if (state.kind === "create_account" && state.accountFact === "exists") {
+    return { kind: "account_exists", attemptedFields };
+  }
   return state.kind === "manual_intervention"
     ? { kind: state.kind, reason: state.reason, attemptedFields }
     : { kind: state.kind, attemptedFields };

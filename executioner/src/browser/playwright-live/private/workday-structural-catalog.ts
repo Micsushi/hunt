@@ -58,6 +58,11 @@ const accountRules = Object.freeze([
   rule("structural_trait_account_create_v1", '[data-automation-id="createAccountSubmitButton"]'),
 ] satisfies readonly TraitRule[]);
 
+const accountFactRules = Object.freeze([
+  rule("structural_trait_account_absent_v1", '[data-automation-id="accountNotFoundError"]'),
+  rule("structural_trait_account_exists_v1", '[data-automation-id="accountAlreadyExistsError"]'),
+] satisfies readonly TraitRule[]);
+
 const challengeRules = Object.freeze([
   rule("structural_trait_challenge_captcha_v1", '[data-automation-id="captchaChallenge"]'),
   rule("structural_trait_challenge_captcha_v1", 'iframe[title="reCAPTCHA"]'),
@@ -116,6 +121,11 @@ export async function inspectWorkdayStructure(
       rule.traitId === "structural_trait_page_account_entry_v1"
     ) continue;
     if (await present(page, rule.selector)) traitIds.push(rule.traitId);
+  }
+  if (!inlineVerification) {
+    for (const rule of accountFactRules) {
+      if (await anyExactVisible(page, [rule.selector])) traitIds.push(rule.traitId);
+    }
   }
   const semanticAccount = inlineVerification
     ? undefined

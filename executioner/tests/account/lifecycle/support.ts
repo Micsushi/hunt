@@ -20,8 +20,11 @@ export function lifecycleInput() {
     credential: liveFixtures.accountSecret,
     mailboxRequest: liveFixtures.mailboxPollRequest,
     now: liveFixtures.issuedAt,
+    accountIntent: "sign_in" as const,
     operations: {
       initialCredentialMutation: operation("initial"),
+      createCredentialMutation: operation("create"),
+      accountExistsSignIn: operation("exists-sign-in"),
       navigateVerification: operation("navigate"),
       postVerificationSignIn: operation("sign-in"),
     },
@@ -29,7 +32,7 @@ export function lifecycleInput() {
 }
 
 export type ObservedState = "application_ready" | "existing_account" |
-  "create_account" | "verification_required";
+  "create_account" | "verification_required" | "account_absent" | "account_exists";
 
 export function accountObserver(
   ...states: readonly (ObservedState | ClassifiedAccountObservation)[]
@@ -48,12 +51,23 @@ export function accountObserver(
       const next = states[Math.min(index, states.length - 1)] ?? "application_ready";
       index += 1;
       if (typeof next !== "string") return { ok: true, value: next };
+      const accountFact = next === "account_absent"
+        ? "absent"
+        : next === "account_exists"
+          ? "exists"
+          : undefined;
+      const kind = next === "account_absent"
+        ? "existing_account"
+        : next === "account_exists"
+          ? "create_account"
+          : next;
       return {
         ok: true,
         value: {
           kind: "classified_account",
           state: {
-            kind: next,
+            kind,
+            ...(accountFact === undefined ? {} : { accountFact }),
             classificationId: "classification_account_test_v1",
             sourceRevisionId: "classification_revision_test_v1",
           },

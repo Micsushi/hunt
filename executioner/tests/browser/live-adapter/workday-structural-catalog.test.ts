@@ -84,6 +84,60 @@ test("a generic visible alert does not overclaim the semantic account state", as
   ]);
 });
 
+test("only exact Workday account-fact markers produce absence or existence traits", async () => {
+  const cases = [
+    [
+      '[data-automation-id="accountNotFoundError"]',
+      "structural_trait_account_absent_v1",
+      signInInspector(),
+    ],
+    [
+      '[data-automation-id="accountAlreadyExistsError"]',
+      "structural_trait_account_exists_v1",
+      createInspector(),
+    ],
+  ] as const;
+  for (const [exactSelector, factTrait, inspector] of cases) {
+    const page: WorkdayStructuralPage = {
+      locator: (selector) => ({
+        count: async () => selector === exactSelector ? 1 : 0,
+        isVisible: async () => true,
+      }),
+    };
+
+    const result = await inspectWorkdayStructure(page, false, inspector);
+
+    assert.equal(result.kind, "snapshot");
+    assert.equal(
+      result.kind === "snapshot" && result.snapshot.traitIds.includes(factTrait),
+      true,
+    );
+  }
+});
+
+test("hidden or ambiguous account-fact markers never become existence evidence", async () => {
+  for (const [count, visible] of [[1, false], [2, true]] as const) {
+    const page: WorkdayStructuralPage = {
+      locator: (selector) => ({
+        count: async () => selector === '[data-automation-id="accountNotFoundError"]'
+          ? count
+          : 0,
+        isVisible: async () => visible,
+      }),
+    };
+
+    const result = await inspectWorkdayStructure(page, false, signInInspector());
+
+    assert.equal(result.kind, "snapshot");
+    assert.equal(
+      result.kind === "snapshot" && result.snapshot.traitIds.includes(
+        "structural_trait_account_absent_v1",
+      ),
+      false,
+    );
+  }
+});
+
 test("normal noCaptcha ownership alone never creates a CAPTCHA trait", async () => {
   const page: WorkdayStructuralPage = {
     locator: (selector) => ({
@@ -112,6 +166,17 @@ function signInInspector(): WorkdaySemanticAccountInspector {
       actionable: control !== "password_confirmation" &&
         control !== "submit_create_account" &&
         control !== "show_sign_in",
+    }),
+  };
+}
+
+function createInspector(): WorkdaySemanticAccountInspector {
+  return {
+    inspect: async (control) => ({
+      cardinality: control === "submit_sign_in" || control === "show_create_account"
+        ? 0
+        : 1,
+      actionable: control !== "submit_sign_in" && control !== "show_create_account",
     }),
   };
 }

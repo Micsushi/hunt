@@ -344,6 +344,8 @@ export function parseCredentialMutationResult(
     [
       "existing_account",
       "create_account",
+      "account_absent",
+      "account_exists",
       "verification_required",
       "application_ready",
       "manual_intervention",

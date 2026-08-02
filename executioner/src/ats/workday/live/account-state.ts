@@ -11,7 +11,11 @@ type LiveAccountStateMetadata = {
 };
 
 export type ResolvedLiveAccountStateResult = LiveAccountStateMetadata & (
-  | { readonly kind: "existing_account" | "create_account" | "verification_required" | "application_ready" }
+  | {
+      readonly kind: "existing_account" | "create_account";
+      readonly accountFact?: "absent" | "exists";
+    }
+  | { readonly kind: "verification_required" | "application_ready" }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
 
@@ -26,6 +30,8 @@ export type LiveAccountStateResult =
 const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
   existing_account: "classification_account_existing_v1",
   create_account: "classification_account_create_v1",
+  account_absent: "classification_account_absent_v1",
+  account_exists: "classification_account_exists_v1",
   verification_required: "classification_account_verify_v1",
   application_ready: "classification_account_ready_v1",
   manual_intervention_captcha: "classification_account_captcha_v1",
@@ -36,6 +42,8 @@ const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
 }) as unknown as Readonly<Record<
   | "existing_account"
   | "create_account"
+  | "account_absent"
+  | "account_exists"
   | "verification_required"
   | "application_ready"
   | "manual_intervention_captcha"
@@ -70,9 +78,16 @@ export function classifyLiveAccountState(
   if (pageType === "account_entry") {
     const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn);
     const create = traits.has(LIVE_ENTRY_TRAITS.account.create);
-    if (signIn && create) return state("account_state_ambiguous");
-    if (signIn) return state("existing_account");
-    if (create) return state("create_account");
+    const absent = traits.has(LIVE_ENTRY_TRAITS.accountFact.absent);
+    const exists = traits.has(LIVE_ENTRY_TRAITS.accountFact.exists);
+    if (
+      (signIn && create) ||
+      (absent && exists) ||
+      (absent && !signIn) ||
+      (exists && !create)
+    ) return state("account_state_ambiguous");
+    if (signIn) return entryState("existing_account", absent ? "absent" : undefined);
+    if (create) return entryState("create_account", exists ? "exists" : undefined);
     return state("account_state_unknown");
   }
   if (pageType === "email_verification") return state("verification_required");
@@ -80,6 +95,24 @@ export function classifyLiveAccountState(
     return state("application_ready");
   }
   return state("account_state_unknown");
+}
+
+function entryState(
+  kind: "existing_account" | "create_account",
+  accountFact: "absent" | "exists" | undefined,
+): ResolvedLiveAccountStateResult {
+  return Object.freeze({
+    kind,
+    ...(accountFact === undefined ? {} : { accountFact }),
+    classificationId: ACCOUNT_CLASSIFICATION_IDS[
+      accountFact === "absent"
+        ? "account_absent"
+        : accountFact === "exists"
+          ? "account_exists"
+          : kind
+    ],
+    sourceRevisionId: LIVE_ENTRY_CLASSIFICATION_REVISION_ID,
+  });
 }
 
 function state(

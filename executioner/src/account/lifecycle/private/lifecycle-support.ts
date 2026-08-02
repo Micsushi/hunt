@@ -2,7 +2,7 @@ import { liveCoordinatorError } from "../../../control/orchestrator/live/types.t
 import type { AccountLifecycleInput, AccountLifecycleResult } from "../types.ts";
 
 export function ready(
-  path: "already_ready" | "reused_account" | "verified_account",
+  path: "already_ready" | "reused_account" | "created_account" | "verified_account",
   verificationCandidateCount: 0 | 1,
   verificationConsumed: boolean,
 ): AccountLifecycleResult {
@@ -160,7 +160,10 @@ export function requestFingerprint(input: AccountLifecycleInput): string {
     input.mailboxRequest.notBefore,
     input.mailboxRequest.notAfter,
     input.now,
+    input.accountIntent,
     input.operations.initialCredentialMutation,
+    input.operations.createCredentialMutation,
+    input.operations.accountExistsSignIn,
     input.operations.navigateVerification,
     input.operations.postVerificationSignIn,
   ]);

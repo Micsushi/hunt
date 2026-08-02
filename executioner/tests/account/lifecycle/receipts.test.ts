@@ -29,7 +29,7 @@ test("same operation replays one frozen receipt and a changed fingerprint confli
   const first = await lifecycle.run(request, new AbortController().signal);
   const replay = await lifecycle.run(request, new AbortController().signal);
   const conflict = await lifecycle.run(
-    { ...request, target: liveFixtures.otherTarget },
+    { ...request, accountIntent: "fresh_create" },
     new AbortController().signal,
   );
 

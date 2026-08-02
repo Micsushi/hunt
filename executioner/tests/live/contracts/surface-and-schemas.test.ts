@@ -341,6 +341,8 @@ test("credential mutation result preserves exact account and manual states", () 
   for (const kind of [
     "existing_account",
     "create_account",
+    "account_absent",
+    "account_exists",
     "verification_required",
     "application_ready",
   ] as const) {

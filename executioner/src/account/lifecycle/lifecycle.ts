@@ -63,7 +63,11 @@ export class AccountVerificationLifecycle {
     if (signal.aborted) {
       return { ok: false, error: liveCoordinatorError("operation_cancelled") };
     }
-    if (input.schemaVersion !== 1 || !validInstant(input.now)) {
+    if (
+      input.schemaVersion !== 1 ||
+      !validInstant(input.now) ||
+      (input.accountIntent !== "sign_in" && input.accountIntent !== "fresh_create")
+    ) {
       return { ok: false, error: liveCoordinatorError("mcp_request_invalid") };
     }
     if (input.credential.journeyId !== input.journeyId) {
@@ -152,86 +156,157 @@ export class AccountVerificationLifecycle {
     }
     if (
       observed.value.kind === "classified_account" &&
-      observed.value.state.kind === "existing_account"
-    ) {
-      const mutation = await this.#dependencies.credentialMutation.mutate({
-        schemaVersion: 1,
-        journeyId: input.journeyId,
-        operationId: input.operations.initialCredentialMutation,
-        sessionId: input.session.sessionId,
-        target: input.target,
-        now: input.now,
-        mode: "sign_in",
-        credential: input.credential,
-        fields: ["email", "password"],
-      }, signal);
-      if (!mutation.ok) return mutation;
-      let result;
-      try {
-        result = parseCredentialMutationResult(mutation.value);
-        if (result.kind === "manual_intervention") {
-          return blocked("account_access", {
-            kind: "manual_intervention",
-            reason: result.reason,
-          });
-        }
-      } catch {
-        return denied();
-      }
-      if (result.kind === "verification_required") {
-        return this.#verify(input, signal);
-      }
-      if (result.kind !== "application_ready") return denied();
-      const confirmed = await this.#dependencies.accountState.observe({
-        schemaVersion: 1,
-        journeyId: input.journeyId,
-        sessionId: input.session.sessionId,
-        target: input.target,
-      }, signal);
-      if (!confirmed.ok) return confirmed;
-      return confirmed.value.kind === "classified_account" &&
-          confirmed.value.state.kind === "application_ready"
-        ? ready("reused_account", 0, false)
-        : denied();
-    }
-    if (
-      observed.value.kind === "classified_account" &&
       observed.value.state.kind === "verification_required"
     ) {
       return this.#verify(input, signal);
     }
     if (
-      observed.value.kind === "classified_account" &&
-      observed.value.state.kind === "create_account"
-    ) {
-      const mutation = await this.#dependencies.credentialMutation.mutate({
-        schemaVersion: 1,
-        journeyId: input.journeyId,
-        operationId: input.operations.initialCredentialMutation,
-        sessionId: input.session.sessionId,
-        target: input.target,
-        now: input.now,
-        mode: "create_account",
-        credential: input.credential,
-        fields: ["email", "password"],
-      }, signal);
-      if (!mutation.ok) return mutation;
-      try {
-        const result = parseCredentialMutationResult(mutation.value);
-        if (result.kind === "manual_intervention") {
-          return blocked("account_access", {
-            kind: "manual_intervention",
-            reason: result.reason,
-          });
-        }
-        return result.kind === "verification_required"
-          ? this.#verify(input, signal)
-          : denied();
-      } catch {
-        return denied();
-      }
+      observed.value.kind !== "classified_account" ||
+      (observed.value.state.kind !== "existing_account" &&
+        observed.value.state.kind !== "create_account")
+    ) return denied();
+    return this.#signIn(input, signal);
+  }
+
+  async #signIn(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+  ): Promise<AccountLifecycleResult> {
+    const mutation = await this.#credentialMutation(
+      input,
+      signal,
+      "sign_in",
+      input.operations.initialCredentialMutation,
+    );
+    if (!mutation.ok) return mutation;
+    let result;
+    try {
+      result = parseCredentialMutationResult(mutation.value);
+    } catch {
+      return denied();
     }
-    return denied();
+    if (result.kind === "manual_intervention") {
+      return blocked("account_access", {
+        kind: "manual_intervention",
+        reason: result.reason,
+      });
+    }
+    if (result.kind === "verification_required") return this.#verify(input, signal);
+    if (result.kind === "application_ready") {
+      return this.#confirmReady(input, signal, "reused_account");
+    }
+    if (result.kind !== "account_absent" || input.accountIntent !== "fresh_create") {
+      return denied();
+    }
+    const confirmed = await this.#observe(input, signal);
+    if (!confirmed.ok) return confirmed;
+    if (
+      confirmed.value.kind !== "classified_account" ||
+      confirmed.value.state.kind !== "existing_account" ||
+      confirmed.value.state.accountFact !== "absent"
+    ) return denied();
+    return this.#create(input, signal);
+  }
+
+  async #create(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+  ): Promise<AccountLifecycleResult> {
+    const mutation = await this.#credentialMutation(
+      input,
+      signal,
+      "create_account",
+      input.operations.createCredentialMutation,
+    );
+    if (!mutation.ok) return mutation;
+    let result;
+    try {
+      result = parseCredentialMutationResult(mutation.value);
+    } catch {
+      return denied();
+    }
+    if (result.kind === "manual_intervention") {
+      return blocked("account_access", {
+        kind: "manual_intervention",
+        reason: result.reason,
+      });
+    }
+    if (result.kind === "verification_required") return this.#verify(input, signal);
+    if (result.kind === "application_ready") {
+      return this.#confirmReady(input, signal, "created_account");
+    }
+    if (result.kind !== "account_exists") return denied();
+    const confirmed = await this.#observe(input, signal);
+    if (!confirmed.ok) return confirmed;
+    if (
+      confirmed.value.kind !== "classified_account" ||
+      confirmed.value.state.kind !== "create_account" ||
+      confirmed.value.state.accountFact !== "exists"
+    ) return denied();
+    const signedIn = await this.#credentialMutation(
+      input,
+      signal,
+      "sign_in",
+      input.operations.accountExistsSignIn,
+    );
+    if (!signedIn.ok) return signedIn;
+    let signInResult;
+    try {
+      signInResult = parseCredentialMutationResult(signedIn.value);
+    } catch {
+      return denied();
+    }
+    if (signInResult.kind === "manual_intervention") {
+      return blocked("account_access", {
+        kind: "manual_intervention",
+        reason: signInResult.reason,
+      });
+    }
+    if (signInResult.kind === "verification_required") return this.#verify(input, signal);
+    return signInResult.kind === "application_ready"
+      ? this.#confirmReady(input, signal, "reused_account")
+      : denied();
+  }
+
+  #credentialMutation(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+    mode: "sign_in" | "create_account",
+    operationId: AccountLifecycleInput["operationId"],
+  ) {
+    return this.#dependencies.credentialMutation.mutate({
+      schemaVersion: 1,
+      journeyId: input.journeyId,
+      operationId,
+      sessionId: input.session.sessionId,
+      target: input.target,
+      now: input.now,
+      mode,
+      credential: input.credential,
+      fields: ["email", "password"],
+    }, signal);
+  }
+
+  #observe(input: AccountLifecycleInput, signal: AbortSignal) {
+    return this.#dependencies.accountState.observe({
+      schemaVersion: 1,
+      journeyId: input.journeyId,
+      sessionId: input.session.sessionId,
+      target: input.target,
+    }, signal);
+  }
+
+  async #confirmReady(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+    path: "reused_account" | "created_account",
+  ): Promise<AccountLifecycleResult> {
+    const confirmed = await this.#observe(input, signal);
+    if (!confirmed.ok) return confirmed;
+    return confirmed.value.kind === "classified_account" &&
+        confirmed.value.state.kind === "application_ready"
+      ? ready(path, 0, false)
+      : denied();
   }
 
   async #verify(

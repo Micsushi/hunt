@@ -222,7 +222,21 @@ async function mutateOnce(
             emit(dependencies, "post_submit_classify_failed");
             throw new Error("credential effect could not be reconciled");
           }
-          emit(dependencies, postSubmitEvent(reconciled.value.state.kind));
+          const reconciledResult = accountStateResult(
+            reconciled.value.state,
+            ["email", "password"],
+          );
+          emit(dependencies, postSubmitEvent(reconciledResult.kind));
+          if (
+            reconciledResult.kind === "account_absent" ||
+            reconciledResult.kind === "account_exists"
+          ) {
+            if (!await cleanupPopulated(access, populated, dependencies)) {
+              localFailure = failure("credential_effect_uncertain");
+              return accountStateResult(reconciled.value.state, ["email", "password"]);
+            }
+            return reconciledResult;
+          }
           if (
             reconciled.value.state.kind === "existing_account" ||
             reconciled.value.state.kind === "create_account"
@@ -281,7 +295,7 @@ async function cleanupPopulated(
 
 function postSubmitEvent(
   kind: "existing_account" | "create_account" | "verification_required" |
-    "application_ready" | "manual_intervention",
+    "application_ready" | "manual_intervention" | "account_absent" | "account_exists",
 ) {
   return `post_submit_${kind}` as const;
 }

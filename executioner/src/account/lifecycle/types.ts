@@ -40,10 +40,10 @@ export type AccountLifecycleObservation =
         | {
             readonly kind:
               | "existing_account"
-              | "create_account"
-              | "verification_required"
-              | "application_ready";
+              | "create_account";
+            readonly accountFact?: "absent" | "exists";
           }
+        | { readonly kind: "verification_required" | "application_ready" }
         | {
             readonly kind: "manual_intervention";
             readonly reason: "captcha" | "mfa" | "access_control";
@@ -85,8 +85,11 @@ export interface AccountLifecycleInput {
   readonly credential: ActiveAccountSecretHandle;
   readonly mailboxRequest: MailboxPollRequest;
   readonly now: string;
+  readonly accountIntent: "sign_in" | "fresh_create";
   readonly operations: {
     readonly initialCredentialMutation: OperationId;
+    readonly createCredentialMutation: OperationId;
+    readonly accountExistsSignIn: OperationId;
     readonly navigateVerification: OperationId;
     readonly postVerificationSignIn: OperationId;
   };
@@ -94,7 +97,7 @@ export interface AccountLifecycleInput {
 
 export interface AccountLifecycleReady {
   readonly kind: "account_ready";
-  readonly path: "already_ready" | "reused_account" | "verified_account";
+  readonly path: "already_ready" | "reused_account" | "created_account" | "verified_account";
   readonly independentlyObserved: true;
   readonly verificationCandidateCount: 0 | 1;
   readonly verificationConsumed: boolean;
