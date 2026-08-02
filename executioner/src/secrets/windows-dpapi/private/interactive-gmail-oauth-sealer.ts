@@ -413,10 +413,12 @@ public static class HuntInteractiveGmailOAuthSealer
         try
         {
             try { existing = grants.Read(target); }
-            catch (InvalidDataException) { throw new FlowException(11); }
+            catch { throw new FlowException(11); }
             if (existing == null)
             {
-                token = oauth.AuthorizeInteractive(clientId, clientSecret, accountEmail);
+                try { token = oauth.AuthorizeInteractive(clientId, clientSecret, accountEmail); }
+                catch (FlowException) { throw; }
+                catch { throw new FlowException(3); }
                 if (token == null || !ValidGrant(token.RefreshValue)) throw new FlowException(3);
             }
             else
@@ -435,10 +437,10 @@ public static class HuntInteractiveGmailOAuthSealer
                 profileEmail = oauth.ProfileEmail(token.AccessValue, usedExistingGrant);
             }
             catch (HuntGmailRefreshUnavailableException) { throw new FlowException(12); }
+            catch (FlowException) { throw; }
             catch
             {
-                if (usedExistingGrant) throw new FlowException(11);
-                throw;
+                throw new FlowException(usedExistingGrant ? 11 : 4);
             }
             if (!String.Equals(accountEmail, profileEmail, StringComparison.OrdinalIgnoreCase) ||
                 !ValidEmail(profileEmail) || profileEmail != profileEmail.ToLowerInvariant())
@@ -450,7 +452,12 @@ public static class HuntInteractiveGmailOAuthSealer
                 byte[] value = token.RefreshValue;
                 if (!ValidGrant(value))
                     throw new FlowException(existing == null ? 3 : 11);
-                grants.Write(target, value);
+                try { grants.Write(target, value); }
+                catch
+                {
+                    try { grants.Delete(target); } catch { }
+                    throw new FlowException(11);
+                }
             }
             return token;
         }
@@ -641,7 +648,7 @@ public static class HuntInteractiveGmailOAuthSealer
         catch (Exception error) { failure = error; }
         try { deleted = grants.Delete(lookupTarget) || deleted; }
         catch (Exception error) { if (failure == null) failure = error; }
-        if (failure != null) throw failure;
+        if (failure != null) throw new FlowException(11);
         return deleted;
     }
 

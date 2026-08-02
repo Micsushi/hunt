@@ -574,17 +574,31 @@ public sealed class HuntLookupStore : IHuntGmailGrantStore
 {
     public Dictionary<string, byte[]> Values = new Dictionary<string, byte[]>();
     public bool FailLookupWrite;
+    public string Failure;
     public int Deletes;
+    public int LookupReads;
 
     public byte[] Read(string target)
     {
+        if (Failure == "grant_read" && target.StartsWith("Hunt/C3/GmailRefresh/v1/"))
+            throw new InvalidOperationException();
+        if (target.StartsWith("Hunt/C3/GmailRefreshLookup/v1/"))
+        {
+            LookupReads++;
+            if (Failure == "lookup_read" ||
+                (Failure == "lookup_readback" && LookupReads > 1))
+                throw new InvalidOperationException();
+        }
         byte[] value;
         return Values.TryGetValue(target, out value) ? (byte[])value.Clone() : null;
     }
 
     public void Write(string target, byte[] value)
     {
-        if (FailLookupWrite && target.StartsWith("Hunt/C3/GmailRefreshLookup/v1/"))
+        if (Failure == "grant_write" && target.StartsWith("Hunt/C3/GmailRefresh/v1/"))
+            throw new InvalidOperationException();
+        if ((FailLookupWrite || Failure == "cleanup") &&
+            target.StartsWith("Hunt/C3/GmailRefreshLookup/v1/"))
             throw new InvalidOperationException();
         Values[target] = (byte[])value.Clone();
     }
@@ -592,6 +606,7 @@ public sealed class HuntLookupStore : IHuntGmailGrantStore
     public bool Delete(string target)
     {
         Deletes++;
+        if (Failure == "cleanup") throw new InvalidOperationException();
         byte[] value;
         if (!Values.TryGetValue(target, out value)) return false;
         Array.Clear(value, 0, value.Length);
@@ -602,8 +617,10 @@ public sealed class HuntLookupStore : IHuntGmailGrantStore
 
 public sealed class HuntLookupOAuth : IHuntGmailOAuthClient
 {
+    public static bool FailAuthorize;
     public HuntGmailToken AuthorizeInteractive(string clientId, string clientSecret, string loginHint)
     {
+        if (FailAuthorize) throw new InvalidOperationException();
         return Token("interactive", Encoding.UTF8.GetBytes("new-refresh"));
     }
 
@@ -637,7 +654,7 @@ public sealed class HuntLookupOAuth : IHuntGmailOAuthClient
       [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command",
-        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $type=[HuntInteractiveGmailOAuthSealer]; $acquire=$type.GetMethod('AcquireTokenWithLookup',$flags); $grantTarget=$type.GetMethod('GrantTarget',$flags); $lookupTarget=$type.GetMethod('LookupTarget',$flags); $cleanup=$type.GetMethod('DeleteGrantAndLookup',$flags); if($null -eq $acquire -or $null -eq $grantTarget -or $null -eq $lookupTarget -or $null -eq $cleanup) { exit 55 }; $client='1234567890-example1.apps.googleusercontent.com'; $email='person@example.invalid'; $recipient='recipient_abcdefghijklmnop'; $grant=[string]$grantTarget.Invoke($null,@($client,$email)); $lookup=[string]$lookupTarget.Invoke($null,@($client,$recipient)); function Acquire($store) { try { $token=$acquire.Invoke($null,@($client,'client-secret',$email,$recipient,$store,[HuntLookupOAuth]::new())); $token.Clear(); return 0 } catch { $inner=$_.Exception.InnerException; if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { return $inner.ExitCode }; return 99 } }; $fresh=[HuntLookupStore]::new(); if((Acquire $fresh) -ne 0 -or -not $fresh.Values.ContainsKey($grant) -or -not $fresh.Values.ContainsKey($lookup) -or [Text.Encoding]::ASCII.GetString($fresh.Values[$lookup]) -ne $grant.Substring($grant.Length-64)) { exit 56 }; $existing=[HuntLookupStore]::new(); $existing.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); if((Acquire $existing) -ne 0 -or -not $existing.Values.ContainsKey($grant) -or -not $existing.Values.ContainsKey($lookup)) { exit 57 }; $failed=[HuntLookupStore]::new(); $failed.FailLookupWrite=$true; if((Acquire $failed) -ne 11 -or $failed.Values.Count -ne 0 -or $failed.Deletes -lt 2) { exit 58 }; $mismatch=[HuntLookupStore]::new(); $mismatch.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $mismatch.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes(('0'*64)); if((Acquire $mismatch) -ne 11 -or $mismatch.Values.Count -ne 0 -or $mismatch.Deletes -lt 2) { exit 59 }; $cleanupStore=[HuntLookupStore]::new(); $cleanupStore.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $cleanupStore.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($grant.Substring($grant.Length-64)); if(-not $cleanup.Invoke($null,@($client,$email,$recipient,$cleanupStore)) -or $cleanupStore.Values.Count -ne 0 -or $cleanupStore.Deletes -ne 2) { exit 60 }; exit 0`,
+        `$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $type=[HuntInteractiveGmailOAuthSealer]; $acquire=$type.GetMethod('AcquireTokenWithLookup',$flags); $grantTarget=$type.GetMethod('GrantTarget',$flags); $lookupTarget=$type.GetMethod('LookupTarget',$flags); $cleanup=$type.GetMethod('DeleteGrantAndLookup',$flags); if($null -eq $acquire -or $null -eq $grantTarget -or $null -eq $lookupTarget -or $null -eq $cleanup) { exit 55 }; $client='1234567890-example1.apps.googleusercontent.com'; $email='person@example.invalid'; $recipient='recipient_abcdefghijklmnop'; $grant=[string]$grantTarget.Invoke($null,@($client,$email)); $lookup=[string]$lookupTarget.Invoke($null,@($client,$recipient)); function Acquire($store) { try { $token=$acquire.Invoke($null,@($client,'client-secret',$email,$recipient,$store,[HuntLookupOAuth]::new())); $token.Clear(); return 0 } catch { $inner=$_.Exception.InnerException; if($null -ne $inner -and $null -ne $inner.GetType().GetProperty('ExitCode')) { return $inner.ExitCode }; return 99 } }; $fresh=[HuntLookupStore]::new(); if((Acquire $fresh) -ne 0 -or -not $fresh.Values.ContainsKey($grant) -or -not $fresh.Values.ContainsKey($lookup) -or [Text.Encoding]::ASCII.GetString($fresh.Values[$lookup]) -ne $grant.Substring($grant.Length-64)) { exit 56 }; $existing=[HuntLookupStore]::new(); $existing.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); if((Acquire $existing) -ne 0 -or -not $existing.Values.ContainsKey($grant) -or -not $existing.Values.ContainsKey($lookup)) { exit 57 }; $failed=[HuntLookupStore]::new(); $failed.FailLookupWrite=$true; if((Acquire $failed) -ne 11 -or $failed.Values.Count -ne 0 -or $failed.Deletes -lt 2) { exit 58 }; $mismatch=[HuntLookupStore]::new(); $mismatch.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $mismatch.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes(('0'*64)); if((Acquire $mismatch) -ne 11 -or $mismatch.Values.Count -ne 0 -or $mismatch.Deletes -lt 2) { exit 59 }; foreach($phase in @('grant_read','grant_write','lookup_read','lookup_readback','cleanup')) { $phaseStore=[HuntLookupStore]::new(); $phaseStore.Failure=$phase; if((Acquire $phaseStore) -ne 11) { exit 60 } }; [HuntLookupOAuth]::FailAuthorize=$true; $authorizeFailure=Acquire ([HuntLookupStore]::new()); [HuntLookupOAuth]::FailAuthorize=$false; if($authorizeFailure -ne 3) { exit 61 }; $cleanupStore=[HuntLookupStore]::new(); $cleanupStore.Values[$grant]=[Text.Encoding]::UTF8.GetBytes('stored-refresh'); $cleanupStore.Values[$lookup]=[Text.Encoding]::ASCII.GetBytes($grant.Substring($grant.Length-64)); if(-not $cleanup.Invoke($null,@($client,$email,$recipient,$cleanupStore)) -or $cleanupStore.Values.Count -ne 0 -or $cleanupStore.Deletes -ne 2) { exit 62 }; exit 0`,
       ],
       {
         shell: false,
