@@ -109,6 +109,13 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /AuthorizationEndpoint = "https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth"/u);
   assert.match(source, /InstalledClientAuthUri = "https:\/\/accounts\.google\.com\/o\/oauth2\/auth"/u);
   assert.match(source, /CertificateEndpoint = "https:\/\/www\.googleapis\.com\/oauth2\/v1\/certs"/u);
+  assert.match(source, /Authorize\(clientId, installedClient\.Secret, accountEmail\)/u);
+  assert.match(source, /AuthorizationUrl\(clientId, redirect, state, challenge, loginHint\)/u);
+  assert.match(source, /\{ "login_hint", loginHint \}/u);
+  assert.match(
+    source,
+    /String\.Equals\(accountEmail, profileEmail, StringComparison\.OrdinalIgnoreCase\)/u,
+  );
   assert.match(source, /TcpListener\(IPAddress\.Loopback, 0\)/u);
   assert.match(source, /first\[0\] != "GET"/u);
   assert.match(source, /AbsolutePath != "\/oauth2callback"/u);
@@ -140,10 +147,48 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /exactBundle\["senderAddress"\] = sender/u);
   const authorizeMethod = /private static Token Authorize[\s\S]*?private static string ReceiveCode/u.exec(source)?.[0] ?? "";
   assert.doesNotMatch(authorizeMethod, /senderAddress|senderPolicy|notifications@/iu);
+  const bundleBlock = /IDictionary<string, object> exactBundle[\s\S]*?WriteOutput\(sealedValue\)/u.exec(source)?.[0] ?? "";
+  assert.doesNotMatch(bundleBlock, /login_hint|loginHint|accountEmail/u);
   assert.match(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
   assert.doesNotMatch(source, /process\.env|refresh_token[^\n]*bundle/iu);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)/iu);
+});
+
+test("trusted authorization URL contains one encoded private login hint", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-login-hint-url-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('AuthorizationUrl',[Reflection.BindingFlags]'NonPublic,Static'); try { $url=$method.Invoke($null,@('1234567890-example1.apps.googleusercontent.com','http://127.0.0.1:43210/oauth2callback','state-value','challenge-value','person+tag@example.invalid')) } catch { exit 31 }; $uri=[Uri]$url; $query=[System.Web.HttpUtility]::ParseQueryString($uri.Query); $hints=$query.GetValues('login_hint'); if($uri.GetLeftPart([UriPartial]::Path) -ne 'https://accounts.google.com/o/oauth2/v2/auth' -or $null -eq $hints -or $hints.Length -ne 1 -or $hints[0] -ne 'person+tag@example.invalid' -or -not $url.Contains('login_hint=person%2btag%40example.invalid')) { exit 32 }; exit 0",
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("embedded Gmail helper compiles without opening UI or network", async () => {

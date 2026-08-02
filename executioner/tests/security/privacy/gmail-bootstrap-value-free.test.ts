@@ -3,11 +3,24 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", async () => {
-  const [child, coordinator, cli, ownership] = await Promise.all([
+  const [
+    child,
+    coordinator,
+    cli,
+    ownership,
+    ownerContract,
+    mailboxEvidence,
+    accountEvidence,
+    evidenceStore,
+  ] = await Promise.all([
     readFile("src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts", "utf8"),
     readFile("src/composition/s2-gmail-bootstrap.ts", "utf8"),
     readFile("src/composition/s2-gmail-bootstrap-cli.ts", "utf8"),
     readFile("tests/security/privacy/fixtures/gmail-bootstrap-ownership.json", "utf8"),
+    readFile("src/live/preflight/types.ts", "utf8"),
+    readFile("src/live/evidence/mailbox-candidate-evidence.ts", "utf8"),
+    readFile("src/live/evidence/account-access-evidence.ts", "utf8"),
+    readFile("src/evidence/store.ts", "utf8"),
   ]);
   const embedded = /\$source = @'\r?\n[\s\S]*?\r?\n'@/u.exec(child)?.[0] ?? "";
   const ordinaryNodeSurface = child.replace(embedded, "");
@@ -15,6 +28,18 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
   assert.match(embedded, /senderAddress/u);
   assert.doesNotMatch(embedded, /InputBox|Microsoft\.VisualBasic|Interaction\./u);
   assert.doesNotMatch(ordinaryNodeSurface, /process\.env|process\.argv|client_secret|senderAddress/iu);
+  assert.doesNotMatch(
+    [
+      ordinaryNodeSurface,
+      coordinator,
+      cli,
+      ownerContract,
+      mailboxEvidence,
+      accountEvidence,
+      evidenceStore,
+    ].join("\n"),
+    /login_hint|loginHint/u,
+  );
   assert.match(child, /env:\s*\{\s*SystemRoot:/u);
   assert.doesNotMatch(coordinator, /access_token|refresh_token|client_secret|senderAddress|recipientAddress/u);
   assert.doesNotMatch(cli, /readFile\([^)]*(?:installedClient|senderPolicy)|client_secret|senderAddress/iu);
