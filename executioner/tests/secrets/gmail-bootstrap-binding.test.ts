@@ -12,13 +12,14 @@ const expected = {
   gmailHandleId: "secret_handle_fedcba9876543210fedcba9876543210",
 };
 
-test("admits one exact bound installed-client path and verification-host input", () => {
+test("admits exact bound installed-client and sender-policy paths", () => {
   const input = {
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v2",
+    contractRevision: "s2-gmail-bootstrap-v3",
     ...expected,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
     installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
+    senderPolicyConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\gmail-sender-policy.json",
     verificationHost: "wd5.myworkday.com",
   };
   assert.deepEqual(admitGmailBootstrapInput(input, expected), input);
@@ -32,10 +33,11 @@ test("admits one exact bound installed-client path and verification-host input",
 test("rejects extra fields, wrong binding, web clients, and unsafe hosts", () => {
   const base = {
     schemaVersion: 1,
-    contractRevision: "s2-gmail-bootstrap-v2",
+    contractRevision: "s2-gmail-bootstrap-v3",
     ...expected,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
     installedClientConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
+    senderPolicyConfigPath: "C:\\Users\\example\\AppData\\Local\\Hunt\\gmail-sender-policy.json",
     verificationHost: "wd5.myworkday.com",
   };
   for (const value of [
@@ -45,6 +47,10 @@ test("rejects extra fields, wrong binding, web clients, and unsafe hosts", () =>
     { ...base, installedClientConfigPath: "relative.json" },
     { ...base, installedClientConfigPath: "C:\\Users\\example\\..\\google.json" },
     { ...base, installedClientConfigPath: `C:\\${"x".repeat(4094)}` },
+    { ...base, senderPolicyConfigPath: "relative.json" },
+    { ...base, senderPolicyConfigPath: "C:\\Users\\example\\..\\sender.json" },
+    { ...base, senderPolicyConfigPath: `C:\\${"x".repeat(4094)}` },
+    { ...base, senderPolicyConfigPath: base.installedClientConfigPath.toUpperCase() },
     { ...base, verificationHost: "https://wd5.myworkday.com/token" },
     { ...base, verificationHost: "127.0.0.1" },
   ]) {

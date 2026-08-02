@@ -58,6 +58,12 @@ class ErrorSealer implements GmailCiphertextSealer {
   }
 }
 
+class SenderErrorSealer implements GmailCiphertextSealer {
+  async seal(): Promise<Uint8Array> {
+    throw new Error("Gmail sender policy invalid");
+  }
+}
+
 test("preflights both inputs before sealing the exact Gmail handle", async () => {
   const record = await fixture();
   try {
@@ -87,6 +93,7 @@ test("preflights both inputs before sealing the exact Gmail handle", async () =>
     assert.equal(sealer.calls, 1);
     assert.equal(sealer.request?.clientId, record.bootstrap.desktopClientId);
     assert.equal(sealer.request?.installedClientConfigPath, record.installedClientConfigPath);
+    assert.equal(sealer.request?.senderPolicyConfigPath, record.senderPolicyConfigPath);
     assert.equal(sealer.request?.binding.verificationHost, record.bootstrap.verificationHost);
     assert.equal(sealer.request?.binding.verificationTenant, record.owner.target.tenant);
     assert.equal(sealer.request?.binding.verificationTtlSeconds, 86_400);
@@ -102,6 +109,7 @@ test("preflights both inputs before sealing the exact Gmail handle", async () =>
     assert.equal(acl.calls[0]?.gmailRecord, undefined);
     assert.equal(acl.calls[1]?.ownerConfig, record.bootstrapInputPath);
     assert.equal(acl.calls[1]?.oauthClientConfig, record.installedClientConfigPath);
+    assert.equal(acl.calls[1]?.senderPolicyConfig, record.senderPolicyConfigPath);
     assert.equal(acl.calls[2]?.gmailRecord, join(record.secrets, `${GMAIL_HANDLE}.s2secret`));
     assert.equal(existsSync(join(record.secrets, `${GMAIL_HANDLE}.s2secret`)), true);
   } finally {
@@ -308,6 +316,83 @@ test("maps installed-client ACL and trusted-child parse failures without values"
   }
 });
 
+test("rejects missing, reparse, oversized, and repository-owned sender-policy files before UI", async () => {
+  const record = await fixture();
+  try {
+    const linkedRoot = join(record.root, "sender-link");
+    symlinkSync(record.runtime, linkedRoot, "junction");
+    const linked = join(linkedRoot, "gmail-sender-policy.json");
+    const oversized = join(record.root, "oversized-sender-policy.json");
+    writeFileSync(oversized, "x".repeat(65_537));
+    const repositoryPolicy = join(record.repository, "sender-policy.json");
+    writeFileSync(repositoryPolicy, "{}");
+    for (const senderPolicyConfigPath of [
+      join(record.root, "missing-sender-policy.json"),
+      linked,
+      oversized,
+      repositoryPolicy,
+    ]) {
+      const sealer = new Sealer();
+      assert.deepEqual(await bootstrapS2GmailAuthorization(
+        record.owner,
+        { ...record.bootstrap, senderPolicyConfigPath },
+        {
+          now: NOW,
+          ownerConfigPath: record.ownerConfigPath,
+          bootstrapInputPath: record.bootstrapInputPath,
+          forbiddenRoots: [record.repository],
+          aclAdmission: new AclAdmission(),
+          sealer,
+        },
+        new AbortController().signal,
+      ), { ok: false, error: { code: "gmail_sender_policy_invalid" } });
+      assert.equal(sealer.calls, 0);
+    }
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("maps sender-policy ACL and trusted-child parse failures without values", async () => {
+  const record = await fixture();
+  try {
+    assert.deepEqual(await bootstrapS2GmailAuthorization(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission([
+          { ok: true },
+          { ok: false, failure: { target: "sender_policy_config", reason: "other_principal" } },
+        ]),
+        sealer: new Sealer(),
+      },
+      new AbortController().signal,
+    ), { ok: false, error: { code: "gmail_sender_policy_invalid" } });
+
+    const childFailure = await bootstrapS2GmailAuthorization(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission(),
+        sealer: new SenderErrorSealer(),
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(childFailure, { ok: false, error: { code: "gmail_sender_policy_invalid" } });
+    assert.equal(JSON.stringify(childFailure).includes(record.senderPolicyConfigPath), false);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "hunt-gmail-bootstrap-"));
   const repository = join(root, "repository");
@@ -319,19 +404,22 @@ async function fixture() {
   const ownerConfigPath = join(runtime, "owner-inputs.json");
   const bootstrapInputPath = join(runtime, "gmail-bootstrap-input.json");
   const installedClientConfigPath = join(runtime, "google-installed-client.json");
+  const senderPolicyConfigPath = join(runtime, "gmail-sender-policy.json");
   const bootstrap = {
     schemaVersion: 1 as const,
-    contractRevision: "s2-gmail-bootstrap-v2" as const,
+    contractRevision: "s2-gmail-bootstrap-v3" as const,
     revisionId: owner.revisionId,
     journeyId: owner.journeyId,
     gmailHandleId: owner.gmailAuthorization.handleId,
     desktopClientId: "1234567890-example1.apps.googleusercontent.com",
     installedClientConfigPath,
+    senderPolicyConfigPath,
     verificationHost: "wd5.myworkday.com",
   };
   writeFileSync(ownerConfigPath, JSON.stringify(owner));
   writeFileSync(bootstrapInputPath, JSON.stringify(bootstrap));
   writeFileSync(installedClientConfigPath, '{"installed":{"client_secret":"synthetic"}}');
+  writeFileSync(senderPolicyConfigPath, '{"schemaVersion":1,"contractRevision":"s2-gmail-sender-policy-v1","senderAddress":"notifications@example.invalid"}');
   await writeSecretRecord(secrets, {
     storageVersion: 1,
     schemaVersion: 1,
@@ -345,7 +433,7 @@ async function fixture() {
     expiresAt: ACCOUNT_EXPIRES,
     state: "active",
   }, Uint8Array.from([2, 3, 5]));
-  return { root, repository, runtime, secrets, evidence, ownerConfigPath, bootstrapInputPath, installedClientConfigPath, owner, bootstrap };
+  return { root, repository, runtime, secrets, evidence, ownerConfigPath, bootstrapInputPath, installedClientConfigPath, senderPolicyConfigPath, owner, bootstrap };
 }
 
 function ownerInputs(runtime: string, secrets: string, evidence: string): RealRunOwnerInputsV1 {

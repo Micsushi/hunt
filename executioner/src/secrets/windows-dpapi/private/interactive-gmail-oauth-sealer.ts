@@ -21,7 +21,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Web;
 using System.Web.Script.Serialization;
-using Microsoft.VisualBasic;
 
 public static class HuntInteractiveGmailOAuthSealer
 {
@@ -47,6 +46,7 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[] sealedValue = null;
         Token token = null;
         InstalledClient installedClient = null;
+        string sender = null;
         try
         {
             input = ReadInput();
@@ -54,11 +54,13 @@ public static class HuntInteractiveGmailOAuthSealer
             string accountEmail = ReadAccountEmail(account);
             string clientId = StrictUtf8(input[3]);
             string installedClientConfigPath = StrictUtf8(input[4]);
-            IDictionary<string, object> binding = ExactObject(StrictUtf8(input[5]));
+            string senderPolicyConfigPath = StrictUtf8(input[5]);
+            IDictionary<string, object> binding = ExactObject(StrictUtf8(input[6]));
             IDictionary<string, object> gmailMetadata = ExactObject(StrictUtf8(input[0]));
             ValidateClient(clientId);
             ValidateBinding(binding);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
+            sender = ReadSenderPolicy(senderPolicyConfigPath);
 
             token = Authorize(clientId, installedClient.Secret);
             ValidateExpiry(gmailMetadata, token.ExpiresIn, token.ReceivedAt);
@@ -67,15 +69,6 @@ public static class HuntInteractiveGmailOAuthSealer
                 throw new FlowException(4);
             if (!ValidEmail(profileEmail) || profileEmail != profileEmail.ToLowerInvariant())
                 throw new FlowException(4);
-            string sender = Interaction.InputBox(
-                "Authorized mailbox confirmed. Enter only the exact lowercase From email shown on the new Workday verification message. Never paste a verification link or token.",
-                "Hunt Gmail sender policy",
-                ""
-            );
-            if (String.IsNullOrEmpty(sender)) throw new FlowException(2);
-            if (!ValidEmail(sender) || sender != sender.ToLowerInvariant())
-                throw new FlowException(3);
-
             IDictionary<string, object> exactBundle = new Dictionary<string, object>();
             exactBundle["format"] = "gmail-oauth-bundle-v1";
             exactBundle["accessValue"] = token.AccessValue;
@@ -105,6 +98,7 @@ public static class HuntInteractiveGmailOAuthSealer
             Clear(account);
             if (token != null) token.Clear();
             if (installedClient != null) installedClient.Clear();
+            sender = null;
             if (input != null) foreach (byte[] section in input) Clear(section);
         }
     }
@@ -115,8 +109,8 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[] magic = reader.ReadBytes(4);
         if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 71 || magic[3] != 73)
             throw new InvalidDataException();
-        if (reader.ReadByte() != 1 || reader.ReadByte() != 6) throw new InvalidDataException();
-        byte[][] sections = new byte[6][];
+        if (reader.ReadByte() != 1 || reader.ReadByte() != 7) throw new InvalidDataException();
+        byte[][] sections = new byte[7][];
         for (int index = 0; index < sections.Length; index++)
         {
             int length = reader.ReadInt32();
@@ -241,6 +235,36 @@ public static class HuntInteractiveGmailOAuthSealer
             if (!((character >= 'a' && character <= 'z') ||
                 (character >= '0' && character <= '9') || character == '-'))
                 throw new InvalidDataException();
+    }
+
+    private static string ReadSenderPolicy(string path)
+    {
+        byte[] bytes = null;
+        try
+        {
+            if (String.IsNullOrWhiteSpace(path) || path.Length > 32768 ||
+                !String.Equals(Path.GetFullPath(path), path, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException();
+            FileInfo info = new FileInfo(path);
+            if (!info.Exists || info.Length < 2 || info.Length > 65536 ||
+                (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException();
+            bytes = File.ReadAllBytes(path);
+            if (bytes.Length != info.Length || bytes.Length < 2 || bytes.Length > 65536 ||
+                (bytes.Length >= 3 && bytes[0] == 239 && bytes[1] == 187 && bytes[2] == 191))
+                throw new InvalidDataException();
+            IDictionary<string, object> policy = ExactObject(StrictUtf8(bytes));
+            ExactKeys(policy, new string[] { "schemaVersion", "contractRevision", "senderAddress" });
+            if (IntegerField(policy, "schemaVersion", 1, 1) != 1 ||
+                StringField(policy, "contractRevision", 25, 25) != "s2-gmail-sender-policy-v1")
+                throw new InvalidDataException();
+            string sender = StringField(policy, "senderAddress", 3, 254);
+            if (!ValidEmail(sender) || sender != sender.ToLowerInvariant())
+                throw new InvalidDataException();
+            return sender;
+        }
+        catch { throw new FlowException(10); }
+        finally { Clear(bytes); }
     }
 
     private static Token Authorize(string clientId, string clientSecret)
@@ -556,7 +580,7 @@ public static class HuntInteractiveGmailOAuthSealer
 }
 '@
 try {
-  Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll','Microsoft.VisualBasic.dll'
+  Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'
   exit [HuntInteractiveGmailOAuthSealer]::Run()
 } catch { exit 7 }
 `;
@@ -567,6 +591,7 @@ export interface GmailOAuthSealRequest {
   readonly accountCiphertext: Readonly<Uint8Array>;
   readonly clientId: string;
   readonly installedClientConfigPath: string;
+  readonly senderPolicyConfigPath: string;
   readonly binding: {
     readonly journeyId: string;
     readonly recipientBindingId: string;
@@ -706,12 +731,14 @@ function encodeSections(request: GmailOAuthSealRequest): Buffer {
   const binding = Buffer.from(JSON.stringify(request.binding), "utf8");
   const clientId = Buffer.from(request.clientId, "utf8");
   const installedClientConfigPath = Buffer.from(request.installedClientConfigPath, "utf8");
+  const senderPolicyConfigPath = Buffer.from(request.senderPolicyConfigPath, "utf8");
   const values = [
     Buffer.from(request.gmailMetadata),
     Buffer.from(request.accountMetadata),
     Buffer.from(request.accountCiphertext),
     clientId,
     installedClientConfigPath,
+    senderPolicyConfigPath,
     binding,
   ];
   try {
@@ -765,6 +792,8 @@ function childFailure(code: number | null): Error {
               ? "Gmail OAuth timeout"
               : code === 9
                 ? "Gmail OAuth client invalid"
+                : code === 10
+                  ? "Gmail sender policy invalid"
               : "Gmail OAuth sealing failed";
   return new Error(message);
 }

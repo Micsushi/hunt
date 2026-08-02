@@ -18,6 +18,18 @@
     "durableOutput": "none"
   },
   {
+    "value": "sender_policy_canonical_path",
+    "ordinaryNode": "admission_and_acl_only",
+    "trustedWindowsHelper": "bounded_file_open",
+    "durableOutput": "none"
+  },
+  {
+    "value": "sender_address",
+    "ordinaryNode": "none",
+    "trustedWindowsHelper": "sole_reader_current_bundle_binding",
+    "durableOutput": "dpapi_ciphertext_only"
+  },
+  {
     "value": "gmail_access_token_and_mailbox_identity",
     "ordinaryNode": "none",
     "trustedWindowsHelper": "oauth_profile_and_bundle_sealing",

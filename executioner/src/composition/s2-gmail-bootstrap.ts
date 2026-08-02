@@ -57,6 +57,7 @@ export type GmailBootstrapErrorCode =
   | "gmail_handle_invalid"
   | "gmail_handle_exists"
   | "gmail_oauth_client_invalid"
+  | "gmail_sender_policy_invalid"
   | "gmail_oauth_cancelled"
   | "gmail_oauth_denied"
   | "gmail_identity_mismatch"
@@ -103,11 +104,19 @@ export async function bootstrapS2GmailAuthorization(
     gmailHandleId: owner.gmailAuthorization.handleId,
   });
   if (bootstrap === null) return failure("gmail_bootstrap_input_invalid");
-  const installedClientConfigPath = admitInstalledClientConfigPath(
+  const installedClientConfigPath = admitProtectedConfigPath(
     bootstrap.installedClientConfigPath,
     options.forbiddenRoots,
   );
   if (installedClientConfigPath === null) return failure("gmail_oauth_client_invalid");
+  const senderPolicyConfigPath = admitProtectedConfigPath(
+    bootstrap.senderPolicyConfigPath,
+    options.forbiddenRoots,
+  );
+  if (
+    senderPolicyConfigPath === null ||
+    comparable(senderPolicyConfigPath) === comparable(installedClientConfigPath)
+  ) return failure("gmail_sender_policy_invalid");
   const accountRecordPath = recordPath(owner, owner.accountSecret.handleId);
   const gmailRecordPath = recordPath(owner, owner.gmailAuthorization.handleId);
   if (!existsSync(accountRecordPath)) return failure("account_handle_invalid");
@@ -117,6 +126,7 @@ export async function bootstrapS2GmailAuthorization(
     evidence: owner.roots.evidence.path,
     ownerConfig: options.bootstrapInputPath,
     oauthClientConfig: installedClientConfigPath,
+    senderPolicyConfig: senderPolicyConfigPath,
     accountRecord: accountRecordPath,
   });
   if (!policyAcl.ok) {
@@ -125,6 +135,9 @@ export async function bootstrapS2GmailAuthorization(
     }
     if (policyAcl.failure.target === "oauth_client_config") {
       return failure("gmail_oauth_client_invalid");
+    }
+    if (policyAcl.failure.target === "sender_policy_config") {
+      return failure("gmail_sender_policy_invalid");
     }
     return failure("secret_root_invalid");
   }
@@ -163,6 +176,7 @@ export async function bootstrapS2GmailAuthorization(
       accountCiphertext: account.sealedBytes,
       clientId: bootstrap.desktopClientId,
       installedClientConfigPath,
+      senderPolicyConfigPath,
       binding: {
         journeyId: owner.journeyId,
         recipientBindingId: owner.recipientBindingId,
@@ -198,6 +212,7 @@ export async function bootstrapS2GmailAuthorization(
     evidence: owner.roots.evidence.path,
     ownerConfig: options.bootstrapInputPath,
     oauthClientConfig: installedClientConfigPath,
+    senderPolicyConfig: senderPolicyConfigPath,
     accountRecord: accountRecordPath,
     gmailRecord: gmailRecordPath,
   });
@@ -318,6 +333,7 @@ function sealerError(error: unknown, signal: AbortSignal): GmailBootstrapErrorCo
   if (signal.aborted || message === "Gmail OAuth cancelled") return "gmail_oauth_cancelled";
   if (message === "Gmail OAuth denied") return "gmail_oauth_denied";
   if (message === "Gmail OAuth client invalid") return "gmail_oauth_client_invalid";
+  if (message === "Gmail sender policy invalid") return "gmail_sender_policy_invalid";
   if (message === "Gmail mailbox identity mismatched") return "gmail_identity_mismatch";
   if (message === "Gmail OAuth scope invalid") return "gmail_scope_invalid";
   if (message === "Gmail OAuth token expiry invalid") return "gmail_token_expiry_invalid";
@@ -325,7 +341,7 @@ function sealerError(error: unknown, signal: AbortSignal): GmailBootstrapErrorCo
   return "gmail_seal_failed";
 }
 
-function admitInstalledClientConfigPath(
+function admitProtectedConfigPath(
   value: string,
   forbiddenRoots: readonly string[],
 ): string | null {
