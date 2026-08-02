@@ -6,11 +6,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { TargetIdentityV1 } from "../../src/contracts/live/index.ts";
+import { liveFixtures } from "../../src/testing/live/index.ts";
 
 import {
   WindowsInteractiveGmailOAuthSealer,
   type InteractiveGmailOAuthProcess,
 } from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
+import { WindowsDpapiBridge } from "../../src/secrets/windows-dpapi/bridge.ts";
+import { WindowsDpapiSecretResolver } from "../../src/secrets/windows-dpapi/private/resolver.ts";
+import { writeSecretRecord } from "../../src/secrets/windows-dpapi/record.ts";
 
 class ReplyProcess implements InteractiveGmailOAuthProcess {
   input?: Uint8Array;
@@ -26,6 +30,19 @@ class ReplyProcess implements InteractiveGmailOAuthProcess {
     this.capturedInput = Uint8Array.from(input);
     if (this.#reply instanceof Error) throw this.#reply;
     return this.#reply;
+  }
+}
+
+class ControlledUnprotectBridge extends WindowsDpapiBridge {
+  readonly #payload: Uint8Array;
+
+  constructor(payload: Uint8Array) {
+    super();
+    this.#payload = payload;
+  }
+
+  override async unprotect(): Promise<Uint8Array> {
+    return this.#payload.slice();
   }
 }
 
@@ -79,6 +96,87 @@ test("accepts only one bounded ciphertext frame and clears its child input", asy
   assert.deepEqual([...request.accountCiphertext], [3, 5, 7]);
 });
 
+test("trusted helper frames the Gmail bundle for the resolver's exact one-item decoder", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-bundle-frame-"));
+  const bundle = new TextEncoder().encode('{"format":"gmail-oauth-bundle-v1","accessValue":"synthetic"}');
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const bundlePath = join(root, "bundle.bin");
+    const framedPath = join(root, "framed.bin");
+    await Promise.all([
+      writeFile(sourcePath, csharp),
+      writeFile(bundlePath, bundle),
+    ]);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "$bundle=$null; $framed=$null; try { Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('FrameBundle',[Reflection.BindingFlags]'NonPublic,Static'); if($null -eq $method) { exit 41 }; $bundle=[IO.File]::ReadAllBytes($env:HUNT_TEST_BUNDLE); $framed=[byte[]]$method.Invoke($null,@(,$bundle)); [IO.File]::WriteAllBytes($env:HUNT_TEST_FRAMED,$framed); exit 0 } finally { if($null -ne $bundle) { [Array]::Clear($bundle,0,$bundle.Length) }; if($null -ne $framed) { [Array]::Clear($framed,0,$framed.Length) } }",
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_BUNDLE: bundlePath,
+          HUNT_TEST_FRAMED: framedPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "");
+    const framed = await readFile(framedPath);
+    const expected = Buffer.alloc(8 + bundle.byteLength);
+    expected.writeUInt32LE(1, 0);
+    expected.writeUInt32LE(bundle.byteLength, 4);
+    expected.set(bundle, 8);
+    assert.deepEqual(framed, expected);
+
+    const gmailHandle = {
+      ...liveFixtures.gmailSecret,
+      handleId: "secret_handle_fedcba9876543210fedcba9876543210" as typeof liveFixtures.gmailSecret.handleId,
+    };
+    await writeSecretRecord(root, {
+      storageVersion: 1,
+      ...gmailHandle,
+      scope: "mailbox_verification",
+    }, Uint8Array.from([1]));
+    const resolver = new WindowsDpapiSecretResolver({
+      root,
+      forbiddenRoots: [process.cwd()],
+      now: () => liveFixtures.issuedAt,
+      bridge: new ControlledUnprotectBridge(framed),
+    });
+    let callbackBytes: Uint8Array | undefined;
+    const resolved = await resolver.useGmailAuthorization(
+      gmailHandle,
+      new AbortController().signal,
+      async (value) => {
+        callbackBytes = Uint8Array.from(value);
+        return liveFixtures.mailboxAvailable;
+      },
+    );
+    assert.deepEqual(resolved, { ok: true, value: liveFixtures.mailboxAvailable });
+    assert.deepEqual(callbackBytes, bundle);
+    framed.fill(0);
+    expected.fill(0);
+  } finally {
+    bundle.fill(0);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("fails closed for cancellation, helper failure, and malformed output", async () => {
   for (const process of [
     new ReplyProcess(new Error("synthetic")),
@@ -126,6 +224,13 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly/u);
   assert.match(source, /https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/u);
   assert.match(source, /DataProtectionScope\.CurrentUser/u);
+  assert.match(source, /framedBundle = FrameBundle\(bundle\)/u);
+  assert.match(
+    source,
+    /ProtectedData\.Protect\(framedBundle, input\[0\], DataProtectionScope\.CurrentUser\)/u,
+  );
+  assert.match(source, /Clear\(framedBundle\)/u);
+  assert.doesNotMatch(source, /WriteOutput\((?:bundle|framedBundle)\)/u);
   assert.match(source, /ReadInstalledClient/u);
   assert.match(source, /File\.ReadAllBytes/u);
   assert.match(source, /client_secret/u);
