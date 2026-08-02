@@ -52,7 +52,7 @@ import type {
 } from "../contracts/live/index.ts";
 import {
   createBoundedVerificationMailboxPolling,
-} from "../control/orchestrator/live/mailbox-polling.ts";
+} from "../account/lifecycle/mailbox-polling.ts";
 import { writeAccountVerifiedEvidence } from "../live/evidence/account-verified-evidence.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";

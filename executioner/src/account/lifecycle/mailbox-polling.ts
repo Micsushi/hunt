@@ -6,7 +6,7 @@ import type {
   MailboxPollResultV1,
   MailboxProvider,
   MailboxProviderErrorCode,
-} from "../../../contracts/live/index.ts";
+} from "../../contracts/live/index.ts";
 
 type MailboxErrorCode = GmailAuthErrorCode | MailboxProviderErrorCode;
 type MailboxResult = LivePortResult<MailboxPollResultV1, MailboxErrorCode>;

@@ -13,7 +13,7 @@ import type {
 import {
   createBoundedVerificationMailboxPolling,
   type MailboxPollingScheduler,
-} from "../../src/control/orchestrator/live/mailbox-polling.ts";
+} from "../../src/account/lifecycle/mailbox-polling.ts";
 import { liveFixtures } from "../../src/testing/live/index.ts";
 
 type MailboxResult = LivePortResult<
