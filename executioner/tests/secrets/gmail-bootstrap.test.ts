@@ -70,11 +70,7 @@ class GrantRevoker implements GmailRefreshGrantRevoker {
   async revoke(value: GmailRefreshGrantRevokeRequest): Promise<"revoked" | "absent"> {
     this.calls += 1;
     this.liveRequest = value;
-    this.request = {
-      ...value,
-      accountMetadata: Uint8Array.from(value.accountMetadata),
-      accountCiphertext: Uint8Array.from(value.accountCiphertext),
-    };
+    this.request = { ...value };
     if (this.#result instanceof Error) throw this.#result;
     return this.#result;
   }
@@ -521,16 +517,58 @@ test("revokes or accepts an absent exact Gmail refresh grant through the trusted
         record.installedClientConfigPath,
       );
       assert.equal(
-        revoker.liveRequest?.accountMetadata.every((value) => value === 0),
-        true,
+        revoker.request?.recipientBindingId,
+        record.owner.recipientBindingId,
       );
-      assert.equal(
-        revoker.liveRequest?.accountCiphertext.every((value) => value === 0),
-        true,
-      );
+      assert.deepEqual(Object.keys(revoker.request ?? {}).sort(), [
+        "clientId",
+        "installedClientConfigPath",
+        "recipientBindingId",
+      ]);
     } finally {
       rmSync(record.root, { recursive: true, force: true });
     }
+  }
+});
+
+test("refresh-grant revocation needs no active approval or secret record", async () => {
+  const record = await fixture();
+  try {
+    rmSync(join(record.secrets, `${ACCOUNT_HANDLE}.s2secret`));
+    rmSync(join(record.secrets, `${GMAIL_HANDLE}.s2secret`), { force: true });
+    const revoker = new GrantRevoker();
+    const acl = new AclAdmission();
+    const result = await revokeS2GmailRefreshGrant(
+      record.owner,
+      record.bootstrap,
+      {
+        now: "2026-08-02T12:00:00.000Z",
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: acl,
+        revoker,
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(result, {
+      ok: true,
+      value: {
+        schemaVersion: 1,
+        kind: "gmail_refresh_grant_revoked",
+      },
+    });
+    assert.equal(revoker.calls, 1);
+    assert.equal(revoker.request?.recipientBindingId, record.owner.recipientBindingId);
+    assert.equal(acl.calls.length, 2);
+    assert.equal(
+      acl.calls.every((paths) =>
+        paths.accountRecord === undefined && paths.gmailRecord === undefined
+      ),
+      true,
+    );
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
   }
 });
 

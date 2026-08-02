@@ -83,6 +83,25 @@ const opaquePatterns = {
   evidenceRoot: /^evidence_root_[A-Za-z0-9_-]{16,64}$/u,
 } as const;
 
+export interface GmailGrantRevocationOwnerV1 {
+  readonly schemaVersion: 1;
+  readonly kind: "gmail_refresh_grant_revocation_owner";
+  readonly revisionId: string;
+  readonly journeyId: string;
+  readonly recipientBindingId: string;
+  readonly targetHandleId: string;
+  readonly rootPaths: {
+    readonly runtime: string;
+    readonly secrets: string;
+    readonly evidence: string;
+  };
+  readonly gmailHandleId: string;
+}
+
+export type GmailGrantRevocationOwnerResult =
+  | { readonly ok: true; readonly value: GmailGrantRevocationOwnerV1 }
+  | Extract<RealRunPreflightResult, { readonly ok: false }>;
+
 export function admitRealRunPreflight(
   value: unknown,
   context: PreflightContext,
@@ -227,6 +246,46 @@ export function admitRealRunPreflight(
   };
 }
 
+export function admitGmailGrantRevocationOwner(
+  value: unknown,
+  context: PreflightContext,
+): GmailGrantRevocationOwnerResult {
+  const input = record(value, topKeys);
+  if (input === null || input.schemaVersion !== 1) {
+    return failure("owner_config_invalid", "schema");
+  }
+  const approval = record(input.approval, approvalKeys);
+  const now = parseTimestamp(context.now);
+  const approvedAt = approval === null ? null : parseTimestamp(approval.approvedAt);
+  if (now === null || approvedAt === null || approvedAt > now) {
+    return failure("owner_config_invalid", "approval");
+  }
+  const historical = admitRealRunPreflight(value, {
+    ...context,
+    now: approval.approvedAt as string,
+  });
+  if (!historical.ok) return historical;
+  const owner = value as RealRunOwnerInputsV1;
+
+  return Object.freeze({
+    ok: true,
+    value: Object.freeze({
+      schemaVersion: 1,
+      kind: "gmail_refresh_grant_revocation_owner",
+      revisionId: owner.revisionId,
+      journeyId: owner.journeyId,
+      recipientBindingId: owner.recipientBindingId,
+      targetHandleId: owner.target.handleId,
+      rootPaths: Object.freeze({
+        runtime: owner.roots.runtime.path,
+        secrets: owner.roots.secrets.path,
+        evidence: owner.roots.evidence.path,
+      }),
+      gmailHandleId: owner.gmailAuthorization.handleId,
+    }),
+  });
+}
+
 function validTarget(target: UnknownRecord): boolean {
   if (
     !matches(target.handleId, opaquePatterns.target) ||
@@ -278,7 +337,7 @@ function parseRoot(value: unknown, idPattern: RegExp): ExternalRootV1 | null {
 function validateRoots(
   roots: Readonly<Record<RootName, ExternalRootV1>>,
   forbiddenRoots: readonly string[],
-): RealRunPreflightResult | null {
+): Extract<RealRunPreflightResult, { readonly ok: false }> | null {
   if (forbiddenRoots.length === 0) {
     return failure("owner_config_invalid", "repository_scope");
   }
@@ -457,6 +516,6 @@ function rootCode(name: RootName): PreflightFailureCode {
 function failure(
   code: PreflightFailureCode,
   dimension: string,
-): RealRunPreflightResult {
+): Extract<RealRunPreflightResult, { readonly ok: false }> {
   return { ok: false, error: { code, dimension } };
 }

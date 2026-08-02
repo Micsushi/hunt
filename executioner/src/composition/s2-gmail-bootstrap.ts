@@ -9,6 +9,7 @@ import type {
   TargetTenantId,
 } from "../contracts/index.ts";
 import type { SecretHandleMetadataV1, TargetIdentityV1 } from "../contracts/live/index.ts";
+import { admitGmailGrantRevocationOwner } from "../live/preflight/admit.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import {
   WindowsCurrentUserAclAdmission,
@@ -136,6 +137,90 @@ type AdmittedGmailOperation = {
   readonly gmailRecordPath: string;
   readonly account: NonNullable<Awaited<ReturnType<typeof readSecretRecord>>>;
 };
+
+type AdmittedGmailGrantRevocation = {
+  readonly owner: NonNullable<Extract<
+    ReturnType<typeof admitGmailGrantRevocationOwner>,
+    { readonly ok: true }
+  >["value"]>;
+  readonly bootstrap: NonNullable<ReturnType<typeof admitGmailBootstrapInput>>;
+  readonly installedClientConfigPath: string;
+};
+
+function admitGmailGrantRevocation(
+  ownerValue: unknown,
+  bootstrapValue: unknown,
+  options: GmailOperationOptions,
+):
+  | { readonly ok: true; readonly value: AdmittedGmailGrantRevocation }
+  | { readonly ok: false; readonly code: GmailBootstrapErrorCode } {
+  const ownerAdmission = admitGmailGrantRevocationOwner(ownerValue, {
+    now: options.now,
+    forbiddenRoots: options.forbiddenRoots,
+  });
+  if (!ownerAdmission.ok) {
+    return { ok: false, code: ownerAdmission.error.code };
+  }
+  const owner = ownerAdmission.value;
+  const bootstrap = admitGmailBootstrapInput(bootstrapValue, {
+    revisionId: owner.revisionId,
+    journeyId: owner.journeyId,
+    gmailHandleId: owner.gmailHandleId,
+  });
+  if (bootstrap === null) return { ok: false, code: "gmail_bootstrap_input_invalid" };
+  const installedClientConfigPath = admitProtectedConfigPath(
+    bootstrap.installedClientConfigPath,
+    options.forbiddenRoots,
+  );
+  if (installedClientConfigPath === null) {
+    return { ok: false, code: "gmail_oauth_client_invalid" };
+  }
+
+  const acl = options.aclAdmission ?? new WindowsCurrentUserAclAdmission();
+  const ownerAcl = acl.admit({
+    runtime: owner.rootPaths.runtime,
+    secrets: owner.rootPaths.secrets,
+    evidence: owner.rootPaths.evidence,
+    ownerConfig: options.ownerConfigPath,
+  });
+  if (!ownerAcl.ok) {
+    return {
+      ok: false,
+      code: ownerAcl.failure.target === "runtime_root"
+        ? "runtime_root_invalid"
+        : ownerAcl.failure.target === "evidence_root"
+          ? "evidence_root_invalid"
+          : ownerAcl.failure.target === "owner_config"
+            ? "owner_config_invalid"
+            : "secret_root_invalid",
+    };
+  }
+  const bootstrapAcl = acl.admit({
+    runtime: owner.rootPaths.runtime,
+    secrets: owner.rootPaths.secrets,
+    evidence: owner.rootPaths.evidence,
+    ownerConfig: options.bootstrapInputPath,
+    oauthClientConfig: installedClientConfigPath,
+  });
+  if (!bootstrapAcl.ok) {
+    return {
+      ok: false,
+      code: bootstrapAcl.failure.target === "runtime_root"
+        ? "runtime_root_invalid"
+        : bootstrapAcl.failure.target === "evidence_root"
+          ? "evidence_root_invalid"
+          : bootstrapAcl.failure.target === "owner_config"
+            ? "gmail_bootstrap_input_invalid"
+            : bootstrapAcl.failure.target === "oauth_client_config"
+              ? "gmail_oauth_client_invalid"
+              : "secret_root_invalid",
+    };
+  }
+  return {
+    ok: true,
+    value: { owner, bootstrap, installedClientConfigPath },
+  };
+}
 
 async function admitGmailOperation(
   ownerValue: unknown,
@@ -342,21 +427,18 @@ export async function revokeS2GmailRefreshGrant(
   signal: AbortSignal,
 ): Promise<GmailGrantRevocationResult> {
   if (signal.aborted) return failure("operation_cancelled");
-  const admission = await admitGmailOperation(ownerValue, bootstrapValue, options);
+  const admission = admitGmailGrantRevocation(ownerValue, bootstrapValue, options);
   if (!admission.ok) return failure(admission.code);
-  const { owner, bootstrap, installedClientConfigPath, account } = admission.value;
+  const { owner, bootstrap, installedClientConfigPath } = admission.value;
   let outcome: "revoked" | "absent";
   try {
     outcome = await (options.revoker ?? new WindowsGmailRefreshGrantRevoker()).revoke({
-      accountMetadata: account.metadataBytes,
-      accountCiphertext: account.sealedBytes,
+      recipientBindingId: owner.recipientBindingId,
       clientId: bootstrap.desktopClientId,
       installedClientConfigPath,
     }, signal);
   } catch (error) {
     return failure(sealerError(error, signal));
-  } finally {
-    clearRecord(account);
   }
   return Object.freeze({
     ok: true,

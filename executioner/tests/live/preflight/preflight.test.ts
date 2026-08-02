@@ -14,6 +14,7 @@ import {
   admitRealRunPreflight,
   type RealRunOwnerInputsV1,
 } from "../../../src/live/preflight/index.ts";
+import { admitGmailGrantRevocationOwner } from "../../../src/live/preflight/admit.ts";
 
 const NOW = "2026-08-01T12:00:00.000Z";
 const LATER = "2026-08-02T12:00:00.000Z";
@@ -185,6 +186,81 @@ test("accepts the frozen sign-in mode without widening account policy", () => {
     const result = admit({ ...record.input, accountMode: "sign_in" }, record);
     assert.equal(result.ok, true);
     assert.equal(result.ok && result.report.accountMode, "sign_in");
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
+test("admits an expired owner only for scope-bound Gmail grant revocation", () => {
+  const record = fixture();
+  try {
+    const result = admitGmailGrantRevocationOwner(record.input, {
+      now: "2026-08-03T12:00:00.000Z",
+      forbiddenRoots: [record.forbidden],
+    });
+    assert.deepEqual(result, {
+      ok: true,
+      value: {
+        schemaVersion: 1,
+        kind: "gmail_refresh_grant_revocation_owner",
+        revisionId: REVISION_ID,
+        journeyId: JOURNEY_ID,
+        recipientBindingId: "recipient_abcdefghijklmnop",
+        targetHandleId: "target_ref_abcdefghijklmnop",
+        rootPaths: {
+          runtime: record.input.roots.runtime.path,
+          secrets: record.input.roots.secrets.path,
+          evidence: record.input.roots.evidence.path,
+        },
+        gmailHandleId: "secret_handle_gmailabcdefghijklmn",
+      },
+    });
+
+    const invalid = [
+      {
+        value: {
+          ...record.input,
+          target: { ...record.input.target, tenant: "other" },
+        },
+        dimension: "target",
+      },
+      {
+        value: { ...record.input, recipientBindingId: "private@example.invalid" },
+        dimension: "recipient",
+      },
+      {
+        value: {
+          ...record.input,
+          approval: {
+            ...record.input.approval,
+            secretCustodianId: "owner_otherabcdefghijkl",
+          },
+        },
+        dimension: "approval",
+      },
+      {
+        value: {
+          ...record.input,
+          gmailAuthorization: {
+            ...record.input.gmailAuthorization,
+            journeyId: "journey_otherabcdefghijkl",
+          },
+        },
+        dimension: "gmail_authorization",
+      },
+    ];
+    for (const entry of invalid) {
+      assert.deepEqual(
+        admitGmailGrantRevocationOwner(entry.value, {
+          now: "2026-08-03T12:00:00.000Z",
+          forbiddenRoots: [record.forbidden],
+        }),
+        {
+          ok: false,
+          error: { code: "owner_config_invalid", dimension: entry.dimension },
+        },
+      );
+    }
   } finally {
     rmSync(record.root, { recursive: true, force: true });
   }
