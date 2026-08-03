@@ -156,12 +156,34 @@
 }
 
 @media (max-width: 760px) {
+  .shell {
+    padding: 16px 16px 44px;
+  }
+
   .header {
     align-items: stretch;
     flex-direction: column;
+    position: static;
   }
 
   .nav {
+    align-items: stretch;
+    flex-direction: column;
     width: 100%;
+  }
+
+  .navGroup {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .navLink {
+    justify-content: center;
+  }
+
+  .navSecondary {
+    border-top: 1px solid var(--line);
+    justify-content: space-between;
+    padding-top: 8px;
   }
 }

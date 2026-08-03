@@ -2,7 +2,9 @@
 
 ## Layout
 
-Top navigation bar (sticky) + full-width content area. No sidebar.
+Top navigation bar + full-width content area. No sidebar. The header is sticky on
+desktop; below 760px it becomes static and stacked, with the navigation links in
+a three-column grid so long task pages keep their vertical workspace.
 
 - Content max-width: 1280px, centred, 24px horizontal padding.
 - Page sections stack vertically, 24px gap.
