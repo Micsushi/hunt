@@ -183,7 +183,7 @@ test("verification navigation is private, byte-scoped, one-shot, and value-free"
   assert.match(scope, /hostBytes\.fill\(0\)/u);
   assert.match(scope, /tenantBytes\.fill\(0\)/u);
   assert.match(coordinator, /isStablePostVerificationState/u);
-  assert.equal(factory.includes("new PlaywrightVerificationNavigationAdapter()"), true);
+  assert.match(factory, /new PlaywrightVerificationNavigationAdapter\(\{[\s\S]*trace:/u);
   assert.equal(publicFacade.includes("VerificationNavigationAccess"), false);
   assert.equal(publicFacade.includes("ByteScopedVerification"), false);
 });

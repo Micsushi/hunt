@@ -5,7 +5,10 @@ import { PlaywrightVerificationNavigationAdapter } from "../../../src/browser/pl
 
 test("verification navigation decodes transient bytes for one existing-page goto", async () => {
   const page = new FakePage();
-  const adapter = new PlaywrightVerificationNavigationAdapter();
+  const events: string[] = [];
+  const adapter = new PlaywrightVerificationNavigationAdapter({
+    trace: (event) => events.push(event),
+  });
   const bytes = new TextEncoder().encode(
     "https://tenant.wd5.myworkdayjobs.invalid/verify?token=private",
   );
@@ -14,8 +17,12 @@ test("verification navigation decodes transient bytes for one existing-page goto
 
   assert.deepEqual(page.gotoCalls, [{
     target: "https://tenant.wd5.myworkdayjobs.invalid/verify?token=private",
-    options: { waitUntil: "domcontentloaded" },
+    options: { waitUntil: "commit" },
   }]);
+  assert.deepEqual(events, [
+    "verification_navigation_goto_started",
+    "verification_navigation_commit_succeeded",
+  ]);
   assert.deepEqual(Object.keys(adapter), []);
 });
 
@@ -28,11 +35,36 @@ test("invalid UTF-8 stops before a page effect", async () => {
   assert.deepEqual(page.gotoCalls, []);
 });
 
+test("verification navigation emits a value-free failure after goto rejects", async () => {
+  const events: string[] = [];
+  const adapter = new PlaywrightVerificationNavigationAdapter({
+    trace: (event) => events.push(event),
+  });
+
+  await assert.rejects(
+    () => adapter.navigate(new ThrowingPage(), new TextEncoder().encode(
+      "https://tenant.wd5.myworkdayjobs.invalid/verify?token=private",
+    )),
+    /synthetic navigation failure/u,
+  );
+
+  assert.deepEqual(events, [
+    "verification_navigation_goto_started",
+    "verification_navigation_goto_failed",
+  ]);
+});
+
 class FakePage {
   readonly gotoCalls: unknown[] = [];
-  async goto(target: string, options?: { readonly waitUntil?: "domcontentloaded" }): Promise<void> {
+  async goto(target: string, options?: { readonly waitUntil?: "commit" }): Promise<void> {
     this.gotoCalls.push({ target, options });
   }
   isClosed(): boolean { return false; }
   async close(): Promise<void> {}
+}
+
+class ThrowingPage extends FakePage {
+  override async goto(): Promise<void> {
+    throw new Error("synthetic navigation failure");
+  }
 }

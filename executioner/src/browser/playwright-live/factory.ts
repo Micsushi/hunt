@@ -11,7 +11,10 @@ import {
   PlaywrightPostingNavigationAdapter,
   type PlaywrightPostingNavigationTraceEvent,
 } from "./private/playwright-posting-navigation.ts";
-import { PlaywrightVerificationNavigationAdapter } from "./private/playwright-verification-navigation.ts";
+import {
+  PlaywrightVerificationNavigationAdapter,
+  type PlaywrightVerificationNavigationTraceEvent,
+} from "./private/playwright-verification-navigation.ts";
 import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
 import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
 import { PlaywrightPersistentBrowserSession } from "./session.ts";
@@ -20,7 +23,8 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
   readonly timeoutMs?: number;
   readonly accountTrace?: (
-    event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent,
+    event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
+      PlaywrightVerificationNavigationTraceEvent,
   ) => void;
 }
 
@@ -46,7 +50,9 @@ export function createPlaywrightPersistentBrowserSession(
     postingNavigation: new PlaywrightPostingNavigationAdapter({
       trace: options.accountTrace,
     }),
-    verificationNavigation: new PlaywrightVerificationNavigationAdapter(),
+    verificationNavigation: new PlaywrightVerificationNavigationAdapter({
+      trace: options.accountTrace,
+    }),
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,

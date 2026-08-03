@@ -18,7 +18,10 @@ export interface PersistentBrowserRuntimeBinding {
 }
 
 export interface PersistentPage {
-  goto(target: string, options?: { readonly waitUntil?: "domcontentloaded" }): Promise<unknown>;
+  goto(
+    target: string,
+    options?: { readonly waitUntil?: "commit" | "domcontentloaded" },
+  ): Promise<unknown>;
   isClosed(): boolean;
   close(): Promise<unknown>;
 }
