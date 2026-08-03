@@ -702,6 +702,7 @@ def test_server2_c1_smoke_assets_exist():
     assert "/api/gateway/c1/status" in smoke_text
     assert "/api/gateway/c1/scrape" in smoke_text
     assert "/api/jobs/count?source=linkedin&status=processing" in smoke_text
+    assert 'payload.get("items", []) if isinstance(payload, dict) else payload' in smoke_text
     assert "Server2 C1 smoke PASSED" in smoke_text
 
 

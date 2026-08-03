@@ -213,7 +213,8 @@ import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    rows = json.load(handle)
+    payload = json.load(handle)
+rows = payload.get("items", []) if isinstance(payload, dict) else payload
 if not isinstance(rows, list) or not rows:
     raise SystemExit(1)
 linked = [row for row in rows if row.get("source") == "linkedin"]
