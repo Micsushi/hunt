@@ -233,7 +233,7 @@ function SearchConfig({
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} lane — target job titles
+            {name.charAt(0).toUpperCase() + name.slice(1)} lane — Target job titles
             <span className={styles.fieldHint}>One role title per line.</span>
             <textarea
               className={styles.textarea}
@@ -251,11 +251,11 @@ function SearchConfig({
         </p>
         <div className={styles.experienceGrid}>
           {[
-            ['internship', 'Internship', 'Intern, internship, co-op, and student'],
+            ['internship', 'Internship', 'Intern, internship, co-op, and student searches'],
             [
               'junior',
               'Junior',
-              'Junior, entry level, associate, Level 1, Level One, L1, and role I/1 variants',
+              'Junior, entry level, associate, Level 1, L1, and role I/1 variants, including Level One',
             ],
             ['new_grad', 'New graduate', 'New grad, graduate, and entry level'],
           ].map(([value, label, hint]) => (
