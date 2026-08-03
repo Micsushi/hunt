@@ -130,7 +130,7 @@ export function createAccountVerifiedBindings(
     tenantId: `tenant_${targetSuffix}` as TargetTenantId,
     postingId: `posting_${targetSuffix}` as TargetPostingId,
   });
-  const notBefore = owner.approval.approvedAt;
+  const notBefore = new Date(Date.parse(now) - 24 * 60 * 60 * 1_000).toISOString();
   const mailboxRequest = Object.freeze({
     schemaVersion: 1 as const,
     journeyId: owner.journeyId as never,
@@ -138,7 +138,7 @@ export function createAccountVerifiedBindings(
     recipientBindingId: owner.recipientBindingId as RecipientBindingId,
     target,
     notBefore,
-    notAfter: owner.approval.expiresAt,
+    notAfter: now,
   });
   const lifecycle = Object.freeze({
     schemaVersion: 1 as const,
@@ -166,7 +166,7 @@ export function createAccountVerifiedBindings(
     }) as SenderPolicyId,
     target,
     notBefore,
-    notAfter: owner.approval.expiresAt,
+    notAfter: mailboxRequest.notAfter,
     verificationOperationId: operations.navigateVerification,
   });
   const runner: Stage2AccountVerifiedInput = Object.freeze({

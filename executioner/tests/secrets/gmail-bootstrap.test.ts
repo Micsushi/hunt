@@ -658,7 +658,7 @@ async function fixture() {
   writeFileSync(ownerConfigPath, JSON.stringify(owner));
   writeFileSync(bootstrapInputPath, JSON.stringify(bootstrap));
   writeFileSync(installedClientConfigPath, '{"installed":{"client_secret":"synthetic"}}');
-  writeFileSync(senderPolicyConfigPath, '{"schemaVersion":1,"contractRevision":"s2-gmail-sender-policy-v1","senderAddress":"notifications@example.invalid"}');
+  writeFileSync(senderPolicyConfigPath, '{"schemaVersion":1,"contractRevision":"s2-gmail-sender-policy-v2","senderAddress":"notifications@example.invalid","verificationHost":"wd5.myworkday.com","verificationTenant":"acme"}');
   await writeSecretRecord(secrets, {
     storageVersion: 1,
     schemaVersion: 1,

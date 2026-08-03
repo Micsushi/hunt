@@ -130,7 +130,7 @@ Create a bootstrap JSON file outside every repository with exactly these fields:
   "desktopClientId": "...apps.googleusercontent.com",
   "installedClientConfigPath": "C:\\absolute\\protected\\google-installed-client.json",
   "senderPolicyConfigPath": "C:\\absolute\\protected\\gmail-sender-policy.json",
-  "verificationHost": "wd5.myworkday.com"
+  "verificationHost": "tenant.wd5.myworkdayjobs.com"
 }
 ```
 
@@ -140,10 +140,16 @@ owner-approved policy:
 ```json
 {
   "schemaVersion": 1,
-  "contractRevision": "s2-gmail-sender-policy-v1",
-  "senderAddress": "notifications@example.com"
+  "contractRevision": "s2-gmail-sender-policy-v2",
+  "senderAddress": "notifications@example.com",
+  "verificationHost": "tenant.wd5.myworkdayjobs.com",
+  "verificationTenant": "tenant"
 }
 ```
+
+The sender policy is target-bound. Its host and tenant must exactly match the
+current approved Workday target, so a sender observed for another tenant cannot
+silently produce a false empty-mailbox result.
 
 Use an owner-approved Google Desktop OAuth client JSON with Gmail API access.
 Keep both referenced files regular, bounded, distinct, outside every repository,

@@ -53,9 +53,14 @@ test("account-verified bindings share the one navigation operation with Gmail", 
   assert.equal(value.lifecycle.mailboxRequest, value.mailboxRequest);
   assert.equal(value.lifecycle.target, value.target);
   assert.equal(value.runner.targetHandleId, "target_ref_abcdefghijklmnop");
-  assert.equal(value.mailboxRequest.notBefore, ownerInputs().approval.approvedAt);
-  assert.equal(value.gmail.notBefore, ownerInputs().approval.approvedAt);
-  assert.equal(value.mailboxRequest.notAfter, ownerInputs().approval.expiresAt);
+  assert.equal(value.mailboxRequest.notBefore, "2026-08-01T02:05:29.000Z");
+  assert.equal(value.gmail.notBefore, "2026-08-01T02:05:29.000Z");
+  assert.equal(value.mailboxRequest.notAfter, now);
+  assert.equal(value.gmail.notAfter, value.mailboxRequest.notAfter);
+  assert.equal(
+    Date.parse(value.mailboxRequest.notAfter) - Date.parse(value.mailboxRequest.notBefore),
+    24 * 60 * 60 * 1_000,
+  );
   assert.match(value.mailboxRequest.queryId, /^mailbox_query_/u);
   assert.notEqual(value.mailboxRequest.queryId, operations.navigateVerification);
   assert.equal(JSON.stringify(value).includes("myworkdayjobs.com"), false);

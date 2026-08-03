@@ -302,7 +302,11 @@ public static class HuntInteractiveGmailOAuthSealer
             ValidateClient(clientId);
             ValidateBinding(binding);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
-            sender = ReadSenderPolicy(senderPolicyConfigPath);
+            sender = ReadSenderPolicy(
+                senderPolicyConfigPath,
+                (string)binding["verificationHost"],
+                (string)binding["verificationTenant"]
+            );
 
             token = AcquireTokenWithLookup(
                 clientId,
@@ -952,7 +956,7 @@ public static class HuntInteractiveGmailOAuthSealer
                 throw new InvalidDataException();
     }
 
-    private static string ReadSenderPolicy(string path)
+    private static string ReadSenderPolicy(string path, string expectedHost, string expectedTenant)
     {
         byte[] bytes = null;
         try
@@ -969,9 +973,14 @@ public static class HuntInteractiveGmailOAuthSealer
                 (bytes.Length >= 3 && bytes[0] == 239 && bytes[1] == 187 && bytes[2] == 191))
                 throw new InvalidDataException();
             IDictionary<string, object> policy = ExactObject(StrictUtf8(bytes));
-            ExactKeys(policy, new string[] { "schemaVersion", "contractRevision", "senderAddress" });
+            ExactKeys(policy, new string[] {
+                "schemaVersion", "contractRevision", "senderAddress",
+                "verificationHost", "verificationTenant"
+            });
             if (IntegerField(policy, "schemaVersion", 1, 1) != 1 ||
-                StringField(policy, "contractRevision", 25, 25) != "s2-gmail-sender-policy-v1")
+                StringField(policy, "contractRevision", 25, 25) != "s2-gmail-sender-policy-v2" ||
+                StringField(policy, "verificationHost", 3, 253) != expectedHost ||
+                StringField(policy, "verificationTenant", 1, 253) != expectedTenant)
                 throw new InvalidDataException();
             string sender = StringField(policy, "senderAddress", 3, 254);
             if (!ValidEmail(sender) || sender != sender.ToLowerInvariant())

@@ -1556,7 +1556,7 @@ test("embedded helper exact-parses only the matching installed loopback client",
   }
 });
 
-test("embedded helper exact-parses one versioned lowercase sender policy", async () => {
+test("embedded helper exact-parses one target-bound lowercase sender policy", async () => {
   const source = await readFile(
     "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
     "utf8",
@@ -1568,26 +1568,32 @@ test("embedded helper exact-parses one versioned lowercase sender policy", async
     const validPath = join(root, "valid.json");
     const bomPath = join(root, "bom.json");
     const invalid = [
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "Notifications@example.invalid" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "invalid" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid", extra: true },
-      { schemaVersion: 2, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "Notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "other.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "other" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant", extra: true },
+      { schemaVersion: 2, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
     ];
     const invalidPaths = invalid.map((_, index) => join(root, `invalid-${index}.json`));
     await Promise.all([
       writeFile(sourcePath, csharp),
       writeFile(validPath, JSON.stringify({
         schemaVersion: 1,
-        contractRevision: "s2-gmail-sender-policy-v1",
+        contractRevision: "s2-gmail-sender-policy-v2",
         senderAddress: "notifications@example.invalid",
+        verificationHost: "tenant.example.invalid",
+        verificationTenant: "tenant",
       })),
       writeFile(bomPath, Buffer.concat([
         Buffer.from([0xef, 0xbb, 0xbf]),
         Buffer.from(JSON.stringify({
           schemaVersion: 1,
-          contractRevision: "s2-gmail-sender-policy-v1",
+          contractRevision: "s2-gmail-sender-policy-v2",
           senderAddress: "notifications@example.invalid",
+          verificationHost: "tenant.example.invalid",
+          verificationTenant: "tenant",
         })),
       ])),
       ...invalid.map((value, index) => writeFile(invalidPaths[index]!, JSON.stringify(value))),
@@ -1597,7 +1603,7 @@ test("embedded helper exact-parses one versioned lowercase sender policy", async
       [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command",
-        "$invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadSenderPolicy',[Reflection.BindingFlags]'NonPublic,Static'); try { $sender=$method.Invoke($null,@($env:HUNT_TEST_VALID)); if($sender -ne 'notifications@example.invalid') { exit 21 } } catch { exit 22 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path)); exit 23 } catch {} }; exit 0",
+        "$invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadSenderPolicy',[Reflection.BindingFlags]'NonPublic,Static'); try { $sender=$method.Invoke($null,@($env:HUNT_TEST_VALID,'tenant.example.invalid','tenant')); if($sender -ne 'notifications@example.invalid') { exit 21 } } catch { exit 22 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,'tenant.example.invalid','tenant')); exit 23 } catch {} }; exit 0",
       ],
       {
         shell: false,
