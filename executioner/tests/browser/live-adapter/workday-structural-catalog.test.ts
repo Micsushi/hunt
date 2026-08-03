@@ -6,6 +6,7 @@ import {
   type WorkdaySemanticAccountInspector,
   type WorkdayStructuralPage,
 } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
+import { classifyWorkdayAccountNavigation } from "../../../src/browser/playwright-live/private/workday-account-navigation.ts";
 import { classifyLiveAccountState } from "../../../src/ats/workday/live/index.ts";
 
 const LIVE_VERIFICATION_REQUIRED_SELECTOR =
@@ -175,7 +176,7 @@ test("normal noCaptcha ownership alone never creates a CAPTCHA trait", async () 
   );
 });
 
-test("the exact email sign-in choice is a closed navigation trait", async () => {
+test("visible email sign-in text alone cannot create a navigation trait", async () => {
   const page: WorkdayStructuralPage = {
     locator: (selector) => ({
       count: async () =>
@@ -193,8 +194,55 @@ test("the exact email sign-in choice is a closed navigation trait", async () => 
   assert.deepEqual(result.kind === "snapshot" ? result.snapshot.traitIds : [], [
     "structural_trait_ats_workday_family_v1",
     "structural_trait_page_account_entry_v1",
-    "structural_trait_navigation_email_sign_in_choice_v1",
   ]);
+  assert.equal(
+    result.kind === "snapshot" &&
+      classifyWorkdayAccountNavigation(result.snapshot).kind,
+    "invalid",
+  );
+});
+
+test("a live-shaped standalone email provider choice uses its exact visible owner", async () => {
+  const choiceOwner =
+    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === choiceOwner ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  assert.equal(
+    result.kind === "snapshot" &&
+      classifyWorkdayAccountNavigation(result.snapshot).kind,
+    "email_sign_in_choice",
+  );
+});
+
+test("hidden provider and application markers cannot classify navigation or readiness", async () => {
+  const hiddenSelectors = new Set([
+    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
+    '[data-automation-id="candidateHomePage"]',
+  ]);
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => hiddenSelectors.has(selector) ? 1 : 0,
+      isVisible: async () => false,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const snapshot = result.kind === "snapshot" ? result.snapshot : undefined;
+  assert.deepEqual(snapshot?.traitIds, ["structural_trait_ats_workday_family_v1"]);
+  assert.equal(
+    snapshot === undefined ? "invalid" : classifyWorkdayAccountNavigation(snapshot).kind,
+    "invalid",
+  );
 });
 
 function signInInspector(): WorkdaySemanticAccountInspector {

@@ -37,7 +37,10 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="createAccountPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
-  rule("structural_trait_navigation_email_sign_in_choice_v1", ':text-is("Sign in with email")'),
+  rule(
+    "structural_trait_navigation_email_sign_in_choice_v1",
+    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
+  ),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="emailVerificationPage"]'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="verifyEmailPage"]'),
   rule("structural_trait_page_candidate_home_v1", '[data-automation-id="candidateHomePage"]'),
@@ -133,7 +136,7 @@ export async function inspectWorkdayStructure(
       inlineVerification &&
       rule.traitId === "structural_trait_page_account_entry_v1"
     ) continue;
-    if (await present(page, rule.selector)) traitIds.push(rule.traitId);
+    if (await anyExactVisible(page, [rule.selector])) traitIds.push(rule.traitId);
   }
   if (!inlineVerification) {
     for (const rule of accountFactRules) {
@@ -211,10 +214,6 @@ async function matchingUnavailable(
     if (await anyExactVisible(page, [rule.selector])) facts.add(rule.reason);
   }
   return [...facts];
-}
-
-async function present(page: WorkdayStructuralPage, selector: string): Promise<boolean> {
-  return await page.locator(selector).count() > 0;
 }
 
 async function anyExactVisible(
