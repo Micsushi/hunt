@@ -8,41 +8,34 @@ const OUTPUT_MAGIC = Buffer.from("HACS", "ascii");
 
 const PINNED_ENV_ACCOUNT_SCRIPT = String.raw`
 & {
-param([string]$sourcePath, [string]$expectedSha256)
 $ErrorActionPreference = 'Stop'
-if (-not [System.IO.Path]::IsPathRooted($sourcePath)) { exit 31 }
-$envBytes = $null
-$hashBytes = $null
-$sha256 = $null
-$envSource = $null
-$emailMatches = $null
-$passwordMatches = $null
-try {
-    $item = Get-Item -LiteralPath $sourcePath -Force
-    if ($item.PSIsContainer -or (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or $item.Length -lt 1 -or $item.Length -gt 65536) { exit 34 }
-    $envBytes = [System.IO.File]::ReadAllBytes($sourcePath)
-    if ($envBytes.Length -lt 1 -or $envBytes.Length -gt 65536) { exit 34 }
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    $hashBytes = $sha256.ComputeHash($envBytes)
-    $actualSha256 = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
-    if ($actualSha256 -cne $expectedSha256) { exit 32 }
-    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    $envSource = $strictUtf8.GetString($envBytes)
-    $emailMatches = [regex]::Matches($envSource, '(?m)^HUNT_C3_TEST_ACCOUNT_EMAIL=([^\r\n]{1,320})\r?$', 'CultureInvariant')
-    $passwordMatches = [regex]::Matches($envSource, '(?m)^HUNT_C3_TEST_ACCOUNT_PASSWORD=([^\r\n]{1,4096})\r?$', 'CultureInvariant')
-    if ($emailMatches.Count -ne 1 -or $passwordMatches.Count -ne 1) { exit 33 }
-
-    $source = @'
+$sourcePath = $env:HUNT_PINNED_ENV_SOURCE_PATH
+$expectedSha256 = $env:HUNT_PINNED_ENV_SHA256
+$env:HUNT_PINNED_ENV_SOURCE_PATH = $null
+$env:HUNT_PINNED_ENV_SHA256 = $null
+if ([string]::IsNullOrEmpty($sourcePath) -or [string]::IsNullOrEmpty($expectedSha256)) { exit 31 }
+$source = @'
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 public static class HuntPinnedEnvAccountSealer
 {
     private static readonly byte[] InputMagic = new byte[] { 72, 65, 67, 73 };
     private static readonly byte[] OutputMagic = new byte[] { 72, 65, 67, 83 };
     private static readonly byte[] BundleMagic = new byte[] { 72, 65, 67, 66 };
+    private static readonly byte[] EmailPrefix = Encoding.ASCII.GetBytes("HUNT_C3_TEST_ACCOUNT_EMAIL=");
+    private static readonly byte[] PasswordPrefix = Encoding.ASCII.GetBytes("HUNT_C3_TEST_ACCOUNT_PASSWORD=");
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(
+        SafeFileHandle handle,
+        StringBuilder path,
+        uint pathLength,
+        uint flags);
 
     private static byte[] ReadEntropy()
     {
@@ -66,19 +59,124 @@ public static class HuntPinnedEnvAccountSealer
         writer.Write(value);
     }
 
-    public static void Run(string email, string password)
+    private static string WithoutDevicePrefix(string path)
+    {
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+            return @"\\" + path.Substring(8);
+        if (path.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase))
+            return path.Substring(4);
+        return path;
+    }
+
+    private static void ValidateFinalPath(FileStream stream, string sourcePath)
+    {
+        StringBuilder finalPath = new StringBuilder(32768);
+        uint length = GetFinalPathNameByHandle(stream.SafeFileHandle, finalPath, 32768, 0);
+        if (length < 1 || length >= 32768) throw new InvalidDataException();
+        string expected = Path.GetFullPath(sourcePath);
+        string actual = WithoutDevicePrefix(finalPath.ToString());
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException();
+    }
+
+    private static byte[] ReadAllBytes(string sourcePath)
+    {
+        FileAttributes attributes = File.GetAttributes(sourcePath);
+        if ((attributes & FileAttributes.Directory) != 0 || (attributes & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException();
+        using (FileStream stream = new FileStream(
+            sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan))
+        {
+            ValidateFinalPath(stream, sourcePath);
+            if (stream.Length < 1 || stream.Length > 65536) throw new InvalidDataException();
+            byte[] value = new byte[(int)stream.Length];
+            int offset = 0;
+            while (offset < value.Length)
+            {
+                int read = stream.Read(value, offset, value.Length - offset);
+                if (read < 1) throw new EndOfStreamException();
+                offset += read;
+            }
+            if (stream.ReadByte() != -1) throw new InvalidDataException();
+            return value;
+        }
+    }
+
+    private static byte[] ParseExpectedDigest(string value)
+    {
+        if (value == null || value.Length != 64) throw new InvalidDataException();
+        byte[] digest = new byte[32];
+        for (int i = 0; i < digest.Length; i++)
+        {
+            int high = Hex(value[i * 2]);
+            int low = Hex(value[i * 2 + 1]);
+            if (high < 0 || low < 0) throw new InvalidDataException();
+            digest[i] = (byte)((high << 4) | low);
+        }
+        return digest;
+    }
+
+    private static int Hex(char value)
+    {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+        return -1;
+    }
+
+    private static bool StartsWith(byte[] source, int start, int end, byte[] prefix)
+    {
+        if (end - start < prefix.Length) return false;
+        for (int i = 0; i < prefix.Length; i++)
+            if (source[start + i] != prefix[i]) return false;
+        return true;
+    }
+
+    private static byte[] ExtractUniqueValue(byte[] source, byte[] prefix, int maximumLength)
+    {
+        byte[] result = null;
+        int count = 0;
+        int start = 0;
+        for (int cursor = 0; cursor <= source.Length; cursor++)
+        {
+            if (cursor != source.Length && source[cursor] != 10) continue;
+            int end = cursor;
+            if (end > start && source[end - 1] == 13) end--;
+            if (StartsWith(source, start, end, prefix))
+            {
+                int length = end - start - prefix.Length;
+                if (length < 1 || length > maximumLength || ++count != 1)
+                    throw new InvalidDataException();
+                result = new byte[length];
+                Buffer.BlockCopy(source, start + prefix.Length, result, 0, length);
+            }
+            start = cursor + 1;
+        }
+        if (count != 1 || result == null) throw new InvalidDataException();
+        new UTF8Encoding(false, true).GetCharCount(result);
+        return result;
+    }
+
+    public static void Run(string sourcePath, string expectedSha256)
     {
         byte[] entropy = ReadEntropy();
+        byte[] envBytes = null;
+        byte[] expectedDigest = null;
+        byte[] actualDigest = null;
         byte[] emailBytes = null;
         byte[] passwordBytes = null;
         byte[] bundle = null;
         byte[] sealedValue = null;
         try
         {
-            emailBytes = new UTF8Encoding(false, true).GetBytes(email);
-            passwordBytes = new UTF8Encoding(false, true).GetBytes(password);
-            if (emailBytes.Length < 1 || emailBytes.Length > 320 || passwordBytes.Length < 1 || passwordBytes.Length > 4096)
-                throw new InvalidDataException();
+            if (!Path.IsPathRooted(sourcePath)) throw new InvalidDataException();
+            envBytes = ReadAllBytes(sourcePath);
+            expectedDigest = ParseExpectedDigest(expectedSha256);
+            using (SHA256 sha256 = SHA256.Create()) actualDigest = sha256.ComputeHash(envBytes);
+            int difference = 0;
+            for (int i = 0; i < actualDigest.Length; i++) difference |= actualDigest[i] ^ expectedDigest[i];
+            if (difference != 0) throw new InvalidDataException();
+            emailBytes = ExtractUniqueValue(envBytes, EmailPrefix, 320);
+            passwordBytes = ExtractUniqueValue(envBytes, PasswordPrefix, 4096);
             MemoryStream bundleStream = new MemoryStream();
             BinaryWriter bundleWriter = new BinaryWriter(bundleStream);
             bundleWriter.Write(BundleMagic);
@@ -105,21 +203,16 @@ public static class HuntPinnedEnvAccountSealer
             if (bundle != null) Array.Clear(bundle, 0, bundle.Length);
             if (passwordBytes != null) Array.Clear(passwordBytes, 0, passwordBytes.Length);
             if (emailBytes != null) Array.Clear(emailBytes, 0, emailBytes.Length);
+            if (actualDigest != null) Array.Clear(actualDigest, 0, actualDigest.Length);
+            if (expectedDigest != null) Array.Clear(expectedDigest, 0, expectedDigest.Length);
+            if (envBytes != null) Array.Clear(envBytes, 0, envBytes.Length);
             Array.Clear(entropy, 0, entropy.Length);
         }
     }
 }
 '@
-    Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll'
-    [HuntPinnedEnvAccountSealer]::Run($emailMatches[0].Groups[1].Value, $passwordMatches[0].Groups[1].Value)
-} finally {
-    if ($null -ne $hashBytes) { [System.Array]::Clear($hashBytes, 0, $hashBytes.Length) }
-    if ($null -ne $envBytes) { [System.Array]::Clear($envBytes, 0, $envBytes.Length) }
-    if ($null -ne $sha256) { $sha256.Dispose() }
-    $envSource = $null
-    $emailMatches = $null
-    $passwordMatches = $null
-}
+Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.Security.dll'
+[HuntPinnedEnvAccountSealer]::Run($sourcePath, $expectedSha256)
 }
 `.trim();
 
@@ -223,13 +316,16 @@ class PowerShellPinnedEnvAccountProcess implements PinnedEnvAccountProcess {
         "Bypass",
         "-Command",
         PINNED_ENV_ACCOUNT_SCRIPT,
-        sourcePath,
-        expectedSha256,
       ], {
         shell: false,
         windowsHide: true,
         stdio: ["pipe", "pipe", "ignore"],
-        env: { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" },
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_PINNED_ENV_SOURCE_PATH: sourcePath,
+          HUNT_PINNED_ENV_SHA256: expectedSha256,
+        },
       });
       const chunks: Buffer[] = [];
       let size = 0;
@@ -291,4 +387,3 @@ function parseFramedCiphertext(value: Uint8Array, bound: number): Uint8Array {
   }
   return new Uint8Array(input.subarray(9));
 }
-

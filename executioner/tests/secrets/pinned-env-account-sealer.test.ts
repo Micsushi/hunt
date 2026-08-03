@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -74,7 +74,8 @@ test("trusted helper reads only exact test-account keys and emits ciphertext onl
   assert.match(source, /ReadAllBytes/u);
   assert.match(source, /SHA256/u);
   assert.match(source, /ReparsePoint/u);
-  assert.match(source, /envBytes\.Length -gt 65536/u);
+  assert.match(source, /GetFinalPathNameByHandle/u);
+  assert.match(source, /FileShare\.Read/u);
   assert.match(source, /expectedSha256/u);
   assert.match(source, /HUNT_C3_TEST_ACCOUNT_EMAIL/u);
   assert.match(source, /HUNT_C3_TEST_ACCOUNT_PASSWORD/u);
@@ -84,6 +85,7 @@ test("trusted helper reads only exact test-account keys and emits ciphertext onl
   assert.match(source, /stdio:\s*\["pipe",\s*"pipe",\s*"ignore"\]/u);
   assert.doesNotMatch(source, /process\.env/u);
   assert.doesNotMatch(source, /Get-FileHash/u);
+  assert.doesNotMatch(source, /\[regex\]|envSource|emailMatches|passwordMatches/u);
   assert.doesNotMatch(source, /Write-(?:Output|Error|Host)|console\.(?:log|error)|stderr:/iu);
 });
 
@@ -110,3 +112,25 @@ test("production child seals a pinned synthetic env file", async () => {
   }
 });
 
+test("production child treats a source path containing spaces and dollar signs as opaque", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hunt-env-account-opaque-"));
+  try {
+    const nested = join(root, "space $HOME");
+    await mkdir(nested);
+    const sourcePath = join(nested, ".env");
+    const source = [
+      "HUNT_C3_TEST_ACCOUNT_EMAIL=synthetic@example.invalid",
+      "HUNT_C3_TEST_ACCOUNT_PASSWORD=synthetic-only",
+    ].join("\n");
+    await writeFile(sourcePath, source, "utf8");
+    const expectedSha256 = createHash("sha256").update(source).digest("hex");
+    const sealed = await new WindowsPinnedEnvAccountSealer({
+      sourcePath,
+      expectedSha256,
+    }).seal(Uint8Array.from([53, 59, 61]), new AbortController().signal);
+    assert.ok(sealed.byteLength > 32);
+    sealed.fill(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
