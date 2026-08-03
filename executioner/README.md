@@ -98,12 +98,17 @@ bounded account-access checkpoint from a clean committed worktree:
 npm run live:s2 -- --config C:\private\s2-owner-inputs.json --stop-after account_access --evidence-root C:\private\s2-evidence
 ```
 
-On Windows, every headed live run requires a non-primary monitor. Chrome starts
-minimized with its restored bounds contained by the rightmost secondary
-monitor, and the launcher verifies both the minimized state and those bounds.
-It never restores, activates, or brings the page forward. Missing secondary
-geometry or a browser that restores itself fails closed before the job flow
-continues.
+On Windows, every headed live run requires a non-primary monitor. `live:s2`
+starts the entire acceptance runner inside a kill-on-close Windows Job on a
+named, non-switched desktop; Playwright and its owned Chrome descendants inherit
+that desktop. The browser launcher independently attests the desktop binding,
+stores the window inside the rightmost secondary monitor, minimizes it without
+activation, and verifies the minimized DPI-equivalent bounds through the owned
+persistent context. It never switches the desktop, restores, activates, brings
+the page forward, or attaches to an externally launched browser. Closing the
+Job owns cleanup for the runner and every browser descendant, including parent
+cancellation. Missing secondary geometry, failed isolation, or a browser that
+restores itself fails closed before the job flow continues.
 
 The runner verifies the exact checked-out Git SHA and rejects tracked, staged,
 or untracked production changes before browser creation. At the account-access

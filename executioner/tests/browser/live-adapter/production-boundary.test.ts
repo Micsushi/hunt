@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 
 test("production browser launch uses only a persistent Playwright context", async () => {
@@ -17,6 +17,19 @@ test("production browser launch uses only a persistent Playwright context", asyn
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
+});
+
+test("all production live-browser files preserve the persistent-context boundary", async () => {
+  const privateRoot = new URL(
+    "../../../src/browser/playwright-live/private/",
+    import.meta.url,
+  );
+  const sources = await Promise.all(
+    (await readdir(privateRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+      .map((entry) => readFile(new URL(entry.name, privateRoot), "utf8")),
+  );
+  assert.equal(sources.join("\n").includes("connectOverCDP"), false);
 });
 
 test("public live-browser facade adds no frozen port or raw-page capability", async () => {
