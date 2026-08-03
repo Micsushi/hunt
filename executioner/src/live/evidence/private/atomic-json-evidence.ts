@@ -15,22 +15,27 @@ import {
 import { isAbsolute, join, normalize, resolve } from "node:path";
 
 const MAX_ACCEPTANCE_BYTES = 16 * 1024;
+const MAX_DIAGNOSTICS_BYTES = 64 * 1024;
 
 export interface AtomicJsonEvidenceRequest {
   readonly root: string;
   readonly value: unknown;
   readonly sensitiveValues: readonly string[];
   readonly label: string;
+  readonly fileName?: "acceptance.json" | "diagnostics.json";
 }
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): void {
   const unavailable = () => failure(`${request.label} evidence unavailable`);
   const denied = () => failure(`${request.label} evidence denied`);
   const root = admittedRoot(request.root, unavailable);
-  const target = join(root, "acceptance.json");
+  const target = join(root, request.fileName ?? "acceptance.json");
   if (existsSync(target)) unavailable();
   const payload = Buffer.from(`${JSON.stringify(request.value, null, 2)}\n`, "utf8");
-  if (payload.byteLength > MAX_ACCEPTANCE_BYTES) denied();
+  const maxBytes = request.fileName === "diagnostics.json"
+    ? MAX_DIAGNOSTICS_BYTES
+    : MAX_ACCEPTANCE_BYTES;
+  if (payload.byteLength > maxBytes) denied();
   for (const sensitive of request.sensitiveValues) {
     if (sensitive.length >= 3 && payload.includes(Buffer.from(sensitive, "utf8"))) {
       payload.fill(0);
@@ -38,7 +43,10 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): voi
     }
   }
 
-  const partial = join(root, `.acceptance-${randomBytes(16).toString("hex")}.partial`);
+  const partial = join(
+    root,
+    `.${(request.fileName ?? "acceptance.json").replace(/\.json$/u, "")}-${randomBytes(16).toString("hex")}.partial`,
+  );
   let descriptor: number | undefined;
   try {
     descriptor = openSync(partial, "wx", 0o600);

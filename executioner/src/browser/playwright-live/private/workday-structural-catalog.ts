@@ -90,10 +90,16 @@ const challengeRules = Object.freeze([
 const unavailableRules = Object.freeze([
   unavailable("not_found", '[data-automation-id="jobNotFoundPage"]'),
   unavailable("not_found", ':text-is("The page you are looking for doesn\'t exist.")'),
+  unavailable("not_found", ':text-is("The page you are looking for doesn’t exist.")'),
   unavailable("closed", '[data-automation-id="jobClosedPage"]'),
   unavailable("removed", '[data-automation-id="jobRemovedPage"]'),
   unavailable("unavailable", '[data-automation-id="jobUnavailablePage"]'),
 ] satisfies readonly UnavailableRule[]);
+
+const maintenanceSelectors = Object.freeze([
+  ':text-is("Workday is currently unavailable.")',
+  ':text-is("We are experiencing a service interruption.")',
+]);
 
 const controlSelector = 'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"]';
 const requiredSelector = '[required], [aria-required="true"]';
@@ -176,6 +182,31 @@ export async function inspectWorkdayStructure(
       optionCount: await boundedCount(page, optionSelector),
     }),
   };
+}
+
+export async function isExactWorkdayMaintenancePage(
+  page: WorkdayStructuralPage,
+  value: string,
+): Promise<boolean> {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname.toLowerCase() !== "community.workday.com" ||
+    url.port !== "" ||
+    url.pathname !== "/maintenance-page" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== ""
+  ) return false;
+  for (const selector of maintenanceSelectors) {
+    if (!await anyExactVisible(page, [selector])) return false;
+  }
+  return true;
 }
 
 async function inspectSemanticAccount(

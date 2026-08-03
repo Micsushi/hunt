@@ -25,7 +25,7 @@ export function formatStage2TerminalResult(result: Stage2TerminalResult): string
         revisionId: result.acceptance.revisionId,
       }
     : {
-        status: "failed",
+        status: result.fact === undefined ? "failed" : "blocked",
         code: result.code,
         ...(result.fact === undefined ? {} : { fact: result.fact }),
       };

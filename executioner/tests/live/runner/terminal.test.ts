@@ -8,7 +8,7 @@ test("terminal output preserves bounded factual target details", () => {
     ok: false,
     code: "posting_unavailable",
     fact: { kind: "posting_unavailable", reason: "closed" },
-  }), '{"status":"failed","code":"posting_unavailable","fact":{"kind":"posting_unavailable","reason":"closed"}}\n');
+  }), '{"status":"blocked","code":"posting_unavailable","fact":{"kind":"posting_unavailable","reason":"closed"}}\n');
 });
 
 test("terminal output emits only admitted success references", () => {
@@ -49,5 +49,5 @@ test("terminal output preserves only a bounded account-verification fact", () =>
     ok: false,
     code: "manual_intervention",
     fact: { kind: "manual_intervention", reason: "mfa" },
-  }), '{"status":"failed","code":"manual_intervention","fact":{"kind":"manual_intervention","reason":"mfa"}}\n');
+  }), '{"status":"blocked","code":"manual_intervention","fact":{"kind":"manual_intervention","reason":"mfa"}}\n');
 });

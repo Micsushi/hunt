@@ -98,13 +98,35 @@ bounded account-access checkpoint from a clean committed worktree:
 npm run live:s2 -- --config C:\private\s2-owner-inputs.json --stop-after account_access --evidence-root C:\private\s2-evidence
 ```
 
+On Windows, every headed live run requires a non-primary monitor. Chrome starts
+minimized with its restored bounds contained by the rightmost secondary
+monitor, and the launcher verifies both the minimized state and those bounds.
+It never restores, activates, or brings the page forward. Missing secondary
+geometry or a browser that restores itself fails closed before the job flow
+continues.
+
 The runner verifies the exact checked-out Git SHA and rejects tracked, staged,
 or untracked production changes before browser creation. At the account-access
 checkpoint it inspects only the scoped account handle; the admitted Gmail
 reference and its future record remain untouched until the mailbox-verification
 lane. It proves account field entry, closes the owned browser with an
 independent cleanup signal, and then atomically writes a value-free
-`acceptance.json`. The recorded
+`acceptance.json`. Every admitted account-access run, including target facts and
+stable failures, attempts to seal `diagnostics.json` after cleanup; a persistence
+failure becomes the explicit `evidence_unavailable` terminal error. That file contains the
+ordered component/phase/step `EventEnvelope` records, cleanup state, and the
+exact `TerminalResult` for blocked or failed
+runs. It contains no URL, selector, page text, account value, credential,
+mailbox value, or raw browser capture. Factual outcomes print as `blocked`, not
+`failed`.
+
+`createStage2DiagnosticsMcpFromEvidenceRoot(...)` composes the protected
+evidence reader with the read-only Stage 2 MCP facade. Existing MCP request v2
+`journey_status` and `journey_result` calls return response v4 progress or the
+sealed terminal fact when diagnostics are available. Start, cancel, raw browser actions, and evidence-root
+paths are not exposed by this readback facade.
+
+The recorded
 `submitActivated: false` refers only to final job-application Submit; account
 Create or Sign In is activated as part of account-access proof.
 

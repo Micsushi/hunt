@@ -45,11 +45,14 @@ export function selectVisibleSecondaryWindow(
   });
 }
 
-export function visibleSecondaryWindowFromEnvironment(): VisibleSecondaryWindow | undefined {
-  if (!enabled(process.env.HUNT_C3_VISIBLE_SECONDARY_INSPECTION)) return undefined;
-  if (process.platform !== "win32") {
-    throw new Error("visible secondary inspection is Windows-only");
-  }
+export function requiresMinimizedSecondaryWindow(
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "win32";
+}
+
+export function minimizedSecondaryWindowForLiveTest(): VisibleSecondaryWindow | undefined {
+  if (!requiresMinimizedSecondaryWindow(process.platform)) return undefined;
   const script = windowsScreenDiscoveryScript();
   const result = spawnSync(
     "powershell.exe",
@@ -71,12 +74,12 @@ export function visibleSecondaryWindowFromEnvironment(): VisibleSecondaryWindow 
     result.stdout.length === 0 ||
     result.stdout.length > 16 * 1024
   ) {
-    throw new Error("secondary monitor discovery failed");
+    throw new Error("minimized secondary monitor discovery failed");
   }
   const parsed = JSON.parse(result.stdout) as unknown;
   const screens = Array.isArray(parsed) ? parsed : [parsed];
   if (!screens.every(isScreenWorkArea)) {
-    throw new Error("secondary monitor discovery returned invalid geometry");
+    throw new Error("minimized secondary monitor discovery returned invalid geometry");
   }
   return selectVisibleSecondaryWindow(screens);
 }
@@ -109,10 +112,6 @@ Add-Type -AssemblyName System.Windows.Forms
   }
 }) | ConvertTo-Json -Compress
 `;
-}
-
-function enabled(value: string | undefined): boolean {
-  return value === "1" || value === "true" || value === "TRUE";
 }
 
 function isScreenWorkArea(value: unknown): value is WindowsScreenWorkArea {

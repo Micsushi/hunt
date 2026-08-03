@@ -1,3 +1,4 @@
+import { s2StableErrorPolicy } from "../../contracts/index.ts";
 import type {
   ActiveAccountSecretHandle,
   CredentialMutationAdapter,
@@ -12,7 +13,19 @@ import type {
   SecretStore,
   TargetIdentityV1,
   JourneyId,
+  EventId,
+  S2StableErrorCode,
+  TerminalResultV4,
 } from "../../contracts/index.ts";
+import {
+  AccountAccessEventRecorder,
+  type AccountAccessDiagnostics,
+  type AccountAccessDiagnosticsWriter,
+} from "./account-access-diagnostics.ts";
+export type {
+  AccountAccessDiagnostics,
+  AccountAccessDiagnosticsWriter,
+} from "./account-access-diagnostics.ts";
 
 export interface Stage2AccountAccessInput {
   readonly sourceRevision: string;
@@ -91,7 +104,10 @@ export interface Stage2AccountAccessDependencies {
   readonly navigator: AccountEntryNavigator;
   readonly credentials: CredentialMutationAdapter;
   readonly evidence: AccountAccessEvidenceWriter;
+  readonly diagnostics: AccountAccessDiagnosticsWriter;
   readonly nextOperationId: () => OperationId;
+  readonly nextEventId: () => EventId;
+  readonly now: () => string;
 }
 
 export type Stage2AccountAccessResult =
@@ -103,7 +119,22 @@ export async function runStage2AccountAccess(
   dependencies: Stage2AccountAccessDependencies,
   signal: AbortSignal,
 ): Promise<Stage2AccountAccessResult> {
-  if (signal.aborted) return failure("operation_cancelled");
+  const recorder = new AccountAccessEventRecorder({
+    journeyId: input.journeyId,
+    nextEventId: dependencies.nextEventId,
+    now: dependencies.now,
+  });
+  if (signal.aborted) {
+    return finalize(
+      input,
+      dependencies,
+      recorder,
+      failure("operation_cancelled"),
+      "pass",
+    );
+  }
+  const inspectOperation = dependencies.nextOperationId();
+  recorder.record("S2_SECRET_STORE", "validate", "step_started", inspectOperation);
   const account = await inspect(
     dependencies.secretStore,
     input,
@@ -113,59 +144,79 @@ export async function runStage2AccountAccess(
     "credential_mutation_adapter",
     signal,
   );
-  if (!account.ok) return failure(account.code);
+  if (!account.ok) {
+    recorder.record("S2_SECRET_STORE", "validate", "step_failed", inspectOperation);
+    return finalize(input, dependencies, recorder, failure(account.code), "pass");
+  }
+  recorder.record("S2_SECRET_STORE", "validate", "step_completed", inspectOperation);
 
   let opened: LiveBrowserSessionV1 | undefined;
-  let pending: Stage2AccountAccessResult = failure("account_access_failed");
+  let pending: Stage2AccountAccessResult = failure("browser_session_invalidated");
   try {
+    const openOperation = dependencies.nextOperationId();
+    recorder.record("F3", "start", "step_started", openOperation);
     const open = await dependencies.browser.open({
       schemaVersion: 1,
       journeyId: input.journeyId,
-      operationId: dependencies.nextOperationId(),
+      operationId: openOperation,
       profileLeaseId: input.profileLeaseId,
       target: input.target,
     }, signal);
     if (!open.ok) {
+      recorder.record("F3", "start", "step_failed", openOperation);
       pending = failure(open.error.code);
     } else {
+      recorder.record("F3", "start", "step_completed", openOperation);
       opened = open.value.session;
       pending = await enterAndProve(
         input,
         dependencies,
         account.value as ActiveAccountSecretHandle,
         opened,
+        recorder,
         signal,
       );
     }
   } catch {
-    pending = failure(signal.aborted ? "operation_cancelled" : "account_access_failed");
+    const code = signal.aborted
+      ? "operation_cancelled"
+      : recorder.unexpectedFailureCode();
+    recorder.failActive();
+    pending = failure(code);
   }
 
+  let cleanup: AccountAccessDiagnostics["cleanup"] = "pass";
   if (opened !== undefined) {
+    const closeOperation = dependencies.nextOperationId();
+    recorder.record("F3", "close", "step_started", closeOperation);
     try {
-      const cleanup = await dependencies.browser.close({
+      const closeResult = await dependencies.browser.close({
         schemaVersion: 1,
         journeyId: input.journeyId,
-        operationId: dependencies.nextOperationId(),
+        operationId: closeOperation,
         sessionId: opened.sessionId,
       }, new AbortController().signal);
-      if (!cleanup.ok) {
+      if (!closeResult.ok) {
         if (
-          cleanup.error.code !== "browser_session_missing" ||
+          closeResult.error.code !== "browser_session_missing" ||
           pending.ok
-        ) return failure(cleanup.error.code);
+        ) {
+          recorder.record("F3", "close", "step_failed", closeOperation);
+          pending = failure(closeResult.error.code);
+          cleanup = "failed";
+        } else {
+          recorder.record("F3", "close", "step_completed", closeOperation);
+        }
+      } else {
+        recorder.record("F3", "close", "step_completed", closeOperation);
       }
     } catch {
-      return failure("browser_profile_cleanup_failed");
+      recorder.record("F3", "close", "step_failed", closeOperation);
+      pending = failure("browser_profile_cleanup_failed");
+      cleanup = "failed";
     }
   }
-  if (!pending.ok) return pending;
-  try {
-    await dependencies.evidence.write(pending.acceptance);
-    return pending;
-  } catch {
-    return failure("evidence_unavailable");
-  }
+  return finalize(input, dependencies, recorder, pending, cleanup);
 }
 
 async function enterAndProve(
@@ -173,33 +224,53 @@ async function enterAndProve(
   dependencies: Stage2AccountAccessDependencies,
   credential: ActiveAccountSecretHandle,
   opened: LiveBrowserSessionV1,
+  recorder: AccountAccessEventRecorder,
   signal: AbortSignal,
 ): Promise<Stage2AccountAccessResult> {
+  const reconcileOperation = dependencies.nextOperationId();
+  recorder.record("F3", "reconcile", "step_started", reconcileOperation);
   const reconciled = await dependencies.browser.reconcile({
     schemaVersion: 1,
     journeyId: input.journeyId,
-    operationId: dependencies.nextOperationId(),
+    operationId: reconcileOperation,
     session: opened,
     expectedTarget: input.target,
   }, signal);
-  if (!reconciled.ok) return failure(reconciled.error.code);
+  if (!reconciled.ok) {
+    recorder.record("F3", "reconcile", "step_failed", reconcileOperation);
+    return failure(reconciled.error.code);
+  }
+  recorder.record("F3", "reconcile", "step_completed", reconcileOperation);
   if (reconciled.value.kind !== "matched") return targetFailure(reconciled.value);
+  const navigateOperation = dependencies.nextOperationId();
+  recorder.record("F3", "navigate", "step_started", navigateOperation);
   const advanced = await dependencies.navigator.advanceToAccountEntry({
     schemaVersion: 1,
     journeyId: input.journeyId,
-    operationId: dependencies.nextOperationId(),
+    operationId: navigateOperation,
     sessionId: reconciled.value.session.sessionId,
     target: input.target,
     now: input.now,
   }, signal);
-  if (!advanced.ok) return failure(advanced.error.code);
+  if (!advanced.ok) {
+    recorder.record("F3", "navigate", "step_failed", navigateOperation);
+    return failure(advanced.error.code);
+  }
+  recorder.record("F3", "navigate", "step_completed", navigateOperation);
   if (advanced.value.kind !== "account_boundary") {
     return targetFailure(advanced.value);
   }
+  const mutateOperation = dependencies.nextOperationId();
+  recorder.record(
+    "S2_CREDENTIAL_MUTATION",
+    "mutate",
+    "step_started",
+    mutateOperation,
+  );
   const mutated = await dependencies.credentials.mutate({
     schemaVersion: 1,
     journeyId: input.journeyId,
-    operationId: dependencies.nextOperationId(),
+    operationId: mutateOperation,
     sessionId: reconciled.value.session.sessionId,
     target: input.target,
     now: input.now,
@@ -207,14 +278,36 @@ async function enterAndProve(
     credential,
     fields: ["email", "password"],
   }, signal);
-  if (!mutated.ok) return failure(mutated.error.code);
+  if (!mutated.ok) {
+    recorder.record(
+      "S2_CREDENTIAL_MUTATION",
+      "mutate",
+      "step_failed",
+      mutateOperation,
+    );
+    return failure(mutated.error.code);
+  }
   if (
     mutated.value.attemptedFields.length !== 2 ||
     mutated.value.attemptedFields[0] !== "email" ||
     mutated.value.attemptedFields[1] !== "password" ||
     (mutated.value.kind !== "verification_required" &&
       mutated.value.kind !== "application_ready")
-  ) return failure("account_proof_invalid");
+  ) {
+    recorder.record(
+      "S2_CREDENTIAL_MUTATION",
+      "mutate",
+      "step_failed",
+      mutateOperation,
+    );
+    return failure("credential_mutation_denied");
+  }
+  recorder.record(
+    "S2_CREDENTIAL_MUTATION",
+    "mutate",
+    "step_completed",
+    mutateOperation,
+  );
 
   const accountOutcome = mutated.value.kind as
     "verification_required" | "application_ready";
@@ -237,6 +330,92 @@ async function enterAndProve(
     cleanup: "pass" as const,
   });
   return { ok: true, acceptance };
+}
+
+async function finalize(
+  input: Stage2AccountAccessInput,
+  dependencies: Stage2AccountAccessDependencies,
+  recorder: AccountAccessEventRecorder,
+  candidate: Stage2AccountAccessResult,
+  cleanup: AccountAccessDiagnostics["cleanup"],
+): Promise<Stage2AccountAccessResult> {
+  let result = candidate;
+  if (result.ok) {
+    const evidenceOperation = dependencies.nextOperationId();
+    recorder.record("F11", "persist", "step_started", evidenceOperation);
+    try {
+      await dependencies.evidence.write(result.acceptance);
+      recorder.record("F11", "persist", "step_completed", evidenceOperation);
+    } catch {
+      recorder.record("F11", "persist", "step_failed", evidenceOperation);
+      result = failure("evidence_unavailable");
+    }
+  }
+  if (!result.ok) {
+    recorder.record(
+      "F9",
+      "complete",
+      "journey_terminal",
+      recorder.lastSource ?? dependencies.nextOperationId(),
+    );
+  }
+  const terminal = terminalResult(input.journeyId, result);
+  const diagnostics = Object.freeze({
+    schemaVersion: 1 as const,
+    evidenceRevision: "s2-account-access-diagnostics-v1" as const,
+    checkpoint: "account_access" as const,
+    sourceRevision: input.sourceRevision,
+    revisionId: input.revisionId,
+    journeyId: input.journeyId,
+    status: result.ok ? "passed" as const : result.fact === undefined
+      ? "failed" as const
+      : "blocked" as const,
+    completedSteps: recorder.completedSteps,
+    events: Object.freeze([...recorder.events]),
+    terminal,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
+    cleanup,
+  });
+  try {
+    await dependencies.diagnostics.write(diagnostics);
+  } catch {
+    return failure("evidence_unavailable");
+  }
+  return result;
+}
+
+function terminalResult(
+  journeyId: JourneyId,
+  result: Stage2AccountAccessResult,
+): TerminalResultV4 | null {
+  if (result.ok) return null;
+  if (result.fact !== undefined) {
+    return Object.freeze({
+      schemaVersion: 4 as const,
+      journeyId,
+      status: "blocked" as const,
+      completedPages: 0,
+      factualOutcome: {
+        source: "target_identity" as const,
+        result: result.fact,
+      },
+    });
+  }
+  const code = stableCode(result.code);
+  return Object.freeze({
+    schemaVersion: 4 as const,
+    journeyId,
+    status: "failed" as const,
+    completedPages: 0,
+    errorCode: code,
+  });
+}
+
+function stableCode(value: string): S2StableErrorCode {
+  return Object.hasOwn(s2StableErrorPolicy, value)
+    ? value as S2StableErrorCode
+    : "mcp_internal_error";
 }
 
 async function inspect(

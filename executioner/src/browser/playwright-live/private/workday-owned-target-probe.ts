@@ -8,6 +8,7 @@ import type {
 import { PlaywrightAccountPageAdapter } from "./playwright-account-page.ts";
 import {
   inspectWorkdayStructure,
+  isExactWorkdayMaintenancePage,
   type WorkdayStructuralPage,
 } from "./workday-structural-catalog.ts";
 
@@ -34,6 +35,13 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
   ): Promise<OwnedTargetObservation> {
     if (signal.aborted) throw signal.reason;
     const probePage = page as unknown as WorkdayProbePage;
+    if (await isExactWorkdayMaintenancePage(probePage, probePage.url())) {
+      this.#matchedLineage.delete(probePage);
+      return owned(emptyWorkdaySnapshot(), {
+        kind: "posting_unavailable",
+        reason: "unavailable",
+      });
+    }
     const parsed = parseWorkdayTarget(probePage.url());
     if (parsed === undefined) {
       this.#matchedLineage.delete(probePage);

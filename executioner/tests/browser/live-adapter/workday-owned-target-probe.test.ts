@@ -271,6 +271,78 @@ test("production probe preserves structural ambiguity, unknowns, and exact unava
   );
 });
 
+test("production probe recognizes Workday's typographic-apostrophe not-found page", async () => {
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      { ':text-is("The page you are looking for doesn’t exist.")': 1 },
+    ),
+    expected,
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(
+    result,
+    owned({ kind: "posting_unavailable", reason: "not_found" }),
+  );
+});
+
+test("production probe recognizes only the exact Workday maintenance redirect", async () => {
+  const maintenance = new ProbePage(
+    "https://community.workday.com/maintenance-page?d=5&s=1&e=1&o=",
+    {
+      ':text-is("Workday is currently unavailable.")': 1,
+      ':text-is("We are experiencing a service interruption.")': 1,
+    },
+  );
+
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      maintenance,
+      expected,
+      new AbortController().signal,
+    ),
+    owned({ kind: "posting_unavailable", reason: "unavailable" }),
+  );
+
+  maintenance.currentUrl = "https://community.workday.com/other";
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      maintenance,
+      expected,
+      new AbortController().signal,
+    ),
+    { ownership: "foreign" },
+  );
+
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      new ProbePage(
+        "https://community.workday.com/maintenance-page",
+        { ':text-is("Workday is currently unavailable.")': 1 },
+      ),
+      expected,
+      new AbortController().signal,
+    ),
+    { ownership: "foreign" },
+  );
+
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      new ProbePage(
+        "https://community.workday.com:444/maintenance-page",
+        {
+          ':text-is("Workday is currently unavailable.")': 1,
+          ':text-is("We are experiencing a service interruption.")': 1,
+        },
+      ),
+      expected,
+      new AbortController().signal,
+    ),
+    { ownership: "foreign" },
+  );
+});
+
 test("production probe fails ambiguous routes and contradictory unavailability closed", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const ambiguousRoute = await probe.inspect(

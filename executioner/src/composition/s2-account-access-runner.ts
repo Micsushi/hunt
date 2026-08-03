@@ -17,6 +17,7 @@ import type { PlaywrightPersistentBrowserSession } from "../browser/playwright-l
 import { createPlaywrightLiveEntryStructuralSource } from "./s2-live-entry-source.ts";
 import { createStage2AccountEntryCredentialMutationAdapter } from "./s2-account-entry.ts";
 import type {
+  EventId,
   OperationId,
   ProfileLeaseId,
   SecretHandleId,
@@ -25,6 +26,7 @@ import type {
   TargetTenantId,
 } from "../contracts/index.ts";
 import { writeAccountAccessEvidence } from "../live/evidence/account-access-evidence.ts";
+import { writeAccountAccessDiagnostics } from "../live/evidence/account-access-diagnostics.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
@@ -102,6 +104,16 @@ export async function runStage2AccountAccessFromOwnerConfig(
     );
     const targetSuffix = opaqueSuffix(owner.target.handleId, "target_ref_");
     const profileSuffix = opaqueSuffix(owner.profileRef, "profile_ref_");
+    const sensitiveValues = [
+      owner.target.url,
+      owner.target.host,
+      owner.target.tenant,
+      owner.target.posting,
+      owner.roots.runtime.path,
+      owner.roots.secrets.path,
+      owner.roots.evidence.path,
+      configPath,
+    ];
     return await runStage2AccountAccess({
       sourceRevision: source.sourceRevision,
       revisionId: owner.revisionId,
@@ -129,20 +141,21 @@ export async function runStage2AccountAccessFromOwnerConfig(
         write: async (acceptance) => writeAccountAccessEvidence({
           root: owner.roots.evidence.path,
           acceptance,
-          sensitiveValues: [
-            owner.target.url,
-            owner.target.host,
-            owner.target.tenant,
-            owner.target.posting,
-            owner.roots.runtime.path,
-            owner.roots.secrets.path,
-            owner.roots.evidence.path,
-            configPath,
-          ],
+          sensitiveValues,
+        }),
+      },
+      diagnostics: {
+        write: async (diagnostics) => writeAccountAccessDiagnostics({
+          root: owner.roots.evidence.path,
+          diagnostics,
+          sensitiveValues,
         }),
       },
       nextOperationId: () =>
         `operation_${randomBytes(16).toString("hex")}` as OperationId,
+      nextEventId: () =>
+        `event_${randomBytes(16).toString("hex")}` as EventId,
+      now: () => new Date().toISOString(),
     }, signal);
   } catch {
     return failed(signal.aborted ? "operation_cancelled" : "owner_config_invalid");

@@ -11,6 +11,8 @@ import type {
 } from "../../../src/contracts/live/index.ts";
 import {
   runStage2AccountAccess,
+  type AccountAccessDiagnostics,
+  type AccountAccessDiagnosticsWriter,
   type AccountAccessEvidenceWriter,
   type AccountEntryNavigator,
   type Stage2AccountAccessInput,
@@ -130,6 +132,27 @@ test("account access inspects only the account handle before browser and seals a
       assert.deepEqual(value.independentlyVerifiedFields, ["email", "password"]);
     },
   };
+  const diagnostics: AccountAccessDiagnosticsWriter = {
+    async write(value) {
+      order.push("diagnostics");
+      assert.equal(value.status, "passed");
+      assert.equal(value.terminal, null);
+      assert.equal(value.cleanup, "pass");
+      assert.deepEqual(
+        value.events.filter(({ kind }) => kind === "step_completed")
+          .map(({ component, phase, step }) => [component, phase, step]),
+        [
+          ["S2_SECRET_STORE", "account_access", "validate"],
+          ["F3", "account_access", "start"],
+          ["F3", "account_access", "reconcile"],
+          ["F3", "account_access", "navigate"],
+          ["S2_CREDENTIAL_MUTATION", "account_access", "mutate"],
+          ["F3", "account_access", "close"],
+          ["F11", "account_access", "persist"],
+        ],
+      );
+    },
+  };
 
   const result = await runStage2AccountAccess(input(), {
     secretStore,
@@ -137,7 +160,10 @@ test("account access inspects only the account handle before browser and seals a
     navigator,
     credentials,
     evidence,
+    diagnostics,
     nextOperationId: ids(),
+    nextEventId: eventIds(),
+    now: () => "2026-08-01T12:00:00.000Z",
   }, new AbortController().signal);
 
   assert.equal(result.ok, true);
@@ -149,6 +175,7 @@ test("account access inspects only the account handle before browser and seals a
     "mutate",
     "close",
     "evidence",
+    "diagnostics",
   ]);
   assert.equal(signals.length, 1);
   assert.equal(signals[0]?.aborted, false);
@@ -270,7 +297,7 @@ test("unproven account fields fail after cleanup and do not seal acceptance", as
     dependencies,
     new AbortController().signal,
   );
-  assert.deepEqual(result, { ok: false, code: "account_proof_invalid" });
+  assert.deepEqual(result, { ok: false, code: "credential_mutation_denied" });
   assert.equal(closed, 1);
   assert.equal(evidenceCalls, 0);
 });
@@ -289,6 +316,97 @@ test("account navigation preserves exact factual target outcomes", async () => {
       input(), dependencies, new AbortController().signal,
     );
     assert.deepEqual(result, { ok: false, code: value.kind, fact: value });
+  }
+});
+
+test("a factual posting stop seals detailed blocked diagnostics after cleanup", async () => {
+  let diagnostic: AccountAccessDiagnostics | undefined;
+  const dependencies = successfulDependencies();
+  dependencies.navigator = {
+    async advanceToAccountEntry() {
+      return {
+        ok: true,
+        value: { kind: "posting_unavailable", reason: "not_found" },
+      };
+    },
+  };
+  dependencies.diagnostics = {
+    async write(value) { diagnostic = value; },
+  };
+
+  const result = await runStage2AccountAccess(
+    input(), dependencies, new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    code: "posting_unavailable",
+    fact: { kind: "posting_unavailable", reason: "not_found" },
+  });
+  assert.equal(diagnostic?.status, "blocked");
+  assert.equal(diagnostic?.cleanup, "pass");
+  assert.deepEqual(diagnostic?.terminal, {
+    schemaVersion: 4,
+    journeyId: input().journeyId,
+    status: "blocked",
+    completedPages: 0,
+    factualOutcome: {
+      source: "target_identity",
+      result: { kind: "posting_unavailable", reason: "not_found" },
+    },
+  });
+  assert.deepEqual(
+    diagnostic?.events.map(({ component, phase, step, kind }) =>
+      [component, phase, step, kind]
+    ),
+    [
+      ["S2_SECRET_STORE", "account_access", "validate", "step_started"],
+      ["S2_SECRET_STORE", "account_access", "validate", "step_completed"],
+      ["F3", "account_access", "start", "step_started"],
+      ["F3", "account_access", "start", "step_completed"],
+      ["F3", "account_access", "reconcile", "step_started"],
+      ["F3", "account_access", "reconcile", "step_completed"],
+      ["F3", "account_access", "navigate", "step_started"],
+      ["F3", "account_access", "navigate", "step_completed"],
+      ["F3", "account_access", "close", "step_started"],
+      ["F3", "account_access", "close", "step_completed"],
+      ["F9", "account_access", "complete", "journey_terminal"],
+    ],
+  );
+});
+
+test("diagnostics persistence failure supersedes blocked and failed outcomes", async () => {
+  for (const kind of ["blocked", "failed"] as const) {
+    const dependencies = successfulDependencies();
+    if (kind === "blocked") {
+      dependencies.navigator = {
+        async advanceToAccountEntry() {
+          return {
+            ok: true,
+            value: { kind: "posting_unavailable", reason: "not_found" },
+          };
+        },
+      };
+    } else {
+      dependencies.credentials = {
+        async mutate() {
+          return {
+            ok: false,
+            error: { code: "credential_mutation_denied", retryable: false },
+          } as const;
+        },
+      };
+    }
+    dependencies.diagnostics = {
+      async write() { throw new Error("private persistence detail"); },
+    };
+
+    assert.deepEqual(
+      await runStage2AccountAccess(
+        input(), dependencies, new AbortController().signal,
+      ),
+      { ok: false, code: "evidence_unavailable" },
+    );
   }
 });
 
@@ -312,6 +430,32 @@ test("run cancellation still closes with a separate live cleanup signal", async 
   const result = await runStage2AccountAccess(input(), dependencies, controller.signal);
   assert.deepEqual(result, { ok: false, code: "operation_cancelled" });
   assert.equal(cleanupSignal?.aborted, false);
+});
+
+test("a thrown credential call is an exact uncertain effect with a failed mutation event", async () => {
+  let diagnostic: AccountAccessDiagnostics | undefined;
+  const dependencies = successfulDependencies();
+  dependencies.credentials = {
+    async mutate() { throw new Error("raw provider detail"); },
+  };
+  dependencies.diagnostics = {
+    async write(value) { diagnostic = value; },
+  };
+
+  assert.deepEqual(
+    await runStage2AccountAccess(
+      input(), dependencies, new AbortController().signal,
+    ),
+    { ok: false, code: "credential_effect_uncertain" },
+  );
+  assert.equal(
+    diagnostic?.events.some(({ component, step, kind }) =>
+      component === "S2_CREDENTIAL_MUTATION" &&
+      step === "mutate" &&
+      kind === "step_failed"
+    ),
+    true,
+  );
 });
 
 test("thrown cleanup is converted to a bounded cleanup failure", async () => {
@@ -384,11 +528,19 @@ function successfulDependencies() {
       },
     } as CredentialMutationAdapter,
     evidence: { async write() {} } as AccountAccessEvidenceWriter,
+    diagnostics: { async write() {} } as AccountAccessDiagnosticsWriter,
     nextOperationId: ids(),
+    nextEventId: eventIds(),
+    now: () => "2026-08-01T12:00:00.000Z",
   };
 }
 
 function ids(): () => never {
   let value = 0;
   return () => `operation_abcdefghijklmnop${value += 1}` as never;
+}
+
+function eventIds(): () => never {
+  let value = 0;
+  return () => `event_account_access_${value += 1}` as never;
 }

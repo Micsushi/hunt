@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  requiresMinimizedSecondaryWindow,
   selectVisibleSecondaryWindow,
   windowsScreenDiscoveryScript,
 } from "../../../src/browser/playwright-live/private/windows-visible-secondary.ts";
+
+test("Windows live browser tests always require minimized secondary placement", () => {
+  assert.equal(requiresMinimizedSecondaryWindow("win32"), true);
+  assert.equal(requiresMinimizedSecondaryWindow("linux"), false);
+});
 
 test("screen discovery enables per-monitor DPI awareness before reading physical work areas", () => {
   const script = windowsScreenDiscoveryScript();

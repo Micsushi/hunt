@@ -8,7 +8,7 @@ import type {
   PersistentContextLauncher,
 } from "./types.ts";
 import {
-  visibleSecondaryWindowFromEnvironment,
+  minimizedSecondaryWindowForLiveTest,
   type VisibleSecondaryWindow,
 } from "./windows-visible-secondary.ts";
 
@@ -31,7 +31,7 @@ export class PlaywrightPersistentContextLauncher
   constructor(options: PlaywrightPersistentContextLauncherOptions = {}) {
     this.#launch = options.launch ?? ((profilePath, launchOptions) =>
       chromium.launchPersistentContext(profilePath, launchOptions));
-    this.#visibleWindow = options.visibleWindow ?? visibleSecondaryWindowFromEnvironment;
+    this.#visibleWindow = options.visibleWindow ?? minimizedSecondaryWindowForLiveTest;
   }
 
   async launchPersistentContext(
@@ -44,13 +44,25 @@ export class PlaywrightPersistentContextLauncher
       : visiblePersistentLaunchOptions(visibleWindow));
     if (visibleWindow === undefined) return context;
     try {
-      await revealVisibleWindow(context, visibleWindow);
+      await verifyMinimizedSecondaryWindow(context, visibleWindow);
       return context;
     } catch (error) {
-      await context.close().catch(() => undefined);
+      await closeUnsafeWindowContext(context);
       throw error;
     }
   }
+}
+
+async function closeUnsafeWindowContext(context: BrowserContext): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await context.close();
+      return;
+    } catch {
+      // One bounded retry handles a transient close race without hiding failure.
+    }
+  }
+  throw new Error("live browser window safety cleanup failed");
 }
 
 export function visiblePersistentLaunchOptions(
@@ -67,7 +79,7 @@ export function visiblePersistentLaunchOptions(
   };
 }
 
-export async function revealVisibleWindow(
+export async function verifyMinimizedSecondaryWindow(
   context: Pick<BrowserContext, "pages" | "newPage" | "newCDPSession">,
   window: VisibleSecondaryWindow,
 ): Promise<void> {
@@ -77,16 +89,28 @@ export async function revealVisibleWindow(
     const { windowId } = await session.send("Browser.getWindowForTarget") as {
       readonly windowId: number;
     };
-    await session.send("Browser.setWindowBounds", {
+    const { bounds } = await session.send("Browser.getWindowBounds", {
       windowId,
-      bounds: {
-        left: window.x,
-        top: window.y,
-        width: window.width,
-        height: window.height,
-        windowState: "normal",
-      },
-    });
+    }) as {
+      readonly bounds: {
+        readonly left?: number;
+        readonly top?: number;
+        readonly width?: number;
+        readonly height?: number;
+        readonly windowState?: string;
+      };
+    };
+    if (bounds.windowState !== "minimized") {
+      throw new Error("live browser did not remain minimized");
+    }
+    if (
+      bounds.left !== window.x ||
+      bounds.top !== window.y ||
+      bounds.width !== window.width ||
+      bounds.height !== window.height
+    ) {
+      throw new Error("live browser did not remain on the secondary monitor");
+    }
   } finally {
     await session.detach();
   }
