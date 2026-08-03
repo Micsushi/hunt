@@ -20,6 +20,17 @@ export interface ParsedGmailMessage {
   readonly verificationTarget: Uint8Array;
 }
 
+export type GmailMessageTraceEvent =
+  | "gmail_message_envelope_admitted"
+  | "gmail_message_time_admitted"
+  | "gmail_message_headers_admitted"
+  | "gmail_message_addresses_admitted"
+  | "gmail_message_body_admitted"
+  | "gmail_message_body_encoding_rejected"
+  | "gmail_message_target_missing"
+  | "gmail_message_target_ambiguous"
+  | "gmail_message_target_admitted";
+
 export function parseMessageIds(value: unknown): readonly string[] {
   if (!record(value)) throw new GmailProviderFailure("mailbox_query_invalid");
   if ("nextPageToken" in value) {
@@ -57,6 +68,7 @@ export function parseGmailMessage(
     readonly notAfter: string;
     readonly verificationTtlSeconds: number;
   },
+  trace?: (event: GmailMessageTraceEvent) => void,
 ): ParsedGmailMessage | null {
   if (
     !record(value) ||
@@ -66,6 +78,7 @@ export function parseGmailMessage(
   ) {
     throw new GmailProviderFailure("mailbox_query_invalid");
   }
+  emit(trace, "gmail_message_envelope_admitted");
   const received = Number(value.internalDate);
   if (!Number.isSafeInteger(received)) {
     throw new GmailProviderFailure("mailbox_query_invalid");
@@ -76,6 +89,7 @@ export function parseGmailMessage(
   } catch {
     throw new GmailProviderFailure("mailbox_query_invalid");
   }
+  emit(trace, "gmail_message_time_admitted");
   if (
     received < Date.parse(expected.notBefore) ||
     received > Date.parse(expected.notAfter)
@@ -83,13 +97,15 @@ export function parseGmailMessage(
     return null;
   }
   const headers = headerMap(value.payload.headers);
+  emit(trace, "gmail_message_headers_admitted");
   if (
     address(headers.get("from")) !== expected.senderAddress ||
     address(headers.get("to")) !== expected.recipientAddress
   ) {
     return null;
   }
-  const target = verificationTarget(value.payload, expected.verificationHost);
+  emit(trace, "gmail_message_addresses_admitted");
+  const target = verificationTarget(value.payload, expected.verificationHost, trace);
   if (target === null) return null;
   return { receivedAt, verificationTarget: target };
 }
@@ -124,10 +140,14 @@ function address(value: string | undefined): string | null {
 function verificationTarget(
   payload: Record<string, unknown>,
   expectedHost: string,
+  trace: ((event: GmailMessageTraceEvent) => void) | undefined,
 ): Uint8Array | null {
   const candidates = new Set<string>();
-  for (const encoded of bodySegments(payload, 0)) {
+  const segments = bodySegments(payload, 0);
+  emit(trace, "gmail_message_body_admitted");
+  for (const encoded of segments) {
     if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) {
+      emit(trace, "gmail_message_body_encoding_rejected");
       throw new GmailProviderFailure("mailbox_query_invalid");
     }
     const bytes = Buffer.from(encoded, "base64url");
@@ -152,7 +172,10 @@ function verificationTarget(
             carriesVerificationToken(candidate)
           ) {
             candidates.add(canonical);
-            if (candidates.size > 1) return null;
+            if (candidates.size > 1) {
+              emit(trace, "gmail_message_target_ambiguous");
+              return null;
+            }
           }
         } catch {
           // Ignore a malformed candidate and continue within the bounded payload.
@@ -162,8 +185,23 @@ function verificationTarget(
       bytes.fill(0);
     }
   }
-  if (candidates.size !== 1) return null;
+  if (candidates.size !== 1) {
+    emit(trace, "gmail_message_target_missing");
+    return null;
+  }
+  emit(trace, "gmail_message_target_admitted");
   return new TextEncoder().encode([...candidates][0]);
+}
+
+function emit(
+  trace: ((event: GmailMessageTraceEvent) => void) | undefined,
+  event: GmailMessageTraceEvent,
+): void {
+  try {
+    trace?.(event);
+  } catch {
+    // Diagnostic tracing cannot alter mailbox parsing.
+  }
 }
 
 function carriesVerificationToken(candidate: URL): boolean {

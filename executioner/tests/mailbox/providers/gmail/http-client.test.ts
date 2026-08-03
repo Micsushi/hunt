@@ -132,6 +132,12 @@ test("emits only value-free parser stage diagnostics", async () => {
       "gmail_list_parse_started",
       "gmail_list_parse_succeeded",
       "gmail_message_parse_started",
+      "gmail_message_envelope_admitted",
+      "gmail_message_time_admitted",
+      "gmail_message_headers_admitted",
+      "gmail_message_addresses_admitted",
+      "gmail_message_body_admitted",
+      "gmail_message_target_admitted",
       "gmail_message_parse_succeeded",
     ]);
     assert.equal(events.some((event) => event.includes("private")), false);

@@ -1,5 +1,6 @@
 import {
   GmailProviderFailure,
+  type GmailMessageTraceEvent,
   parseGmailMessage,
   parseMessageIds,
   type ParsedGmailMessage,
@@ -15,6 +16,7 @@ export interface GmailHttpClientOptions {
 }
 
 export type GmailHttpClientTraceEvent =
+  | GmailMessageTraceEvent
   | "gmail_list_parse_started"
   | "gmail_list_parse_succeeded"
   | "gmail_list_parse_failed"
@@ -86,6 +88,7 @@ export class GmailHttpClient {
         const parsed = parseGmailMessage(
           await this.#request(messageUrl, authority.accessValue, signal),
           { ...authority, ...window },
+          (event) => this.#emit(event),
         );
         this.#emit(
           parsed === null
