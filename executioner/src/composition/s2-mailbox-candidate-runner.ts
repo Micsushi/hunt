@@ -148,10 +148,13 @@ export async function runStage2MailboxCandidateFromOwnerConfig(
     });
     const rawVault = new GmailRawArtifactVault();
     const artifacts = new GmailSafeArtifactRegistry();
+    const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+      ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+      : undefined;
     const authExecutor = new GmailApiAuthExecutor({
       binding: bindings.gmail,
       resolver,
-      httpClient: new GmailHttpClient(),
+      httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
       rawVault,
       artifactRegistry: artifacts,
       approvedPolicy: approvedPolicy(owner),
