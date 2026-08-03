@@ -61,7 +61,7 @@ export async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function patch<T>(path: string, body: unknown): Promise<T> {
-  if (MOCK) return mockPatch<T>()
+  if (MOCK) return mockPatch<T>(path, body)
   const res = await fetch(path, {
     method: 'PATCH',
     credentials: 'include',

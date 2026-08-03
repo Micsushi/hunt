@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchC1Config,
@@ -54,6 +54,78 @@ function settingListValue(
   )
 }
 
+type FeedbackTone = 'pending' | 'success' | 'error'
+
+interface SaveFeedback {
+  tone: FeedbackTone
+  message: string
+}
+
+function FormStatus({
+  pending,
+  error,
+  success,
+}: {
+  pending: boolean
+  error: unknown
+  success: string
+}) {
+  const feedback: SaveFeedback | null = pending
+    ? { tone: 'pending', message: 'Saving changes...' }
+    : error
+      ? {
+          tone: 'error',
+          message:
+            error instanceof Error ? `Save failed: ${error.message}` : 'Save failed. Try again.',
+        }
+      : success
+        ? { tone: 'success', message: success }
+        : null
+
+  if (!feedback) return null
+
+  return (
+    <span
+      className={`${styles.formStatus} ${styles[`formStatus${feedback.tone.charAt(0).toUpperCase()}${feedback.tone.slice(1)}`]}`}
+      role={feedback.tone === 'error' ? 'alert' : 'status'}
+      aria-live="polite"
+    >
+      {feedback.message}
+    </span>
+  )
+}
+
+function SettingsLoadingState({ label }: { label: string }) {
+  return (
+    <div className={styles.loadingState} role="status" aria-live="polite" aria-busy="true">
+      <span className={styles.loadingLine} />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+function SettingsErrorState({
+  title,
+  description,
+  onRetry,
+}: {
+  title: string
+  description: string
+  onRetry: () => void
+}) {
+  return (
+    <div className={styles.errorState} role="alert">
+      <div>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </div>
+      <button className={styles.btn} type="button" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  )
+}
+
 // ---- sub-panels ------------------------------------------------------------
 
 function DiscoveryFilters({
@@ -71,7 +143,7 @@ function DiscoveryFilters({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Discovery filters</h2>
+        <h3 className={styles.panelTitle}>Discovery filters</h3>
       </div>
       <label className={styles.field}>
         Watchlist - priority companies (one per line)
@@ -139,7 +211,7 @@ function SearchConfig({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Search configuration</h2>
+        <h3 className={styles.panelTitle}>Search configuration</h3>
       </div>
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
@@ -226,7 +298,7 @@ function RunSettings({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Run settings</h2>
+        <h3 className={styles.panelTitle}>Run settings</h3>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -360,7 +432,7 @@ function AlertSettings({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Alert thresholds</h2>
+        <h3 className={styles.panelTitle}>Alert thresholds</h3>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -425,7 +497,7 @@ function AppNotificationSettings() {
   const qc = useQueryClient()
   const supported = browserNotificationsSupported()
 
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -465,10 +537,21 @@ function AppNotificationSettings() {
     )
   }
 
+  if (isLoading) return <SettingsLoadingState label="Loading notification settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Notification settings are unavailable."
+        description="Check the C0 settings API, then try loading this preference again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>App notifications</h2>
+        <h3 className={styles.panelTitle}>App notifications</h3>
       </div>
       <label className={styles.checkLabel}>
         <input
@@ -484,6 +567,11 @@ function AppNotificationSettings() {
           ? `Browser permission: ${permission}. Notifications fire when this Hunt tab receives the completed generation response.`
           : 'This browser does not support desktop notifications.'}
       </p>
+      <FormStatus
+        pending={mutation.isPending}
+        error={mutation.error}
+        success={mutation.isSuccess ? 'Notification preference saved.' : ''}
+      />
     </div>
   )
 }
@@ -507,7 +595,7 @@ const C2_GEMINI_API_KEY = 'gemini_api_key'
 function C2ProviderRuntimeSettings() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2', 'runtime'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -599,10 +687,21 @@ function C2ProviderRuntimeSettings() {
     onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
   })
 
+  if (isLoading) return <SettingsLoadingState label="Loading provider and runtime settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Provider settings are unavailable."
+        description="Check the C0 settings API, then try loading Fletcher runtime values again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 provider and runtime</h2>
+        <h3 className={styles.panelTitle}>C2 provider and runtime</h3>
         <span className={styles.panelMeta}>Secrets are stored redacted</span>
       </div>
       <div className={styles.gridTwo}>
@@ -766,6 +865,11 @@ function C2ProviderRuntimeSettings() {
         >
           {mutation.isPending ? 'Saving...' : 'Save provider settings'}
         </button>
+        <FormStatus
+          pending={mutation.isPending}
+          error={mutation.error}
+          success={mutation.isSuccess ? 'Provider and runtime settings saved.' : ''}
+        />
       </div>
     </div>
   )
@@ -908,7 +1012,7 @@ function JobMetadataSettings() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
 
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2', 'job-metadata'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -1184,10 +1288,21 @@ function JobMetadataSettings() {
     onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
   })
 
+  if (isLoading) return <SettingsLoadingState label="Loading resume policy settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Resume policy settings are unavailable."
+        description="Check the C0 settings API, then try loading Fletcher metadata values again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 job metadata</h2>
+        <h3 className={styles.panelTitle}>C2 job metadata</h3>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -1422,136 +1537,144 @@ function JobMetadataSettings() {
           />
         </label>
       </div>
-      <label className={styles.field}>
-        Target-lane policy
-        <span className={styles.fieldHint}>
-          Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={targetLanePolicy}
-          onChange={(e) => setTargetLanePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword keep policy
-        <textarea
-          className={styles.textarea}
-          value={keywordKeepPolicy}
-          onChange={(e) => setKeywordKeepPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword ignore policy
-        <textarea
-          className={styles.textarea}
-          value={keywordIgnorePolicy}
-          onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary keyword policy
-        <textarea
-          className={styles.textarea}
-          value={summaryKeywordPolicy}
-          onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Skill addition policy
-        <textarea
-          className={styles.textarea}
-          value={skillAdditionPolicy}
-          onChange={(e) => setSkillAdditionPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary good example
-        <textarea
-          className={styles.textarea}
-          value={summaryGoodExample}
-          onChange={(e) => setSummaryGoodExample(e.target.value)}
-          rows={3}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Summary banned phrases
-          <textarea
-            className={styles.textarea}
-            value={summaryBannedPhrases}
-            onChange={(e) => setSummaryBannedPhrases(e.target.value)}
-            rows={6}
-          />
-        </label>
-        <label className={styles.field}>
-          Blocked keywords
-          <textarea
-            className={styles.textarea}
-            value={blockedKeywords}
-            onChange={(e) => setBlockedKeywords(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
-      <label className={styles.field}>
-        Rewrite strategy
-        <span className={styles.fieldHint}>
-          Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={rewriteStrategy}
-          onChange={(e) => setRewriteStrategy(e.target.value)}
-          rows={8}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite keyword fit policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteKeywordFitPolicy}
-          onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite bullet policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteBulletPolicy}
-          onChange={(e) => setRewriteBulletPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Rewrite length policy
-          <span className={styles.fieldHint}>
-            Use {'{max_length_percent}'} where the configured percentage should appear.
-          </span>
-          <textarea
-            className={styles.textarea}
-            value={rewriteLengthPolicy}
-            onChange={(e) => setRewriteLengthPolicy(e.target.value)}
-            rows={4}
-          />
-        </label>
-        <label className={styles.field}>
-          Rewrite action keyword policy
-          <textarea
-            className={styles.textarea}
-            value={rewriteActionKeywordPolicy}
-            onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
+      <details className={styles.advancedSettings}>
+        <summary className={styles.advancedSummary}>
+          <span>Advanced prompt and rewrite policy</span>
+          <small>Long-form instructions used by Fletcher generation</small>
+        </summary>
+        <div className={styles.advancedBody}>
+          <label className={styles.field}>
+            Target-lane policy
+            <span className={styles.fieldHint}>
+              Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={targetLanePolicy}
+              onChange={(e) => setTargetLanePolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword keep policy
+            <textarea
+              className={styles.textarea}
+              value={keywordKeepPolicy}
+              onChange={(e) => setKeywordKeepPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword ignore policy
+            <textarea
+              className={styles.textarea}
+              value={keywordIgnorePolicy}
+              onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Summary keyword policy
+            <textarea
+              className={styles.textarea}
+              value={summaryKeywordPolicy}
+              onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Skill addition policy
+            <textarea
+              className={styles.textarea}
+              value={skillAdditionPolicy}
+              onChange={(e) => setSkillAdditionPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Summary good example
+            <textarea
+              className={styles.textarea}
+              value={summaryGoodExample}
+              onChange={(e) => setSummaryGoodExample(e.target.value)}
+              rows={3}
+            />
+          </label>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              Summary banned phrases
+              <textarea
+                className={styles.textarea}
+                value={summaryBannedPhrases}
+                onChange={(e) => setSummaryBannedPhrases(e.target.value)}
+                rows={6}
+              />
+            </label>
+            <label className={styles.field}>
+              Blocked keywords
+              <textarea
+                className={styles.textarea}
+                value={blockedKeywords}
+                onChange={(e) => setBlockedKeywords(e.target.value)}
+                rows={6}
+              />
+            </label>
+          </div>
+          <label className={styles.field}>
+            Rewrite strategy
+            <span className={styles.fieldHint}>
+              Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={rewriteStrategy}
+              onChange={(e) => setRewriteStrategy(e.target.value)}
+              rows={8}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite keyword fit policy
+            <textarea
+              className={styles.textarea}
+              value={rewriteKeywordFitPolicy}
+              onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
+              rows={7}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite bullet policy
+            <textarea
+              className={styles.textarea}
+              value={rewriteBulletPolicy}
+              onChange={(e) => setRewriteBulletPolicy(e.target.value)}
+              rows={7}
+            />
+          </label>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              Rewrite length policy
+              <span className={styles.fieldHint}>
+                Use {'{max_length_percent}'} where the configured percentage should appear.
+              </span>
+              <textarea
+                className={styles.textarea}
+                value={rewriteLengthPolicy}
+                onChange={(e) => setRewriteLengthPolicy(e.target.value)}
+                rows={4}
+              />
+            </label>
+            <label className={styles.field}>
+              Rewrite action keyword policy
+              <textarea
+                className={styles.textarea}
+                value={rewriteActionKeywordPolicy}
+                onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
+                rows={6}
+              />
+            </label>
+          </div>
+        </div>
+      </details>
       <div className={styles.footer}>
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
@@ -1560,6 +1683,11 @@ function JobMetadataSettings() {
         >
           {mutation.isPending ? 'Saving...' : 'Save metadata values'}
         </button>
+        <FormStatus
+          pending={mutation.isPending}
+          error={mutation.error}
+          success={mutation.isSuccess ? 'Resume metadata and policy settings saved.' : ''}
+        />
       </div>
     </div>
   )
@@ -1567,21 +1695,78 @@ function JobMetadataSettings() {
 
 // ---- main page -------------------------------------------------------------
 
-type SettingsTab = 'c1' | 'c2' | 'integrations'
+type SettingsTab = 'targeting' | 'automation' | 'resume' | 'system'
+type C1Section = 'filters' | 'search' | 'run' | 'alerts'
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
-  { id: 'c1', label: 'C1 discovery', description: 'Scrape, filters, enrich cadence' },
-  { id: 'c2', label: 'C2 Fletcher', description: 'Resume LLM, queue, prompt policy' },
-  { id: 'integrations', label: 'Integrations', description: 'Discord and shared services' },
+interface SettingsTabDefinition {
+  id: SettingsTab
+  label: string
+  owner: string
+  description: string
+  heading: string
+  summary: string
+  persistence: string
+}
+
+const SETTINGS_TABS: SettingsTabDefinition[] = [
+  {
+    id: 'targeting',
+    label: 'Targeting',
+    owner: 'C1',
+    description: 'Roles, companies, locations',
+    heading: 'Choose what Hunt looks for',
+    summary:
+      'Set search lanes, priority companies, exclusions, locations, and the job boards that feed discovery.',
+    persistence: 'C1 file-backed settings',
+  },
+  {
+    id: 'automation',
+    label: 'Automation',
+    owner: 'C1',
+    description: 'Cadence, limits, alerts',
+    heading: 'Control the discovery cycle',
+    summary:
+      'Tune scrape and enrichment cadence, worker limits, retry behavior, and operational alert thresholds.',
+    persistence: 'C1 file-backed settings',
+  },
+  {
+    id: 'resume',
+    label: 'Resume',
+    owner: 'C2',
+    description: 'Providers, quality, policy',
+    heading: 'Shape Fletcher output',
+    summary:
+      'Configure model access, runtime guardrails, resume metadata, selection limits, and generation policy.',
+    persistence: 'C2 database-backed settings',
+  },
+  {
+    id: 'system',
+    label: 'System',
+    owner: 'App',
+    description: 'Notifications, integrations',
+    heading: 'Connect operator feedback',
+    summary:
+      'Manage local completion notifications and verify shared services used for pipeline alerts.',
+    persistence: 'Browser and integration settings',
+  },
 ]
+
+const C1_SECTION_LABELS: Record<C1Section, string> = {
+  filters: 'Discovery filters',
+  search: 'Search configuration',
+  run: 'Run settings',
+  alerts: 'Alert thresholds',
+}
 
 export function SettingsPage() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const [activeTab, setActiveTab] = useState<SettingsTab>('c2')
-  const [savingSection, setSavingSection] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<SettingsTab>('targeting')
+  const [savingSection, setSavingSection] = useState<C1Section | null>(null)
+  const [c1Feedback, setC1Feedback] = useState<SaveFeedback | null>(null)
   const [testingDiscord, setTestingDiscord] = useState(false)
   const [discordResult, setDiscordResult] = useState<string | null>(null)
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   async function handleTestDiscord() {
     setTestingDiscord(true)
@@ -1603,6 +1788,7 @@ export function SettingsPage() {
     data: cfg,
     isLoading,
     error,
+    refetch,
   } = useQuery({
     queryKey: ['c1-config'],
     queryFn: fetchC1Config,
@@ -1610,112 +1796,230 @@ export function SettingsPage() {
   })
 
   const mutation = useMutation({
-    mutationFn: saveC1Config,
-    onSuccess: (res) => {
+    mutationFn: ({ updates }: { section: C1Section; updates: C1ConfigUpdates }) =>
+      saveC1Config(updates),
+    onMutate: ({ section }) => {
+      setSavingSection(section)
+      setC1Feedback({ tone: 'pending', message: `Saving ${C1_SECTION_LABELS[section]}...` })
+    },
+    onSuccess: (res, { section }) => {
       showToast(`Saved: ${res.updated_keys.join(', ')}`)
+      setC1Feedback({
+        tone: 'success',
+        message: `${C1_SECTION_LABELS[section]} saved. ${res.updated_keys.length} setting${res.updated_keys.length === 1 ? '' : 's'} updated.`,
+      })
       qc.invalidateQueries({ queryKey: ['c1-config'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
+    onError: (e, { section }) => {
+      const message = e instanceof Error ? e.message : 'Save failed'
+      setC1Feedback({
+        tone: 'error',
+        message: `${C1_SECTION_LABELS[section]} were not saved: ${message}. Try again.`,
+      })
+      showToast(message, 'error')
+    },
     onSettled: () => setSavingSection(null),
   })
 
-  function save(section: string, updates: C1ConfigUpdates) {
-    setSavingSection(section)
-    mutation.mutate(updates)
+  function save(section: C1Section, updates: C1ConfigUpdates) {
+    mutation.mutate({ section, updates })
   }
 
-  const c1Content = (() => {
+  function c1Content(tab: 'targeting' | 'automation') {
     if (isLoading) {
-      return (
-        <div className={styles.panel}>
-          <p className="muted">Loading config from C1...</p>
-        </div>
-      )
+      return <SettingsLoadingState label="Loading C1 configuration..." />
     }
     if (error || !cfg) {
       return (
-        <div className={styles.panel}>
-          <p className={styles.errorMsg}>Could not load C1 config. Is the C1 service running?</p>
-        </div>
+        <SettingsErrorState
+          title="C1 configuration is unavailable."
+          description="Check that the C1 service is running, then try loading these settings again."
+          onRetry={() => void refetch()}
+        />
       )
     }
     return (
       <>
-        <div className={styles.notice}>
-          Changes take effect on the next C1 scrape/enrich cycle. Restart C1 to apply scalar
-          settings immediately.
-          <br />
-          Config file: <span className={styles.configPath}>{cfg.config_file}</span>
-        </div>
-        <DiscoveryFilters
-          cfg={cfg}
-          saving={savingSection === 'filters'}
-          onSave={(u) => save('filters', u)}
-        />
-        <SearchConfig
-          cfg={cfg}
-          saving={savingSection === 'search'}
-          onSave={(u) => save('search', u)}
-        />
-        <RunSettings cfg={cfg} saving={savingSection === 'run'} onSave={(u) => save('run', u)} />
-        <AlertSettings
-          cfg={cfg}
-          saving={savingSection === 'alerts'}
-          onSave={(u) => save('alerts', u)}
-        />
+        <aside className={styles.notice}>
+          <div>
+            <strong>Activation</strong>
+            <p>
+              Changes apply on the next C1 scrape or enrichment cycle. Restart C1 only when you need
+              scalar runtime values applied immediately.
+            </p>
+          </div>
+          <span className={styles.configPath}>{cfg.config_file}</span>
+        </aside>
+        {c1Feedback && (
+          <div
+            className={`${styles.saveBanner} ${styles[`saveBanner${c1Feedback.tone.charAt(0).toUpperCase()}${c1Feedback.tone.slice(1)}`]}`}
+            role={c1Feedback.tone === 'error' ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            {c1Feedback.message}
+          </div>
+        )}
+        {tab === 'targeting' ? (
+          <>
+            <SearchConfig
+              cfg={cfg}
+              saving={savingSection === 'search'}
+              onSave={(u) => save('search', u)}
+            />
+            <DiscoveryFilters
+              cfg={cfg}
+              saving={savingSection === 'filters'}
+              onSave={(u) => save('filters', u)}
+            />
+          </>
+        ) : (
+          <>
+            <RunSettings
+              cfg={cfg}
+              saving={savingSection === 'run'}
+              onSave={(u) => save('run', u)}
+            />
+            <AlertSettings
+              cfg={cfg}
+              saving={savingSection === 'alerts'}
+              onSave={(u) => save('alerts', u)}
+            />
+          </>
+        )}
       </>
     )
-  })()
+  }
+
+  function selectTab(nextTab: SettingsTab) {
+    setActiveTab(nextTab)
+    setC1Feedback(null)
+  }
+
+  function activateTab(index: number) {
+    const nextIndex = (index + SETTINGS_TABS.length) % SETTINGS_TABS.length
+    selectTab(SETTINGS_TABS[nextIndex].id)
+    tabRefs.current[nextIndex]?.focus()
+  }
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      activateTab(index + 1)
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      activateTab(index - 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      activateTab(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      activateTab(SETTINGS_TABS.length - 1)
+    }
+  }
+
+  const activeDefinition = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0]
 
   const integrationsContent = (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Integrations</h2>
+        <div>
+          <h3 className={styles.panelTitle}>Discord alerts</h3>
+          <p className={styles.panelDescription}>
+            Verify that C1 can reach the configured webhook before relying on pipeline alerts.
+          </p>
+        </div>
       </div>
-      <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-        Verify Discord webhook is configured and reachable. Sends a test message via C1.
-      </p>
-      <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
+      <button
+        className={styles.btn}
+        type="button"
+        disabled={testingDiscord}
+        onClick={handleTestDiscord}
+      >
         {testingDiscord ? 'Sending...' : 'Test Discord webhook'}
       </button>
-      {discordResult && <p style={{ marginTop: 8, fontSize: '0.88rem' }}>{discordResult}</p>}
+      {discordResult && (
+        <p
+          className={`${styles.formStatus} ${discordResult.startsWith('Failed') ? styles.formStatusError : styles.formStatusSuccess}`}
+          role={discordResult.startsWith('Failed') ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {discordResult}
+        </p>
+      )}
     </div>
   )
 
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
-        <h1 className={styles.heroTitle}>Settings</h1>
-        <p className={styles.heroMeta}>Component controls for Hunt runtime behavior.</p>
+        <div>
+          <h1 className={styles.heroTitle}>Settings</h1>
+          <p className={styles.heroMeta}>
+            Tune the pipeline by outcome. Every save is scoped to the section you are editing.
+          </p>
+        </div>
+        <div className={styles.heroSummary} aria-label="Settings overview">
+          <span>4 focused areas</span>
+          <span>Section-level saves</span>
+        </div>
       </section>
 
-      <div className={styles.tabBar} role="tablist" aria-label="Settings components">
-        {SETTINGS_TABS.map((tab) => (
+      <div className={styles.tabBar} role="tablist" aria-label="Settings areas">
+        {SETTINGS_TABS.map((tab, index) => (
           <button
             key={tab.id}
             type="button"
             role="tab"
+            id={`settings-tab-${tab.id}`}
+            aria-controls={`settings-panel-${tab.id}`}
             aria-selected={activeTab === tab.id}
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            ref={(node) => {
+              tabRefs.current[index] = node
+            }}
             className={`${styles.tabButton} ${activeTab === tab.id ? styles.tabButtonActive : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => selectTab(tab.id)}
+            onKeyDown={(event) => handleTabKeyDown(event, index)}
           >
-            <span>{tab.label}</span>
-            <small>{tab.description}</small>
+            <span className={styles.tabLabel}>
+              {tab.label}
+              <small>{tab.owner}</small>
+            </span>
+            <span className={styles.tabDescription}>{tab.description}</span>
           </button>
         ))}
       </div>
 
-      {activeTab === 'c1' && c1Content}
+      <section
+        className={styles.tabPanel}
+        role="tabpanel"
+        id={`settings-panel-${activeTab}`}
+        aria-labelledby={`settings-tab-${activeTab}`}
+        tabIndex={0}
+      >
+        <header className={styles.sectionHeader}>
+          <div>
+            <h2>{activeDefinition.heading}</h2>
+            <p>{activeDefinition.summary}</p>
+          </div>
+          <span className={styles.persistenceBadge}>{activeDefinition.persistence}</span>
+        </header>
 
-      {activeTab === 'c2' && (
-        <>
-          <C2ProviderRuntimeSettings />
-          <AppNotificationSettings />
-          <JobMetadataSettings />
-        </>
-      )}
-
-      {activeTab === 'integrations' && integrationsContent}
+        {activeTab === 'targeting' && c1Content('targeting')}
+        {activeTab === 'automation' && c1Content('automation')}
+        {activeTab === 'resume' && (
+          <>
+            <C2ProviderRuntimeSettings />
+            <JobMetadataSettings />
+          </>
+        )}
+        {activeTab === 'system' && (
+          <>
+            <AppNotificationSettings />
+            {integrationsContent}
+          </>
+        )}
+      </section>
     </div>
   )
 }

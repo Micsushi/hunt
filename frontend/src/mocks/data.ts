@@ -1,4 +1,4 @@
-import type { ComponentSetting, LinkedInAccount, SystemStatus } from '@/api/control'
+import type { C1Config, ComponentSetting, LinkedInAccount, SystemStatus } from '@/api/control'
 import type {
   BreakdownData,
   DailyDigest,
@@ -217,6 +217,30 @@ export const MOCK_SETTINGS: { settings: ComponentSetting[] } = {
       updated_by: 'mock',
     },
   ],
+}
+
+export const MOCK_C1_CONFIG: C1Config = {
+  config_file: 'hunt_user_config.json',
+  config_file_exists: true,
+  watchlist: ['OpenAI', 'Anthropic'],
+  title_blacklist: ['Senior Director', 'VP of Engineering'],
+  search_terms: {
+    engineering: ['software engineer', 'full stack engineer'],
+    product: ['technical product manager'],
+    data: ['data engineer'],
+  },
+  locations: ['Remote', 'Denver, CO'],
+  sites: ['linkedin', 'indeed'],
+  max_workers: 10,
+  results_wanted: 500,
+  hours_old: 24,
+  run_interval_seconds: 600,
+  enrich_after_scrape: true,
+  enrichment_batch_limit: 25,
+  enrichment_timeout_ms: 45000,
+  enrichment_max_attempts: 4,
+  enrichment_alert_failure_rate_percent: 50,
+  enrichment_alert_cooldown_minutes: 60,
 }
 
 export const MOCK_LINKEDIN_ACCOUNTS: { accounts: LinkedInAccount[] } = {
