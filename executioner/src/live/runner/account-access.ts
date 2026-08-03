@@ -212,10 +212,7 @@ async function enterAndProve(
     mutated.value.attemptedFields.length !== 2 ||
     mutated.value.attemptedFields[0] !== "email" ||
     mutated.value.attemptedFields[1] !== "password" ||
-    (input.accountMode === "fresh_create" &&
-      mutated.value.kind !== "verification_required") ||
-    (input.accountMode === "sign_in" &&
-      mutated.value.kind !== "verification_required" &&
+    (mutated.value.kind !== "verification_required" &&
       mutated.value.kind !== "application_ready")
   ) return failure("account_proof_invalid");
 

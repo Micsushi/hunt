@@ -187,6 +187,32 @@ test("an absent or invalid Gmail record is untouched and cannot affect account a
   assert.equal(gmailInspections, 0);
 });
 
+test("fresh account creation may reach the application without email verification", async () => {
+  let sealedOutcome: string | undefined;
+  const dependencies = successfulDependencies();
+  dependencies.credentials = {
+    async mutate() {
+      return {
+        ok: true,
+        value: {
+          kind: "application_ready",
+          attemptedFields: ["email", "password"],
+        },
+      };
+    },
+  } as CredentialMutationAdapter;
+  dependencies.evidence = {
+    async write(value) { sealedOutcome = value.accountOutcome; },
+  };
+
+  const result = await runStage2AccountAccess(
+    input(), dependencies, new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(sealedOutcome, "application_ready");
+});
+
 test("owner and stored account-secret expiry must match before browser", async () => {
   let browserCalls = 0;
   const dependencies = successfulDependencies();
