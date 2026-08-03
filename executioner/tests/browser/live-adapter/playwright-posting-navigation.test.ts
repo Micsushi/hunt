@@ -70,6 +70,20 @@ test("Apply Manually waits for an admitted account or application destination", 
   assert.equal(page.destinationWaits, 1);
 });
 
+test("Apply Manually admits the exact identity-provider choice page without self-settling email sign-in", async () => {
+  const choiceSelector =
+    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+  const applyPage = new SemanticPage({ "button:Apply Manually": locator() });
+  const emailPage = new SemanticPage({ "button:Sign in with email": locator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  await adapter.activate(applyPage, "apply_manually");
+  await adapter.activate(emailPage, "sign_in_with_email");
+
+  assert.equal(applyPage.destinationQueries[0]?.includes(choiceSelector), true);
+  assert.equal(emailPage.destinationQueries[0]?.includes(choiceSelector), false);
+});
+
 test("Sign in with email waits for a credential or application destination", async () => {
   const page = new SemanticPage({ "button:Sign in with email": locator() });
   const adapter = new PlaywrightPostingNavigationAdapter();
@@ -103,6 +117,7 @@ test("Apply Manually accepts an admitted destination opened in a popup", async (
 
 class SemanticPage {
   readonly clicked: string[] = [];
+  readonly destinationQueries: string[] = [];
   destinationWaits = 0;
   readonly #locators: Readonly<Record<string, LocatorState>>;
   readonly #destinationAvailable: boolean;
@@ -130,7 +145,8 @@ class SemanticPage {
       },
     };
   }
-  locator(): LocatorState {
+  locator(selector: string): LocatorState {
+    this.destinationQueries.push(selector);
     const item = locator();
     return {
       ...item,

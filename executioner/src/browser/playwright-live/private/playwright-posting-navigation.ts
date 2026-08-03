@@ -11,6 +11,7 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
   '[data-automation-id="authPage"]',
+  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="candidateHomePage"]',
   '[data-automation-id="applyFlowMyInfoPage"]',
