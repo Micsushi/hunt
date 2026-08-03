@@ -1,5 +1,6 @@
 import os as _os
 
+from hunter.search_lanes import build_search_queries as _build_search_queries
 from shared.config_utils import get_bool_env as _get_bool_env
 from shared.config_utils import get_int_env as _get_int_env
 from shared.config_utils import get_str_env as _get_str_env
@@ -92,10 +93,12 @@ HUNT_SERVICE_TOKEN = _get_str_env("HUNT_SERVICE_TOKEN", "")
 HUNT_HUNTER_URL = _get_str_env("HUNT_HUNTER_URL", "http://localhost:8001")
 HUNT_FLETCHER_URL = _get_str_env("HUNT_FLETCHER_URL", "http://localhost:8002")
 
-# Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
-# see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
-_DEFAULT_SEARCH_TERMS = {"engineering": ["software engineer"]}
-SEARCH_TERMS = _get_config_dict("SEARCH_TERMS", _DEFAULT_SEARCH_TERMS)
+# User preferences are the only source of discovery queries. Each target title
+# is combined with the built-in aliases for every selected experience level.
+# Empty defaults prevent a fresh install from searching before the user opts in.
+TARGET_JOB_TITLES = _get_config_dict("TARGET_JOB_TITLES", {})
+EXPERIENCE_LEVELS = _get_config_list("EXPERIENCE_LEVELS", [])
+SEARCH_QUERIES = _build_search_queries(TARGET_JOB_TITLES, EXPERIENCE_LEVELS)
 
 _DEFAULT_LOCATIONS = ["Remote"]
 LOCATIONS = _get_config_list("LOCATIONS", _DEFAULT_LOCATIONS)

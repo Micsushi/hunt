@@ -105,7 +105,8 @@ cp hunt_user_config.example.json hunt_user_config.json
 
 - `watchlist` : priority company list - Discord alert fires on scrape when a match lands
 - `title_blacklist` : title phrases to filter out during scrape
-- `search_terms` : search queries per lane (engineering / product / data)
+- `target_job_titles` : user-selected job-title phrases grouped by lane
+- `experience_levels` : selected levels (`internship`, `junior`, `new_grad`)
 - `locations` : where to search
 - `sites` : boards to scrape (`indeed`, `linkedin`)
 - `run_interval_seconds` : time between scrape cycles (default 600)

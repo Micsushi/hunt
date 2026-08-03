@@ -255,6 +255,28 @@ class HunterServiceApiTests(unittest.TestCase):
         enrich_mock.assert_called_once_with(limit=42, return_summary=True)
         self.assertFalse(service._is_enrich_running())
 
+    def test_config_exposes_user_editable_target_titles_and_experience_levels(self):
+        client = self._make_client()
+        targets = {
+            "engineering": ["software engineer", "software developer"],
+            "data": ["data scientist", "data analyst"],
+        }
+
+        with patch("hunter.config.TARGET_JOB_TITLES", targets):
+            with patch(
+                "hunter.config.EXPERIENCE_LEVELS",
+                ["internship", "junior", "new_grad"],
+            ):
+                response = client.get("/config", headers=_auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("search_terms", response.json())
+        self.assertEqual(response.json()["target_job_titles"], targets)
+        self.assertEqual(
+            response.json()["experience_levels"],
+            ["internship", "junior", "new_grad"],
+        )
+
     def test_enrich_rejects_duplicate_run_while_first_is_active(self):
         client = self._make_client()
         started = threading.Event()

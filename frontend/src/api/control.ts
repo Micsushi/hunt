@@ -418,7 +418,8 @@ export interface C1Config {
   config_file_exists: boolean
   watchlist: string[]
   title_blacklist: string[]
-  search_terms: Record<string, string[]>
+  target_job_titles: Record<string, string[]>
+  experience_levels: string[]
   locations: string[]
   sites: string[]
   max_workers: number
