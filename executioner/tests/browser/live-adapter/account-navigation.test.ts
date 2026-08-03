@@ -19,6 +19,23 @@ test("concrete session reaches an account boundary through exactly two reclassif
   assert.equal(harness.probeChecks(), 6);
 });
 
+test("an email-provider choice reaches the account boundary through one exact extra effect", async () => {
+  const harness = await openedHarness({ emailSignInChoice: true });
+
+  const result = await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
+  assert.deepEqual(harness.adapter.actions, [
+    "start_application",
+    "apply_manually",
+    "sign_in_with_email",
+  ]);
+  assert.equal(harness.context.effects, 3);
+});
+
 test("an already reached account, verification, or application boundary performs no effect", async () => {
   for (const traits of [
     ["structural_trait_page_account_entry_v1", "structural_trait_account_sign_in_v1"],
@@ -150,7 +167,7 @@ test("redirect mismatch and popup ambiguity preserve exact facts then release ow
   assert.equal(popup.profiles.cleanupCount, 1);
 });
 
-test("the transition ceiling prevents a third effect", async () => {
+test("a repeated apply-choice cycle stops before repeating the same effect", async () => {
   const harness = await openedHarness({ remainApplyChoice: true });
   const result = await harness.provider.advanceToAccountEntry(
     request(),
@@ -212,6 +229,7 @@ async function openedHarness(options: {
   readonly targetAfterEffect?: TargetFact;
   readonly popupAfterEffect?: boolean;
   readonly remainApplyChoice?: boolean;
+  readonly emailSignInChoice?: boolean;
 } = {}) {
   const context = new FakeContext();
   const profiles = new MemoryProfiles();
@@ -221,7 +239,11 @@ async function openedHarness(options: {
       context.effects += 1;
       if (options.popupAfterEffect) context.ownedPages.push(new FakePage());
       if (action === "start_application") context.phase = "apply_choice";
-      else context.phase = options.remainApplyChoice ? "apply_choice" : "account";
+      else if (action === "apply_manually") {
+        context.phase = options.remainApplyChoice
+          ? "apply_choice"
+          : options.emailSignInChoice ? "email_sign_in_choice" : "account";
+      } else context.phase = "account";
     },
   );
   let checks = 0;
@@ -269,6 +291,12 @@ function phaseTraits(phase: FakeContext["phase"]): readonly string[] {
     return [
       "structural_trait_page_job_posting_v1",
       "structural_trait_navigation_apply_choice_v1",
+    ];
+  }
+  if (phase === "email_sign_in_choice") {
+    return [
+      "structural_trait_page_account_entry_v1",
+      "structural_trait_navigation_email_sign_in_choice_v1",
     ];
   }
   return [
@@ -329,7 +357,7 @@ class FakePage {
 class FakeContext {
   closeCount = 0;
   effects = 0;
-  phase: "posting" | "apply_choice" | "account" = "posting";
+  phase: "posting" | "apply_choice" | "email_sign_in_choice" | "account" = "posting";
   readonly ownedPages = [new FakePage()];
   pages(): FakePage[] { return this.ownedPages; }
   async newPage(): Promise<FakePage> { return this.ownedPages[0]!; }

@@ -37,6 +37,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="createAccountPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
+  rule("structural_trait_navigation_email_sign_in_choice_v1", ':text-is("Sign in with email")'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="emailVerificationPage"]'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="verifyEmailPage"]'),
   rule("structural_trait_page_candidate_home_v1", '[data-automation-id="candidateHomePage"]'),
@@ -85,6 +86,7 @@ const challengeRules = Object.freeze([
 
 const unavailableRules = Object.freeze([
   unavailable("not_found", '[data-automation-id="jobNotFoundPage"]'),
+  unavailable("not_found", ':text-is("The page you are looking for doesn\'t exist.")'),
   unavailable("closed", '[data-automation-id="jobClosedPage"]'),
   unavailable("removed", '[data-automation-id="jobRemovedPage"]'),
   unavailable("unavailable", '[data-automation-id="jobUnavailablePage"]'),
@@ -204,11 +206,11 @@ function exactActionable(fact: SemanticControlFact): boolean {
 async function matchingUnavailable(
   page: WorkdayStructuralPage,
 ): Promise<Array<UnavailableRule["reason"]>> {
-  const facts: Array<UnavailableRule["reason"]> = [];
+  const facts = new Set<UnavailableRule["reason"]>();
   for (const rule of unavailableRules) {
-    if (await present(page, rule.selector)) facts.push(rule.reason);
+    if (await anyExactVisible(page, [rule.selector])) facts.add(rule.reason);
   }
-  return facts;
+  return [...facts];
 }
 
 async function present(page: WorkdayStructuralPage, selector: string): Promise<boolean> {

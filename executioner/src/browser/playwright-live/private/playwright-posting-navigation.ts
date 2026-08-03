@@ -18,13 +18,26 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="applyFlowReviewPage"]',
 ].join(", ");
 
+const EMAIL_SIGN_IN_DESTINATION = [
+  '[data-automation-id="email"]',
+  '[data-automation-id="signInPage"]',
+  '[data-automation-id="createAccountPage"]',
+  '[data-automation-id="emailVerificationPage"]',
+  '[data-automation-id="candidateHomePage"]',
+  '[data-automation-id="applyFlowMyInfoPage"]',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowReviewPage"]',
+].join(", ");
+
 export type PlaywrightPostingNavigationTraceEvent =
   | `posting_${PostingNavigationAction}_click_started`
   | `posting_${PostingNavigationAction}_click_succeeded`
   | `posting_${PostingNavigationAction}_click_failed`
   | "posting_apply_manually_same_page_destination_observed"
   | "posting_apply_manually_popup_destination_observed"
-  | "posting_apply_manually_destination_wait_failed";
+  | "posting_apply_manually_destination_wait_failed"
+  | "posting_sign_in_with_email_same_page_destination_observed"
+  | "posting_sign_in_with_email_destination_wait_failed";
 
 export interface PlaywrightPostingNavigationAdapterOptions {
   readonly trace?: (event: PlaywrightPostingNavigationTraceEvent) => void;
@@ -91,6 +104,14 @@ export class PlaywrightPostingNavigationAdapter
           ? "posting_apply_manually_popup_destination_observed"
           : "posting_apply_manually_same_page_destination_observed",
       );
+    } else if (action === "sign_in_with_email") {
+      try {
+        await waitForEmailSignInDestination(semanticPage);
+      } catch {
+        this.#emit("posting_sign_in_with_email_destination_wait_failed");
+        throw new TypeError("account or application destination did not settle");
+      }
+      this.#emit("posting_sign_in_with_email_same_page_destination_observed");
     }
   }
 
@@ -141,7 +162,12 @@ function candidateLocators(
         semanticPage.getByRole("button", { name: "Apply Manually", exact: true }),
         semanticPage.getByRole("link", { name: "Apply Manually", exact: true }),
       ]
-    : [
+    : action === "sign_in_with_email"
+      ? [
+          semanticPage.getByRole("button", { name: "Sign in with email", exact: true }),
+          semanticPage.getByRole("link", { name: "Sign in with email", exact: true }),
+        ]
+      : [
         semanticPage.getByRole("button", { name: "Apply", exact: true }),
         semanticPage.getByRole("link", { name: "Apply", exact: true }),
         semanticPage.getByRole("button", { name: "Apply Now", exact: true }),
@@ -149,6 +175,15 @@ function candidateLocators(
         semanticPage.getByRole("button", { name: "Start Your Application", exact: true }),
         semanticPage.getByRole("link", { name: "Start Your Application", exact: true }),
       ];
+}
+
+async function waitForEmailSignInDestination(
+  page: Pick<Page, "locator">,
+): Promise<void> {
+  await page.locator(EMAIL_SIGN_IN_DESTINATION).first().waitFor({
+    state: "attached",
+    timeout: 10_000,
+  });
 }
 
 async function waitForAnyCandidate(

@@ -244,6 +244,7 @@ test("production probe preserves structural ambiguity, unknowns, and exact unava
 
   for (const [selector, reason] of [
     ['[data-automation-id="jobNotFoundPage"]', "not_found"],
+    [':text-is("The page you are looking for doesn\'t exist.")', "not_found"],
     ['[data-automation-id="jobClosedPage"]', "closed"],
     ['[data-automation-id="jobRemovedPage"]', "removed"],
     ['[data-automation-id="jobUnavailablePage"]', "unavailable"],
@@ -255,6 +256,19 @@ test("production probe preserves structural ambiguity, unknowns, and exact unava
     );
     assert.deepEqual(unavailable, owned({ kind: "posting_unavailable", reason }));
   }
+
+  const corroboratedNotFound = await probe.inspect(
+    new ProbePage(url, {
+      '[data-automation-id="jobNotFoundPage"]': 1,
+      ':text-is("The page you are looking for doesn\'t exist.")': 1,
+    }),
+    expected,
+    new AbortController().signal,
+  );
+  assert.deepEqual(
+    corroboratedNotFound,
+    owned({ kind: "posting_unavailable", reason: "not_found" }),
+  );
 });
 
 test("production probe fails ambiguous routes and contradictory unavailability closed", async () => {
@@ -298,6 +312,33 @@ test("production probe emits the closed apply-choice navigation trait", async ()
     "structural_trait_ats_workday_family_v1",
     "structural_trait_navigation_apply_choice_v1",
   ]);
+});
+
+test("an exact email sign-in choice remains one posting-free account descendant", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  assert.equal(
+    (await probe.inspect(page, expected, new AbortController().signal)).ownership,
+    "owned",
+  );
+  page.currentUrl = "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/apply";
+  page.counts = {
+    '[data-automation-id="authPage"]': 1,
+    ':text-is("Sign in with email")': 1,
+  };
+
+  const result = await probe.inspect(page, expected, new AbortController().signal);
+
+  assert.deepEqual(result, owned(
+    { kind: "matched" },
+    [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_account_entry_v1",
+      "structural_trait_navigation_email_sign_in_choice_v1",
+    ],
+  ));
 });
 
 class ProbePage {

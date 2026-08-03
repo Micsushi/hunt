@@ -461,7 +461,8 @@ export class PlaywrightPersistentBrowserSession
     if (signal.aborted) return cancelled();
     if (!this.#validAdvanceRequest(request)) return failure("browser_target_invalid");
     let transitionCount = 0;
-    while (transitionCount < 2) {
+    const visitedStates = new Set<string>();
+    while (transitionCount < 3) {
       const inspected = await inspectPinnedTarget(
         this.#page!,
         this.#options.probe,
@@ -482,12 +483,16 @@ export class PlaywrightPersistentBrowserSession
         return failure("browser_target_ambiguous");
       }
       if (state.kind === "invalid") return failure("browser_target_invalid");
+      if (visitedStates.has(state.kind)) return failure("browser_target_invalid");
+      visitedStates.add(state.kind);
       if (state.kind === "job_posting" && transitionCount !== 0) {
         return failure("browser_target_invalid");
       }
       const action: PostingNavigationAction = state.kind === "job_posting"
         ? "start_application"
-        : "apply_manually";
+        : state.kind === "apply_choice"
+          ? "apply_manually"
+          : "sign_in_with_email";
       const control = await bounded(
         this.#options.postingNavigation!.inspect(this.#page!, action),
         signal,

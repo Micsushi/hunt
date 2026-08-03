@@ -7,7 +7,10 @@ import type {
 } from "../../../contracts/live/index.ts";
 import type { PersistentPage } from "./types.ts";
 
-export type PostingNavigationAction = "start_application" | "apply_manually";
+export type PostingNavigationAction =
+  | "start_application"
+  | "apply_manually"
+  | "sign_in_with_email";
 
 export interface SemanticPostingNavigationAdapter {
   inspect(

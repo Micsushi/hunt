@@ -118,14 +118,19 @@ const postingFreeDescendantTraits = Object.freeze(new Set([
   "structural_trait_page_profile_step_v1",
   "structural_trait_page_questionnaire_v1",
   "structural_trait_page_review_step_v1",
+  "structural_trait_navigation_email_sign_in_choice_v1",
 ]));
 
 function hasExactlyOnePostingFreeDescendantTrait(
   snapshot: ValueFreeOwnedPageSnapshot,
 ): boolean {
-  return snapshot.traitIds.filter((trait) =>
+  const descendants = snapshot.traitIds.filter((trait) =>
     postingFreeDescendantTraits.has(trait)
-  ).length === 1;
+  );
+  return descendants.length === 1 ||
+    descendants.length === 2 &&
+      descendants.includes("structural_trait_page_account_entry_v1") &&
+      descendants.includes("structural_trait_navigation_email_sign_in_choice_v1");
 }
 
 function targetLineageKey(expectedTarget: ApprovedTargetBinding): string {

@@ -130,7 +130,7 @@ export function createAccountVerifiedBindings(
     tenantId: `tenant_${targetSuffix}` as TargetTenantId,
     postingId: `posting_${targetSuffix}` as TargetPostingId,
   });
-  const notBefore = now;
+  const notBefore = owner.approval.approvedAt;
   const mailboxRequest = Object.freeze({
     schemaVersion: 1 as const,
     journeyId: owner.journeyId as never,

@@ -10,6 +10,8 @@ test("production adapter resolves each closed Workday transition semantically", 
     ["start_application", "button", "Start Your Application"],
     ["apply_manually", "button", "Apply Manually"],
     ["apply_manually", "link", "Apply Manually"],
+    ["sign_in_with_email", "button", "Sign in with email"],
+    ["sign_in_with_email", "link", "Sign in with email"],
   ] as const) {
     const page = new SemanticPage({ [`${role}:${name}`]: locator() });
     const adapter = new PlaywrightPostingNavigationAdapter();
@@ -64,6 +66,15 @@ test("Apply Manually waits for an admitted account or application destination", 
   const adapter = new PlaywrightPostingNavigationAdapter();
 
   await adapter.activate(page, "apply_manually");
+
+  assert.equal(page.destinationWaits, 1);
+});
+
+test("Sign in with email waits for a credential or application destination", async () => {
+  const page = new SemanticPage({ "button:Sign in with email": locator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  await adapter.activate(page, "sign_in_with_email");
 
   assert.equal(page.destinationWaits, 1);
 });

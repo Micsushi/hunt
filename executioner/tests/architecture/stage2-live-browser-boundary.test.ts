@@ -146,14 +146,15 @@ test("posting navigation is private, semantic, bounded, and submit-free", async 
   const capability = await source("private/account-navigation-types.ts");
   const session = await source("session.ts");
   const publicFacade = await source("index.ts");
-  for (const required of ["start_application", "apply_manually"]) {
+  for (const required of ["start_application", "apply_manually", "sign_in_with_email"]) {
     assert.equal((navigator + capability).includes(required), true, required);
   }
   for (const forbidden of ["credential", "password", "submit", "rawHtml", "rawText"]) {
     assert.equal((navigator + session).toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
   }
   assert.equal(publicFacade.includes("PostingNavigation"), false);
-  assert.match(session, /transitionCount < 2/u);
+  assert.match(session, /transitionCount < 3/u);
+  assert.match(session, /visitedStates\.has/u);
 });
 
 test("verification navigation is private, byte-scoped, one-shot, and value-free", async () => {

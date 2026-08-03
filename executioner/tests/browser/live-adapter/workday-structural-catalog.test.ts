@@ -175,6 +175,28 @@ test("normal noCaptcha ownership alone never creates a CAPTCHA trait", async () 
   );
 });
 
+test("the exact email sign-in choice is a closed navigation trait", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () =>
+        selector === '[data-automation-id="authPage"]' ||
+          selector === ':text-is("Sign in with email")'
+          ? 1
+          : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  assert.deepEqual(result.kind === "snapshot" ? result.snapshot.traitIds : [], [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_navigation_email_sign_in_choice_v1",
+  ]);
+});
+
 function signInInspector(): WorkdaySemanticAccountInspector {
   return {
     inspect: async (control) => ({
@@ -199,4 +221,8 @@ function createInspector(): WorkdaySemanticAccountInspector {
       actionable: control !== "submit_sign_in" && control !== "show_create_account",
     }),
   };
+}
+
+function emptyInspector(): WorkdaySemanticAccountInspector {
+  return { inspect: async () => ({ cardinality: 0, actionable: false }) };
 }
