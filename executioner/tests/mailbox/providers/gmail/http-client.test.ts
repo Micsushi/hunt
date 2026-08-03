@@ -95,6 +95,50 @@ test("never follows redirects and fails closed before pagination", async () => {
     await close(pagination);
   }
 });
+
+test("emits only value-free parser stage diagnostics", async () => {
+  const events: string[] = [];
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    response.setHeader("content-type", "application/json");
+    if (requestUrl.pathname.endsWith("/messages")) {
+      response.end(JSON.stringify({ messages: [{ id: "one" }] }));
+      return;
+    }
+    response.end(JSON.stringify({
+      internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
+      payload: {
+        headers: [
+          { name: "From", value: authority.senderAddress },
+          { name: "To", value: authority.recipientAddress },
+        ],
+        body: {
+          data: Buffer.from(
+            "https://tenant.example.invalid/verify?token=synthetic-private",
+          ).toString("base64url"),
+        },
+      },
+    }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    const result = await new GmailHttpClient({
+      baseUrl,
+      allowLoopbackHttp: true,
+      trace: (event) => events.push(event),
+    }).query(authority, window, new AbortController().signal);
+    assert.equal(result.length, 1);
+    assert.deepEqual(events, [
+      "gmail_list_parse_started",
+      "gmail_list_parse_succeeded",
+      "gmail_message_parse_started",
+      "gmail_message_parse_succeeded",
+    ]);
+    assert.equal(events.some((event) => event.includes("private")), false);
+  } finally {
+    await close(server);
+  }
+});
 test("rejects oversized and malformed responses without retaining diagnostics", async () => {
   const payloads = [
     `{"padding":"${"x".repeat(1_048_576)}"}`,

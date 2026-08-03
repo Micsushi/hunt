@@ -11,7 +11,17 @@ const maximumResponseBytes = 1_048_576;
 export interface GmailHttpClientOptions {
   readonly baseUrl?: string;
   readonly allowLoopbackHttp?: boolean;
+  readonly trace?: (event: GmailHttpClientTraceEvent) => void;
 }
+
+export type GmailHttpClientTraceEvent =
+  | "gmail_list_parse_started"
+  | "gmail_list_parse_succeeded"
+  | "gmail_list_parse_failed"
+  | "gmail_message_parse_started"
+  | "gmail_message_parse_succeeded"
+  | "gmail_message_parse_skipped"
+  | "gmail_message_parse_failed";
 export interface GmailQueryAuthority {
   readonly accessValue: string;
   readonly senderAddress: string;
@@ -27,12 +37,14 @@ export interface GmailQueryWindow {
 
 export class GmailHttpClient {
   readonly #baseUrl: URL;
+  readonly #trace: ((event: GmailHttpClientTraceEvent) => void) | undefined;
 
   constructor(options: GmailHttpClientOptions = {}) {
     this.#baseUrl = approvedBaseUrl(
       options.baseUrl ?? productionBase,
       options.allowLoopbackHttp === true,
     );
+    this.#trace = options.trace;
   }
 
   async query(
@@ -51,9 +63,17 @@ export class GmailHttpClient {
         `before:${Math.ceil(Date.parse(window.notAfter) / 1_000)}`,
       ].join(" "),
     );
-    const ids = parseMessageIds(
-      await this.#request(listUrl, authority.accessValue, signal),
-    );
+    this.#emit("gmail_list_parse_started");
+    let ids: readonly string[];
+    try {
+      ids = parseMessageIds(
+        await this.#request(listUrl, authority.accessValue, signal),
+      );
+      this.#emit("gmail_list_parse_succeeded");
+    } catch (error) {
+      this.#emit("gmail_list_parse_failed");
+      throw error;
+    }
     const output: ParsedGmailMessage[] = [];
     for (const id of ids) {
       if (signal.aborted) throw new GmailProviderFailure("operation_cancelled");
@@ -61,13 +81,32 @@ export class GmailHttpClient {
         `${this.#baseUrl.toString()}/messages/${encodeURIComponent(id)}`,
       );
       messageUrl.searchParams.set("format", "full");
-      const parsed = parseGmailMessage(
-        await this.#request(messageUrl, authority.accessValue, signal),
-        { ...authority, ...window },
-      );
-      if (parsed !== null) output.push(parsed);
+      this.#emit("gmail_message_parse_started");
+      try {
+        const parsed = parseGmailMessage(
+          await this.#request(messageUrl, authority.accessValue, signal),
+          { ...authority, ...window },
+        );
+        this.#emit(
+          parsed === null
+            ? "gmail_message_parse_skipped"
+            : "gmail_message_parse_succeeded",
+        );
+        if (parsed !== null) output.push(parsed);
+      } catch (error) {
+        this.#emit("gmail_message_parse_failed");
+        throw error;
+      }
     }
     return output;
+  }
+
+  #emit(event: GmailHttpClientTraceEvent): void {
+    try {
+      this.#trace?.(event);
+    } catch {
+      // Diagnostic tracing cannot alter mailbox behavior.
+    }
   }
 
   async #request(

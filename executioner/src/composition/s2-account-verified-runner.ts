@@ -424,7 +424,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         const authExecutor = new GmailApiAuthExecutor({
           binding: attemptBinding,
           resolver,
-          httpClient: new GmailHttpClient(),
+          httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
           rawVault,
           artifactRegistry: artifacts,
           approvedPolicy: approvedPolicy(owner),
