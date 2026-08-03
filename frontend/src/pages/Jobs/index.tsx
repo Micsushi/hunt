@@ -153,10 +153,19 @@ function Th({
     <th
       className={sortKey ? styles.sortable : ''}
       title={COL_TIPS[label] ?? label}
-      onClick={sortKey ? () => onLocalSort({ field: sortKey, dir: nextDir }) : undefined}
+      aria-sort={active ? (localSort?.dir === 'asc' ? 'ascending' : 'descending') : undefined}
     >
-      {label}
-      {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
+      {sortKey ? (
+        <button
+          className={styles.sortButton}
+          onClick={() => onLocalSort({ field: sortKey, dir: nextDir })}
+        >
+          {label}
+          {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
+        </button>
+      ) : (
+        label
+      )}
     </th>
   )
 }
@@ -227,8 +236,7 @@ export function JobsPage() {
   useEffect(() => {
     const rows = tbodyRef.current?.querySelectorAll('tr[data-job-id]') ?? []
     rows.forEach((r, i) => r.classList.toggle(styles.focused, i === focusIdx))
-    if (focusIdx >= 0)
-      (rows[focusIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (focusIdx >= 0) (rows[focusIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' })
   }, [focusIdx, jobs])
 
   const allIds = jobs.map((j) => j.id)
@@ -374,7 +382,7 @@ export function JobsPage() {
       </div>
 
       {/* Table */}
-      <div className={styles.tableWrap}>
+      <div className={styles.tableWrap} role="region" aria-label="Filtered jobs" tabIndex={0}>
         <table className={styles.table}>
           <thead>
             <tr>

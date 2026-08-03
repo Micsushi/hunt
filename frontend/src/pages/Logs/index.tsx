@@ -11,7 +11,12 @@ function JsonExpander({ value }: { value: unknown }) {
   const short = text.length > 96 ? text.slice(0, 96) + '…' : text
   return (
     <span>
-      <button className={styles.expandBtn} onClick={() => setOpen((o) => !o)}>
+      <button
+        className={styles.expandBtn}
+        aria-expanded={open}
+        aria-label={open ? 'Collapse event detail' : 'Expand event detail'}
+        onClick={() => setOpen((o) => !o)}
+      >
         {open ? '▾' : '▸'}
       </button>
       {open ? (
@@ -67,8 +72,18 @@ export function LogsPage() {
     setLevels((prev) => (prev.includes(level) ? prev.filter((v) => v !== level) : [...prev, level]))
   }
 
-  if (isLoading) return <div className={styles.loading}>Loading…</div>
-  if (error || !data) return <div className={styles.error}>Failed to load logs.</div>
+  if (isLoading)
+    return (
+      <div className={styles.loading} role="status">
+        Loading logs…
+      </div>
+    )
+  if (error || !data)
+    return (
+      <div className={styles.error} role="alert">
+        Logs could not be loaded. Refresh the page to try again.
+      </div>
+    )
 
   const { summary, activity } = data
   const li = summary.auth?.linkedin ?? {}
@@ -134,6 +149,7 @@ export function LogsPage() {
             <button
               key={t.key}
               className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`}
+              aria-pressed={tab === t.key}
               onClick={() => setTab(t.key)}
             >
               {t.label}
@@ -142,6 +158,7 @@ export function LogsPage() {
         </div>
         <input
           className={styles.search}
+          aria-label="Search log messages and details"
           placeholder="Search…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -154,6 +171,7 @@ export function LogsPage() {
             <button
               key={level}
               className={`${styles.tab} ${levels.includes(level) ? styles.tabActive : ''}`}
+              aria-pressed={levels.includes(level)}
               onClick={() => toggleLevel(level)}
             >
               {level}
@@ -165,6 +183,7 @@ export function LogsPage() {
             <button
               key={w.key}
               className={`${styles.tab} ${since === w.key ? styles.tabActive : ''}`}
+              aria-pressed={since === w.key}
               onClick={() => {
                 setSince(w.key)
                 setLimit(100)

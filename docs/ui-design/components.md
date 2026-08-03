@@ -17,3 +17,11 @@
 **Approval queue (Coordinator):** visually distinct - `panel-strong` background, `accent` left border 3px, primary action buttons immediately visible.
 
 **Pipeline status dots (nav + Overview):** green/amber/red/grey as above. Polled every 30s from `/api/system/status`.
+
+**Buttons and controls:** use the shared 40px control height for normal actions, explicit action labels, visible accent focus, and readable disabled states. Icon-only controls require an accessible label.
+
+**Toggle groups:** use native radio/checkbox controls when the choice is form data. Use `aria-pressed` for button-based filters and segments so visual selection is also exposed to assistive technology.
+
+**Loading, error, and empty states:** loading replacements announce status; errors name the failed resource and recovery; empty states identify the active filter or missing prerequisite. Keep retry actions beside the message.
+
+**Settings targeting:** role-title lanes and experience levels are separate inputs. Engineering and data are always first, extra lane keys are preserved, and C1 save payloads contain `target_job_titles` plus `experience_levels`—never the retired `search_terms` field.

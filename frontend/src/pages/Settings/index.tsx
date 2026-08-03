@@ -196,10 +196,13 @@ function SearchConfig({
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
 }) {
-  const laneNames = Object.keys(cfg.search_terms)
-  const [lanes, setLanes] = useState<Record<string, string>>(() =>
-    Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.search_terms[k])])),
+  const laneNames = Array.from(
+    new Set(['engineering', 'data', ...Object.keys(cfg.target_job_titles)]),
   )
+  const [lanes, setLanes] = useState<Record<string, string>>(() =>
+    Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])])),
+  )
+  const [experienceLevels, setExperienceLevels] = useState(() => new Set(cfg.experience_levels))
   const [locations, setLocations] = useState(() => listToText(cfg.locations))
   const [linkedinOn, setLinkedinOn] = useState(() => cfg.sites.includes('linkedin'))
   const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
@@ -208,15 +211,30 @@ function SearchConfig({
     setLanes((prev) => ({ ...prev, [name]: val }))
   }
 
+  function toggleExperienceLevel(level: string) {
+    setExperienceLevels((previous) => {
+      const next = new Set(previous)
+      if (next.has(level)) next.delete(level)
+      else next.add(level)
+      return next
+    })
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Search configuration</h3>
+        <div>
+          <h3 className={styles.panelTitle}>Search targeting</h3>
+          <p className={styles.panelDescription}>
+            Define the role titles and career levels Hunt should require when matching jobs.
+          </p>
+        </div>
       </div>
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} lane - search queries
+            {name.charAt(0).toUpperCase() + name.slice(1)} lane — target job titles
+            <span className={styles.fieldHint}>One role title per line.</span>
             <textarea
               className={styles.textarea}
               value={lanes[name] ?? ''}
@@ -225,6 +243,40 @@ function SearchConfig({
           </label>
         ))}
       </div>
+      <fieldset className={styles.experienceFieldset}>
+        <legend>Experience levels</legend>
+        <p className={styles.fieldHint}>
+          Hunt expands each selected level into the aliases shown below and deduplicates overlapping
+          queries.
+        </p>
+        <div className={styles.experienceGrid}>
+          {[
+            ['internship', 'Internship', 'Intern, internship, co-op, and student'],
+            [
+              'junior',
+              'Junior',
+              'Junior, entry level, associate, Level 1, Level One, L1, and role I/1 variants',
+            ],
+            ['new_grad', 'New graduate', 'New grad, graduate, and entry level'],
+          ].map(([value, label, hint]) => (
+            <label key={value} className={styles.experienceChoice}>
+              <input
+                type="checkbox"
+                checked={experienceLevels.has(value)}
+                onChange={() => toggleExperienceLevel(value)}
+              />
+              <span>
+                <strong>{label}</strong>
+                <small>{hint}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <p className={styles.matchingNote}>
+        A result must match both a configured role title and a selected experience level. If either
+        list is empty, discovery will not return matches.
+      </p>
       <label className={styles.field}>
         Locations (one per line)
         <textarea
@@ -234,8 +286,8 @@ function SearchConfig({
           rows={4}
         />
       </label>
-      <div className={styles.field}>
-        Job boards
+      <fieldset className={styles.experienceFieldset}>
+        <legend>Job boards</legend>
         <label className={styles.checkLabel}>
           <input
             type="checkbox"
@@ -252,7 +304,7 @@ function SearchConfig({
           />
           Indeed
         </label>
-      </div>
+      </fieldset>
       <div className={styles.footer}>
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
@@ -262,15 +314,18 @@ function SearchConfig({
             if (linkedinOn) sites.push('linkedin')
             if (indeedOn) sites.push('indeed')
             onSave({
-              search_terms: Object.fromEntries(
+              target_job_titles: Object.fromEntries(
                 Object.entries(lanes).map(([k, v]) => [k, textToList(v)]),
+              ),
+              experience_levels: ['internship', 'junior', 'new_grad'].filter((level) =>
+                experienceLevels.has(level),
               ),
               locations: textToList(locations),
               sites,
             })
           }}
         >
-          {saving ? 'Saving…' : 'Save search config'}
+          {saving ? 'Saving…' : 'Save targeting'}
         </button>
       </div>
     </div>

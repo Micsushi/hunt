@@ -225,11 +225,12 @@ export const MOCK_C1_CONFIG: C1Config = {
   config_file_exists: true,
   watchlist: ['OpenAI', 'Anthropic'],
   title_blacklist: ['Senior Director', 'VP of Engineering'],
-  search_terms: {
+  target_job_titles: {
     engineering: ['software engineer', 'full stack engineer'],
     product: ['technical product manager'],
     data: ['data engineer'],
   },
+  experience_levels: ['internship', 'junior', 'new_grad'],
   locations: ['Remote', 'Denver, CO'],
   sites: ['linkedin', 'indeed'],
   max_workers: 10,

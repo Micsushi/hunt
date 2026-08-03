@@ -5,9 +5,10 @@
 ### All pages
 - [ ] Replace `<pre>` JSON dumps with formatted key-value grids or collapsible panels.
 - [ ] Move Fletcher + Executioner out of `_stubs/` into `pages/Fletcher/` and `pages/Executioner/` with own CSS modules.
+- [x] Shared focus, disabled-control, and reduced-motion behavior.
 - [ ] Consistent panel header: title left, meta/badge right.
 - [ ] All timestamps: "2h ago" display, full ISO on hover.
-- [ ] Error states: inline banner with message text.
+- [ ] Error states: inline banner that names the failure and recovery.
 - [ ] Login page: restyle for dark green theme.
 
 ### Coordinator (skip detail page - not finished yet)
@@ -25,6 +26,8 @@
 - [ ] Extension health panel (placeholder for heartbeat/version).
 
 ### Settings + LinkedIn Accounts (Ops)
+- [x] Settings: grouped Targeting, Automation, Resume, and System tabs.
+- [x] Settings: C1 targeting uses role-title lanes plus experience levels and preserves extra lanes.
 - [ ] Settings: inline Edit + Delete per row.
 - [ ] Secrets: "------" with per-row reveal toggle.
 - [ ] LinkedIn accounts: Deactivate + Delete per row.

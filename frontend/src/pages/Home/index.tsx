@@ -94,6 +94,8 @@ function ServiceStrip() {
     <div className={styles.serviceStrip}>
       {items.map((item) => {
         const state = !data ? 'unknown' : item.ok ? 'ok' : 'error'
+        const stateLabel =
+          state === 'ok' ? 'Operational' : state === 'error' ? 'Unavailable' : 'Unknown'
         return (
           <button
             key={item.key}
@@ -103,6 +105,7 @@ function ServiceStrip() {
           >
             <span className={`${styles.serviceDot} ${styles[`dot_${state}`]}`} />
             {item.label}
+            <span className={styles.serviceState}>{stateLabel}</span>
           </button>
         )
       })}
@@ -137,6 +140,7 @@ function BreakdownChart() {
             <button
               key={f.key}
               className={`${styles.seg} ${field === f.key ? styles.segActive : ''}`}
+              aria-pressed={field === f.key}
               onClick={() => setField(f.key)}
             >
               {f.label}
@@ -145,7 +149,7 @@ function BreakdownChart() {
         </div>
       </div>
       {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
+        <p className={`${styles.empty} ${styles.emptyError}`} role="alert">
           Error: {(error as Error)?.message ?? 'failed to load'}
         </p>
       ) : chartData.length === 0 ? (
@@ -226,6 +230,7 @@ function TimelineChart() {
             <button
               key={w.days}
               className={`${styles.seg} ${days === w.days ? styles.segActive : ''}`}
+              aria-pressed={days === w.days}
               onClick={() => setDays(w.days)}
             >
               {w.label}
@@ -234,7 +239,7 @@ function TimelineChart() {
         </div>
       </div>
       {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
+        <p className={`${styles.empty} ${styles.emptyError}`} role="alert">
           Error: {(error as Error)?.message ?? 'failed to load'}
         </p>
       ) : chartData.length === 0 ? (
@@ -456,8 +461,18 @@ export function HomePage() {
   const navigate = useNavigate()
   const { data: summary, isLoading, error } = useSummary()
 
-  if (isLoading) return <div className={styles.loading}>Loading…</div>
-  if (error || !summary) return <div className={styles.error}>Failed to load summary.</div>
+  if (isLoading)
+    return (
+      <div className={styles.loading} role="status">
+        Loading overview…
+      </div>
+    )
+  if (error || !summary)
+    return (
+      <div className={styles.error} role="alert">
+        The overview could not be loaded. Refresh the page to try again.
+      </div>
+    )
 
   const detailCounts = summary.detail_quality_counts ?? {
     enriched:
