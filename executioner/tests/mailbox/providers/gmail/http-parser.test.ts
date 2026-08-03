@@ -76,6 +76,25 @@ test("finds an admitted target in a bounded later MIME part", () => {
   );
 });
 
+test("accepts canonical padded Gmail base64url bodies", () => {
+  const value = message();
+  const payload = value.payload as {
+    parts: { body: { data: string } }[];
+  };
+  const target = "https://tenant.example.invalid/verify?token=private&a=b";
+  const unpadded = encoded(target);
+  const paddingLength = (4 - (unpadded.length % 4)) % 4;
+  assert.notEqual(paddingLength, 0);
+  payload.parts[1]!.body.data = `${unpadded}${"=".repeat(paddingLength)}`;
+
+  assert.equal(
+    new TextDecoder().decode(
+      parseGmailMessage(value, expected)?.verificationTarget,
+    ),
+    target,
+  );
+});
+
 test("returns no candidate when the message has no verification target", () => {
   const value = message({
     payload: {

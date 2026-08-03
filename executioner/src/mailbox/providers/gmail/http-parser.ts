@@ -146,7 +146,7 @@ function verificationTarget(
   const segments = bodySegments(payload, 0);
   emit(trace, "gmail_message_body_admitted");
   for (const encoded of segments) {
-    if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) {
+    if (!canonicalBase64Url(encoded)) {
       emit(trace, "gmail_message_body_encoding_rejected");
       throw new GmailProviderFailure("mailbox_query_invalid");
     }
@@ -191,6 +191,16 @@ function verificationTarget(
   }
   emit(trace, "gmail_message_target_admitted");
   return new TextEncoder().encode([...candidates][0]);
+}
+
+function canonicalBase64Url(value: string): boolean {
+  const match = /^([A-Za-z0-9_-]+)(={0,2})$/u.exec(value);
+  if (match === null) return false;
+  const unpaddedLength = match[1]!.length;
+  const paddingLength = match[2]!.length;
+  if (unpaddedLength % 4 === 1) return false;
+  return paddingLength === 0 ||
+    (value.length % 4 === 0 && paddingLength === (4 - (unpaddedLength % 4)) % 4);
 }
 
 function emit(
