@@ -42,6 +42,17 @@ export class PlaywrightVerificationNavigationAdapter
   }
 
   async #enterEmailSignInIfPresent(page: PersistentPage): Promise<void> {
+    const semanticPage = page as unknown as {
+      readonly getByRole?: unknown;
+      readonly locator?: unknown;
+    };
+    if (
+      typeof semanticPage.getByRole !== "function" ||
+      typeof semanticPage.locator !== "function"
+    ) {
+      this.#emit("verification_navigation_email_sign_in_absent");
+      return;
+    }
     const navigation = new PlaywrightPostingNavigationAdapter();
     const control = await navigation.inspect(page, "sign_in_with_email");
     if (control.cardinality === 0) {
