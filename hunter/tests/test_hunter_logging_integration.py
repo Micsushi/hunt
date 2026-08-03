@@ -97,7 +97,7 @@ class HunterLoggingIntegrationTests(unittest.TestCase):
                 self.addCleanup(setattr, db, "DB_PATH", old_db_path)
                 init_db()
                 with (
-                    mock.patch.object(scraper, "SEARCH_TERMS", {"engineering": ["python"]}),
+                    mock.patch.object(scraper, "SEARCH_QUERIES", {"engineering": ["python"]}),
                     mock.patch.object(scraper, "LOCATIONS", ["Remote"]),
                     mock.patch.object(scraper, "SITES", ["indeed"]),
                     mock.patch.object(scraper, "MAX_WORKERS", 1),

@@ -73,6 +73,22 @@ def test_settings_exposes_resume_done_windows_notification_toggle():
     assert "resume_done_windows_notification_enabled" in notifications
 
 
+def test_settings_exposes_c1_target_titles_and_experience_levels():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+
+    assert "Target job titles" in settings
+    assert "Experience levels" in settings
+    assert "Internship" in settings
+    assert "Junior" in settings
+    assert "New grad" in settings
+    assert "target_job_titles" in control
+    assert "experience_levels" in control
+    assert "search_terms" not in control
+    assert "co-op, and student searches" in settings
+    assert "Level 1, L1, and role I/1 variants" in settings
+
+
 def test_settings_exposes_c2_job_metadata_values():
     settings = read("frontend/src/pages/Settings/index.tsx")
 

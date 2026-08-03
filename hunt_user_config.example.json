@@ -23,21 +23,12 @@
     "doctoral"
   ],
 
-  "search_terms": {
-    "engineering": [
-      "software engineer intern",
-      "software engineer new grad",
-      "junior software engineer"
-    ],
-    "product": [
-      "product manager intern",
-      "associate product manager"
-    ],
-    "data": [
-      "data analyst intern",
-      "data scientist intern"
-    ]
+  "target_job_titles": {
+    "engineering": [],
+    "data": []
   },
+
+  "experience_levels": [],
 
   "locations": [
     "Canada"

@@ -1,5 +1,6 @@
 import os as _os
 
+from hunter.search_lanes import build_search_queries as _build_search_queries
 from shared.config_utils import get_bool_env as _get_bool_env
 from shared.config_utils import get_int_env as _get_int_env
 from shared.config_utils import get_str_env as _get_str_env
@@ -93,45 +94,12 @@ HUNT_HUNTER_URL = _get_str_env("HUNT_HUNTER_URL", "http://localhost:8001")
 HUNT_FLETCHER_URL = _get_str_env("HUNT_FLETCHER_URL", "http://localhost:8002")
 HUNT_COORDINATOR_URL = _get_str_env("HUNT_COORDINATOR_URL", "http://localhost:8003")
 
-# Discovery runs one query per (lane, term). Broad board results are trimmed afterward:
-# see hunter.search_lanes.LANE_TITLE_KEYWORDS (keep lanes aligned when you change terms).
-_DEFAULT_SEARCH_TERMS = {
-    "engineering": [
-        "software engineer intern",
-        "software engineer new grad",
-        "junior software engineer",
-        "software developer intern",
-        "software developer new grad",
-        "junior software developer",
-        "frontend developer intern",
-        "backend developer intern",
-        "fullstack developer intern",
-    ],
-    "product": [
-        "product manager intern",
-        "product manager new grad",
-        "junior product manager",
-        "associate product manager",
-        "project manager intern",
-        "project manager new grad",
-        "scrum master junior",
-        "scrum master intern",
-        "business analyst intern",
-        "business analyst new grad",
-    ],
-    "data": [
-        "data analyst intern",
-        "data analyst new grad",
-        "junior data analyst",
-        "data scientist intern",
-        "data scientist new grad",
-        "junior data scientist",
-        "data engineer intern",
-        "data engineer new grad",
-        "junior data engineer",
-    ],
-}
-SEARCH_TERMS = _get_config_dict("SEARCH_TERMS", _DEFAULT_SEARCH_TERMS)
+# User preferences are the only source of discovery queries. Each target title
+# is combined with the built-in aliases for every selected experience level.
+# Empty defaults prevent a fresh install from searching before the user opts in.
+TARGET_JOB_TITLES = _get_config_dict("TARGET_JOB_TITLES", {})
+EXPERIENCE_LEVELS = _get_config_list("EXPERIENCE_LEVELS", [])
+SEARCH_QUERIES = _build_search_queries(TARGET_JOB_TITLES, EXPERIENCE_LEVELS)
 
 _DEFAULT_LOCATIONS = [
     "Canada",
