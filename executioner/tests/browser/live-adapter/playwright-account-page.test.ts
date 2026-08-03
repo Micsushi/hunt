@@ -192,6 +192,12 @@ test("activates each exact semantic link or button without returning page state"
               ? '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]'
               : '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
           },
+          ...(action === "submit_create_account"
+            ? [{
+                method: "locator",
+                selector: '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])',
+              }]
+            : []),
           {
             method: "locator",
             selector: [
@@ -959,6 +965,91 @@ test("create-account submit admits a newly visible semantic sign-in destination"
   assert.deepEqual(signInOwner.waitForArguments, [
     { state: "visible", timeout: 10_000 },
   ]);
+});
+
+test("create-account submit admits a newly visible exact modern sign-in form", async () => {
+  const modernSelector =
+    '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+  const modern = new FakeLocator({
+    count: 1,
+    visible: false,
+    visibleResults: [false, true],
+    enabled: true,
+    editable: false,
+  });
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const absentOpposingOwner = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+
+  await new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absentDestination, new Map([
+      [modernSelector, modern],
+      ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absentOpposingOwner],
+    ])),
+    "submit_create_account",
+  );
+
+  assert.deepEqual(modern.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(modern.isVisibleCalls, 2);
+});
+
+test("modern sign-in settlement rejects hidden, pre-existing, and duplicate forms", async () => {
+  const modernSelector =
+    '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+  const cases = [
+    new FakeLocator({ count: 1, visible: false, enabled: true, editable: false, visibleWaitFails: true }),
+    new FakeLocator({ count: 1, visible: true, enabled: true, editable: false }),
+    new FakeLocator({ count: 2, visible: true, enabled: true, editable: false }),
+  ];
+  for (const modern of cases) {
+    const submit = new FakeLocator({
+      count: 1,
+      visible: true,
+      enabled: true,
+      editable: false,
+      visibleWaitFails: true,
+    });
+    const absentDestination = new FakeLocator({
+      count: 0,
+      visible: false,
+      enabled: false,
+      editable: false,
+      attachedWaitFails: true,
+    });
+    const absentOpposingOwner = new FakeLocator({
+      count: 0,
+      visible: false,
+      enabled: false,
+      editable: false,
+      visibleWaitFails: true,
+    });
+
+    await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+      new FakePage(submit, absentDestination, new Map([
+        [modernSelector, modern],
+        ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absentOpposingOwner],
+      ])),
+      "submit_create_account",
+    ));
+  }
 });
 
 test("hidden attached semantic sign-in markup cannot settle create-account submit", async () => {

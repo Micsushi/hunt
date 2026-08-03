@@ -87,6 +87,8 @@ const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
+const WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR =
+  '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
 
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
@@ -174,6 +176,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       let credentialsOrLockedCanSettle = false;
       let opposingSubmitOwner: Locator | undefined;
       let opposingSubmitOwnerCanSettle = false;
+      let modernSignInDestination: Locator | undefined;
+      let modernSignInDestinationCanSettle = false;
       if (submit) {
         const factSelectors = postSubmitExactFactSelectors(action);
         const candidates = factSelectors.map((selector) =>
@@ -194,6 +198,14 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           action === "submit_sign_in" ? "submit_create_account" : "submit_sign_in",
         ).locator;
         opposingSubmitOwnerCanSettle = !await opposingSubmitOwner.isVisible();
+        if (action === "submit_create_account") {
+          modernSignInDestination = playwrightPage(page).locator(
+            WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR,
+          );
+          modernSignInDestinationCanSettle = !await exactVisible(
+            modernSignInDestination,
+          );
+        }
         const hitTarget = await inspectSubmitHitTarget(locator);
         this.#emit(hitTarget);
         this.#emit("submit_click_started");
@@ -280,6 +292,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
                         state: "visible",
                         timeout: 10_000,
                       }).then(() => "destination" as const),
+                    ]
+                  : []),
+                ...(modernSignInDestinationCanSettle
+                  ? [
+                      waitForExactVisible(modernSignInDestination!)
+                        .then(() => "destination" as const),
                     ]
                   : []),
                 locator.waitFor({ state: "visible", timeout: 10_000 })
@@ -488,6 +506,11 @@ function postSubmitDestination(
     ? '[data-automation-id="createAccountPage"]'
     : '[data-automation-id="signInPage"]';
   return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS].join(", ");
+}
+
+async function waitForExactVisible(locator: Locator): Promise<void> {
+  await locator.waitFor({ state: "visible", timeout: 10_000 });
+  if (!await exactVisible(locator)) throw new Error("destination remained ambiguous");
 }
 
 function postSubmitExactFactSelectors(
