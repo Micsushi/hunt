@@ -1,6 +1,10 @@
 import { globSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+export function testRunnerArgs(inputs: readonly string[]): string[] {
+  return ["--test", "--test-concurrency=4", ...testTargets(inputs)];
+}
+
 export function testTargets(inputs: readonly string[]): string[] {
   return (inputs.length === 0 ? ["tests"] : inputs).flatMap((input) => {
     if (!statSync(input).isDirectory()) {
