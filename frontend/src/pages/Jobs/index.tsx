@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
+import { linkedInListingUrl } from '@/utils/jobLinks'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
@@ -280,7 +281,7 @@ export function JobsPage() {
         <td onClick={(e) => e.stopPropagation()}>
           {job.job_url && (
             <a
-              href={job.job_url}
+              href={linkedInListingUrl(job.job_url)}
               target="_blank"
               rel="noreferrer"
               title="View original listing"

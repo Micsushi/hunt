@@ -26,6 +26,8 @@ Hunt uses a dark olive-green, data-dense control dashboard for the job pipeline.
 ## Interaction Contract
 
 - Every interactive element must work with the keyboard and show the shared accent focus ring.
+- Displayed LinkedIn listing links use the authenticated collections route derived from the stored job ID; direct employer apply URLs remain unchanged.
+- The Run settings panel exposes a LinkedIn discovery cooldown. JobSpy's first LinkedIn HTTP 429 stops queued LinkedIn searches and persists the pause across scheduler cycles; other job boards continue normally.
 - Selected toggles expose state with native inputs or `aria-pressed`; disclosures expose `aria-expanded`.
 - Interactive controls use a 40px default minimum height. Compact table controls may be smaller only when their label and focus target remain clear.
 - Disabled controls remain readable, use `not-allowed`, and must not be the only explanation for why an action is unavailable.
@@ -47,12 +49,13 @@ Hunt uses a dark olive-green, data-dense control dashboard for the job pipeline.
 
 ## Settings Information Architecture
 
-- `Targeting` owns C1 role titles, experience levels, locations, and job boards.
+- `Targeting` owns C1 role titles, experience levels, company priority/block rules, title exclusions, locations, and job boards.
 - `Automation` owns C1 cadence, result limits, enrichment, and advanced runtime controls.
 - `Resume` owns C2 tailoring and provider controls.
 - `System` owns persistence status, integrations, and maintenance links.
 - C1 targeting uses `target_job_titles` and `experience_levels`. The retired `search_terms` field must never appear in the UI or save payload.
 - Engineering and data are the fixed primary lanes; render any additional configured lanes after them and preserve those keys on save.
+- Blocked-company copy must state that exact normalized matches are rejected before database persistence. It must not imply that saving the list removes existing rows.
 
 OpenSpec change `design.md`, if introduced later, remains technical design and
 does not replace this UI contract.

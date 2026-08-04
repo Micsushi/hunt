@@ -50,6 +50,7 @@ class EnrichRequest(BaseModel):
 
 class ConfigPatchRequest(BaseModel):
     watchlist: list[str] | None = None
+    company_blocklist: list[str] | None = None
     title_blacklist: list[str] | None = None
     target_job_titles: dict[str, list[str]] | None = None
     experience_levels: list[str] | None = None
@@ -62,6 +63,7 @@ class ConfigPatchRequest(BaseModel):
     enrich_after_scrape: bool | None = None
     enrichment_batch_limit: int | None = None
     linkedin_fetch_description: bool | None = None
+    linkedin_discovery_cooldown_minutes: int | None = None
     enrichment_timeout_ms: int | None = None
     enrichment_max_attempts: int | None = None
     enrichment_alert_failure_rate_percent: int | None = None
@@ -79,6 +81,7 @@ def get_status():
         count_pending_jobs_for_enrichment,
         count_ready_jobs_for_enrichment,
         get_linkedin_auth_state,
+        get_linkedin_discovery_cooldown_state,
     )
 
     return {
@@ -90,6 +93,7 @@ def get_status():
             "ready": count_ready_jobs_for_enrichment(),
         },
         "linkedin_auth": get_linkedin_auth_state(),
+        "linkedin_discovery_cooldown": get_linkedin_discovery_cooldown_state(),
     }
 
 
@@ -160,6 +164,7 @@ def post_enrich(req: EnrichRequest, background_tasks: BackgroundTasks):
 def get_config():
     from hunter import user_config as _uc
     from hunter.config import (
+        COMPANY_BLOCKLIST,
         ENRICH_AFTER_SCRAPE,
         ENRICHMENT_ALERT_COOLDOWN_MINUTES,
         ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
@@ -168,6 +173,7 @@ def get_config():
         ENRICHMENT_TIMEOUT_MS,
         EXPERIENCE_LEVELS,
         HOURS_OLD,
+        LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
         LINKEDIN_FETCH_DESCRIPTION,
         LOCATIONS,
         MAX_WORKERS,
@@ -180,10 +186,17 @@ def get_config():
     )
 
     cfg_path = _uc.get_path()
+    saved_company_blocklist = _uc.load().get("company_blocklist")
+    company_blocklist = (
+        [str(value) for value in saved_company_blocklist if str(value).strip()]
+        if isinstance(saved_company_blocklist, list)
+        else COMPANY_BLOCKLIST
+    )
     return {
         "config_file": str(cfg_path),
         "config_file_exists": cfg_path.exists(),
         "watchlist": WATCHLIST,
+        "company_blocklist": company_blocklist,
         "title_blacklist": TITLE_BLACKLIST,
         "target_job_titles": TARGET_JOB_TITLES,
         "experience_levels": EXPERIENCE_LEVELS,
@@ -195,6 +208,7 @@ def get_config():
         "run_interval_seconds": RUN_INTERVAL_SECONDS,
         "enrich_after_scrape": ENRICH_AFTER_SCRAPE,
         "linkedin_fetch_description": LINKEDIN_FETCH_DESCRIPTION,
+        "linkedin_discovery_cooldown_minutes": LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
         "enrichment_batch_limit": ENRICHMENT_BATCH_LIMIT,
         "enrichment_timeout_ms": ENRICHMENT_TIMEOUT_MS,
         "enrichment_max_attempts": ENRICHMENT_MAX_ATTEMPTS,

@@ -1,5 +1,7 @@
 import os
+import re
 import sqlite3
+import unicodedata
 from datetime import UTC, datetime, timedelta
 
 from hunter import config
@@ -155,6 +157,7 @@ LINKEDIN_AUTH_STATE_OK = "ok"
 LINKEDIN_AUTH_STATE_EXPIRED = "expired"
 LINKEDIN_AUTH_STATE_UNKNOWN = "unknown"
 HIRING_CAFE_COOLDOWN_UNTIL_KEY = "hiring_cafe_cooldown_until"
+LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY = "linkedin_discovery_cooldown_until"
 REVIEW_AUDIT_LOG_KEY = "review_audit_log"
 
 # Backwards compatible: tests and older scripts may patch `db.DB_PATH` directly.
@@ -1314,6 +1317,54 @@ def is_hiring_cafe_in_cooldown(*, now=None):
     return now < cooldown_until
 
 
+def get_linkedin_discovery_cooldown_until():
+    state = get_runtime_state([LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY]).get(
+        LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY
+    )
+    return (state or {}).get("value")
+
+
+def set_linkedin_discovery_cooldown_until(value):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        _upsert_runtime_state(cursor, LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY, value)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_linkedin_discovery_cooldown():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        _delete_runtime_state(cursor, LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def is_linkedin_discovery_in_cooldown(*, now=None):
+    value = get_linkedin_discovery_cooldown_until()
+    if not value:
+        return False
+    try:
+        cooldown_until = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    if now is None:
+        now = utc_now()
+    return now < cooldown_until
+
+
+def get_linkedin_discovery_cooldown_state(*, now=None):
+    until = get_linkedin_discovery_cooldown_until()
+    return {
+        "active": is_linkedin_discovery_in_cooldown(now=now),
+        "until": until,
+    }
+
+
 def restore_job_enrichment_claim(claimed_job, *, source=None):
     conn = get_connection()
     try:
@@ -1804,7 +1855,31 @@ def append_review_audit_entry(action, detail=None, *, max_entries=100):
     )
 
 
-def add_job(job_data):
+def _company_match_key(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.sub(r"[^a-z0-9]+", "", normalized)
+
+
+def _saved_company_blocklist():
+    from hunter import user_config  # noqa: PLC0415
+
+    saved = user_config.load().get("company_blocklist")
+    if isinstance(saved, list):
+        return [str(value) for value in saved if str(value).strip()]
+    return config.COMPANY_BLOCKLIST
+
+
+def add_job(job_data, *, company_blocklist=None):
+    if company_blocklist is None:
+        company_blocklist = _saved_company_blocklist()
+    company_key = _company_match_key(job_data.get("company"))
+    blocked_keys = {_company_match_key(value) for value in company_blocklist}
+    blocked_keys.discard("")
+    if company_key and company_key in blocked_keys:
+        return "blocked", None
+
     conn = get_connection()
     try:
         cursor = conn.cursor()

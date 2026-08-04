@@ -99,6 +99,8 @@ cp hunt_user_config.example.json hunt_user_config.json
 **Configurable values:**
 
 - `watchlist` : priority company list - Discord alert fires on scrape when a match lands
+- `company_blocklist` : company names or domains rejected before database persistence
+- `linkedin_discovery_cooldown_minutes` : pause duration after JobSpy's first LinkedIn HTTP 429 (default `180`)
 - `title_blacklist` : title phrases to filter out during scrape
 - `target_job_titles` : user-selected job-title phrases grouped by lane
 - `experience_levels` : selected levels (`internship`, `junior`, `new_grad`)

@@ -6,8 +6,11 @@ See **docs/NAMING.md** for component IDs and code names.
 """
 
 import argparse
+import logging
 import os
 import sys
+import threading
+from datetime import UTC, datetime, timedelta
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +27,7 @@ from hunter.config import (
     ENRICHMENT_UI_VERIFY_BLOCKED,
     EXPERIENCE_LEVELS,
     HOURS_OLD,
+    LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
     LINKEDIN_FETCH_DESCRIPTION,
     LOCATIONS,
     MAX_WORKERS,
@@ -35,10 +39,35 @@ from hunter.config import (
     TITLE_BLACKLIST,
     WATCHLIST,
 )
-from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
+from hunter.db import (
+    add_job,
+    clear_linkedin_discovery_cooldown,
+    count_ready_jobs_for_enrichment,
+    get_linkedin_discovery_cooldown_until,
+    init_db,
+    is_linkedin_discovery_in_cooldown,
+    set_linkedin_discovery_cooldown_until,
+)
 from hunter.notifications import send_discord_webhook_message
 from hunter.search_lanes import title_matches_search_lane, title_matches_target_preferences
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
+
+_linkedin_discovery_blocked = threading.Event()
+_linkedin_discovery_guard_active = False
+
+
+class _LinkedInRateLimitHandler(logging.Handler):
+    def __init__(self, on_rate_limit):
+        super().__init__(level=logging.ERROR)
+        self._on_rate_limit = on_rate_limit
+
+    def emit(self, record):
+        if "429" not in record.getMessage():
+            return
+        try:
+            self._on_rate_limit(record.getMessage())
+        except Exception:
+            self.handleError(record)
 
 
 def classify_level(title):
@@ -162,6 +191,14 @@ def _notify_priority_jobs(priority_jobs):
 
 
 def scrape_single(site, term, location, category):
+    if site == "linkedin" and _linkedin_discovery_guard_active:
+        if _linkedin_discovery_blocked.is_set():
+            print(
+                f"  [{site}] [{category}] Skipping '{term}' in '{location}': "
+                "LinkedIn discovery cooldown is active."
+            )
+            return []
+
     print(f"  [{site}] [{category}] Searching: '{term}' in '{location}'...")
     try:
         # Import here so unit tests and non-discovery workflows don't require jobspy.
@@ -316,8 +353,63 @@ def scrape(
     enrichment_browser_channel=None,
     ui_verify_blocked=None,
 ):
+    global _linkedin_discovery_guard_active
+
     init_db()
     logger = C1Logger(discord=False)
+
+    _linkedin_discovery_blocked.clear()
+    persisted_cooldown_until = get_linkedin_discovery_cooldown_until()
+    persisted_cooldown_active = is_linkedin_discovery_in_cooldown()
+    if persisted_cooldown_active:
+        _linkedin_discovery_blocked.set()
+    elif persisted_cooldown_until:
+        clear_linkedin_discovery_cooldown()
+        persisted_cooldown_until = None
+
+    cooldown_state = {
+        "active": persisted_cooldown_active,
+        "until": persisted_cooldown_until,
+        "triggered": False,
+    }
+    cooldown_lock = threading.Lock()
+
+    def activate_linkedin_cooldown(message):
+        with cooldown_lock:
+            if _linkedin_discovery_blocked.is_set():
+                return
+            _linkedin_discovery_blocked.set()
+            cooldown_until = datetime.now(UTC) + timedelta(
+                minutes=max(1, LINKEDIN_DISCOVERY_COOLDOWN_MINUTES)
+            )
+            formatted_until = cooldown_until.strftime("%Y-%m-%d %H:%M:%S")
+            set_linkedin_discovery_cooldown_until(formatted_until)
+            cooldown_state.update(
+                {
+                    "active": True,
+                    "until": formatted_until,
+                    "triggered": True,
+                }
+            )
+            logger.event(
+                key="hunt_last_linkedin_discovery_rate_limit",
+                level="warn",
+                message=(
+                    "LinkedIn discovery returned HTTP 429; queued LinkedIn searches "
+                    f"are paused until {formatted_until} UTC."
+                ),
+                code="linkedin_discovery_rate_limited",
+                details={
+                    "cooldown_minutes": LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
+                    "cooldown_until": formatted_until,
+                    "jobspy_message": message,
+                },
+            )
+
+    rate_limit_handler = _LinkedInRateLimitHandler(activate_linkedin_cooldown)
+    jobspy_linkedin_logger = logging.getLogger("JobSpy:LinkedIn")
+    jobspy_linkedin_logger.addHandler(rate_limit_handler)
+    _linkedin_discovery_guard_active = True
 
     if enrich_pending is None:
         enrich_pending = ENRICH_AFTER_SCRAPE
@@ -333,13 +425,19 @@ def scrape(
         ui_verify_blocked = ENRICHMENT_UI_VERIFY_BLOCKED
 
     all_jobs = []
-    tasks = [
+    candidate_tasks = [
         (site, term, location, category)
         for category, terms in SEARCH_QUERIES.items()
         for term in terms
         for location in LOCATIONS
         for site in SITES
     ]
+    tasks = [
+        task
+        for task in candidate_tasks
+        if not (persisted_cooldown_active and task[0] == "linkedin")
+    ]
+    linkedin_tasks_skipped = len(candidate_tasks) - len(tasks)
 
     logger.event(
         key="hunt_last_scrape_start",
@@ -348,6 +446,8 @@ def scrape(
         code="scrape_started",
         details={
             "task_count": len(tasks),
+            "linkedin_tasks_skipped": linkedin_tasks_skipped,
+            "linkedin_discovery_cooldown_until": persisted_cooldown_until,
             "max_workers": MAX_WORKERS,
             "enrich_pending": bool(enrich_pending),
             "enrich_limit": enrich_limit,
@@ -419,6 +519,9 @@ def scrape(
             "refreshed": refreshed,
             "skipped": skipped,
             "enrichment_exit_code": enrichment_exit_code,
+            "linkedin_discovery_cooldown_active": bool(cooldown_state["active"]),
+            "linkedin_discovery_cooldown_until": cooldown_state["until"],
+            "linkedin_discovery_cooldown_triggered": bool(cooldown_state["triggered"]),
         }
         logger.event(
             key="hunt_last_scrape_end",
@@ -436,6 +539,10 @@ def scrape(
             code="scrape_failed",
         )
         raise
+    finally:
+        _linkedin_discovery_guard_active = False
+        _linkedin_discovery_blocked.clear()
+        jobspy_linkedin_logger.removeHandler(rate_limit_handler)
 
 
 if __name__ == "__main__":

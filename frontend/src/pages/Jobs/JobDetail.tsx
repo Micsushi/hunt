@@ -17,6 +17,7 @@ import {
   type EasyApplyVerifyResult,
 } from '@/api/control'
 import { logHumanCommand } from '@/api/humanCommandLog'
+import { linkedInListingUrl } from '@/utils/jobLinks'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
@@ -420,7 +421,12 @@ export function JobDetailPage() {
         </div>
         <div className={styles.menuLinks}>
           {job.job_url && (
-            <a href={job.job_url} target="_blank" rel="noreferrer" className={styles.extBtn}>
+            <a
+              href={linkedInListingUrl(job.job_url)}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.extBtn}
+            >
               Listing ↗
             </a>
           )}

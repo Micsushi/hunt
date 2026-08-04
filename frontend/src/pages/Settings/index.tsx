@@ -138,6 +138,9 @@ function DiscoveryFilters({
   saving: boolean
 }) {
   const [watchlist, setWatchlist] = useState(() => listToText(cfg.watchlist))
+  const [companyBlocklist, setCompanyBlocklist] = useState(() =>
+    listToText(cfg.company_blocklist ?? []),
+  )
   const [blacklist, setBlacklist] = useState(() => listToText(cfg.title_blacklist))
 
   return (
@@ -145,20 +148,34 @@ function DiscoveryFilters({
       <div className={styles.panelHeader}>
         <h3 className={styles.panelTitle}>Discovery filters</h3>
       </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Priority companies (one per line)
+          <span className={styles.fieldHint}>
+            Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={watchlist}
+            onChange={(e) => setWatchlist(e.target.value)}
+            rows={8}
+          />
+        </label>
+        <label className={styles.field}>
+          Blocked companies (one per line)
+          <span className={styles.fieldHint}>
+            Exact normalized matches are discarded after scraping and never written to the database.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={companyBlocklist}
+            onChange={(e) => setCompanyBlocklist(e.target.value)}
+            rows={8}
+          />
+        </label>
+      </div>
       <label className={styles.field}>
-        Watchlist - priority companies (one per line)
-        <span className={styles.fieldHint}>
-          Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={watchlist}
-          onChange={(e) => setWatchlist(e.target.value)}
-          rows={10}
-        />
-      </label>
-      <label className={styles.field}>
-        Title blacklist - phrases to exclude (one per line)
+        Blocked title phrases (one per line)
         <span className={styles.fieldHint}>
           Jobs whose title contains any of these phrases are filtered out during scrape.
         </span>
@@ -176,6 +193,7 @@ function DiscoveryFilters({
           onClick={() =>
             onSave({
               watchlist: textToList(watchlist),
+              company_blocklist: textToList(companyBlocklist),
               title_blacklist: textToList(blacklist),
             })
           }
@@ -345,6 +363,9 @@ function RunSettings({
   const [resultsWanted, setResultsWanted] = useState(String(cfg.results_wanted))
   const [hoursOld, setHoursOld] = useState(String(cfg.hours_old))
   const [maxWorkers, setMaxWorkers] = useState(String(cfg.max_workers))
+  const [linkedinCooldownMin, setLinkedinCooldownMin] = useState(
+    String(cfg.linkedin_discovery_cooldown_minutes),
+  )
   const [enrichAfterScrape, setEnrichAfterScrape] = useState(cfg.enrich_after_scrape)
   const [batchLimit, setBatchLimit] = useState(String(cfg.enrichment_batch_limit))
   const [timeoutMs, setTimeoutMs] = useState(String(cfg.enrichment_timeout_ms))
@@ -407,6 +428,20 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
+          LinkedIn rate-limit cooldown (minutes)
+          <span className={styles.fieldHint}>
+            After the first LinkedIn 429, stop queued searches and pause future cycles (default
+            180).
+          </span>
+          <input
+            type="number"
+            className={styles.input}
+            value={linkedinCooldownMin}
+            onChange={(e) => setLinkedinCooldownMin(e.target.value)}
+            min={1}
+          />
+        </label>
+        <label className={styles.field}>
           Enrichment batch limit
           <span className={styles.fieldHint}>Jobs enriched per cycle (default 25).</span>
           <input
@@ -458,6 +493,7 @@ function RunSettings({
               results_wanted: parseInt(resultsWanted, 10),
               hours_old: parseInt(hoursOld, 10),
               max_workers: parseInt(maxWorkers, 10),
+              linkedin_discovery_cooldown_minutes: parseInt(linkedinCooldownMin, 10),
               enrich_after_scrape: enrichAfterScrape,
               enrichment_batch_limit: parseInt(batchLimit, 10),
               enrichment_timeout_ms: parseInt(timeoutMs, 10),

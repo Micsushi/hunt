@@ -472,6 +472,7 @@ export interface C1Config {
   config_file: string
   config_file_exists: boolean
   watchlist: string[]
+  company_blocklist: string[]
   title_blacklist: string[]
   target_job_titles: Record<string, string[]>
   experience_levels: string[]
@@ -482,6 +483,7 @@ export interface C1Config {
   hours_old: number
   run_interval_seconds: number
   enrich_after_scrape: boolean
+  linkedin_discovery_cooldown_minutes: number
   enrichment_batch_limit: number
   enrichment_timeout_ms: number
   enrichment_max_attempts: number

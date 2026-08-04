@@ -1,5 +1,6 @@
 import importlib
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -104,6 +105,7 @@ class Stage1Tests(unittest.TestCase):
                         "experience_levels": ["new_grad"],
                         "enrich_after_scrape": False,
                         "linkedin_fetch_description": False,
+                        "linkedin_discovery_cooldown_minutes": 240,
                     },
                     f,
                 )
@@ -124,6 +126,7 @@ class Stage1Tests(unittest.TestCase):
                     "EXPERIENCE_LEVELS",
                     "ENRICH_AFTER_SCRAPE",
                     "LINKEDIN_FETCH_DESCRIPTION",
+                    "LINKEDIN_DISCOVERY_COOLDOWN_MINUTES",
                 ):
                     os.environ.pop(key, None)
                 reloaded = importlib.reload(config_module)
@@ -135,6 +138,7 @@ class Stage1Tests(unittest.TestCase):
                 self.assertEqual(reloaded.EXPERIENCE_LEVELS, ["new_grad"])
                 self.assertFalse(reloaded.ENRICH_AFTER_SCRAPE)
                 self.assertFalse(reloaded.LINKEDIN_FETCH_DESCRIPTION)
+                self.assertEqual(reloaded.LINKEDIN_DISCOVERY_COOLDOWN_MINUTES, 240)
         finally:
             importlib.reload(config_module)
             if os.path.exists(path):
@@ -387,6 +391,85 @@ class Stage1Tests(unittest.TestCase):
         self.assertIn("Priority jobs found: 2", sent_message)
         self.assertIn("Software Engineer at Amazon", sent_message)
         self.assertIn("Developer at Microsoft", sent_message)
+
+    def test_scrape_stops_queued_linkedin_tasks_after_first_429(self):
+        scrape_calls = []
+
+        def fake_scrape_jobs(**kwargs):
+            scrape_calls.append(kwargs)
+            logging.getLogger("JobSpy:LinkedIn").error(
+                "429 Response - Blocked by LinkedIn for too many requests"
+            )
+            return FakeDf([])
+
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = fake_scrape_jobs
+
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            with patch.object(
+                discovery,
+                "SEARCH_QUERIES",
+                {"engineering": ["software engineer", "software developer"]},
+            ):
+                with patch.object(discovery, "LOCATIONS", ["Canada"]):
+                    with patch.object(discovery, "SITES", ["linkedin"]):
+                        with patch.object(discovery, "MAX_WORKERS", 1):
+                            with patch.object(discovery, "init_db"):
+                                with patch.object(
+                                    discovery,
+                                    "get_linkedin_discovery_cooldown_until",
+                                    return_value=None,
+                                ):
+                                    with patch.object(
+                                        discovery,
+                                        "is_linkedin_discovery_in_cooldown",
+                                        return_value=False,
+                                    ):
+                                        with patch.object(
+                                            discovery,
+                                            "set_linkedin_discovery_cooldown_until",
+                                        ) as set_cooldown:
+                                            summary = discovery.scrape(enrich_pending=False)
+
+        self.assertEqual(len(scrape_calls), 1)
+        set_cooldown.assert_called_once()
+        self.assertTrue(summary["linkedin_discovery_cooldown_active"])
+        self.assertIsNotNone(summary["linkedin_discovery_cooldown_until"])
+
+    def test_scrape_skips_linkedin_while_persisted_discovery_cooldown_is_active(self):
+        scrape_calls = []
+
+        def fake_scrape_jobs(**kwargs):
+            scrape_calls.append(kwargs)
+            return FakeDf([])
+
+        jobspy_fake = types.ModuleType("jobspy")
+        jobspy_fake.scrape_jobs = fake_scrape_jobs
+
+        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
+            with patch.object(discovery, "SEARCH_QUERIES", {"engineering": ["developer"]}):
+                with patch.object(discovery, "LOCATIONS", ["Canada"]):
+                    with patch.object(discovery, "SITES", ["linkedin", "indeed"]):
+                        with patch.object(discovery, "MAX_WORKERS", 1):
+                            with patch.object(discovery, "init_db"):
+                                with patch.object(
+                                    discovery,
+                                    "get_linkedin_discovery_cooldown_until",
+                                    return_value="2026-08-04 06:00:00",
+                                ):
+                                    with patch.object(
+                                        discovery,
+                                        "is_linkedin_discovery_in_cooldown",
+                                        return_value=True,
+                                    ):
+                                        summary = discovery.scrape(enrich_pending=False)
+
+        self.assertEqual([call["site_name"] for call in scrape_calls], [["indeed"]])
+        self.assertTrue(summary["linkedin_discovery_cooldown_active"])
+        self.assertEqual(
+            summary["linkedin_discovery_cooldown_until"],
+            "2026-08-04 06:00:00",
+        )
 
     def test_scrape_single_treats_nan_feed_values_as_missing(self):
         jobs_df = FakeDf(
@@ -666,6 +749,62 @@ class Stage1Tests(unittest.TestCase):
             db.DB_PATH = old_db_path
             if os.path.exists(path):
                 os.remove(path)
+
+    def test_add_job_blocks_normalized_company_before_database_insert(self):
+        path = self.make_temp_db_path()
+        old_db_path = db.DB_PATH
+        try:
+            db.DB_PATH = path
+            db.init_db()
+
+            result = db.add_job(
+                {
+                    "title": "Junior Software Engineer",
+                    "company": "JobRight AI",
+                    "job_url": "https://example.test/jobs/blocked-company",
+                    "source": "linkedin",
+                },
+                company_blocklist=["jobright.ai"],
+            )
+
+            conn = sqlite3.connect(path)
+            count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            conn.close()
+
+            self.assertEqual(result, ("blocked", None))
+            self.assertEqual(count, 0)
+        finally:
+            db.DB_PATH = old_db_path
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_add_job_uses_saved_company_blocklist_by_default(self):
+        path = self.make_temp_db_path()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        old_db_path = db.DB_PATH
+        try:
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump({"company_blocklist": ["jobright.ai"]}, handle)
+            db.DB_PATH = path
+            db.init_db()
+
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                result = db.add_job(
+                    {
+                        "title": "Junior Software Engineer",
+                        "company": "JobRight.ai",
+                        "job_url": "https://example.test/jobs/default-blocklist",
+                        "source": "linkedin",
+                    }
+                )
+
+            self.assertEqual(result, ("blocked", None))
+        finally:
+            db.DB_PATH = old_db_path
+            for temp_path in (path, config_path):
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
 
     def test_scrape_can_trigger_post_scrape_enrichment(self):
         path = self.make_temp_db_path()

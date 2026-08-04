@@ -33,6 +33,17 @@ def test_jobs_table_keeps_id_on_one_line_and_truncates_long_titles():
     assert ".titleCell" in styles and "text-overflow: ellipsis" in styles
 
 
+def test_linkedin_listing_links_use_authenticated_collection_route():
+    helper = read("frontend/src/utils/jobLinks.ts")
+    jobs = read("frontend/src/pages/Jobs/index.tsx")
+    detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
+
+    assert "linkedin.com/jobs/collections/recommended/" in helper
+    assert "currentJobId" in helper
+    assert "linkedInListingUrl(job.job_url)" in jobs
+    assert "linkedInListingUrl(job.job_url)" in detail
+
+
 def test_dark_theme_controls_keep_readable_text_colors():
     filters = read("frontend/src/components/Filters/Filters.module.css")
 
@@ -87,6 +98,31 @@ def test_settings_exposes_c1_target_titles_and_experience_levels():
     assert "search_terms" not in control
     assert "co-op, and student searches" in settings
     assert "Level 1, L1, and role I/1 variants" in settings
+
+
+def test_settings_exposes_company_blocklist_as_a_pre_persistence_filter():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "Blocked companies" in settings
+    assert "never written to the database" in settings
+    assert "company_blocklist" in settings
+    assert "cfg.company_blocklist ?? []" in settings
+    assert "company_blocklist" in control
+    assert "company_blocklist" in mocks
+
+
+def test_settings_exposes_linkedin_discovery_rate_limit_cooldown():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "LinkedIn rate-limit cooldown" in settings
+    assert "first LinkedIn 429" in settings
+    assert "linkedin_discovery_cooldown_minutes" in settings
+    assert "linkedin_discovery_cooldown_minutes" in control
+    assert "linkedin_discovery_cooldown_minutes" in mocks
 
 
 def test_settings_exposes_c2_job_metadata_values():

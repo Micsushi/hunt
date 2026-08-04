@@ -10,6 +10,8 @@
     "amazon"
   ],
 
+  "company_blocklist": ["jobright.ai"],
+
   "title_blacklist": [
     "senior",
     "sr.",
@@ -30,9 +32,7 @@
 
   "experience_levels": [],
 
-  "locations": [
-    "Canada"
-  ],
+  "locations": ["Canada"],
 
   "sites": ["indeed", "linkedin"],
 
@@ -42,6 +42,7 @@
   "run_interval_seconds": 600,
   "enrich_after_scrape": true,
   "linkedin_fetch_description": true,
+  "linkedin_discovery_cooldown_minutes": 180,
   "enrichment_batch_limit": 25,
   "enrichment_timeout_ms": 45000,
   "enrichment_max_attempts": 4,

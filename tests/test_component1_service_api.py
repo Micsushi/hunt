@@ -1,5 +1,6 @@
 """Tests for the C1 hunter service HTTP API."""
 
+import json
 import os
 import sqlite3
 import sys
@@ -159,6 +160,7 @@ class HunterServiceApiTests(unittest.TestCase):
                     "last_error": "cookie expired",
                     "updated_at": response.json()["linkedin_auth"]["updated_at"],
                 },
+                "linkedin_discovery_cooldown": {"active": False, "until": None},
             },
         )
         self.assertIsNotNone(response.json()["linkedin_auth"]["updated_at"])
@@ -263,6 +265,74 @@ class HunterServiceApiTests(unittest.TestCase):
             response.json()["experience_levels"],
             ["internship", "junior", "new_grad"],
         )
+
+    def test_config_exposes_company_blocklist(self):
+        client = self._make_client()
+
+        with patch("hunter.config.COMPANY_BLOCKLIST", ["jobright.ai"]):
+            response = client.get("/config", headers=_auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["company_blocklist"], ["jobright.ai"])
+
+    def test_config_exposes_linkedin_discovery_cooldown_minutes(self):
+        client = self._make_client()
+
+        with patch("hunter.config.LINKEDIN_DISCOVERY_COOLDOWN_MINUTES", 180):
+            response = client.get("/config", headers=_auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["linkedin_discovery_cooldown_minutes"], 180)
+
+    def test_config_patch_persists_linkedin_discovery_cooldown_minutes(self):
+        client = self._make_client()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(config_path)
+        try:
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                response = client.patch(
+                    "/config",
+                    headers=_auth(),
+                    json={"linkedin_discovery_cooldown_minutes": 240},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.json()["updated_keys"],
+                ["linkedin_discovery_cooldown_minutes"],
+            )
+            persisted = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            self.assertEqual(persisted["linkedin_discovery_cooldown_minutes"], 240)
+        finally:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+
+    def test_config_patch_persists_company_blocklist(self):
+        client = self._make_client()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(config_path)
+        try:
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                response = client.patch(
+                    "/config",
+                    headers=_auth(),
+                    json={"company_blocklist": ["jobright.ai", "Acme Inc."]},
+                )
+                refreshed = client.get("/config", headers=_auth())
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["updated_keys"], ["company_blocklist"])
+            self.assertEqual(
+                refreshed.json()["company_blocklist"],
+                ["jobright.ai", "Acme Inc."],
+            )
+            persisted = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            self.assertEqual(persisted["company_blocklist"], ["jobright.ai", "Acme Inc."])
+        finally:
+            if os.path.exists(config_path):
+                os.remove(config_path)
 
     def test_enrich_rejects_duplicate_run_while_first_is_active(self):
         client = self._make_client()

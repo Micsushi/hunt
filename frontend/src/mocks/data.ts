@@ -224,6 +224,7 @@ export const MOCK_C1_CONFIG: C1Config = {
   config_file: 'hunt_user_config.json',
   config_file_exists: true,
   watchlist: ['OpenAI', 'Anthropic'],
+  company_blocklist: ['jobright.ai'],
   title_blacklist: ['Senior Director', 'VP of Engineering'],
   target_job_titles: {
     engineering: ['software engineer', 'full stack engineer'],
@@ -238,6 +239,7 @@ export const MOCK_C1_CONFIG: C1Config = {
   hours_old: 24,
   run_interval_seconds: 600,
   enrich_after_scrape: true,
+  linkedin_discovery_cooldown_minutes: 180,
   enrichment_batch_limit: 25,
   enrichment_timeout_ms: 45000,
   enrichment_max_attempts: 4,
