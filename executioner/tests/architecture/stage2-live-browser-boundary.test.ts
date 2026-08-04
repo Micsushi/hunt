@@ -112,6 +112,17 @@ test("factory wires the private hold without widening the public browser facade"
   assert.equal(publicFacade.includes("unsettledInspectionHold"), false);
 });
 
+test("production account access replaces the timed hold with protected monitor acknowledgement", async () => {
+  const composition = await readFile(
+    "src/composition/s2-account-access-runner.ts",
+    "utf8",
+  );
+  const factory = await source("factory.ts");
+  assert.match(composition, /waitForOperatorMonitorAcknowledgement/u);
+  assert.match(composition, /inspectionHold/u);
+  assert.match(factory, /options\.inspectionHold/u);
+});
+
 test("account-submit diagnostics remain fixed, value-free, and private", async () => {
   const accountPage = await source("private/playwright-account-page.ts");
   const publicFacade = await source("index.ts");

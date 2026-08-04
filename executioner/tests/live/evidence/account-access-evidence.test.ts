@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  readAccountAccessEvidence,
   writeAccountAccessEvidence,
   type AccountAccessAcceptanceV1,
 } from "../../../src/live/evidence/account-access-evidence.ts";
@@ -46,6 +47,7 @@ test("account-access evidence is atomically sealed with an exact value-free sche
     });
     const value = JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8"));
     assert.deepEqual(value, packet());
+    assert.deepEqual(readAccountAccessEvidence(root), packet());
     assert.deepEqual(readdirSync(root), ["acceptance.json"]);
   } finally {
     rmSync(root, { recursive: true, force: true });

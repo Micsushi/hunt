@@ -188,6 +188,8 @@ public static class HuntC3IsolatedRunner
     [DllImport("kernel32.dll", SetLastError = true)] public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint length, out uint returnedLength);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool CloseHandle(IntPtr value);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int kind);
 }
@@ -198,6 +200,65 @@ function Quote-WindowsArgument([string]$value) {
     $trailing = [regex]::Match($value, '\\+$')
     if ($trailing.Success) { $value += $trailing.Value }
     return '"' + $value + '"'
+}
+
+function Get-JobProcessIds([IntPtr]$jobHandle) {
+    $capacity = 256
+    $bytes = 8 + ($capacity * [IntPtr]::Size)
+    $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes)
+    try {
+        $returned = [uint32]0
+        if (-not [HuntC3IsolatedRunner]::QueryInformationJobObject($jobHandle, 3, $buffer, $bytes, [ref]$returned)) { throw 'job process query failed' }
+        $count = [Runtime.InteropServices.Marshal]::ReadInt32($buffer, 4)
+        if ($count -lt 0 -or $count -gt $capacity) { throw 'job process query invalid' }
+        $ids = [Collections.Generic.List[int]]::new()
+        for ($index = 0; $index -lt $count; $index++) {
+            $offset = 8 + ($index * [IntPtr]::Size)
+            $identifier = if ([IntPtr]::Size -eq 8) { [Runtime.InteropServices.Marshal]::ReadInt64($buffer, $offset) } else { [Runtime.InteropServices.Marshal]::ReadInt32($buffer, $offset) }
+            if ($identifier -gt 0 -and $identifier -le [int]::MaxValue) { [void]$ids.Add([int]$identifier) }
+        }
+        return $ids.ToArray()
+    } finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+    }
+}
+
+function Test-ProcessExited([int]$identifier) {
+    # SYNCHRONIZE is sufficient and avoids inspecting an unrelated process command line.
+    $handle = [HuntC3IsolatedRunner]::OpenProcess([uint32]0x00100000, $false, $identifier)
+    if ($handle -eq [IntPtr]::Zero) { return $true }
+    try { return [HuntC3IsolatedRunner]::WaitForSingleObject($handle, 5000) -eq 0 }
+    finally { [HuntC3IsolatedRunner]::CloseHandle($handle) | Out-Null }
+}
+
+function Write-ProcessAudit([string]$root, [int[]]$members, [int]$alive) {
+    if (-not [IO.Path]::IsPathRooted($root) -or -not [IO.Directory]::Exists($root)) { throw 'process audit root invalid' }
+    $target = [IO.Path]::Combine($root, 'process-audit.json')
+    if ([IO.File]::Exists($target)) { throw 'process audit already exists' }
+    $partial = [IO.Path]::Combine($root, '.process-audit-' + [guid]::NewGuid().ToString('N') + '.partial')
+    try {
+        $audit = [ordered]@{
+            schemaVersion = 1
+            evidenceRevision = 's2-windows-process-audit-v1'
+            status = if ($alive -eq 0) { 'pass' } else { 'failed' }
+            jobCloseApplied = $true
+            membersObservedBeforeClose = $members.Count
+            membersAliveAfterClose = $alive
+            checkedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+        }
+        [IO.File]::WriteAllText($partial, (($audit | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($partial, $target)
+    } finally {
+        if ([IO.File]::Exists($partial)) { [IO.File]::Delete($partial) }
+    }
+}
+
+$evidenceRoot = $null
+for ($index = 0; $index -lt ($runnerArguments.Count - 1); $index++) {
+    if ($runnerArguments[$index] -eq '--evidence-root') {
+        $evidenceRoot = [IO.Path]::GetFullPath($runnerArguments[$index + 1])
+        break
+    }
 }
 
 $desktopName = 'HuntC3_' + [guid]::NewGuid().ToString('N')
@@ -212,6 +273,8 @@ $attributeList = [IntPtr]::Zero
 $jobValue = [IntPtr]::Zero
 $created = $false
 $childExit = [uint32]125
+$jobMembers = @()
+$processAuditPassed = $true
 try {
     $limits = New-Object HuntC3IsolatedRunner+JOBOBJECT_EXTENDED_LIMIT_INFORMATION
     $basicLimits = New-Object HuntC3IsolatedRunner+JOBOBJECT_BASIC_LIMIT_INFORMATION
@@ -266,10 +329,22 @@ try {
     if ($jobValue -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($jobValue) }
     if ($processInfo.hThread -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($processInfo.hThread) | Out-Null }
     if ($processInfo.hProcess -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($processInfo.hProcess) | Out-Null }
-    # Closing the job is the authoritative cleanup for the runner and every browser descendant.
+    # Query exact job membership, close the job, then prove every observed member exited.
+    try { $jobMembers = @(Get-JobProcessIds $job) }
+    catch { $processAuditPassed = $false; $jobMembers = @() }
     [HuntC3IsolatedRunner]::CloseHandle($job) | Out-Null
+    $aliveAfterClose = 0
+    foreach ($identifier in $jobMembers) {
+        if (-not (Test-ProcessExited $identifier)) { $aliveAfterClose++ }
+    }
+    if ($aliveAfterClose -ne 0) { $processAuditPassed = $false }
     [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
+    if ($evidenceRoot -ne $null) {
+        try { Write-ProcessAudit $evidenceRoot $jobMembers $aliveAfterClose }
+        catch { $processAuditPassed = $false }
+    }
 }
+if (-not $processAuditPassed) { exit 136 }
 exit ([int]$childExit)
 }
 `.trim();

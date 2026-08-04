@@ -16,7 +16,9 @@
     "provision:s2-gmail": "node scripts/provision-s2-gmail.ts",
     "revoke:s2-gmail-grant": "node scripts/revoke-s2-gmail-grant.ts",
     "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts",
-    "live:s2": "node scripts/run-s2-isolated.ts"
+    "live:s2": "node scripts/run-s2-isolated.ts",
+    "ack:s2-monitor": "node scripts/ack-s2-monitor.ts",
+    "audit:s2": "node scripts/audit-s2-run.ts"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

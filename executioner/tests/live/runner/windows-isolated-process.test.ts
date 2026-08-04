@@ -25,6 +25,9 @@ test("Windows live runner owns an unswitched desktop and kill-on-close process j
     "ResumeThread",
     "WaitForSingleObject",
     "GetExitCodeProcess",
+    "QueryInformationJobObject",
+    "OpenProcess",
+    "process-audit.json",
   ]) assert.match(source, new RegExp(required, "u"), required);
   assert.doesNotMatch(source, /AssignProcessToJobObject/u);
   for (const forbidden of ["SwitchDesktop", "SetForegroundWindow", "connectOverCDP"]) {
@@ -55,6 +58,36 @@ test("Windows isolated runner round-trips trailing backslashes and attests its d
       attestationOutput,
     ], { runnerPath: fixture }), 0);
     assert.equal(await readFile(attestationOutput, "utf8"), "ok");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Windows isolated runner seals exact post-job descendant cleanup evidence", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hunt-c3-process-audit-"));
+  try {
+    const argvOutput = join(directory, "argv.json");
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "argv",
+      argvOutput,
+      "--evidence-root",
+      directory,
+    ], { runnerPath: fixture }), 0);
+    const audit = JSON.parse(await readFile(join(directory, "process-audit.json"), "utf8"));
+    assert.deepEqual(Object.keys(audit), [
+      "schemaVersion",
+      "evidenceRevision",
+      "status",
+      "jobCloseApplied",
+      "membersObservedBeforeClose",
+      "membersAliveAfterClose",
+      "checkedAt",
+    ]);
+    assert.equal(audit.status, "pass");
+    assert.equal(audit.jobCloseApplied, true);
+    assert.equal(audit.membersAliveAfterClose, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

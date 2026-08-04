@@ -22,7 +22,12 @@ export interface AtomicJsonEvidenceRequest {
   readonly value: unknown;
   readonly sensitiveValues: readonly string[];
   readonly label: string;
-  readonly fileName?: "acceptance.json" | "diagnostics.json";
+  readonly fileName?:
+    | "acceptance.json"
+    | "diagnostics.json"
+    | "monitor-ack.json"
+    | "process-audit.json"
+    | "completion-audit.json";
 }
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): void {

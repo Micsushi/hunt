@@ -1,3 +1,11 @@
+import {
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
+
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 export interface AccountAccessAcceptanceV1 {
@@ -35,6 +43,35 @@ export async function writeAccountAccessEvidence(
     sensitiveValues: request.sensitiveValues,
     label: "account-access",
   });
+}
+
+export function readAccountAccessEvidence(rootValue: string): AccountAccessAcceptanceV1 {
+  const denied = (): never => {
+    throw new Error("account-access evidence denied");
+  };
+  try {
+    if (
+      !isAbsolute(rootValue) ||
+      normalize(rootValue) !== rootValue ||
+      lstatSync(rootValue).isSymbolicLink() ||
+      !statSync(rootValue).isDirectory() ||
+      comparable(realpathSync.native(rootValue)) !== comparable(resolve(rootValue))
+    ) denied();
+    const root = realpathSync.native(rootValue);
+    const path = join(root, "acceptance.json");
+    if (
+      lstatSync(path).isSymbolicLink() ||
+      !statSync(path).isFile() ||
+      statSync(path).size < 2 ||
+      statSync(path).size > 16 * 1024 ||
+      comparable(realpathSync.native(path)) !== comparable(resolve(path))
+    ) denied();
+    return exactAcceptance(
+      JSON.parse(readFileSync(path, "utf8")) as AccountAccessAcceptanceV1,
+    );
+  } catch {
+    return denied();
+  }
 }
 
 function exactAcceptance(value: AccountAccessAcceptanceV1): AccountAccessAcceptanceV1 {
@@ -80,4 +117,9 @@ function exactArray(value: readonly string[], expected: readonly string[]): bool
 
 function denied(): never {
   throw new Error("account-access evidence denied");
+}
+
+function comparable(value: string): string {
+  const normalized = normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

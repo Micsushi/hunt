@@ -22,6 +22,7 @@ import { PlaywrightPersistentBrowserSession } from "./session.ts";
 export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
   readonly timeoutMs?: number;
+  readonly inspectionHold?: () => Promise<void>;
   readonly accountTrace?: (
     event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
       PlaywrightVerificationNavigationTraceEvent,
@@ -35,9 +36,10 @@ export function createPlaywrightPersistentBrowserSession(
     process.env.HUNT_C3_LIVE_INSPECTION_HOLD,
     options.timeoutMs,
   );
-  const inspectionHold = inspection.holdMs === 0
+  const holdAction = options.inspectionHold ?? (inspection.holdMs === 0
     ? undefined
-    : oneShot(() => delay(inspection.holdMs));
+    : () => delay(inspection.holdMs));
+  const inspectionHold = holdAction === undefined ? undefined : oneShot(holdAction);
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher(),

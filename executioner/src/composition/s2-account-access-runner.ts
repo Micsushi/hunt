@@ -27,6 +27,7 @@ import type {
 } from "../contracts/index.ts";
 import { writeAccountAccessEvidence } from "../live/evidence/account-access-evidence.ts";
 import { writeAccountAccessDiagnostics } from "../live/evidence/account-access-diagnostics.ts";
+import { waitForOperatorMonitorAcknowledgement } from "../live/evidence/operator-monitor-ack.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
@@ -83,6 +84,11 @@ export async function runStage2AccountAccessFromOwnerConfig(
     const browser = createPlaywrightPersistentBrowserSession({
       binding: admission.binding,
       accountTrace: valueFreeTrace,
+      inspectionHold: process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+        ? async () => {
+          await waitForOperatorMonitorAcknowledgement(owner.roots.evidence.path);
+        }
+        : undefined,
     });
     const navigator = browser as PlaywrightPersistentBrowserSession &
       AccountEntryNavigator;
