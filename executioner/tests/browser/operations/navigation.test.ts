@@ -40,6 +40,44 @@ test("rejects duplicate next controls as ambiguous", async () => {
   }
 });
 
+test("waits for a delayed post-click destination before rotating page coordinates", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  await context.route("https://fixture.invalid/**", async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      contentType: "text/html",
+      body: url.pathname === "/profile"
+        ? `<html data-hunt-page-id="page-profile"><body><button onclick="setTimeout(()=>location.href='/questionnaire',75)">Next</button></body></html>`
+        : `<html data-hunt-page-id="page-questionnaire"><body><h1>Questions</h1></body></html>`,
+    });
+  });
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("edededededededed"),
+    timeoutMs: 2_000,
+  });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: "https://fixture.invalid/profile",
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const request = admittedNavigation(started.value.sessionId, started.value.pageId);
+    assert.deepEqual(await provider.navigate(request, new AbortController().signal), {
+      ok: true,
+      value: {
+        operationId: request.snapshot.effect.operationId,
+        fromPageId: "page-profile",
+        pageId: "page-questionnaire",
+      },
+    });
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("closes and invalidates when navigation lands on a malformed page coordinate", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();

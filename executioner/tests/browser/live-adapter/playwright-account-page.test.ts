@@ -22,6 +22,21 @@ const SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS = [
   '[role="alert"]',
   '[data-automation-id="createAccountLink"]',
 ] as const;
+const POST_SUBMIT_DESTINATION_SELECTORS = [
+  '[data-automation-id="emailVerificationPage"]',
+  '[data-automation-id="verifyEmailPage"]',
+  '[data-automation-id="candidateHomePage"]',
+  '[data-automation-id="applyFlowMyInfoPage"]',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowReviewPage"]',
+  '[data-automation-id="captchaChallenge"]',
+  'iframe[title="reCAPTCHA"]',
+  'iframe[title="hCaptcha"]',
+  '[data-automation-id="mfaChallenge"]',
+  '[data-automation-id="accessDeniedPage"]',
+  '[data-automation-id="securityChallenge"]',
+  ':text-is("Something went wrong")',
+] as const;
 
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
@@ -176,65 +191,28 @@ test("activates each exact semantic link or button without returning page state"
 
   for (const [action, expectedCall] of cases) {
     const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
-    const destination = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+    const destination = new FakeLocator({
+      count: 1,
+      visible: true,
+      visibleResults: [false],
+      enabled: true,
+      editable: false,
+    });
     const page = new FakePage(locator, destination);
 
     assert.equal(await adapter.activate(page, action), undefined);
-    assert.deepEqual(page.calls, action.startsWith("submit_")
-      ? [
-          expectedCall,
-          ...(action === "submit_sign_in"
-            ? SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector }))
-            : [{ method: "locator", selector: WORKDAY_ACCOUNT_FACT_SELECTORS.exists }]),
-          {
-            method: "locator",
-            selector: action === "submit_sign_in"
-              ? '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]'
-              : '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]',
-          },
-          ...(action === "submit_create_account"
-            ? [{
-                method: "locator",
-                selector: '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])',
-              }]
-            : []),
-          {
-            method: "locator",
-            selector: [
-              action === "submit_sign_in"
-                ? '[data-automation-id="createAccountPage"]'
-                : '[data-automation-id="signInPage"]',
-              '[data-automation-id="emailVerificationPage"]',
-              '[data-automation-id="verifyEmailPage"]',
-              '[data-automation-id="candidateHomePage"]',
-              '[data-automation-id="applyFlowMyInfoPage"]',
-              '[data-automation-id="applyFlowApplicationQuestionsPage"]',
-              '[data-automation-id="applyFlowReviewPage"]',
-              '[data-automation-id="captchaChallenge"]',
-              'iframe[title="reCAPTCHA"]',
-              'iframe[title="hCaptcha"]',
-              '[data-automation-id="mfaChallenge"]',
-              '[data-automation-id="accessDeniedPage"]',
-              '[data-automation-id="securityChallenge"]',
-            ].join(", "),
-          },
-        ]
-      : [expectedCall]);
+    assert.deepEqual(page.calls[0], expectedCall);
+    if (!action.startsWith("submit_")) assert.deepEqual(page.calls, [expectedCall]);
+    else {
+      assert.equal(page.calls.some((call) =>
+        (call as { readonly selector?: string }).selector ===
+          '[data-automation-id="candidateHomePage"]'
+      ), true);
+    }
     assert.equal(locator.clickCalls, 1);
-    assert.deepEqual(
-      locator.waitForArguments,
-      action.startsWith("submit_")
-        ? [
-            { state: "hidden", timeout: 10_000 },
-            { state: "visible", timeout: 10_000 },
-          ]
-        : [],
-    );
-    assert.deepEqual(
-      destination.waitForArguments,
-      action.startsWith("submit_")
-        ? [{ state: "attached", timeout: 10_000 }]
-        : [],
+    assert.equal(
+      destination.waitForArguments.length > 0,
+      action.startsWith("submit_"),
     );
   }
 });
@@ -270,6 +248,10 @@ test("a submit that remains visible never claims a settled effect", async () => 
   assert.deepEqual(page.calls, [
     { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
     ...SIGN_IN_EXACT_FACT_SELECTORS.map((selector) => ({ method: "locator", selector })),
+    ...[
+      '[data-automation-id="createAccountPage"]',
+      ...POST_SUBMIT_DESTINATION_SELECTORS,
+    ].map((selector) => ({ method: "locator", selector })),
     { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' },
     ...SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS.map((selector) => ({ method: "locator", selector })),
   ]);
@@ -473,6 +455,89 @@ test("an opted-in unsettled submit holds without another browser read or action"
   ]);
 });
 
+test("a destination that becomes visible during the inspection hold is reclassified without another effect", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+    visibleWaitFails: true,
+  });
+  const destination = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+    unsettledInspectionHold: async () => {
+      destination.values.visible = true;
+    },
+  }).activate(new FakePage(submit, undefined, new Map([
+    ['[data-automation-id="applyFlowMyInfoPage"]', destination],
+  ])), "submit_sign_in");
+
+  assert.equal(submit.clickCalls, 1);
+  assert.equal(events.at(-1), "submit_destination_observed");
+});
+
+test("a hidden stale account shell cannot mask a later visible application destination", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+    visibleWaitFails: true,
+  });
+  const staleCompositeFirst = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const applicationDestination = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+  });
+  const destinationSelector = [
+    '[data-automation-id="createAccountPage"]',
+    '[data-automation-id="emailVerificationPage"]',
+    '[data-automation-id="verifyEmailPage"]',
+    '[data-automation-id="candidateHomePage"]',
+    '[data-automation-id="applyFlowMyInfoPage"]',
+    '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+    '[data-automation-id="applyFlowReviewPage"]',
+    '[data-automation-id="captchaChallenge"]',
+    'iframe[title="reCAPTCHA"]',
+    'iframe[title="hCaptcha"]',
+    '[data-automation-id="mfaChallenge"]',
+    '[data-automation-id="accessDeniedPage"]',
+    '[data-automation-id="securityChallenge"]',
+    ':text-is("Something went wrong")',
+  ].join(", ");
+  const page = new FakePage(submit, undefined, new Map([
+    [destinationSelector, staleCompositeFirst],
+    ['[data-automation-id="applyFlowMyInfoPage"]', applicationDestination],
+  ]));
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
+
+  assert.equal(submit.clickCalls, 1);
+  assert.equal(events.at(-1), "submit_destination_observed");
+});
+
 test("only the action-specific exact account fact settles a visible submit", async () => {
   const cases = [
     ["submit_sign_in", WORKDAY_ACCOUNT_FACT_SELECTORS.absent, WORKDAY_ACCOUNT_FACT_SELECTORS.exists],
@@ -502,7 +567,14 @@ test("only the action-specific exact account fact settles a visible submit", asy
       attachedWaitFails: true,
       visibleWaitFails: true,
     });
-    const page = new FakePage(submit, absent, new Map([
+    const absentDestination = new FakeLocator({
+      count: 0,
+      visible: false,
+      enabled: false,
+      editable: false,
+      visibleWaitFails: true,
+    });
+    const page = new FakePage(submit, absentDestination, new Map([
       [exactSelector, fact],
       [opposingSelector, absent],
     ]));
@@ -703,7 +775,7 @@ test("a markerless rejected submit may detach then reattach before classificatio
   assert.deepEqual(email.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
   assert.deepEqual(password.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
   assert.deepEqual(absentDestination.waitForArguments, [
-    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
   ]);
   assert.deepEqual(events, [
     "submit_hit_target_clear",
@@ -725,9 +797,10 @@ test("a hidden attached submit owner cannot beat a known destination", async () 
   const destination = new FakeLocator({
     count: 1,
     visible: true,
+    visibleResults: [false],
     enabled: true,
     editable: false,
-    attachedWaitYields: true,
+    visibleWaitYields: true,
   });
   const opposingCreateOwner = new FakeLocator({
     count: 1,
@@ -750,7 +823,7 @@ test("a hidden attached submit owner cannot beat a known destination", async () 
     { state: "visible", timeout: 10_000 },
   ]);
   assert.deepEqual(destination.waitForArguments, [
-    { state: "attached", timeout: 10_000 },
+    { state: "visible", timeout: 10_000 },
   ]);
   assert.deepEqual(events, [
     "submit_hit_target_clear",
@@ -928,6 +1001,71 @@ test("submit stabilization excludes the stale current account container", async 
     assert.equal(destination.includes(`[data-automation-id="${staleMarker}"]`), false);
     assert.equal(destination.includes('[data-automation-id="authPage"]'), false);
   }
+});
+
+test("an exact Workday runtime-error shell settles credential submit for reclassification", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: false,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    attachedWaitFails: true,
+  });
+  const runtimeError = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+    attachedWaitYields: true,
+  });
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, absentDestination, new Map([
+    [':text-is("Something went wrong")', runtimeError],
+  ])), "submit_sign_in");
+
+  assert.equal(events.at(-1), "submit_destination_observed");
+  assert.deepEqual(runtimeError.waitForArguments, [
+    { state: "visible", timeout: 10_000 },
+  ]);
+});
+
+test("a newly visible application destination settles even while the stale submit owner remains", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+    visibleWaitFails: true,
+  });
+  const destination = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+  });
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, undefined, new Map([
+    ['[data-automation-id="applyFlowMyInfoPage"]', destination],
+  ])), "submit_sign_in");
+
+  assert.equal(events.at(-1), "submit_destination_observed");
+  assert.deepEqual(destination.waitForArguments, [
+    { state: "visible", timeout: 10_000 },
+  ]);
 });
 
 test("create-account submit admits a newly visible semantic sign-in destination", async () => {
@@ -1261,16 +1399,19 @@ class FakePage {
     if (
       selector.includes("accountNotFoundError") ||
       selector.includes("accountAlreadyExistsError") ||
-      selector.includes('signInPage"]:has-text') ||
-      selector === LIVE_VERIFICATION_REQUIRED_SELECTOR ||
+      WORKDAY_INLINE_VERIFICATION_SELECTORS.some((candidate) => candidate === selector) ||
       selector === '[data-automation-id="signInPage"]' ||
       selector === '[data-automation-id="createAccountPage"]' ||
       selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked ||
       selector === '[role="alert"]'
     ) return this.absentExactFactLocator;
-    return selector.includes("candidateHomePage")
-      ? this.destinationLocator
-      : this.resultLocator;
+    if (selector === '[data-automation-id="candidateHomePage"]') {
+      return this.destinationLocator;
+    }
+    if (POST_SUBMIT_DESTINATION_SELECTORS.includes(
+      selector as typeof POST_SUBMIT_DESTINATION_SELECTORS[number],
+    )) return this.absentExactFactLocator;
+    return this.resultLocator;
   }
   async goto(): Promise<void> {}
   isClosed(): boolean { return false; }

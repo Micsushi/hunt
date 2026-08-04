@@ -107,6 +107,59 @@ test("an existing account signs in once and completes only after re-observation"
   assert.equal(navigator.calls.length, 0);
 });
 
+test("an uncertain sign-in effect recovers from an independently observed ready page", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: { ok: false, error: { code: "credential_effect_uncertain", retryable: false } },
+  });
+  const accountState = observer("existing_account", "application_ready");
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path, "reused_account");
+  assert.equal(accountState.calls.length, 2);
+  assert.equal(credential.calls.length, 1);
+});
+
+test("an uncertain sign-in effect preserves a maintenance page reached during transition", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: { ok: false, error: { code: "credential_effect_uncertain", retryable: false } },
+  });
+  const accountState = observer("existing_account", {
+    kind: "posting_unavailable",
+    reason: "maintenance",
+  });
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "blocked",
+      factualOutcome: {
+        source: "target_identity",
+        result: { kind: "posting_unavailable", reason: "maintenance" },
+      },
+    },
+  });
+  assert.equal(accountState.calls.length, 2);
+  assert.equal(credential.calls.length, 1);
+});
+
 test("verification consumes through one navigator call and never invalidates separately", async () => {
   const credential = createCredentialMutationAdapterFake();
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });

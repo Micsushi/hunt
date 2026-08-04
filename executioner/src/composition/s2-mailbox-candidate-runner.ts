@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
+import { dirname, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -23,6 +23,7 @@ import {
   type Stage2MailboxCandidateResult,
 } from "../live/runner/mailbox-candidate.ts";
 import { createBoundedMailboxPolicy, type SenderPolicyId } from "../mailbox/policy.ts";
+import { matchesStage2OwnerStorageBinding } from "./private/s2-owner-storage-binding.ts";
 import {
   GmailApiAuthExecutor,
   type GmailApprovedPolicyCapability,
@@ -113,8 +114,12 @@ export async function runStage2MailboxCandidateFromOwnerConfig(
     });
     if (!admission.ok) return failure(admission.error.code);
     const owner = value as RealRunOwnerInputsV1;
-    if (!inside(owner.roots.runtime.path, configPath) ||
-        !samePath(owner.roots.evidence.path, options.evidenceRoot)) {
+    if (!matchesStage2OwnerStorageBinding({
+      ownerConfigPath: configPath,
+      runtimeRoot: owner.roots.runtime.path,
+      ownerEvidenceRoot: owner.roots.evidence.path,
+      requestedEvidenceRoot: options.evidenceRoot,
+    })) {
       return failure("owner_config_invalid");
     }
     const secretStore = new WindowsDpapiSecretStore({
@@ -276,19 +281,6 @@ function opaqueSuffix(value: string, prefix: string): string {
     throw new TypeError("invalid opaque reference");
   }
   return suffix;
-}
-
-function inside(root: string, child: string): boolean {
-  const path = relative(realpathSync.native(root), realpathSync.native(child));
-  return path !== "" && path !== ".." && !path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(path);
-}
-
-function samePath(left: string, right: string): boolean {
-  try {
-    return comparable(realpathSync.native(left)) === comparable(realpathSync.native(right));
-  } catch {
-    return false;
-  }
 }
 
 function comparable(value: string): string {

@@ -12,7 +12,7 @@ export function bindApprovedTarget(
   try {
     const parsed = new URL(targetUrl);
     const host = parsed.hostname.toLowerCase();
-    const tenant = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,2}\.myworkdayjobs\.(?:com|invalid)$/u.exec(host);
+    const tenant = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,3}\.myworkdayjobs\.(?:com|invalid)$/u.exec(host);
     const segment = parsed.pathname.split("/").filter(Boolean).at(-1);
     const posting = /_([A-Za-z0-9-]{2,64})$/u.exec(segment ?? "");
     if (

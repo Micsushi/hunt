@@ -10,6 +10,7 @@ import type { PersistentPage } from "./types.ts";
 import {
   WORKDAY_ACCOUNT_FACT_SELECTORS,
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
+  WORKDAY_RUNTIME_ERROR_SELECTORS,
   WORKDAY_SIGN_IN_REJECTION_SELECTORS,
 } from "./workday-structural-catalog.ts";
 
@@ -103,6 +104,7 @@ const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="mfaChallenge"]',
   '[data-automation-id="accessDeniedPage"]',
   '[data-automation-id="securityChallenge"]',
+  WORKDAY_RUNTIME_ERROR_SELECTORS[0]!,
 ];
 
 export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter {
@@ -173,6 +175,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
       let postClickExactFactLocators: readonly Locator[] = [];
+      let postClickDestinationLocators: readonly Locator[] = [];
+      let postClickDestinations: readonly Promise<"transition">[] = [];
       let credentialsOrLockedCanSettle = false;
       let opposingSubmitOwner: Locator | undefined;
       let opposingSubmitOwnerCanSettle = false;
@@ -188,6 +192,15 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         ));
         postClickExactFactLocators = candidates.filter(
           (_candidate, index) => !visibleBeforeClick[index],
+        );
+        const destinationCandidates = postSubmitDestinationSelectors(action).map(
+          (selector) => playwrightPage(page).locator(selector),
+        );
+        const destinationVisibleBeforeClick = await Promise.all(
+          destinationCandidates.map((candidate) => exactVisible(candidate)),
+        );
+        postClickDestinationLocators = destinationCandidates.filter(
+          (_candidate, index) => !destinationVisibleBeforeClick[index],
         );
         credentialsOrLockedCanSettle = factSelectors.some((selector, index) =>
           selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked &&
@@ -221,6 +234,9 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       }
       if (submit) {
         this.#emit("submit_click_succeeded");
+        postClickDestinations = postClickDestinationLocators.map((destination) =>
+          waitForExactVisible(destination).then(() => "transition" as const)
+        );
         const exactFact = waitForExactFact(postClickExactFactLocators);
         let initial: "transition" | "exact_fact";
         try {
@@ -230,6 +246,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               timeout: 10_000,
             }).then(() => "transition" as const),
             exactFact,
+            ...postClickDestinations,
           ]);
         } catch {
           this.#emit("submit_control_remained_visible");
@@ -265,6 +282,14 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               // Diagnostic holding cannot alter the fixed browser outcome.
             }
             this.#emit("submit_inspection_hold_ended");
+            if (await anyExactVisible(postClickExactFactLocators)) {
+              this.#emit("submit_exact_fact_observed");
+              return;
+            }
+            if (await anyExactVisible(postClickDestinationLocators)) {
+              this.#emit("submit_destination_observed");
+              return;
+            }
           }
           throw new Error("submit effect did not settle");
         }
@@ -282,10 +307,9 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
             try {
               observed = await Promise.any([
                 exactFact,
-                playwrightPage(page).locator(postSubmitDestination(action))
-                  .first()
-                  .waitFor({ state: "attached", timeout: 10_000 })
-                  .then(() => "destination" as const),
+                ...postClickDestinations.map((destination) =>
+                  destination.then(() => "destination" as const)
+                ),
                 ...(opposingSubmitOwnerCanSettle
                   ? [
                       opposingSubmitOwner!.waitFor({
@@ -425,6 +449,13 @@ async function exactActionable(locator: Locator): Promise<boolean> {
   return await locator.count() === 1 && await locator.isVisible() && await locator.isEnabled();
 }
 
+async function anyExactVisible(locators: readonly Locator[]): Promise<boolean> {
+  for (const locator of locators) {
+    if (await exactVisible(locator)) return true;
+  }
+  return false;
+}
+
 async function inspectSubmitHitTarget(
   locator: Locator,
 ): Promise<PlaywrightAccountPageTraceEvent> {
@@ -499,13 +530,13 @@ function classifyClickFailure(error: unknown): PlaywrightAccountPageTraceEvent {
   return "submit_click_other";
 }
 
-function postSubmitDestination(
+function postSubmitDestinationSelectors(
   action: "submit_sign_in" | "submit_create_account",
-): string {
+): readonly string[] {
   const opposingAccountPage = action === "submit_sign_in"
     ? '[data-automation-id="createAccountPage"]'
     : '[data-automation-id="signInPage"]';
-  return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS].join(", ");
+  return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS];
 }
 
 async function waitForExactVisible(locator: Locator): Promise<void> {

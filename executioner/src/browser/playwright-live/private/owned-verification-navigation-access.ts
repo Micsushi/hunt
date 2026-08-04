@@ -211,7 +211,7 @@ function byteValue(
 
 function workdayHost(host: string, tenant: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(tenant) &&
-    new RegExp(`^${escapePattern(tenant)}\\.wd\\d{1,2}\\.myworkdayjobs\\.(?:com|invalid)$`, "u")
+    new RegExp(`^${escapePattern(tenant)}\\.wd\\d{1,3}\\.myworkdayjobs\\.(?:com|invalid)$`, "u")
       .test(host);
 }
 

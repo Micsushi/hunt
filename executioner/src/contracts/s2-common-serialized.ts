@@ -200,7 +200,7 @@ function s2FactualOutcome(value: unknown, path: string): void {
       oneOf(exactResult.dimension, ["host", "tenant", "posting"], `${resultPath}.dimension`);
     } else if (kind === "posting_unavailable") {
       const exactResult = exact(result, resultPath, ["kind", "reason"]);
-      oneOf(exactResult.reason, ["not_found", "closed", "removed", "unavailable"], `${resultPath}.reason`);
+      oneOf(exactResult.reason, ["not_found", "closed", "removed", "unavailable", "maintenance", "runtime_error"], `${resultPath}.reason`);
     } else exact(result, resultPath, ["kind"]);
     return;
   }

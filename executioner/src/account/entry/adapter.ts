@@ -248,10 +248,11 @@ async function mutateOnce(
           }
           emit(dependencies, "submit_activated");
           emit(dependencies, "post_submit_classify_started");
-          const reconciled = await classify(dependencies, request, signal);
+          const reconciled = await classifyAfterSubmit(dependencies, request, signal);
           if (!reconciled.ok || reconciled.value.kind !== "classified_account") {
             emit(dependencies, "post_submit_classify_failed");
-            throw new Error("credential effect could not be reconciled");
+            localFailure = failure("credential_effect_uncertain");
+            return accountStateResult(state.state, ["email", "password"]);
           }
           const factualResult = accountFactResult(reconciled.value.state);
           emit(dependencies, postSubmitEvent(
@@ -397,6 +398,32 @@ function classify(
     { schemaVersion: 1, sessionId: request.sessionId, target: request.target },
     signal,
   );
+}
+
+async function classifyAfterSubmit(
+  dependencies: AccountEntryDependencies,
+  request: CredentialMutationRequest,
+  signal: AbortSignal,
+) {
+  const attempts = 20;
+  let inspected = await classify(dependencies, request, signal);
+  for (let attempt = 1; attempt < attempts; attempt += 1) {
+    if (
+      !inspected.ok ||
+      inspected.value.kind === "classified_account" ||
+      inspected.value.kind === "target_mismatch" ||
+      inspected.value.kind === "posting_unavailable"
+    ) return inspected;
+    if (signal.aborted) return inspected;
+    emit(dependencies, "post_submit_classify_retry");
+    await (dependencies.postSubmitClassificationDelay ?? postSubmitClassificationDelay)();
+    inspected = await classify(dependencies, request, signal);
+  }
+  return inspected;
+}
+
+function postSubmitClassificationDelay(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 250));
 }
 
 function noSecretState(

@@ -396,7 +396,7 @@ function validReconcileResult(
   if (kind === "target_ambiguous") return exactKeys(value, ["kind"]);
   return kind === "posting_unavailable" &&
     exactKeys(value, ["kind", "reason"]) &&
-    ["not_found", "closed", "removed", "unavailable"].includes(
+    ["not_found", "closed", "removed", "unavailable", "maintenance", "runtime_error"].includes(
       (value as { readonly reason?: string }).reason ?? "",
     );
 }

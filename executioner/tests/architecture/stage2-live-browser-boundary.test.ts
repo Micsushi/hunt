@@ -118,9 +118,22 @@ test("production account access replaces the timed hold with protected monitor a
     "utf8",
   );
   const factory = await source("factory.ts");
+  assert.match(composition, /writeOperatorMonitorRequest/u);
+  assert.match(composition, /owner\.roots\.runtime\.path/u);
   assert.match(composition, /waitForOperatorMonitorAcknowledgement/u);
   assert.match(composition, /inspectionHold/u);
   assert.match(factory, /options\.inspectionHold/u);
+});
+
+test("full account verification uses the same target-bound monitor handshake", async () => {
+  const composition = await readFile(
+    "src/composition/s2-account-verified-runner.ts",
+    "utf8",
+  );
+  assert.match(composition, /writeOperatorMonitorRequest/u);
+  assert.match(composition, /waitForOperatorMonitorAcknowledgement/u);
+  assert.match(composition, /inspectionHold/u);
+  assert.match(composition, /owner\.roots\.runtime\.path/u);
 });
 
 test("account-submit diagnostics remain fixed, value-free, and private", async () => {

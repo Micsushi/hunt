@@ -97,7 +97,7 @@ export type PersistentBrowserReconcileResult =
   | { readonly kind: "target_ambiguous" }
   | {
       readonly kind: "posting_unavailable";
-      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
     };
 
 export type PersistentBrowserErrorCode =
@@ -298,6 +298,7 @@ export type VerificationArtifactErrorCode =
 export type VerificationNavigationErrorCode =
   | "verification_navigation_denied"
   | "verification_artifact_replayed"
+  | "recovery_checkpoint_unavailable"
   | "browser_timeout"
   | "browser_effect_uncertain";
 

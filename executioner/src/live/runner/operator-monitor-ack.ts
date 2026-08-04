@@ -4,6 +4,7 @@ export type OperatorMonitorAckClassification =
   | "application_ready"
   | "posting_unavailable"
   | "maintenance"
+  | "runtime_error"
   | "account_entry"
   | "verification_required"
   | "manual_action_required"
@@ -11,6 +12,7 @@ export type OperatorMonitorAckClassification =
 
 export interface OperatorMonitorAckArgs {
   readonly evidenceRoot: string;
+  readonly monitorRequestPath: string;
   readonly classification: OperatorMonitorAckClassification;
 }
 
@@ -18,6 +20,7 @@ const classifications: readonly string[] = [
   "application_ready",
   "posting_unavailable",
   "maintenance",
+  "runtime_error",
   "account_entry",
   "verification_required",
   "manual_action_required",
@@ -27,7 +30,7 @@ const classifications: readonly string[] = [
 export function parseOperatorMonitorAckArgs(
   values: readonly string[],
 ): OperatorMonitorAckArgs {
-  if (values.length !== 4) invalid();
+  if (values.length !== 6) invalid();
   const parsed = new Map<string, string>();
   for (let index = 0; index < values.length; index += 2) {
     const name = values[index];
@@ -35,22 +38,27 @@ export function parseOperatorMonitorAckArgs(
     if (
       name === undefined ||
       value === undefined ||
-      !["--evidence-root", "--classification"].includes(name) ||
+      !["--evidence-root", "--monitor-request", "--classification"].includes(name) ||
       parsed.has(name)
     ) invalid();
     parsed.set(name, value);
   }
   const evidenceRoot = parsed.get("--evidence-root");
+  const monitorRequestPath = parsed.get("--monitor-request");
   const classification = parsed.get("--classification");
   if (
     evidenceRoot === undefined ||
+    monitorRequestPath === undefined ||
     classification === undefined ||
     !isAbsolute(evidenceRoot) ||
     normalize(evidenceRoot) !== evidenceRoot ||
+    !isAbsolute(monitorRequestPath) ||
+    normalize(monitorRequestPath) !== monitorRequestPath ||
     !classifications.includes(classification)
   ) invalid();
   return Object.freeze({
     evidenceRoot,
+    monitorRequestPath,
     classification: classification as OperatorMonitorAckClassification,
   });
 }

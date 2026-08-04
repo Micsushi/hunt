@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   GmailProviderFailure,
   type GmailMessageTraceEvent,
@@ -37,6 +39,10 @@ export interface GmailQueryWindow {
   readonly notAfter: string;
 }
 
+export interface QueriedGmailMessage extends ParsedGmailMessage {
+  readonly replayCoordinate: Uint8Array;
+}
+
 export class GmailHttpClient {
   readonly #baseUrl: URL;
   readonly #trace: ((event: GmailHttpClientTraceEvent) => void) | undefined;
@@ -53,7 +59,7 @@ export class GmailHttpClient {
     authority: GmailQueryAuthority,
     window: GmailQueryWindow,
     signal: AbortSignal,
-  ): Promise<readonly ParsedGmailMessage[]> {
+  ): Promise<readonly QueriedGmailMessage[]> {
     const listUrl = new URL(`${this.#baseUrl.toString()}/messages`);
     listUrl.searchParams.set("maxResults", "2");
     listUrl.searchParams.set(
@@ -76,7 +82,7 @@ export class GmailHttpClient {
       this.#emit("gmail_list_parse_failed");
       throw error;
     }
-    const output: ParsedGmailMessage[] = [];
+    const output: QueriedGmailMessage[] = [];
     for (const id of ids) {
       if (signal.aborted) throw new GmailProviderFailure("operation_cancelled");
       const messageUrl = new URL(
@@ -95,7 +101,12 @@ export class GmailHttpClient {
             ? "gmail_message_parse_skipped"
             : "gmail_message_parse_succeeded",
         );
-        if (parsed !== null) output.push(parsed);
+        if (parsed !== null) {
+          output.push({
+            ...parsed,
+            replayCoordinate: opaqueReplayCoordinate(id),
+          });
+        }
       } catch (error) {
         this.#emit("gmail_message_parse_failed");
         throw error;
@@ -153,6 +164,15 @@ export class GmailHttpClient {
       );
     }
   }
+}
+
+function opaqueReplayCoordinate(providerIdentity: string): Uint8Array {
+  return Uint8Array.from(
+    createHash("sha256")
+      .update("hunt-gmail-provider-record-v1\u0000", "utf8")
+      .update(providerIdentity, "utf8")
+      .digest(),
+  );
 }
 
 async function readBoundedResponse(

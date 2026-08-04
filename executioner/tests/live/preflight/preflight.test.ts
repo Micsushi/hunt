@@ -191,6 +191,20 @@ test("accepts the frozen sign-in mode without widening account policy", () => {
   }
 });
 
+test("admits three-digit Workday shard hosts used by current postings", () => {
+  const record = fixture();
+  try {
+    const target = {
+      ...record.input.target,
+      url: "https://acme.wd108.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      host: "acme.wd108.myworkdayjobs.invalid",
+    };
+    assert.equal(admit({ ...record.input, target }, record).ok, true);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
+  }
+});
+
 test("admits an expired owner only for scope-bound Gmail grant revocation", () => {
   const record = fixture();
   try {
@@ -421,7 +435,8 @@ test("the operator runbook keeps preflight dry and owner inputs external", () =>
     "does not launch a browser, contact Gmail or Workday, or resolve a secret",
     "windows-dpapi-current-user-v1",
     "gmail-api-v1",
-    "24-hour crash-recovery lease",
+    "approval-bounded live authority",
+    "no more than 30 minutes",
     "30-day retention ceiling",
     "Never copy the owner input file into the repository",
     "current user or SYSTEM",

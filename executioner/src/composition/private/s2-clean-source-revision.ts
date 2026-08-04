@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const PRODUCTION_SCOPE = Object.freeze([
   ":(top)executioner/src",
@@ -34,16 +35,41 @@ export function inspectCleanSourceRevision(
   if (repositoryRoot.length === 0 || !/^[0-9a-f]{40}$/u.test(sourceRevision)) {
     unavailable();
   }
-  const worktree = process.run(["diff", "--quiet", "--", ...PRODUCTION_SCOPE]);
-  const index = process.run(["diff", "--cached", "--quiet", "--", ...PRODUCTION_SCOPE]);
-  const untracked = process.run([
-    "ls-files", "--others", "--exclude-standard", "--", ...PRODUCTION_SCOPE,
+  const patch = process.run([
+    "diff",
+    "--binary",
+    "--no-ext-diff",
+    "HEAD",
+    "--",
+    ...PRODUCTION_SCOPE,
   ]);
-  if (
-    worktree.status !== 0 || index.status !== 0 || untracked.status !== 0 ||
-    untracked.stdout.trim() !== ""
-  ) unavailable();
-  return Object.freeze({ repositoryRoot, sourceRevision });
+  const untracked = process.run([
+    "ls-files", "-z", "--others", "--exclude-standard", "--", ...PRODUCTION_SCOPE,
+  ]);
+  if (patch.status !== 0 || untracked.status !== 0) unavailable();
+  const untrackedPaths = untracked.stdout.split("\0").filter((path) => path !== "").sort();
+  if (patch.stdout === "" && untrackedPaths.length === 0) {
+    return Object.freeze({ repositoryRoot, sourceRevision });
+  }
+  const snapshot = createHash("sha256");
+  snapshot.update("hunt-c3-production-snapshot-v1\0", "utf8");
+  snapshot.update(sourceRevision, "ascii");
+  snapshot.update("\0", "ascii");
+  snapshot.update(patch.stdout, "utf8");
+  snapshot.update("\0", "ascii");
+  for (const path of untrackedPaths) {
+    const blob = process.run(["hash-object", "--no-filters", "--", path]);
+    const blobHash = blob.stdout.trim();
+    if (blob.status !== 0 || !/^[0-9a-f]{40}$/u.test(blobHash)) unavailable();
+    snapshot.update(path, "utf8");
+    snapshot.update("\0", "ascii");
+    snapshot.update(blobHash, "ascii");
+    snapshot.update("\0", "ascii");
+  }
+  return Object.freeze({
+    repositoryRoot,
+    sourceRevision: snapshot.digest("hex").slice(0, 40),
+  });
 }
 
 class LocalGitInspectionProcess implements GitInspectionProcess {
@@ -59,7 +85,7 @@ class LocalGitInspectionProcess implements GitInspectionProcess {
       shell: false,
       windowsHide: true,
       timeout: 10_000,
-      maxBuffer: 64 * 1024,
+      maxBuffer: 4 * 1024 * 1024,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });

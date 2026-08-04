@@ -287,7 +287,18 @@ export class PlaywrightBrowserSession implements BrowserSession {
       const count = await matches.count();
       if (count !== 1) return count === 0 ? "invalid" as const : "ambiguous" as const;
       effectStarted = true;
-      return clickNext(active.page, Math.min(500, this.#timeoutMs));
+      const applied = await clickNext(active.page, Math.min(500, this.#timeoutMs));
+      if (applied !== "applied") return applied;
+      await active.page.waitForFunction(
+        (fromPageId) =>
+          document.documentElement.getAttribute("data-hunt-page-id") !== fromPageId,
+        snapshot.effect.pageId,
+        { timeout: 0 },
+      );
+      return Object.freeze({
+        kind: "applied" as const,
+        pageId: await currentPageId(active.page),
+      });
     })();
     const result = await bounded(action, signal, this.#timeoutMs);
     if (result.kind === "cancelled" || result.kind === "timeout" || result.kind === "error") {
@@ -298,16 +309,11 @@ export class PlaywrightBrowserSession implements BrowserSession {
       if (result.kind === "cancelled") return cancelled();
       return failure(result.kind === "timeout" ? "browser_timeout" : "browser_target_invalid");
     }
-    if (result.value !== "applied") {
+    if (typeof result.value === "string") {
       return failure(result.value === "ambiguous" ? "browser_target_ambiguous" : "browser_target_invalid");
     }
     const fromPageId = snapshot.effect.pageId;
-    try {
-      this.#pageId = await currentPageId(active.page);
-    } catch {
-      await this.#invalidateOwnedSession();
-      return failure("browser_effect_uncertain");
-    }
+    this.#pageId = result.value.pageId;
     this.#targets.clear();
     return { ok: true, value: { operationId, fromPageId, pageId: this.#pageId } };
   }

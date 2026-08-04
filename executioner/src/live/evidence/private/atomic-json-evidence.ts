@@ -27,7 +27,9 @@ export interface AtomicJsonEvidenceRequest {
     | "diagnostics.json"
     | "monitor-ack.json"
     | "process-audit.json"
-    | "completion-audit.json";
+    | "completion-audit.json"
+    | "storage-manifest.json"
+    | "disposal-audit.json";
 }
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): void {

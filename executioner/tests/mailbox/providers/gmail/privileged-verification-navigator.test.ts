@@ -39,7 +39,10 @@ function navigationRequest() {
 function harness(options: {
   readonly browserResult?: LivePortResult<
     VerificationNavigationResult,
-    Exclude<VerificationNavigationErrorCode, "verification_artifact_replayed">
+    Exclude<
+      VerificationNavigationErrorCode,
+      "verification_artifact_replayed" | "recovery_checkpoint_unavailable"
+    >
   >;
   readonly policyHost?: string;
   readonly policyTenant?: string;
@@ -62,6 +65,7 @@ function harness(options: {
     metadata: liveFixtures.verificationArtifact,
     operationId: liveFixtures.operationIds.verificationNavigation,
     target,
+    replayCoordinate: new Uint8Array(32).fill(41),
     policy: { host: boundHost, tenant: boundTenant },
   }]);
   assert.equal(pending.commit(liveFixtures.verificationArtifact.handleId), true);
@@ -108,7 +112,11 @@ function harness(options: {
     },
   };
   const navigator = createGmailPrivilegedVerificationNavigator({
-    consumer: new GmailAtomicArtifactConsumer({ rawVault, artifacts }),
+    consumer: new GmailAtomicArtifactConsumer({
+      rawVault,
+      artifacts,
+      replayGuard: { claim: async () => "claimed" },
+    }),
     approvedPolicy,
     browser,
   });

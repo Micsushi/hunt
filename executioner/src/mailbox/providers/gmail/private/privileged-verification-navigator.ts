@@ -12,7 +12,7 @@ import { GmailAtomicArtifactConsumer } from "./atomic-artifact-consumer.ts";
 
 type BrowserNavigationErrorCode = Exclude<
   VerificationNavigationErrorCode,
-  "verification_artifact_replayed"
+  "verification_artifact_replayed" | "recovery_checkpoint_unavailable"
 >;
 
 export interface ByteScopedVerificationBrowserRequest {

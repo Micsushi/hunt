@@ -380,7 +380,7 @@ function matched(traits: readonly string[]) {
 type TargetFact =
   | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
   | { readonly kind: "target_ambiguous" }
-  | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" };
+  | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" };
 
 function targetObservation(target: TargetFact) {
   return { ownership: "owned" as const, target, snapshot: matched([]).snapshot };

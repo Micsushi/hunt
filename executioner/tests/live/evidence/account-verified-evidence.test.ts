@@ -9,7 +9,7 @@ import { writeAccountVerifiedEvidence } from "../../../src/live/evidence/account
 function packet() {
   return {
     schemaVersion: 1 as const,
-    evidenceRevision: "s2-account-verified-acceptance-v1" as const,
+    evidenceRevision: "s2-account-verified-acceptance-v2" as const,
     checkpoint: "account_verified" as const,
     status: "passed" as const,
     sourceRevision: "0123456789abcdef0123456789abcdef01234567",
@@ -19,6 +19,7 @@ function packet() {
     targetHandleId: "target_ref_abcdefghijklmnop",
     accountState: "application_ready" as const,
     independentlyObservedVerifiedState: true as const,
+    verificationProof: "gmail_candidate_consumed" as const,
     provider: "gmail-api-v1" as const,
     consumedCandidateCount: 1 as const,
     messageBodyRetained: false as const,
@@ -43,6 +44,7 @@ test("account-verified evidence rejects widened, unverified, and sensitive packe
   const cases = [
     { ...packet(), independentlyObservedVerifiedState: false },
     { ...packet(), consumedCandidateCount: 0 },
+    { ...packet(), verificationProof: "credential_sign_in", provider: "gmail-api-v1", consumedCandidateCount: 0 },
     { ...packet(), submitActivated: true },
     { ...packet(), rawUrl: "https://private.invalid/token" },
   ];
@@ -60,5 +62,21 @@ test("account-verified evidence rejects widened, unverified, and sensitive packe
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("account-verified evidence admits the exact credential sign-in proof tuple", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-sign-in-"));
+  try {
+    const acceptance = {
+      ...packet(),
+      verificationProof: "credential_sign_in" as const,
+      provider: "workday-auth" as const,
+      consumedCandidateCount: 0 as const,
+    };
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: [] });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

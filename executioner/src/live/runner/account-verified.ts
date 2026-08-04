@@ -14,7 +14,7 @@ export interface Stage2AccountVerifiedInput {
 
 export interface AccountVerifiedAcceptance {
   readonly schemaVersion: 1;
-  readonly evidenceRevision: "s2-account-verified-acceptance-v1";
+  readonly evidenceRevision: "s2-account-verified-acceptance-v2";
   readonly checkpoint: "account_verified";
   readonly status: "passed";
   readonly sourceRevision: string;
@@ -24,8 +24,9 @@ export interface AccountVerifiedAcceptance {
   readonly targetHandleId: string;
   readonly accountState: "application_ready";
   readonly independentlyObservedVerifiedState: true;
-  readonly provider: "gmail-api-v1";
-  readonly consumedCandidateCount: 1;
+  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
+  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly consumedCandidateCount: 0 | 1;
   readonly messageBodyRetained: false;
   readonly submitActivated: false;
   readonly privacyScan: "pass";
@@ -74,7 +75,7 @@ export type AccountVerifiedFact =
   | { readonly kind: "target_ambiguous" }
   | {
       readonly kind: "posting_unavailable";
-      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
     }
   | {
       readonly kind: "manual_intervention";
@@ -97,13 +98,14 @@ export async function runStage2AccountVerified(
   if (lifecycle.cleanup !== "pass") return failure("account_proof_invalid");
   const factual = factualResult(lifecycle.value);
   if (factual !== null) return failure(factual.code, factual.fact);
-  if (!exactVerified(lifecycle.value)) {
+  const proof = exactVerified(lifecycle.value);
+  if (proof === null) {
     return failure("account_proof_invalid");
   }
 
   const acceptance = Object.freeze({
     schemaVersion: 1 as const,
-    evidenceRevision: "s2-account-verified-acceptance-v1" as const,
+    evidenceRevision: "s2-account-verified-acceptance-v2" as const,
     checkpoint: "account_verified" as const,
     status: "passed" as const,
     sourceRevision: input.sourceRevision,
@@ -113,8 +115,9 @@ export async function runStage2AccountVerified(
     targetHandleId: input.targetHandleId,
     accountState: "application_ready" as const,
     independentlyObservedVerifiedState: true as const,
-    provider: "gmail-api-v1" as const,
-    consumedCandidateCount: 1 as const,
+    verificationProof: proof.verificationProof,
+    provider: proof.provider,
+    consumedCandidateCount: proof.consumedCandidateCount,
     messageBodyRetained: false as const,
     submitActivated: false as const,
     privacyScan: "pass" as const,
@@ -128,17 +131,39 @@ export async function runStage2AccountVerified(
   }
 }
 
-function exactVerified(value: unknown): value is AccountVerifiedLifecycleSuccess {
-  if (!record(value)) return false;
+function exactVerified(value: unknown): Pick<
+  AccountVerifiedAcceptance,
+  "verificationProof" | "provider" | "consumedCandidateCount"
+> | null {
+  if (!record(value)) return null;
   const keys = Object.keys(value);
-  return keys.length === 5 &&
+  if (!(keys.length === 5 &&
     keys[0] === "kind" && keys[1] === "path" &&
     keys[2] === "independentlyObserved" &&
     keys[3] === "verificationCandidateCount" &&
     keys[4] === "verificationConsumed" &&
-    value.kind === "account_ready" && value.path === "verified_account" &&
-    value.independentlyObserved === true &&
-    value.verificationCandidateCount === 1 && value.verificationConsumed === true;
+    value.kind === "account_ready" && value.independentlyObserved === true)) return null;
+  if (
+    value.path === "verified_account" &&
+    value.verificationCandidateCount === 1 && value.verificationConsumed === true
+  ) {
+    return Object.freeze({
+      verificationProof: "gmail_candidate_consumed",
+      provider: "gmail-api-v1",
+      consumedCandidateCount: 1,
+    });
+  }
+  if (
+    value.path === "reused_account" &&
+    value.verificationCandidateCount === 0 && value.verificationConsumed === false
+  ) {
+    return Object.freeze({
+      verificationProof: "credential_sign_in",
+      provider: "workday-auth",
+      consumedCandidateCount: 0,
+    });
+  }
+  return null;
 }
 
 function factualResult(

@@ -145,6 +145,46 @@ test("emits only value-free parser stage diagnostics", async () => {
     await close(server);
   }
 });
+
+test("derives a stable opaque replay coordinate from the provider message identity", async () => {
+  let providerIdentity = "provider-record-one";
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    response.setHeader("content-type", "application/json");
+    if (requestUrl.pathname.endsWith("/messages")) {
+      response.end(JSON.stringify({ messages: [{ id: providerIdentity }] }));
+      return;
+    }
+    response.end(JSON.stringify({
+      internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
+      payload: {
+        headers: [
+          { name: "From", value: authority.senderAddress },
+          { name: "To", value: authority.recipientAddress },
+        ],
+        body: {
+          data: Buffer.from(
+            "https://tenant.example.invalid/verify?token=synthetic-private",
+          ).toString("base64url"),
+        },
+      },
+    }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    const client = new GmailHttpClient({ baseUrl, allowLoopbackHttp: true });
+    const first = (await client.query(authority, window, new AbortController().signal))[0]!;
+    const second = (await client.query(authority, window, new AbortController().signal))[0]!;
+    providerIdentity = "provider-record-two";
+    const different = (await client.query(authority, window, new AbortController().signal))[0]!;
+    assert.equal(first.replayCoordinate.byteLength, 32);
+    assert.deepEqual(first.replayCoordinate, second.replayCoordinate);
+    assert.notDeepEqual(first.replayCoordinate, different.replayCoordinate);
+    assert.doesNotMatch(JSON.stringify(first), /provider-record|synthetic-private/u);
+  } finally {
+    await close(server);
+  }
+});
 test("rejects oversized and malformed responses without retaining diagnostics", async () => {
   const payloads = [
     `{"padding":"${"x".repeat(1_048_576)}"}`,

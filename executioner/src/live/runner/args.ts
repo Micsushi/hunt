@@ -1,4 +1,6 @@
-import { isAbsolute, normalize } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+
+const RUN_KEY = /^run_\d{8}_[a-z0-9]{16}$/u;
 
 export type Stage2AcceptanceCheckpoint =
   | "account_access"
@@ -37,9 +39,27 @@ export function parseStage2AcceptanceArgs(
       checkpoint !== "mailbox_candidate" &&
       checkpoint !== "account_verified") ||
     !canonicalAbsolute(configPath) ||
-    !canonicalAbsolute(evidenceRoot)
+    !canonicalAbsolute(evidenceRoot) ||
+    !separatedStorageLayout(configPath, evidenceRoot)
   ) invalid();
   return Object.freeze({ checkpoint, configPath, evidenceRoot });
+}
+
+function separatedStorageLayout(configPath: string, evidenceRoot: string): boolean {
+  if (basename(configPath) !== "owner-input.json") return false;
+  const transientRun = dirname(configPath);
+  const runKey = basename(transientRun);
+  const transientParent = dirname(transientRun);
+  if (!RUN_KEY.test(runKey) || basename(transientParent) !== "transient") return false;
+  const storageRoot = dirname(transientParent);
+  return comparable(evidenceRoot) === comparable(
+    join(storageRoot, "retained", runKey, "evidence"),
+  );
+}
+
+function comparable(value: string): string {
+  const normalized = normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function canonicalAbsolute(value: string): boolean {

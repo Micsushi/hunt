@@ -35,7 +35,7 @@ export type AccountEntryAdvanceResult =
   | { readonly kind: "target_ambiguous" }
   | {
       readonly kind: "posting_unavailable";
-      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
     };
 
 export type AccountEntryAdvancePortResult = LivePortResult<

@@ -63,7 +63,7 @@ export interface AccountEntryNavigator {
     readonly kind: "target_ambiguous";
   } | {
     readonly kind: "posting_unavailable";
-    readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+    readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
   }, PersistentBrowserErrorCode>>;
 }
 
@@ -72,7 +72,7 @@ export type AccountAccessTargetFact =
   | { readonly kind: "target_ambiguous" }
   | {
       readonly kind: "posting_unavailable";
-      readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+      readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
     };
 
 export interface AccountAccessAcceptance {
@@ -88,7 +88,9 @@ export interface AccountAccessAcceptance {
   readonly verifiedTargetDimensions: readonly ["host", "tenant", "posting"];
   readonly accountMode: "fresh_create" | "sign_in";
   readonly accountOutcome: "verification_required" | "application_ready";
-  readonly independentlyVerifiedFields: readonly ["email", "password"];
+  readonly independentlyVerifiedFields:
+    | readonly []
+    | readonly ["email", "password"];
   readonly submitActivated: false;
   readonly privacyScan: "pass";
   readonly cleanup: "pass";
@@ -287,13 +289,14 @@ async function enterAndProve(
     );
     return failure(mutated.error.code);
   }
-  if (
-    mutated.value.attemptedFields.length !== 2 ||
-    mutated.value.attemptedFields[0] !== "email" ||
-    mutated.value.attemptedFields[1] !== "password" ||
-    (mutated.value.kind !== "verification_required" &&
-      mutated.value.kind !== "application_ready")
-  ) {
+  const fullCredentialSet = mutated.value.attemptedFields.length === 2 &&
+    mutated.value.attemptedFields[0] === "email" &&
+    mutated.value.attemptedFields[1] === "password";
+  const directApplicationAccess = mutated.value.kind === "application_ready" &&
+    mutated.value.attemptedFields.length === 0;
+  if ((!fullCredentialSet && !directApplicationAccess) ||
+      (mutated.value.kind !== "verification_required" &&
+        mutated.value.kind !== "application_ready")) {
     recorder.record(
       "S2_CREDENTIAL_MUTATION",
       "mutate",
@@ -324,7 +327,9 @@ async function enterAndProve(
     verifiedTargetDimensions: Object.freeze(["host", "tenant", "posting"] as const),
     accountMode: input.accountMode,
     accountOutcome,
-    independentlyVerifiedFields: Object.freeze(["email", "password"] as const),
+    independentlyVerifiedFields: directApplicationAccess
+      ? Object.freeze([] as const)
+      : Object.freeze(["email", "password"] as const),
     submitActivated: false as const,
     privacyScan: "pass" as const,
     cleanup: "pass" as const,

@@ -151,10 +151,14 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
                   ? "expired"
                   : "available",
               };
-              return { candidate, target: message.verificationTarget };
+              return {
+                candidate,
+                target: message.verificationTarget,
+                replayCoordinate: message.replayCoordinate,
+              };
             });
             const pending = this.#options.rawVault.stage(
-              candidates.map(({ candidate, target }) => ({
+              candidates.map(({ candidate, target, replayCoordinate }) => ({
                 metadata: {
                   schemaVersion: 1,
                   handleId: candidate.verificationHandle,
@@ -168,6 +172,7 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
                 },
                 operationId: this.#options.binding.verificationOperationId,
                 target,
+                replayCoordinate,
                 policy: {
                   host: Uint8Array.from(approvedPolicy.host),
                   tenant: Uint8Array.from(approvedPolicy.tenant),

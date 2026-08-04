@@ -166,6 +166,36 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
   assert.equal(fixture.classificationCalls, 2);
 });
 
+test("post-submit classification retries transient page states without repeating credentials", async () => {
+  const fixture = accountFixture(["existing_account", "application_ready"]);
+  const observations: ClassifiedAccountObservation[] = [
+    stateObservation("existing_account"),
+    { kind: "classification_stopped" },
+    { kind: "target_ambiguous" },
+    stateObservation("application_ready"),
+  ];
+  let classificationCalls = 0;
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => {},
+    classifiedAccount: {
+      inspectClassifiedAccount: async () => ({
+        ok: true,
+        value: observations[Math.min(classificationCalls++, observations.length - 1)]!,
+      }),
+    },
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "application_ready", attemptedFields: ["email", "password"] },
+  });
+  assert.equal(classificationCalls, 4);
+  assert.equal(fixture.operations.filter((operation) =>
+    operation === "activate:submit_sign_in"
+  ).length, 1);
+});
+
 test("value-free trace reports only fixed account-stage identifiers", async () => {
   const fixture = accountFixture(["existing_account", "verification_required"]);
   const events: string[] = [];

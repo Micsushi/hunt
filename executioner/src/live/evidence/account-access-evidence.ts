@@ -21,7 +21,9 @@ export interface AccountAccessAcceptanceV1 {
   readonly verifiedTargetDimensions: readonly ["host", "tenant", "posting"];
   readonly accountMode: "fresh_create" | "sign_in";
   readonly accountOutcome: "verification_required" | "application_ready";
-  readonly independentlyVerifiedFields: readonly ["email", "password"];
+  readonly independentlyVerifiedFields:
+    | readonly []
+    | readonly ["email", "password"];
   /** Final job-application Submit only; account authentication may be activated. */
   readonly submitActivated: false;
   readonly privacyScan: "pass";
@@ -98,7 +100,7 @@ function exactAcceptance(value: AccountAccessAcceptanceV1): AccountAccessAccepta
     (value.accountMode !== "fresh_create" && value.accountMode !== "sign_in") ||
     (value.accountOutcome !== "verification_required" &&
       value.accountOutcome !== "application_ready") ||
-    !exactArray(value.independentlyVerifiedFields, ["email", "password"]) ||
+    !validVerifiedFields(value) ||
     value.submitActivated !== false ||
     value.privacyScan !== "pass" ||
     value.cleanup !== "pass"
@@ -106,8 +108,16 @@ function exactAcceptance(value: AccountAccessAcceptanceV1): AccountAccessAccepta
   return Object.freeze({
     ...value,
     verifiedTargetDimensions: Object.freeze(["host", "tenant", "posting"] as const),
-    independentlyVerifiedFields: Object.freeze(["email", "password"] as const),
+    independentlyVerifiedFields: value.independentlyVerifiedFields.length === 0
+      ? Object.freeze([] as const)
+      : Object.freeze(["email", "password"] as const),
   });
+}
+
+function validVerifiedFields(value: AccountAccessAcceptanceV1): boolean {
+  return exactArray(value.independentlyVerifiedFields, ["email", "password"]) ||
+    (value.accountOutcome === "application_ready" &&
+      exactArray(value.independentlyVerifiedFields, []));
 }
 
 function exactArray(value: readonly string[], expected: readonly string[]): boolean {

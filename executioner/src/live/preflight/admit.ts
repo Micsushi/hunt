@@ -305,7 +305,7 @@ function validTarget(target: UnknownRecord): boolean {
   try {
     const parsed = new URL(target.url);
     const host = parsed.hostname.toLowerCase();
-    const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,2}\.myworkdayjobs\.(?:com|invalid)$/u.exec(host);
+    const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,3}\.myworkdayjobs\.(?:com|invalid)$/u.exec(host);
     const decodedPath = decodeURIComponent(parsed.pathname);
     const finalSegment = decodedPath.split("/").at(-1) ?? "";
     return (

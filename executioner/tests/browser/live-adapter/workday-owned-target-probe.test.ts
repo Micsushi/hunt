@@ -14,6 +14,31 @@ const expected: ApprovedTargetBinding = {
   },
 };
 
+test("production probe owns a current three-digit Workday shard", async () => {
+  const expected108: ApprovedTargetBinding = {
+    identity: liveFixtures.target,
+    approved: {
+      host: "approved.wd108.myworkdayjobs.invalid",
+      tenant: "approved",
+      posting: "R12345",
+    },
+  };
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd108.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+    ),
+    expected108,
+    new AbortController().signal,
+  );
+  assert.deepEqual(result, owned(
+    { kind: "matched" },
+    [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_job_posting_v1",
+    ],
+  ));
+});
+
 test("production probe distinguishes foreign pages and every exact target mismatch", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const cases = [
@@ -287,7 +312,7 @@ test("production probe recognizes Workday's typographic-apostrophe not-found pag
   );
 });
 
-test("production probe recognizes only the exact Workday maintenance redirect", async () => {
+test("production probe reloads an exact Workday maintenance redirect three times before classifying it", async () => {
   const maintenance = new ProbePage(
     "https://community.workday.com/maintenance-page?d=5&s=1&e=1&o=",
     {
@@ -302,8 +327,9 @@ test("production probe recognizes only the exact Workday maintenance redirect", 
       expected,
       new AbortController().signal,
     ),
-    owned({ kind: "posting_unavailable", reason: "unavailable" }),
+    owned({ kind: "posting_unavailable", reason: "maintenance" }),
   );
+  assert.equal(maintenance.reloads, 3);
 
   maintenance.currentUrl = "https://community.workday.com/other";
   assert.deepEqual(
@@ -341,6 +367,87 @@ test("production probe recognizes only the exact Workday maintenance redirect", 
     ),
     { ownership: "foreign" },
   );
+});
+
+test("production probe continues when maintenance clears during the bounded reloads", async () => {
+  const maintenance = new ProbePage(
+    "https://community.workday.com/maintenance-page?d=5&s=1&e=1&o=",
+    {
+      ':text-is("Workday is currently unavailable.")': 1,
+      ':text-is("We are experiencing a service interruption.")': 1,
+    },
+    {},
+    (page) => {
+      page.currentUrl =
+        "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345";
+      page.counts = {};
+    },
+  );
+
+  assert.deepEqual(
+    await new WorkdayOwnedTargetProbe().inspect(
+      maintenance,
+      expected,
+      new AbortController().signal,
+    ),
+    owned(
+      { kind: "matched" },
+      [
+        "structural_trait_ats_workday_family_v1",
+        "structural_trait_page_job_posting_v1",
+      ],
+    ),
+  );
+  assert.equal(maintenance.reloads, 1);
+});
+
+test("production probe reloads an exact Workday runtime-error shell three times before classifying it", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  await probe.inspect(page, expected, new AbortController().signal);
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually";
+  page.counts = {
+    ':text-is("Something went wrong")': 1,
+    ':text-is("Please refresh the page and then try again.")': 1,
+  };
+
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned({ kind: "posting_unavailable", reason: "runtime_error" }),
+  );
+  assert.equal(page.reloads, 3);
+});
+
+test("production probe continues when the Workday runtime-error shell clears", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  await probe.inspect(page, expected, new AbortController().signal);
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually";
+  page.counts = {
+    ':text-is("Something went wrong")': 1,
+    ':text-is("Please refresh the page and then try again.")': 1,
+  };
+  page.onReload = (current) => {
+    current.counts = { '[data-automation-id="applyFlowMyInfoPage"]': 1 };
+  };
+
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned(
+      { kind: "matched" },
+      [
+        "structural_trait_ats_workday_family_v1",
+        "structural_trait_page_profile_step_v1",
+      ],
+    ),
+  );
+  assert.equal(page.reloads, 1);
 });
 
 test("production probe fails ambiguous routes and contradictory unavailability closed", async () => {
@@ -417,15 +524,19 @@ class ProbePage {
   currentUrl: string;
   counts: Readonly<Record<string, number>>;
   readonly semanticCounts: Readonly<Record<string, number>>;
+  onReload?: (page: ProbePage, reload: number) => void;
+  reloads = 0;
 
   constructor(
     currentUrl: string,
     counts: Readonly<Record<string, number>> = {},
     semanticCounts: Readonly<Record<string, number>> = {},
+    onReload?: (page: ProbePage, reload: number) => void,
   ) {
     this.currentUrl = currentUrl;
     this.counts = counts;
     this.semanticCounts = semanticCounts;
+    this.onReload = onReload;
   }
 
   url(): string {
@@ -447,6 +558,10 @@ class ProbePage {
   }
 
   async goto(): Promise<void> {}
+  async reload(): Promise<void> {
+    this.reloads += 1;
+    this.onReload?.(this, this.reloads);
+  }
   isClosed(): boolean { return false; }
   async close(): Promise<void> {}
 }

@@ -38,6 +38,7 @@ export async function auditStage2AccountAccessCompletion(
   try {
     const diagnostics = readAccountAccessDiagnostics(root);
     const monitor = readOperatorMonitorAcknowledgement(root);
+    if (monitor.journeyId !== diagnostics.journeyId) denied();
     readWindowsProcessAudit(root);
 
     let acceptance: "present" | "not_applicable";
@@ -47,6 +48,7 @@ export async function auditStage2AccountAccessCompletion(
         packet.sourceRevision !== diagnostics.sourceRevision ||
         packet.revisionId !== diagnostics.revisionId ||
         packet.journeyId !== diagnostics.journeyId ||
+        monitor.targetHandleId !== packet.targetHandleId ||
         (packet.accountOutcome === "application_ready" &&
           monitor.classification !== "application_ready") ||
         (packet.accountOutcome === "verification_required" &&
@@ -81,8 +83,7 @@ export async function auditStage2AccountAccessCompletion(
       params: { journeyId: diagnostics.journeyId },
     }, signal);
     if (
-      !statusResponse.ok ||
-      !statusResponse.value.ok ||
+      !statusResponse.ok || !statusResponse.value.ok ||
       statusResponse.value.result.kind !== "status" ||
       statusResponse.value.result.progress.journeyId !== diagnostics.journeyId
     ) denied();
@@ -92,20 +93,14 @@ export async function auditStage2AccountAccessCompletion(
 
     let mcpResult: "journey_busy" | "terminal";
     if (diagnostics.status === "passed") {
-      if (
-        !resultResponse.ok ||
-        resultResponse.value.ok ||
-        resultResponse.value.error.code !== "journey_busy"
-      ) denied();
+      if (!resultResponse.ok || resultResponse.value.ok ||
+          resultResponse.value.error.code !== "journey_busy") denied();
       mcpResult = "journey_busy";
     } else {
-      if (
-        !resultResponse.ok ||
-        !resultResponse.value.ok ||
-        resultResponse.value.result.kind !== "terminal" ||
-        resultResponse.value.result.terminal.journeyId !== diagnostics.journeyId ||
-        resultResponse.value.result.terminal.status !== diagnostics.status
-      ) denied();
+      if (!resultResponse.ok || !resultResponse.value.ok ||
+          resultResponse.value.result.kind !== "terminal" ||
+          resultResponse.value.result.terminal.journeyId !== diagnostics.journeyId ||
+          resultResponse.value.result.terminal.status !== diagnostics.status) denied();
       mcpResult = "terminal";
     }
 
@@ -146,7 +141,9 @@ function blockedMonitorMatches(
   if (terminal.status !== "blocked") return classification === "unknown";
   const result = terminal.factualOutcome?.result;
   if (result?.kind === "posting_unavailable") {
-    return classification === "posting_unavailable" || classification === "maintenance";
+    if (result.reason === "maintenance") return classification === "maintenance";
+    if (result.reason === "runtime_error") return classification === "runtime_error";
+    return classification === "posting_unavailable";
   }
   if (result?.kind === "manual_intervention") {
     return classification === "manual_action_required";

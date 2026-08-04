@@ -9,6 +9,7 @@ function entry(overrides: Record<string, unknown> = {}) {
     metadata: liveFixtures.verificationArtifact,
     operationId: liveFixtures.operationIds.verificationNavigation,
     target: Uint8Array.from([11, 13]),
+    replayCoordinate: new Uint8Array(32).fill(31),
     policy: {
       host: Uint8Array.from([17, 19]),
       tenant: Uint8Array.from([23, 29]),
@@ -27,7 +28,10 @@ test("takes exact target and policy bytes once without leaving committed state",
       current.metadata,
       liveFixtures.issuedAt,
     ),
-    [current.target, current.policy.host, current.policy.tenant],
+    {
+      values: [current.target, current.policy.host, current.policy.tenant],
+      replayCoordinate: current.replayCoordinate,
+    },
   );
   assert.equal(vault.committedCount, 0);
   assert.equal(
@@ -74,6 +78,7 @@ test("operation, scope, or expiry mismatch clears every byte", () => {
       null,
     );
     assert.deepEqual([...current.target], [0, 0]);
+    assert.deepEqual([...current.replayCoordinate], new Array(32).fill(0));
     assert.deepEqual([...current.policy.host], [0, 0]);
     assert.deepEqual([...current.policy.tenant], [0, 0]);
     assert.equal(vault.committedCount, 0);
@@ -92,6 +97,7 @@ test("an ambiguous pending batch cannot commit and clears target plus policy byt
   assert.equal(vault.stage([first, second]).commit(first.metadata.handleId), false);
   for (const current of [first, second]) {
     assert.deepEqual([...current.target], [0, 0]);
+    assert.deepEqual([...current.replayCoordinate], new Array(32).fill(0));
     assert.deepEqual([...current.policy.host], [0, 0]);
     assert.deepEqual([...current.policy.tenant], [0, 0]);
   }

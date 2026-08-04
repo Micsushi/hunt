@@ -39,6 +39,10 @@ Its source, fixtures, tests, and supporting tools remain available on branch
 - Final Submit is outside C3 v3 scope.
 - Unknown personal facts stop with `profile_answer_missing`.
 
+Future C1 synchronization for maintenance, runtime-error, and removed-posting statuses is
+specified in [the C1/C3 job-status handoff](docs/c1-c3-job-status-handoff.md).
+C3 currently emits the typed factual outcome only; it does not mutate C1.
+
 ## Stage 2 real-run preflight
 
 The owner input file belongs outside the repository and every worktree. Never
@@ -50,7 +54,7 @@ outside all repository and worktree roots supplied by the runner.
 
 The dry preflight does not launch a browser, contact Gmail or Workday, or
 resolve a secret. It admits only `windows-dpapi-current-user-v1` and
-`gmail-api-v1`, a 24-hour crash-recovery lease, and a 30-day retention ceiling.
+`gmail-api-v1`, an approval-bounded live authority, and a 30-day retention ceiling.
 Account and Gmail handles must be separate and bound to the exact journey,
 purpose, consumer, scope, and approval expiry. Its public report contains only
 opaque IDs, provider IDs, policy numbers, and the approved host, tenant, and
@@ -134,6 +138,92 @@ paths are not exposed by this readback facade.
 The recorded
 `submitActivated: false` refers only to final job-application Submit; account
 Create or Sign In is activated as part of account-access proof.
+
+### Stage 2 run storage lifecycle
+
+Do not invent or remember evidence-folder IDs for new runs. Prepare a complete
+run from one protected storage root, the exact Workday URL, and the account
+intent:
+
+```text
+npm run prepare:s2-run -- --storage-root C:\private\hunt-c3-storage --target-url https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345 --account-mode sign_in
+```
+
+The command parses the target, generates every run-scoped ID, writes the owner
+configuration, applies a protected Windows ACL for only the current user and
+SYSTEM, and returns the exact paths needed by later commands. Callers cannot
+supply a run, journey, target, secret, or approval ID. The generated layout is
+deliberately physical:
+
+```text
+hunt-c3-storage/
+  bindings/
+    recipient-binding.json
+    verification-consumption/<opaque-claim>.json
+  transient/<internal-run-key>/
+    owner-input.json
+    runtime/
+    secrets/
+  retained/<internal-run-key>/
+    evidence/
+  retained/catalog.json
+```
+
+`bindings` contains one protected opaque recipient identity reused for later
+Gmail authorization and delayed-message recovery, plus 30-day opaque
+verification-consumption claims that prevent the same provider artifact from
+being opened again after a restart. It contains no email address, provider
+message ID, subject, body, company, posting, URL, URL hash, or token. `transient`
+contains everything that goes: the owner
+configuration, run-scoped IDs, scoped secret records, browser/runtime state,
+and crash-recovery material. `retained` contains only sanitized evidence that
+stays for the approved 30-day retention window. The job host, tenant, posting,
+observed outcome, completion time, source revision, evidence hashes, and expiry
+are recorded in a catalog, so operators never need to remember a journey ID,
+folder ID, or still-live job URL.
+
+After the bounded run is finished, independently monitored, process-clean, and
+has a passing `completion-audit.json`, close its storage lifecycle:
+
+```text
+npm run storage:s2 -- finalize --storage-root C:\private\hunt-c3-storage --config C:\private\hunt-c3-storage\transient\...\owner-input.json --evidence-root C:\private\hunt-c3-storage\retained\...\evidence
+```
+
+Finalization fails closed unless the config, transient roots, retained root,
+target, process audit, completion audit, privacy result, and Submit=false result
+all agree. Only then does it remove the exact transient run tree, seal a
+`storage-manifest.json` plus `disposal-audit.json`, and add the run to the
+catalog. It never deletes another run or a shared parent.
+
+If a run never produced a completion audit, discard only that exact unfinished
+layout with the same three bound paths:
+
+```text
+npm run storage:s2 -- discard --storage-root C:\private\hunt-c3-storage --config C:\private\hunt-c3-storage\transient\...\owner-input.json --evidence-root C:\private\hunt-c3-storage\retained\...\evidence
+```
+
+Discard refuses completed or cataloged evidence, validates both trees before
+deletion, and removes only the bound transient and unfinished retained run.
+
+Inventory all managed runs by lifecycle disposition, list retained history,
+rebuild a lost catalog solely from sanitized retained manifests, or remove only
+evidence whose 30-day deadline has passed:
+
+```text
+npm run storage:s2 -- inventory --storage-root C:\private\hunt-c3-storage
+npm run storage:s2 -- list --storage-root C:\private\hunt-c3-storage
+npm run storage:s2 -- rebuild --storage-root C:\private\hunt-c3-storage
+npm run storage:s2 -- sweep --storage-root C:\private\hunt-c3-storage
+```
+
+`inventory` is read-only and labels exact managed runs as retained/finalized,
+ready to finalize, unfinished and eligible for exact discard, legacy retained,
+or invalid for manual review. Existing historical evidence is left in place so
+recorded paths and handoffs do not break; inventory never migrates or deletes it.
+
+`storage:s2 -- prepare` remains the lower-level allocator for tests and manual
+recovery tooling. Normal live work uses `prepare:s2-run` so the durable binding
+cannot be replaced by a disposable per-job value.
 
 ### Gmail authorization bootstrap
 
@@ -273,6 +363,15 @@ process-local verification artifact, and seals value-free evidence with
 `messageBodyRetained: false`. It never launches the Workday browser or navigates
 the verification link.
 
+An account-verification poll remains bounded to five minutes. If an exact
+message arrives later, prepare a fresh `sign_in` run under the same storage root
+and provision its new Gmail handle. The stable opaque recipient binding resolves
+the protected refresh grant silently, and the fresh query's trailing 24-hour
+window can recover the delayed message. This is a new authorized continuation,
+not an unbounded poll and not reuse of expired run authority. Exact recipient,
+sender, tenant, host, and posting checks still fail closed on zero or multiple
+candidates.
+
 ### Account-verified acceptance slice
 
 Provision both active secret handles before running this checkpoint:
@@ -298,6 +397,26 @@ returns toward Create Account or repeats verification instead of advancing, it
 emits `lifecycle_cycle_stopped` and fails closed. It never creates again from
 that fallback. An exact private `account_exists` fact may also switch once to
 Sign In, while an ordinary sign-in rejection never implies account absence.
+
+For monitored live runs, set `HUNT_C3_LIVE_INSPECTION_HOLD=1`. The runner writes
+`monitor-request.json` under its transient runtime root before browser work and
+will not complete browser cleanup until an independent monitor inspects the
+actual visible post-action page. The monitor saves `monitor-visible.png` in the
+retained evidence root, then acknowledges the exact request:
+
+```text
+npm run ack:s2-monitor -- --evidence-root C:\private\hunt-c3-storage\retained\...\evidence --monitor-request C:\private\hunt-c3-storage\transient\...\runtime\monitor-request.json --classification application_ready
+```
+
+The acknowledgement binds the request hash, journey, target, screenshot hash,
+classification, and observation time. A valid screenshot or acknowledgement
+from another run or target is rejected. After the isolated Windows Job writes a
+passing process audit, run `npm run audit:s2 -- --evidence-root ...`. The audit
+now covers both `account_access` and `account_verified`. Account verification
+records either one exact Gmail candidate consumed or a credential sign-in that
+was independently re-observed at `application_ready`; it never reports one as
+the other. Both proofs require cleanup, privacy, no retained message body, and
+`submitActivated: false`.
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.

@@ -38,7 +38,7 @@ test("account-verified runner seals only one independently observed consumed ver
   if (!result.ok) return;
   assert.deepEqual(result.acceptance, {
     schemaVersion: 1,
-    evidenceRevision: "s2-account-verified-acceptance-v1",
+    evidenceRevision: "s2-account-verified-acceptance-v2",
     checkpoint: "account_verified",
     status: "passed",
     sourceRevision: input().sourceRevision,
@@ -48,6 +48,7 @@ test("account-verified runner seals only one independently observed consumed ver
     targetHandleId: input().targetHandleId,
     accountState: "application_ready",
     independentlyObservedVerifiedState: true,
+    verificationProof: "gmail_candidate_consumed",
     provider: "gmail-api-v1",
     consumedCandidateCount: 1,
     messageBodyRetained: false,
@@ -59,7 +60,30 @@ test("account-verified runner seals only one independently observed consumed ver
   assert.doesNotMatch(JSON.stringify(result), /https?:|password|token|oauth|raw|verification_handle/iu);
 });
 
-test("account-verified runner rejects non-verification ready paths and widened successes", async () => {
+test("account-verified runner accepts an independently re-observed existing-account sign-in", async () => {
+  let written: unknown;
+  const result = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: true,
+      cleanup: "pass",
+      value: {
+        ...verified.value,
+        path: "reused_account",
+        verificationCandidateCount: 0,
+        verificationConsumed: false,
+      },
+    }) },
+    evidence: { write: async (value) => { written = value; } },
+  }, new AbortController().signal);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.acceptance.verificationProof, "credential_sign_in");
+  assert.equal(result.acceptance.provider, "workday-auth");
+  assert.equal(result.acceptance.consumedCandidateCount, 0);
+  assert.deepEqual(written, result.acceptance);
+});
+
+test("account-verified runner rejects unproved ready paths and widened successes", async () => {
   for (const value of [
     { ...verified.value, path: "already_ready", verificationCandidateCount: 0, verificationConsumed: false },
     { ...verified.value, independentlyObserved: false },

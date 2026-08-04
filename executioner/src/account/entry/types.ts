@@ -38,6 +38,7 @@ export type AccountEntryTraceEvent =
   | "submit_activate_failed"
   | "submit_activated"
   | "post_submit_classify_started"
+  | "post_submit_classify_retry"
   | "post_submit_classify_failed"
   | "post_submit_existing_account"
   | "post_submit_create_account"
@@ -134,6 +135,7 @@ export interface AccountEntryDependencies {
   readonly classifiedAccount: ClassifiedAccountStateSource;
   readonly accountPage: AccountPageAccessProvider;
   readonly credentials: ScopedAccountCredentialResolver;
+  readonly postSubmitClassificationDelay?: () => Promise<void>;
   readonly trace?: (event: AccountEntryTraceEvent) => void;
 }
 

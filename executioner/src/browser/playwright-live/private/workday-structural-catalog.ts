@@ -26,7 +26,13 @@ interface TraitRule {
 }
 
 interface UnavailableRule {
-  readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+  readonly reason:
+    | "not_found"
+    | "closed"
+    | "removed"
+    | "unavailable"
+    | "maintenance"
+    | "runtime_error";
   readonly selector: string;
 }
 
@@ -51,6 +57,7 @@ const pageRules = Object.freeze([
 
 export const WORKDAY_INLINE_VERIFICATION_SELECTORS = Object.freeze([
   '[data-automation-id="signInPage"]:has-text("An email has been sent to you. Please verify your account.")',
+  ':text-is("An email has been sent to you. Please verify your account.")',
   '[data-automation-id="signInPage"]:has-text("verify your account before you sign in")',
   '[data-automation-id="signInPage"]:has-text("request a verification email")',
   ':text-is("Verify your account before you sign in or request a verification email.")',
@@ -99,6 +106,11 @@ const unavailableRules = Object.freeze([
 const maintenanceSelectors = Object.freeze([
   ':text-is("Workday is currently unavailable.")',
   ':text-is("We are experiencing a service interruption.")',
+]);
+
+export const WORKDAY_RUNTIME_ERROR_SELECTORS = Object.freeze([
+  ':text-is("Something went wrong")',
+  ':text-is("Please refresh the page and then try again.")',
 ]);
 
 const controlSelector = 'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"]';
@@ -204,6 +216,15 @@ export async function isExactWorkdayMaintenancePage(
     url.hash !== ""
   ) return false;
   for (const selector of maintenanceSelectors) {
+    if (!await anyExactVisible(page, [selector])) return false;
+  }
+  return true;
+}
+
+export async function isExactWorkdayRuntimeErrorPage(
+  page: WorkdayStructuralPage,
+): Promise<boolean> {
+  for (const selector of WORKDAY_RUNTIME_ERROR_SELECTORS) {
     if (!await anyExactVisible(page, [selector])) return false;
   }
   return true;

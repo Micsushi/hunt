@@ -5,7 +5,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
+import { dirname, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -27,7 +27,10 @@ import type {
 } from "../contracts/index.ts";
 import { writeAccountAccessEvidence } from "../live/evidence/account-access-evidence.ts";
 import { writeAccountAccessDiagnostics } from "../live/evidence/account-access-diagnostics.ts";
-import { waitForOperatorMonitorAcknowledgement } from "../live/evidence/operator-monitor-ack.ts";
+import {
+  waitForOperatorMonitorAcknowledgement,
+  writeOperatorMonitorRequest,
+} from "../live/evidence/operator-monitor-ack.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
@@ -38,6 +41,7 @@ import {
 import { WindowsDpapiSecretResolver } from "../secrets/windows-dpapi/private/resolver.ts";
 import { WindowsDpapiSecretStore } from "../secrets/windows-dpapi/store.ts";
 import { inspectCleanSourceRevision } from "./private/s2-clean-source-revision.ts";
+import { matchesStage2OwnerStorageBinding } from "./private/s2-owner-storage-binding.ts";
 export {
   inspectCleanSourceRevision,
   type GitInspectionProcess,
@@ -68,10 +72,12 @@ export async function runStage2AccountAccessFromOwnerConfig(
     });
     if (!admission.ok) return failed(admission.error.code);
     const owner = value as RealRunOwnerInputsV1;
-    if (
-      !inside(owner.roots.runtime.path, configPath) ||
-      !samePath(owner.roots.evidence.path, options.evidenceRoot)
-    ) return failed("owner_config_invalid");
+    if (!matchesStage2OwnerStorageBinding({
+      ownerConfigPath: configPath,
+      runtimeRoot: owner.roots.runtime.path,
+      ownerEvidenceRoot: owner.roots.evidence.path,
+      requestedEvidenceRoot: options.evidenceRoot,
+    })) return failed("owner_config_invalid");
 
     const secretStore = new WindowsDpapiSecretStore({
       root: owner.roots.secrets.path,
@@ -81,12 +87,25 @@ export async function runStage2AccountAccessFromOwnerConfig(
     const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
       ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
       : undefined;
+    const monitorRequest = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      ? writeOperatorMonitorRequest({
+        root: owner.roots.runtime.path,
+        journeyId: owner.journeyId,
+        targetHandleId: owner.target.handleId,
+        host: owner.target.host,
+        tenant: owner.target.tenant,
+        posting: owner.target.posting,
+      })
+      : undefined;
     const browser = createPlaywrightPersistentBrowserSession({
       binding: admission.binding,
       accountTrace: valueFreeTrace,
-      inspectionHold: process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      inspectionHold: monitorRequest !== undefined
         ? async () => {
-          await waitForOperatorMonitorAcknowledgement(owner.roots.evidence.path);
+          await waitForOperatorMonitorAcknowledgement(
+            owner.roots.evidence.path,
+            monitorRequest,
+          );
         }
         : undefined,
     });
@@ -204,23 +223,6 @@ function opaqueSuffix(value: string, prefix: string): string {
     throw new TypeError("invalid opaque reference");
   }
   return suffix;
-}
-
-function inside(root: string, child: string): boolean {
-  const relativePath = relative(realpathSync.native(root), realpathSync.native(child));
-  return relativePath !== "" &&
-    relativePath !== ".." &&
-    !relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
-    !isAbsolute(relativePath);
-}
-
-function samePath(left: string, right: string): boolean {
-  try {
-    return comparable(realpathSync.native(left)) ===
-      comparable(realpathSync.native(right));
-  } catch {
-    return false;
-  }
 }
 
 function comparable(value: string): string {

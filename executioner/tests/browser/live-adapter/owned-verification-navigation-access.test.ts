@@ -34,6 +34,31 @@ test("owned verification navigation admits one byte-only Workday target", async 
   assert.equal(harness.page.gotoCount, harness.gotoCountAfterOpen + 1);
 });
 
+test("three-digit Workday shards stay bound through verification navigation", async () => {
+  const harness = await openedHarness({
+    targetUrl:
+      "https://approved.wd108.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  });
+  let operation: unknown;
+
+  const result = await harness.provider.withOwnedVerificationNavigationAccess(
+    accessRequest(harness.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      operation = await access.navigateVerificationTarget({
+        verificationTarget: encoded(
+          "https://approved.wd108.myworkdayjobs.invalid/verify?token=private",
+        ),
+        approvedHost: encoded("approved.wd108.myworkdayjobs.invalid"),
+        approvedTenant: encoded("approved"),
+      }, AbortSignal.any([]));
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, value: { kind: "navigated" } });
+  assert.deepEqual(operation, { ok: true, value: { kind: "navigated" } });
+});
+
 test("route admission checks every query field before the browser effect", async () => {
   const harness = await openedHarness();
   let operation: unknown;
@@ -336,6 +361,7 @@ function accessRequest(sessionId: LiveSessionId) {
 }
 
 interface HarnessOptions {
+  readonly targetUrl?: string;
   readonly traits?: readonly string[];
   readonly observation?: (
     check: number,
@@ -351,7 +377,8 @@ async function openedHarness(options: HarnessOptions = {}) {
   const provider = new PlaywrightPersistentBrowserSession({
     binding: {
       forPersistentBrowser: () => ({
-        targetUrl: "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+        targetUrl: options.targetUrl ??
+          "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
         profilePath: "C:\\outside\\runtime\\browser-profile",
         admittedAt: liveFixtures.issuedAt,
         leaseExpiresAt: liveFixtures.expiresAt,

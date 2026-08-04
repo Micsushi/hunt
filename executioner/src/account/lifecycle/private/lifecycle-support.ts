@@ -75,7 +75,7 @@ export function targetBlocked(
     | { readonly kind: "target_ambiguous" }
     | {
         readonly kind: "posting_unavailable";
-        readonly reason: "not_found" | "closed" | "removed" | "unavailable";
+        readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
       },
 ): AccountLifecycleResult {
   return {

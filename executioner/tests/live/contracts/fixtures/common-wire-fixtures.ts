@@ -69,7 +69,7 @@ export const s2FactualOutcomeCases = [
     source: "target_identity",
     result: { kind: "target_ambiguous" },
   },
-  ...(["not_found", "closed", "removed", "unavailable"] as const).map(
+  ...(["not_found", "closed", "removed", "unavailable", "maintenance", "runtime_error"] as const).map(
     (reason) => ({
       source: "target_identity" as const,
       result: { kind: "posting_unavailable" as const, reason },

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -31,6 +31,8 @@ import type {
   TargetTenantId,
   VerificationHandleId,
 } from "../contracts/index.ts";
+import { stage2StorageRootForOwnerBinding } from "./private/s2-owner-storage-binding.ts";
+import { Stage2VerificationReplayLedger } from "./private/s2-verification-replay-ledger.ts";
 import type {
   ActiveAccountSecretHandle,
   ActiveGmailSecretHandle,
@@ -54,6 +56,10 @@ import {
   createBoundedVerificationMailboxPolling,
 } from "../account/lifecycle/mailbox-polling.ts";
 import { writeAccountVerifiedEvidence } from "../live/evidence/account-verified-evidence.ts";
+import {
+  waitForOperatorMonitorAcknowledgement,
+  writeOperatorMonitorRequest,
+} from "../live/evidence/operator-monitor-ack.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
@@ -213,7 +219,7 @@ interface CleanupBrowser {
     | { readonly kind: "account_boundary" }
     | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
     | { readonly kind: "target_ambiguous" }
-    | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" },
+    | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" },
     PersistentBrowserErrorCode
   >>;
   close(
@@ -335,8 +341,13 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     });
     if (!admission.ok) return failure(admission.error.code);
     const owner = value as RealRunOwnerInputsV1;
-    if (!inside(owner.roots.runtime.path, configPath) ||
-        !samePath(owner.roots.evidence.path, options.evidenceRoot)) {
+    const storageRoot = stage2StorageRootForOwnerBinding({
+      ownerConfigPath: configPath,
+      runtimeRoot: owner.roots.runtime.path,
+      ownerEvidenceRoot: owner.roots.evidence.path,
+      requestedEvidenceRoot: options.evidenceRoot,
+    });
+    if (storageRoot === undefined) {
       return failure("owner_config_invalid");
     }
     const authorization = createAuthorizationRuntime(
@@ -386,9 +397,27 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
       ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
       : undefined;
+    const monitorRequest = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      ? writeOperatorMonitorRequest({
+        root: owner.roots.runtime.path,
+        journeyId: owner.journeyId,
+        targetHandleId: owner.target.handleId,
+        host: owner.target.host,
+        tenant: owner.target.tenant,
+        posting: owner.target.posting,
+      })
+      : undefined;
     const browser = createPlaywrightPersistentBrowserSession({
       binding: admission.binding,
       accountTrace: valueFreeTrace,
+      inspectionHold: monitorRequest === undefined
+        ? undefined
+        : async () => {
+          await waitForOperatorMonitorAcknowledgement(
+            owner.roots.evidence.path,
+            monitorRequest,
+          );
+        },
     });
     const structural = createPlaywrightLiveEntryStructuralSource(browser);
     const classified = createClassifiedAccountObservationSource(
@@ -453,7 +482,17 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       },
       trace: valueFreeTrace,
     });
-    const consumer = new GmailAtomicArtifactConsumer({ rawVault, artifacts });
+    const consumer = new GmailAtomicArtifactConsumer({
+      rawVault,
+      artifacts,
+      replayGuard: new Stage2VerificationReplayLedger({
+        root: join(storageRoot, "bindings", "verification-consumption"),
+        recipientBindingId: owner.recipientBindingId,
+        host: owner.target.host,
+        tenant: owner.target.tenant,
+        now: liveClock,
+      }),
+    });
     const navigator = createGmailPrivilegedVerificationNavigator({
       consumer,
       approvedPolicy: verificationApprovedPolicy(owner),
@@ -914,21 +953,6 @@ function opaqueSuffix(value: string, prefix: string): string {
   return suffix;
 }
 
-function inside(root: string, child: string): boolean {
-  const path = relative(realpathSync.native(root), realpathSync.native(child));
-  return path !== "" && path !== ".." &&
-    !path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
-    !isAbsolute(path);
-}
-
-function samePath(left: string, right: string): boolean {
-  try {
-    return comparable(realpathSync.native(left)) === comparable(realpathSync.native(right));
-  } catch {
-    return false;
-  }
-}
-
 function comparable(value: string): string {
   const normalized = normalize(value);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -954,7 +978,7 @@ function operationIds(): AccountVerifiedOperationIds {
 type TargetFact =
   | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
   | { readonly kind: "target_ambiguous" }
-  | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" };
+  | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" };
 
 function factualLifecycleResult(
   value: TargetFact,

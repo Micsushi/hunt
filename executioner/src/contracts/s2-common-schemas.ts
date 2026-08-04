@@ -48,7 +48,7 @@ const targetIdentitySchema = factual("target_identity", {
     closed(["kind"], { kind: { const: "target_ambiguous" } }),
     closed(["kind", "reason"], {
       kind: { const: "posting_unavailable" },
-      reason: { enum: ["not_found", "closed", "removed", "unavailable"] },
+      reason: { enum: ["not_found", "closed", "removed", "unavailable", "maintenance", "runtime_error"] },
     }),
   ],
 });

@@ -270,9 +270,10 @@ test("owner and stored account-secret expiry must match before browser", async (
   assert.equal(browserCalls, 0);
 });
 
-test("unproven account fields fail after cleanup and do not seal acceptance", async () => {
+test("direct application access seals no credential fields instead of claiming mutation", async () => {
   let closed = 0;
   let evidenceCalls = 0;
+  let verifiedFields: readonly string[] | undefined;
   const dependencies = successfulDependencies();
   dependencies.credentials = {
     async mutate() {
@@ -290,16 +291,20 @@ test("unproven account fields fail after cleanup and do not seal acceptance", as
       return { ok: true, value: undefined };
     },
   };
-  dependencies.evidence = { async write() { evidenceCalls += 1; } };
+  dependencies.evidence = { async write(value) {
+    evidenceCalls += 1;
+    verifiedFields = value.independentlyVerifiedFields;
+  } };
 
   const result = await runStage2AccountAccess(
     input(),
     dependencies,
     new AbortController().signal,
   );
-  assert.deepEqual(result, { ok: false, code: "credential_mutation_denied" });
+  assert.equal(result.ok, true);
   assert.equal(closed, 1);
-  assert.equal(evidenceCalls, 0);
+  assert.equal(evidenceCalls, 1);
+  assert.deepEqual(verifiedFields, []);
 });
 
 test("account navigation preserves exact factual target outcomes", async () => {
@@ -307,6 +312,8 @@ test("account navigation preserves exact factual target outcomes", async () => {
     { kind: "target_mismatch" as const, dimension: "posting" as const },
     { kind: "target_ambiguous" as const },
     { kind: "posting_unavailable" as const, reason: "closed" as const },
+    { kind: "posting_unavailable" as const, reason: "maintenance" as const },
+    { kind: "posting_unavailable" as const, reason: "runtime_error" as const },
   ]) {
     const dependencies = successfulDependencies();
     dependencies.navigator = {

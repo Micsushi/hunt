@@ -176,7 +176,16 @@ export class AccountVerificationLifecycle {
       "sign_in",
       input.operations.initialCredentialMutation,
     );
-    if (!mutation.ok) return mutation;
+    if (!mutation.ok) {
+      return this.#recoverCredentialEffect(
+        input,
+        signal,
+        mutation,
+        "reused_account",
+        0,
+        false,
+      );
+    }
     let result;
     try {
       result = parseLifecycleCredentialMutationResult(mutation.value);
@@ -216,7 +225,16 @@ export class AccountVerificationLifecycle {
       "create_account",
       input.operations.createCredentialMutation,
     );
-    if (!mutation.ok) return mutation;
+    if (!mutation.ok) {
+      return this.#recoverCredentialEffect(
+        input,
+        signal,
+        mutation,
+        "created_account",
+        0,
+        false,
+      );
+    }
     let result;
     try {
       result = parseLifecycleCredentialMutationResult(mutation.value);
@@ -272,7 +290,9 @@ export class AccountVerificationLifecycle {
       "sign_in",
       input.operations.accountExistsSignIn,
     );
-    if (!signedIn.ok) return signedIn;
+    if (!signedIn.ok) {
+      return this.#recoverCredentialEffect(input, signal, signedIn, path, 0, false);
+    }
     let signInResult;
     try {
       signInResult = parseLifecycleCredentialMutationResult(signedIn.value);
@@ -431,7 +451,16 @@ export class AccountVerificationLifecycle {
       "sign_in",
       input.operations.postVerificationSignIn,
     );
-    if (!signedIn.ok) return signedIn;
+    if (!signedIn.ok) {
+      return this.#recoverCredentialEffect(
+        input,
+        signal,
+        signedIn,
+        "verified_account",
+        1,
+        true,
+      );
+    }
     try {
       const result = parseLifecycleCredentialMutationResult(signedIn.value);
       if (result.kind === "manual_intervention") {
@@ -461,6 +490,54 @@ export class AccountVerificationLifecycle {
     } catch {
       // Value-free diagnostics cannot affect account behavior.
     }
+  }
+
+  async #recoverCredentialEffect(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+    failure: Extract<AccountLifecycleResult, { readonly ok: false }>,
+    path: "reused_account" | "created_account" | "verified_account",
+    verificationCandidateCount: 0 | 1,
+    verificationConsumed: boolean,
+  ): Promise<AccountLifecycleResult> {
+    if (failure.error.code !== "credential_effect_uncertain") return failure;
+    const observed = await this.#observe(input, signal);
+    if (!observed.ok) return failure;
+    if (observed.value.kind === "target_mismatch") {
+      return targetBlocked({
+        kind: observed.value.kind,
+        dimension: observed.value.dimension,
+      });
+    }
+    if (observed.value.kind === "target_ambiguous") {
+      return targetBlocked({ kind: observed.value.kind });
+    }
+    if (observed.value.kind === "posting_unavailable") {
+      return targetBlocked({
+        kind: observed.value.kind,
+        reason: observed.value.reason,
+      });
+    }
+    if (
+      observed.value.kind === "classified_account" &&
+      observed.value.state.kind === "application_ready"
+    ) {
+      return ready(
+        path,
+        verificationCandidateCount,
+        verificationConsumed,
+      );
+    }
+    if (
+      observed.value.kind === "classified_account" &&
+      observed.value.state.kind === "manual_intervention"
+    ) {
+      return blocked("account_access", {
+        kind: "manual_intervention",
+        reason: observed.value.state.reason,
+      });
+    }
+    return failure;
   }
 }
 

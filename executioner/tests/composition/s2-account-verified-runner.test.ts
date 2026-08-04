@@ -301,7 +301,7 @@ test("production assembly shares raw vault and artifact registry without owner m
   assert.match(source, /const rawVault = new GmailRawArtifactVault\(\)/u);
   assert.match(source, /const artifacts = new GmailSafeArtifactRegistry\(\)/u);
   assert.match(source, /new GmailApiAuthExecutor\(\{[\s\S]*?rawVault,[\s\S]*?artifactRegistry: artifacts,/u);
-  assert.match(source, /new GmailAtomicArtifactConsumer\(\{ rawVault, artifacts \}\)/u);
+  assert.match(source, /new GmailAtomicArtifactConsumer\(\{[\s\S]*?replayGuard: new Stage2VerificationReplayLedger/u);
   assert.match(source, /createGmailPrivilegedVerificationNavigator\(\{[\s\S]*?consumer,/u);
   assert.match(source, /createAccountEntryCredentialMutationAdapter\(\{/u);
   assert.equal(source.includes("createStage2AccountEntryCredentialMutationAdapter"), false);

@@ -9,6 +9,7 @@ export interface PendingRawArtifact {
   readonly metadata: AvailableVerificationArtifact;
   readonly operationId: OperationId;
   readonly target: Uint8Array;
+  readonly replayCoordinate: Uint8Array;
   readonly policy: {
     readonly host: Uint8Array;
     readonly tenant: Uint8Array;
@@ -39,7 +40,10 @@ export class GmailRawArtifactVault {
     operationId: OperationId,
     admission: AvailableVerificationArtifact,
     now: string,
-  ): readonly Uint8Array[] | null {
+  ): {
+    readonly values: readonly [Uint8Array, Uint8Array, Uint8Array];
+    readonly replayCoordinate: Uint8Array;
+  } | null {
     const entry = this.#targets.get(admission.handleId);
     if (entry === undefined) return null;
     if (
@@ -53,7 +57,10 @@ export class GmailRawArtifactVault {
       return null;
     }
     this.#targets.delete(admission.handleId);
-    return [entry.target, entry.policy.host, entry.policy.tenant];
+    return {
+      values: [entry.target, entry.policy.host, entry.policy.tenant],
+      replayCoordinate: entry.replayCoordinate,
+    };
   }
 }
 
@@ -95,6 +102,7 @@ export class PendingRawArtifactBatch {
 
 function clear(entry: PendingRawArtifact): void {
   entry.target.fill(0);
+  entry.replayCoordinate.fill(0);
   entry.policy.host.fill(0);
   entry.policy.tenant.fill(0);
 }

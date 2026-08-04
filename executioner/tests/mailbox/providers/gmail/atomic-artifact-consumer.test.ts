@@ -5,6 +5,7 @@ import { generatedOperationId } from "../../../../src/contracts/index.ts";
 import type { VerificationArtifact } from "../../../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../../../src/testing/live/index.ts";
 import { GmailAtomicArtifactConsumer } from "../../../../src/mailbox/providers/gmail/private/atomic-artifact-consumer.ts";
+import type { DurableVerificationReplayGuard } from "../../../../src/mailbox/providers/gmail/private/atomic-artifact-consumer.ts";
 import { GmailRawArtifactVault } from "../../../../src/mailbox/providers/gmail/private/raw-artifact-vault.ts";
 import { GmailSafeArtifactRegistry } from "../../../../src/mailbox/providers/gmail/safe-artifact-registry.ts";
 
@@ -14,6 +15,20 @@ const policyTenant = () => new TextEncoder().encode("example-tenant");
 const rawTarget = () => new TextEncoder().encode(
   "https://tenant.example.invalid/verify?token=private",
 );
+const replayCoordinate = () => new Uint8Array(32).fill(37);
+
+class MemoryReplayGuard implements DurableVerificationReplayGuard {
+  readonly #claimed = new Set<string>();
+  unavailable = false;
+
+  async claim(coordinate: Readonly<Uint8Array>): Promise<"claimed" | "replayed"> {
+    if (this.unavailable) throw new Error("synthetic-private-ledger-detail");
+    const key = Buffer.from(coordinate).toString("hex");
+    if (this.#claimed.has(key)) return "replayed";
+    this.#claimed.add(key);
+    return "claimed";
+  }
+}
 
 function request() {
   return {
@@ -27,7 +42,10 @@ function request() {
   } as const;
 }
 
-function harness(options: { readonly inspectError?: Error } = {}) {
+function harness(options: {
+  readonly inspectError?: Error;
+  readonly replayGuard?: DurableVerificationReplayGuard;
+} = {}) {
   const rawVault = new GmailRawArtifactVault();
   const registry = new GmailSafeArtifactRegistry();
   const delegate: VerificationArtifact = {
@@ -46,6 +64,7 @@ function harness(options: { readonly inspectError?: Error } = {}) {
     metadata: liveFixtures.verificationArtifact,
     operationId: liveFixtures.operationIds.verificationNavigation,
     target,
+    replayCoordinate: replayCoordinate(),
     policy: { host, tenant },
   }]);
   assert.equal(pending.commit(liveFixtures.verificationArtifact.handleId), true);
@@ -66,9 +85,55 @@ function harness(options: { readonly inspectError?: Error } = {}) {
     consumer: new GmailAtomicArtifactConsumer({
       rawVault,
       artifacts: registry,
+      replayGuard: options.replayGuard ?? new MemoryReplayGuard(),
     }),
   };
 }
+
+test("durable replay admission blocks the same provider artifact across consumer reconstruction", async () => {
+  const replayGuard = new MemoryReplayGuard();
+  const first = harness({ replayGuard });
+  let firstCalls = 0;
+  assert.deepEqual(
+    await first.consumer.consume(request(), signal(), async () => {
+      firstCalls += 1;
+      return { ok: true, value: { kind: "navigated" } } as const;
+    }),
+    { ok: true, value: { kind: "navigated" } },
+  );
+
+  const reconstructed = harness({ replayGuard });
+  let replayCalls = 0;
+  assert.deepEqual(
+    await reconstructed.consumer.consume(request(), signal(), async () => {
+      replayCalls += 1;
+      return { ok: true, value: { kind: "navigated" } } as const;
+    }),
+    {
+      ok: false,
+      error: { code: "verification_artifact_replayed", retryable: false },
+    },
+  );
+  assert.equal(firstCalls, 1);
+  assert.equal(replayCalls, 0);
+});
+
+test("durable replay storage unavailability stops before browser navigation", async () => {
+  const replayGuard = new MemoryReplayGuard();
+  replayGuard.unavailable = true;
+  const current = harness({ replayGuard });
+  let calls = 0;
+  const result = await current.consumer.consume(request(), signal(), async () => {
+    calls += 1;
+    return { ok: true, value: { kind: "navigated" } } as const;
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "recovery_checkpoint_unavailable", retryable: true },
+  });
+  assert.equal(calls, 0);
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private/u);
+});
 
 test("atomic consume removes safe and raw state, clears bytes, and replays one exact receipt", async () => {
   const current = harness();

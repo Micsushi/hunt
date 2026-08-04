@@ -32,21 +32,30 @@ interface AtomicSafeArtifactStore {
 interface GmailAtomicArtifactConsumerOptions {
   readonly rawVault: GmailRawArtifactVault;
   readonly artifacts: AtomicSafeArtifactStore;
+  readonly replayGuard: DurableVerificationReplayGuard;
+}
+
+export interface DurableVerificationReplayGuard {
+  claim(
+    coordinate: Readonly<Uint8Array>,
+    signal: AbortSignal,
+  ): Promise<"claimed" | "replayed">;
 }
 
 type DownstreamNavigationErrorCode = Exclude<
   VerificationNavigationErrorCode,
-  "verification_artifact_replayed"
+  "verification_artifact_replayed" | "recovery_checkpoint_unavailable"
 >;
 
 type ConsumeResult<Code extends DownstreamNavigationErrorCode> = LivePortResult<
   VerificationNavigationResult,
-  Code | "verification_artifact_replayed"
+  Code | "verification_artifact_replayed" | "recovery_checkpoint_unavailable"
 >;
 
 export class GmailAtomicArtifactConsumer {
   readonly #rawVault: GmailRawArtifactVault;
   readonly #artifacts: AtomicSafeArtifactStore;
+  readonly #replayGuard: DurableVerificationReplayGuard;
   readonly #receipts = new Map<
     OperationId,
     { readonly fingerprint: string; readonly result: VerificationNavigationResult }
@@ -55,6 +64,7 @@ export class GmailAtomicArtifactConsumer {
   constructor(options: GmailAtomicArtifactConsumerOptions) {
     this.#rawVault = options.rawVault;
     this.#artifacts = options.artifacts;
+    this.#replayGuard = options.replayGuard;
   }
 
   async consume<
@@ -98,13 +108,21 @@ export class GmailAtomicArtifactConsumer {
       this.#clearRequest(request);
       return replayed();
     }
-    const values = this.#rawVault.takeForAtomicConsume(
+    const raw = this.#rawVault.takeForAtomicConsume(
       request.operationId,
       artifact,
       request.now,
     );
-    if (values === null) return replayed();
+    if (raw === null) return replayed();
+    const { values, replayCoordinate } = raw;
     try {
+      let claim: "claimed" | "replayed";
+      try {
+        claim = await this.#replayGuard.claim(replayCoordinate, signal);
+      } catch {
+        return checkpointUnavailable();
+      }
+      if (claim !== "claimed") return replayed();
       const result = await operation(values);
       if (!result.ok) return result;
       const safeResult = exactResult(result.value);
@@ -114,6 +132,7 @@ export class GmailAtomicArtifactConsumer {
       return replayed();
     } finally {
       for (const value of values) value.fill(0);
+      replayCoordinate.fill(0);
     }
   }
 
@@ -183,5 +202,12 @@ function cancelled() {
   return {
     ok: false,
     error: { code: "operation_cancelled", retryable: false },
+  } as const;
+}
+
+function checkpointUnavailable() {
+  return {
+    ok: false,
+    error: { code: "recovery_checkpoint_unavailable", retryable: true },
   } as const;
 }

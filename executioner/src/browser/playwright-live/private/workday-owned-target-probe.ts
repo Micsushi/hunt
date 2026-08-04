@@ -9,12 +9,22 @@ import { PlaywrightAccountPageAdapter } from "./playwright-account-page.ts";
 import {
   inspectWorkdayStructure,
   isExactWorkdayMaintenancePage,
+  isExactWorkdayRuntimeErrorPage,
   type WorkdayStructuralPage,
 } from "./workday-structural-catalog.ts";
 
 interface WorkdayProbePage extends WorkdayStructuralPage {
   url(): string;
+  reload(options?: {
+    readonly waitUntil?: "domcontentloaded";
+    readonly timeout?: number;
+  }): Promise<unknown>;
 }
+
+const maintenanceReloadLimit = 3;
+const maintenanceReloadTimeoutMs = 8_000;
+const runtimeErrorReloadLimit = 3;
+const runtimeErrorReloadTimeoutMs = 8_000;
 
 interface ParsedWorkdayTarget {
   readonly host: string;
@@ -35,11 +45,17 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
   ): Promise<OwnedTargetObservation> {
     if (signal.aborted) throw signal.reason;
     const probePage = page as unknown as WorkdayProbePage;
-    if (await isExactWorkdayMaintenancePage(probePage, probePage.url())) {
+    if (await confirmPersistentMaintenance(probePage, signal)) {
       this.#matchedLineage.delete(probePage);
       return owned(emptyWorkdaySnapshot(), {
         kind: "posting_unavailable",
-        reason: "unavailable",
+        reason: "maintenance",
+      });
+    }
+    if (await confirmPersistentRuntimeError(probePage, signal)) {
+      return owned(emptyWorkdaySnapshot(), {
+        kind: "posting_unavailable",
+        reason: "runtime_error",
       });
     }
     const parsed = parseWorkdayTarget(probePage.url());
@@ -119,6 +135,38 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
   }
 }
 
+async function confirmPersistentRuntimeError(
+  page: WorkdayProbePage,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (!await isExactWorkdayRuntimeErrorPage(page)) return false;
+  for (let reload = 0; reload < runtimeErrorReloadLimit; reload += 1) {
+    if (signal.aborted) throw signal.reason;
+    await page.reload({
+      waitUntil: "domcontentloaded",
+      timeout: runtimeErrorReloadTimeoutMs,
+    });
+    if (!await isExactWorkdayRuntimeErrorPage(page)) return false;
+  }
+  return true;
+}
+
+async function confirmPersistentMaintenance(
+  page: WorkdayProbePage,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (!await isExactWorkdayMaintenancePage(page, page.url())) return false;
+  for (let reload = 0; reload < maintenanceReloadLimit; reload += 1) {
+    if (signal.aborted) throw signal.reason;
+    await page.reload({
+      waitUntil: "domcontentloaded",
+      timeout: maintenanceReloadTimeoutMs,
+    });
+    if (!await isExactWorkdayMaintenancePage(page, page.url())) return false;
+  }
+  return true;
+}
+
 const postingFreeDescendantTraits = Object.freeze(new Set([
   "structural_trait_page_account_entry_v1",
   "structural_trait_page_email_verification_v1",
@@ -179,7 +227,7 @@ function parseWorkdayTarget(value: string): ParsedWorkdayTarget | undefined {
 function parseExpectedHost(
   host: string,
 ): Pick<ParsedWorkdayTarget, "host" | "hostFamily" | "tenant"> | undefined {
-  const matched = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(wd\d{1,2}\.myworkdayjobs\.(?:com|invalid))$/u.exec(host);
+  const matched = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(wd\d{1,3}\.myworkdayjobs\.(?:com|invalid))$/u.exec(host);
   if (matched === null) return undefined;
   return { host, tenant: matched[1]!, hostFamily: matched[2]! };
 }

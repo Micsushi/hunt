@@ -18,7 +18,9 @@
     "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts",
     "live:s2": "node scripts/run-s2-isolated.ts",
     "ack:s2-monitor": "node scripts/ack-s2-monitor.ts",
-    "audit:s2": "node scripts/audit-s2-run.ts"
+    "audit:s2": "node scripts/audit-s2-run.ts",
+    "prepare:s2-run": "node scripts/prepare-s2-run.ts",
+    "storage:s2": "node scripts/manage-s2-storage.ts"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

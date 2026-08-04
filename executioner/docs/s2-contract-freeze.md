@@ -39,3 +39,10 @@ full F0 acceptance gate. Later lanes must not edit the frozen roots locally.
 The manifest contains no live URL, account, mailbox, secret, profile, target
 token, or provider payload. It does not authorize provider access, deployment,
 publication, or final application submission.
+
+The current uncommitted availability-classification work is an authorized,
+compatible contract addition but is not yet a replacement freeze. It adds the
+`maintenance` and `runtime_error` posting-unavailability reasons and therefore intentionally leaves
+the clean-frozen-root gate failing until commit authority permits a new contract
+source commit and replacement tree object IDs. Do not weaken the gate or claim
+the old manifest covers the dirty amendment.

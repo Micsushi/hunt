@@ -54,6 +54,21 @@ test("account-access evidence is atomically sealed with an exact value-free sche
   }
 });
 
+test("direct application access retains an exact empty credential-verification set", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-evidence-"));
+  try {
+    const direct = {
+      ...packet(),
+      accountOutcome: "application_ready" as const,
+      independentlyVerifiedFields: [] as const,
+    };
+    await writeAccountAccessEvidence({ root, acceptance: direct, sensitiveValues: [] });
+    assert.deepEqual(readAccountAccessEvidence(root), direct);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("account-access evidence never overwrites a sealed packet", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-evidence-"));
   try {
