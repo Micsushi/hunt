@@ -396,6 +396,84 @@ test("failed target admission closes the launched context and removes only its p
   assert.equal(profiles.partialCleanupCount, 1);
 });
 
+test("an initially unavailable posting opens only long enough to report the exact fact", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        return {
+          ownership: "owned",
+          target: { kind: "posting_unavailable", reason: "not_found" },
+          snapshot: structuralSnapshot,
+        } as const;
+      },
+    },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  assert.deepEqual(await provider.reconcile({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_initial_unavailable_1"),
+    session: opened.value.session,
+    expectedTarget: liveFixtures.target,
+  }, new AbortController().signal), {
+    ok: true,
+    value: { kind: "posting_unavailable", reason: "not_found" },
+  });
+  assert.deepEqual(await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_initial_unavailable_2"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal), { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("crash recovery reattaches the sole owned unavailable posting for factual reporting", async () => {
+  const page = new FakePage();
+  const context = new FakeContext([page]);
+  const profiles = new MemoryProfiles();
+  profiles.marker = {
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    profileLeaseId: liveFixtures.session.profileLeaseId,
+    sessionId: liveFixtures.session.sessionId,
+    target: liveFixtures.target,
+    admittedAt: liveFixtures.issuedAt,
+    leaseExpiresAt: liveFixtures.expiresAt,
+  };
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        return {
+          ownership: "owned",
+          target: { kind: "posting_unavailable", reason: "unavailable" },
+          snapshot: structuralSnapshot,
+        } as const;
+      },
+    },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok && opened.value.kind, "reattached");
+  assert.equal(context.newPageCount, 0);
+});
+
 test("diagnostic hold runs before failed-open browser cleanup", async () => {
   const context = new FakeContext([]);
   let holdCount = 0;

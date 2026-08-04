@@ -211,7 +211,7 @@ export class PlaywrightPersistentBrowserSession
           const observation = inspected.value;
           if (
             observation.ownership === "owned" &&
-            observation.target.kind === "matched"
+            admissibleInitialTarget(observation.target)
           ) {
             owned.push(page);
           }
@@ -275,7 +275,7 @@ export class PlaywrightPersistentBrowserSession
       const observation = inspected.value;
       if (
         observation.ownership !== "owned" ||
-        observation.target.kind !== "matched"
+        !admissibleInitialTarget(observation.target)
       ) {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
         return cleaned
@@ -717,6 +717,12 @@ type ReconcilePortResult = LivePortResult<
   PersistentBrowserReconcileResult,
   PersistentBrowserErrorCode
 >;
+
+function admissibleInitialTarget(
+  target: OwnedTargetInspection["target"],
+): boolean {
+  return target.kind === "matched" || target.kind === "posting_unavailable";
+}
 
 function copyAdvanceFact(
   fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
