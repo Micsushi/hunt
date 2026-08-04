@@ -4,7 +4,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createPackageSbom, verifyPackageFileList } from "../src/corpus/package/index.ts";
+import {
+  createPackageSbom,
+  findPackageContentViolations,
+  verifyPackageFileList,
+  verifyPackageManifest,
+} from "../src/corpus/package/index.ts";
 
 const executioner = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(executioner, "..");
@@ -28,6 +33,15 @@ const pack = (JSON.parse(result.stdout) as readonly {
 if (pack === undefined) throw new Error("package result unavailable");
 const denied = verifyPackageFileList(pack.files.map((file) => file.path));
 if (denied.length > 0) throw new Error(`package contains denied files: ${denied.join(", ")}`);
+const manifest = JSON.parse(await readFile(resolve(executioner, "package.json"), "utf8"));
+const manifestIssues = verifyPackageManifest(manifest);
+if (manifestIssues.length > 0) throw new Error(manifestIssues.join(", "));
+const contents = new Map<string, string>();
+for (const file of pack.files) {
+  contents.set(file.path, await readFile(resolve(executioner, file.path), "utf8"));
+}
+const contentViolations = findPackageContentViolations(contents);
+if (contentViolations.length > 0) throw new Error(`package content denied: ${contentViolations.join(", ")}`);
 const artifact = resolve(output, pack.filename);
 const checksum = createHash("sha256").update(await readFile(artifact)).digest("hex");
 const lock = JSON.parse(await readFile(resolve(executioner, "package-lock.json"), "utf8"));

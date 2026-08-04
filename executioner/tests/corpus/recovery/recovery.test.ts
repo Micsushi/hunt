@@ -15,6 +15,7 @@ async function setup() {
   await writeFile(join(root, "variant-map.json"), '{"schemaVersion":1,"families":["account"]}');
   await writeFile(join(root, "config.json"), '{"schemaVersion":1,"mode":"deterministic_fixture","maxAttemptsPerSlot":2,"accountRefs":["account-primary"]}');
   await writeFile(join(root, "fixtures", "account.json"), "{}\n");
+  await writeFile(join(root, "fixtures", "fixture-matrix.json"), '{"schemaVersion":1,"expected":"passed","families":["account"]}');
   const bundlePath = join(root, ".runtime", "bundle.json");
   await createFrozenBundle({ repositoryRoot: root, executionerRoot: root, sourceRevision: "a".repeat(40), sourceTree: "b".repeat(40), clean: true, packageLockPath: join(root, "package-lock.json"), manifestPath: join(root, "manifest.json"), variantMapPath: join(root, "variant-map.json"), configPath: join(root, "config.json"), fixtureRoot: join(root, "fixtures") }, bundlePath);
   return { root, bundlePath, ledgerPath: join(root, ".runtime", "ledger.json") };
@@ -24,6 +25,7 @@ test("retry is bounded and a stale ledger cannot cross a freeze identity", async
   const value = await setup();
   let calls = 0;
   const ports: AcceptancePorts = {
+    currentIdentity() { return { sourceRevision: "a".repeat(40), sourceTree: "b".repeat(40), clean: true }; },
     async runFixture() { return { ok: true }; },
     async captureAndSealTruth(ids) { return { seal: "sealed", outcomes: new Map(ids.map((id) => [id, { kind: "review_reached" } as const])) }; },
     async runSlot() { calls += 1; return { ok: false, code: "browser_timeout", retryable: true }; },
@@ -47,6 +49,7 @@ test("frozen input drift stops recovery before corpus work", async () => {
   await writeFile(join(value.root, "fixtures", "account.json"), '{"drift":true}\n');
   let called = false;
   const ports: AcceptancePorts = {
+    currentIdentity() { return { sourceRevision: "a".repeat(40), sourceTree: "b".repeat(40), clean: true }; },
     async runFixture() { called = true; return { ok: true }; },
     async captureAndSealTruth() { throw new Error("unreachable"); },
     async runSlot() { throw new Error("unreachable"); },

@@ -258,7 +258,7 @@ owner-approved policy:
 {
   "schemaVersion": 1,
   "contractRevision": "s2-gmail-sender-policy-v2",
-  "senderAddress": "notifications@example.com",
+  "senderAddress": "notifications@example.invalid",
   "verificationHost": "tenant.wd5.myworkdayjobs.com",
   "verificationTenant": "tenant"
 }
@@ -438,4 +438,5 @@ npm run package:build
 The current checked-in corpus adapter is deterministic and synthetic while the
 accepted S3-F1/F2/F3 providers are unavailable. It proves the fail-closed ports,
 reconciliation, recovery, and packaging path, but is not live-corpus evidence.
+Its report status is `accepted_fixture` and `liveCorpusCertified` remains false.
 See `docs/corpus-release.md` and `docs/owner-test-backlog.md`.

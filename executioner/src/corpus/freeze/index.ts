@@ -60,12 +60,13 @@ export async function createFrozenBundle(
 
   const manifest = object(await json(source.manifestPath));
   const slots = Array.isArray(manifest.slots) ? manifest.slots : [];
-  if (manifest.schemaVersion !== 1 || slots.length !== 40) invalid("corpus manifest");
+  if (!exactKeys(manifest, ["schemaVersion", "slots"]) || manifest.schemaVersion !== 1 || slots.length !== 40) invalid("corpus manifest");
   const slotIds = new Set<string>();
   const families = new Set<string>();
   for (const value of slots) {
     const slot = object(value);
     if (
+      !exactKeys(slot, ["slotId", "availability", "variantFamily"]) ||
       !semanticId(slot.slotId) ||
       slotIds.has(slot.slotId) ||
       !semanticId(slot.variantFamily) ||
@@ -80,21 +81,25 @@ export async function createFrozenBundle(
   const variantMap = object(await json(source.variantMapPath));
   const mappedFamilies = Array.isArray(variantMap.families) ? variantMap.families : [];
   if (
+    !exactKeys(variantMap, ["schemaVersion", "families"]) ||
     variantMap.schemaVersion !== 1 ||
+    mappedFamilies.length !== families.size ||
+    !mappedFamilies.every(semanticId) ||
+    new Set(mappedFamilies).size !== mappedFamilies.length ||
     ![...families].every((family) => mappedFamilies.includes(family))
   ) invalid("variant map");
 
   const config = object(await json(source.configPath));
   const accountRefs = Array.isArray(config.accountRefs) ? config.accountRefs : [];
   if (
+    !exactKeys(config, ["schemaVersion", "mode", "maxAttemptsPerSlot", "accountRefs"]) ||
     config.schemaVersion !== 1 ||
     (config.mode !== "deterministic_fixture" && config.mode !== "live_corpus") ||
     !Number.isSafeInteger(config.maxAttemptsPerSlot) ||
     Number(config.maxAttemptsPerSlot) < 1 ||
     Number(config.maxAttemptsPerSlot) > 3 ||
     accountRefs.length === 0 ||
-    !accountRefs.every(semanticId) ||
-    forbiddenConfigKey(config)
+    !accountRefs.every(semanticId)
   ) throw new Error("acceptance configuration invalid");
 
   const fixedInputs = [
@@ -105,6 +110,17 @@ export async function createFrozenBundle(
   ] as const;
   const fixturePaths = await files(source.fixtureRoot);
   if (fixturePaths.length === 0) invalid("fixture set");
+  const matrixPath = fixturePaths.find((path) => path.endsWith(`${sep}fixture-matrix.json`));
+  if (matrixPath === undefined) invalid("fixture matrix");
+  const matrix = object(await json(matrixPath));
+  const matrixFamilies = Array.isArray(matrix.families) ? matrix.families : [];
+  if (
+    !exactKeys(matrix, ["schemaVersion", "expected", "families"]) ||
+    matrix.schemaVersion !== 1 ||
+    matrix.expected !== "passed" ||
+    matrixFamilies.length !== mappedFamilies.length ||
+    !mappedFamilies.every((family) => matrixFamilies.includes(family))
+  ) invalid("fixture matrix");
   const inputs: FrozenInput[] = [];
   for (const [kind, path] of fixedInputs) {
     inputs.push({ kind, path: safeRelative(source.repositoryRoot, path), sha256: await hashFile(path) });
@@ -114,19 +130,23 @@ export async function createFrozenBundle(
   }
   inputs.sort((left, right) => left.path.localeCompare(right.path));
 
-  const core = {
+  const identityCore = {
     schemaVersion: 1 as const,
     sourceRevision: source.sourceRevision,
     sourceTree: source.sourceTree,
     slotCount: 40 as const,
-    rootRelativeFromBundle: relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || ".",
     accountRefs: Object.freeze(accountRefs as string[]),
     maxAttemptsPerSlot: Number(config.maxAttemptsPerSlot),
-    mode: config.mode,
+    mode: config.mode as "deterministic_fixture" | "live_corpus",
     inputs: Object.freeze(inputs),
   };
-  const identity = hash(stable(core));
-  const unsealed = { ...core, runId: `corpus-${hash(identity).slice(0, 20)}`, identity };
+  const identity = hash(stable(identityCore));
+  const unsealed = {
+    ...identityCore,
+    rootRelativeFromBundle: relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || ".",
+    runId: `corpus-${hash(identity).slice(0, 20)}`,
+    identity,
+  };
   const bundle: FrozenCorpusBundle = Object.freeze({
     ...unsealed,
     seal: hash(stable(unsealed)),
@@ -151,7 +171,6 @@ export async function verifyFrozenBundle(
       sourceRevision: bundle.sourceRevision,
       sourceTree: bundle.sourceTree,
       slotCount: bundle.slotCount,
-      rootRelativeFromBundle: bundle.rootRelativeFromBundle,
       accountRefs: bundle.accountRefs,
       maxAttemptsPerSlot: bundle.maxAttemptsPerSlot,
       mode: bundle.mode,
@@ -184,16 +203,14 @@ function object(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
-function semanticId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9][a-z0-9._:-]{0,63}$/u.test(value);
+function exactKeys(value: JsonObject, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return keys.length === wanted.length && keys.every((key, index) => key === wanted[index]);
 }
 
-function forbiddenConfigKey(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(forbiddenConfigKey);
-  if (value === null || typeof value !== "object") return false;
-  return Object.entries(value).some(([key, child]) =>
-    /password|secret|token|credential|email|url|cookie|submit/iu.test(key) || forbiddenConfigKey(child),
-  );
+function semanticId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._:-]{0,63}$/u.test(value);
 }
 
 async function files(root: string): Promise<string[]> {

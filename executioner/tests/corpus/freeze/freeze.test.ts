@@ -43,6 +43,11 @@ async function source(): Promise<FreezeSource> {
     }),
   );
   await writeFile(join(root, "fixtures", "account.json"), '{"outcome":"review_reached"}\n');
+  await writeFile(join(root, "fixtures", "fixture-matrix.json"), JSON.stringify({
+    schemaVersion: 1,
+    expected: "passed",
+    families: ["account", "questionnaire"],
+  }));
   return {
     repositoryRoot: root,
     executionerRoot: root,
@@ -93,6 +98,50 @@ test("freeze refuses dirty source and unsafe configuration", async () => {
   await assert.rejects(
     () => createFrozenBundle(unsafe, join(unsafe.repositoryRoot, "bundle.json")),
     /acceptance configuration invalid/,
+  );
+});
+
+test("freeze rejects schema extensions and incomplete fixture coverage", async () => {
+  const extra = await source();
+  await writeFile(
+    extra.configPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      mode: "deterministic_fixture",
+      maxAttemptsPerSlot: 2,
+      accountRefs: ["account-primary"],
+      note: "unreviewed",
+    }),
+  );
+  await assert.rejects(
+    () => createFrozenBundle(extra, join(extra.repositoryRoot, "bundle.json")),
+    /acceptance configuration invalid/,
+  );
+
+  const uncovered = await source();
+  await writeFile(
+    join(uncovered.fixtureRoot, "fixture-matrix.json"),
+    JSON.stringify({ schemaVersion: 1, expected: "passed", families: ["account"] }),
+  );
+  await assert.rejects(
+    () => createFrozenBundle(uncovered, join(uncovered.repositoryRoot, "bundle.json")),
+    /fixture matrix invalid/,
+  );
+});
+
+test("freeze identity is output-location independent and the bundle path is locked", async () => {
+  const input = await source();
+  const firstPath = join(input.repositoryRoot, ".runtime", "one", "bundle.json");
+  const secondPath = join(input.repositoryRoot, ".runtime", "deeper", "two", "bundle.json");
+  const first = await createFrozenBundle(input, firstPath);
+  const second = await createFrozenBundle(input, secondPath);
+
+  assert.equal(first.identity, second.identity);
+  assert.equal(first.runId, second.runId);
+  await assert.rejects(() => createFrozenBundle(input, firstPath), /EEXIST/);
+  await assert.rejects(
+    () => verifyFrozenBundle(firstPath, { sourceRevision: "c".repeat(40), sourceTree: "b".repeat(40), clean: true }),
+    /frozen source drift/,
   );
 });
 

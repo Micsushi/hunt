@@ -7,14 +7,21 @@
     "node": ">=22.18"
   },
   "files": [
-    "src/**/*.ts",
-    "docs/corpus-release.md"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "docs/corpus-release.md",
+    "docs/corpus-acceptance-summary.md"
   ],
   "exports": {
-    "./mcp": "./src/control/mcp/index.ts"
+    "./mcp": {
+      "types": "./dist/control/mcp/index.d.ts",
+      "import": "./dist/control/mcp/index.js"
+    }
   },
   "scripts": {
     "test": "node tests/run.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "quality": "npm run typecheck && npm test",
     "provision:s2-account": "node scripts/provision-s2-account.ts",
