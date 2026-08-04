@@ -135,6 +135,48 @@ test("missing, duplicate, and non-actionable controls stop before an effect", as
   }
 });
 
+test("a missing transition control reclassifies a late unavailable page before failing", async () => {
+  const harness = await openedHarness({
+    fact: { cardinality: 0, actionable: false },
+    targetAfterControlInspect: {
+      kind: "posting_unavailable",
+      reason: "not_found",
+    },
+  });
+
+  const result = await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "posting_unavailable", reason: "not_found" },
+  });
+  assert.equal(harness.adapter.activations, 0);
+  assert.equal(harness.context.closeCount, 1);
+  assert.equal(harness.profiles.cleanupCount, 1);
+});
+
+test("a missing control never turns a backward page reclassification into an effect", async () => {
+  const harness = await openedHarness({
+    initialTraits: [
+      "structural_trait_page_job_posting_v1",
+      "structural_trait_navigation_apply_choice_v1",
+    ],
+    fact: { cardinality: 0, actionable: false },
+    factAfterFirstInspect: { cardinality: 1, actionable: true },
+    traitsAfterControlInspect: ["structural_trait_page_job_posting_v1"],
+  });
+
+  assert.deepEqual(await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  ), invalid());
+  assert.equal(harness.adapter.activations, 0);
+  assert.equal(harness.context.effects, 0);
+});
+
 test("redirect mismatch and popup ambiguity preserve exact facts then release ownership", async () => {
   const mismatch = await openedHarness({
     targetAfterEffect: {
@@ -225,16 +267,26 @@ function request() {
 async function openedHarness(options: {
   readonly initialTraits?: readonly string[];
   readonly fact?: { readonly cardinality: number; readonly actionable: boolean };
+  readonly factAfterFirstInspect?: { readonly cardinality: number; readonly actionable: boolean };
   readonly targetAfterOpen?: TargetFact;
   readonly targetAfterEffect?: TargetFact;
+  readonly targetAfterControlInspect?: TargetFact;
+  readonly traitsAfterControlInspect?: readonly string[];
   readonly popupAfterEffect?: boolean;
   readonly remainApplyChoice?: boolean;
   readonly emailSignInChoice?: boolean;
 } = {}) {
   const context = new FakeContext();
   const profiles = new MemoryProfiles();
+  let controlInspected = false;
   const adapter = new NavigationAdapter(
-    options.fact ?? { cardinality: 1, actionable: true },
+    [
+      options.fact ?? { cardinality: 1, actionable: true },
+      ...(options.factAfterFirstInspect === undefined
+        ? []
+        : [options.factAfterFirstInspect]),
+    ],
+    () => { controlInspected = true; },
     (action) => {
       context.effects += 1;
       if (options.popupAfterEffect) context.ownedPages.push(new FakePage());
@@ -260,6 +312,12 @@ async function openedHarness(options: {
     probe: {
       async inspect() {
         checks += 1;
+        if (controlInspected && options.targetAfterControlInspect !== undefined) {
+          return targetObservation(options.targetAfterControlInspect);
+        }
+        if (controlInspected && options.traitsAfterControlInspect !== undefined) {
+          return matched(options.traitsAfterControlInspect);
+        }
         if (checks > 1 && options.targetAfterOpen !== undefined) {
           return targetObservation(options.targetAfterOpen);
         }
@@ -331,16 +389,31 @@ function targetObservation(target: TargetFact) {
 class NavigationAdapter {
   activations = 0;
   readonly actions: string[] = [];
-  readonly #fact: { readonly cardinality: number; readonly actionable: boolean };
+  #inspections = 0;
+  readonly #facts: readonly {
+    readonly cardinality: number;
+    readonly actionable: boolean;
+  }[];
+  readonly #inspect: () => void;
   readonly #activate: (action: string) => void;
   constructor(
-    fact: { readonly cardinality: number; readonly actionable: boolean },
+    facts: readonly {
+      readonly cardinality: number;
+      readonly actionable: boolean;
+    }[],
+    inspect: () => void,
     activate: (action: string) => void,
   ) {
-    this.#fact = fact;
+    this.#facts = facts;
+    this.#inspect = inspect;
     this.#activate = activate;
   }
-  async inspect() { return this.#fact; }
+  async inspect() {
+    this.#inspect();
+    const fact = this.#facts[Math.min(this.#inspections, this.#facts.length - 1)]!;
+    this.#inspections += 1;
+    return fact;
+  }
   async activate(_page: FakePage, action: string) {
     this.activations += 1;
     this.actions.push(action);

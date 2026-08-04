@@ -499,13 +499,35 @@ export class PlaywrightPersistentBrowserSession
         this.#options.timeoutMs,
       );
       if (control.kind === "cancelled") return cancelled();
-      if (control.kind === "timeout") return failure("browser_timeout");
-      if (control.kind === "error") return failure("browser_target_invalid");
+      if (control.kind === "timeout" || control.kind === "error") {
+        const reclassified = await this.#reclassifyAfterUnavailableControl(
+          state.kind,
+          request,
+          signal,
+        );
+        if (reclassified === "retry") continue;
+        if (reclassified !== undefined) return reclassified;
+        return failure(
+          control.kind === "timeout" ? "browser_timeout" : "browser_target_invalid",
+        );
+      }
       if (control.value.cardinality > 1) {
-        return failure("browser_target_ambiguous");
+        const reclassified = await this.#reclassifyAfterUnavailableControl(
+          state.kind,
+          request,
+          signal,
+        );
+        if (reclassified === "retry") continue;
+        return reclassified ?? failure("browser_target_ambiguous");
       }
       if (control.value.cardinality !== 1 || !control.value.actionable) {
-        return failure("browser_target_invalid");
+        const reclassified = await this.#reclassifyAfterUnavailableControl(
+          state.kind,
+          request,
+          signal,
+        );
+        if (reclassified === "retry") continue;
+        return reclassified ?? failure("browser_target_invalid");
       }
       const activated = await bounded(
         this.#options.postingNavigation!.activate(this.#page!, action),
@@ -570,6 +592,35 @@ export class PlaywrightPersistentBrowserSession
     return cleaned
       ? { ok: true, value: copyAdvanceFact(fact) }
       : failure("browser_profile_cleanup_failed");
+  }
+
+  async #reclassifyAfterUnavailableControl(
+    previous: "job_posting" | "apply_choice" | "email_sign_in_choice",
+    request: AccountEntryAdvanceRequest,
+    signal: AbortSignal,
+  ): Promise<AccountEntryAdvancePortResult | "retry" | undefined> {
+    const inspected = await inspectPinnedTarget(
+      this.#page!,
+      this.#options.probe,
+      this.#approvedTarget!,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!inspected.ok) return inspected;
+    if (inspected.value.target.kind !== "matched") {
+      return this.#stopAfterTargetFact(inspected.value.target);
+    }
+    const settled = classifyWorkdayAccountNavigation(inspected.value.snapshot);
+    if (settled.kind === previous) return undefined;
+    if (settled.kind === "account_boundary") {
+      return { ok: true, value: { kind: "account_boundary" } };
+    }
+    if (settled.kind === "ambiguous") return failure("browser_target_ambiguous");
+    if (settled.kind === "invalid") return failure("browser_target_invalid");
+    return navigationRank(settled.kind) > navigationRank(previous)
+      ? "retry"
+      : failure("browser_target_invalid");
   }
 
   async #uncertainAdvanceFailure(): Promise<AccountEntryAdvancePortResult> {
@@ -722,6 +773,12 @@ function admissibleInitialTarget(
   target: OwnedTargetInspection["target"],
 ): boolean {
   return target.kind === "matched" || target.kind === "posting_unavailable";
+}
+
+function navigationRank(
+  state: "job_posting" | "apply_choice" | "email_sign_in_choice",
+): number {
+  return state === "job_posting" ? 0 : state === "apply_choice" ? 1 : 2;
 }
 
 function copyAdvanceFact(
