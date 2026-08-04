@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "defaultOutcome": { "kind": "review_reached" },
+  "overrides": {
+    "slot-37": { "kind": "policy_stop", "reason": "not_found" },
+    "slot-38": { "kind": "policy_stop", "reason": "not_found" },
+    "slot-39": { "kind": "policy_stop", "reason": "not_found" },
+    "slot-40": { "kind": "policy_stop", "reason": "not_found" }
+  }
+}

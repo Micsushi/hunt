@@ -6,6 +6,13 @@
   "engines": {
     "node": ">=22.18"
   },
+  "files": [
+    "src/**/*.ts",
+    "docs/corpus-release.md"
+  ],
+  "exports": {
+    "./mcp": "./src/control/mcp/index.ts"
+  },
   "scripts": {
     "test": "node tests/run.ts",
     "typecheck": "tsc --noEmit",
@@ -20,7 +27,12 @@
     "ack:s2-monitor": "node scripts/ack-s2-monitor.ts",
     "audit:s2": "node scripts/audit-s2-run.ts",
     "prepare:s2-run": "node scripts/prepare-s2-run.ts",
-    "storage:s2": "node scripts/manage-s2-storage.ts"
+    "storage:s2": "node scripts/manage-s2-storage.ts",
+    "corpus:freeze": "node scripts/freeze-corpus.ts",
+    "corpus:accept": "node scripts/accept-corpus.ts",
+    "audit": "node scripts/audit-corpus.ts",
+    "package:build": "node scripts/package.ts",
+    "package:verify": "node scripts/package-verify.ts"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

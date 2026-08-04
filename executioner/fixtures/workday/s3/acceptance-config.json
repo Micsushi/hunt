@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "mode": "deterministic_fixture",
+  "maxAttemptsPerSlot": 2,
+  "accountRefs": ["account-primary"]
+}

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "modules": {
+    "src/account/entry/adapter.ts": { "disposition": "Retain the established account entry boundary.", "regressionImpact": "Covered by account entry and composition suites." },
+    "src/account/lifecycle/lifecycle.ts": { "disposition": "Retain the established lifecycle state machine.", "regressionImpact": "Covered by lifecycle, outcome, and receipt suites." },
+    "src/browser/playwright-live/private/playwright-account-page.ts": { "disposition": "Retain the established page adapter boundary.", "regressionImpact": "Covered by live adapter and page tests." },
+    "src/browser/playwright-live/session.ts": { "disposition": "Retain the established session ownership boundary.", "regressionImpact": "Covered by session, browser, and walking-skeleton suites." },
+    "src/composition/private/s2-run-storage.ts": { "disposition": "Retain the established storage transaction boundary.", "regressionImpact": "Covered by storage and completion audit suites." },
+    "src/composition/s2-account-verified-runner.ts": { "disposition": "Retain the established verified journey composition.", "regressionImpact": "Covered by verified runner and completion suites." },
+    "src/composition/s2-gmail-bootstrap.ts": { "disposition": "Retain the established mailbox bootstrap boundary.", "regressionImpact": "Covered by bootstrap, privacy, and binding suites." },
+    "src/contracts/live/serialized.ts": { "disposition": "Retain the frozen serialized contract in one owner module.", "regressionImpact": "Covered by wire compatibility and contract suites." },
+    "src/contracts/ownership.ts": { "disposition": "Retain the frozen ownership matrix in one authority.", "regressionImpact": "Covered by boundary and dependency suites." },
+    "src/contracts/serialized.ts": { "disposition": "Retain the frozen serialized contract in one owner module.", "regressionImpact": "Covered by serialized compatibility and schema suites." },
+    "src/contracts/types.ts": { "disposition": "Retain the frozen in-process contract in one owner module.", "regressionImpact": "Covered by contract, conformance, and consumer suites." },
+    "src/live/preflight/admit.ts": { "disposition": "Retain the established fail-closed admission boundary.", "regressionImpact": "Covered by preflight and private binding suites." },
+    "src/live/preflight/private/windows-acl.ts": { "disposition": "Retain the established Windows access-control checks together.", "regressionImpact": "Covered by preflight and Windows access-control suites." },
+    "src/live/runner/account-access.ts": { "disposition": "Retain the established account access runner boundary.", "regressionImpact": "Covered by live runner and completion suites." },
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts": { "disposition": "Retain the established Windows custody transaction boundary.", "regressionImpact": "Covered by custody, ACL, and cross-user suites." },
+    "src/testing/contracts/compatibility-probes.ts": { "disposition": "Retain canonical compatibility probes together.", "regressionImpact": "Covered by compatibility and canonical probe suites." },
+    "src/testing/contracts/field-flow-cases.ts": { "disposition": "Retain the executable field-flow catalog together.", "regressionImpact": "Covered by field-flow and component suites." },
+    "src/testing/contracts/operation-cases.ts": { "disposition": "Retain the executable operation catalog together.", "regressionImpact": "Covered by operation, conformance, and component suites." },
+    "src/testing/contracts/scenarios.ts": { "disposition": "Retain canonical contract scenarios together.", "regressionImpact": "Covered by conformance and stateful scenario suites." },
+    "src/control/orchestrator/loop/index.ts": { "disposition": "Retain the established single journey loop boundary.", "regressionImpact": "Covered by page-loop, recovery, and race suites." },
+    "src/control/orchestrator/terminal/index.ts": { "disposition": "Retain terminal projection in its frozen owner.", "regressionImpact": "Covered by terminal, reporting, and progress suites." }
+  }
+}

@@ -420,3 +420,22 @@ the other. Both proofs require cleanup, privacy, no retained message body, and
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
+# Frozen corpus acceptance
+
+The S3-F4 local acceptance workflow freezes one clean revision and its corpus
+inputs, runs fixtures before a sequential 40-slot reconciliation, audits safety
+and privacy gates, and builds an allowlisted local package:
+
+```text
+npm run corpus:freeze
+npm run corpus:accept -- --frozen <bundle-path>
+npm run audit
+npm run quality
+npm run package:verify
+npm run package:build
+```
+
+The current checked-in corpus adapter is deterministic and synthetic while the
+accepted S3-F1/F2/F3 providers are unavailable. It proves the fail-closed ports,
+reconciliation, recovery, and packaging path, but is not live-corpus evidence.
+See `docs/corpus-release.md` and `docs/owner-test-backlog.md`.
