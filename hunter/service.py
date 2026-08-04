@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from hunter.service_auth import require_service_token
 from hunter.service_request_id import ServiceRequestIDMiddleware
@@ -63,11 +64,23 @@ class ConfigPatchRequest(BaseModel):
     enrich_after_scrape: bool | None = None
     enrichment_batch_limit: int | None = None
     linkedin_fetch_description: bool | None = None
+    linkedin_discovery_max_workers: int | None = Field(default=None, ge=1, le=2)
+    linkedin_queries_per_run: int | None = Field(default=None, ge=1, le=20)
+    linkedin_results_wanted: int | None = Field(default=None, ge=1, le=50)
     linkedin_discovery_cooldown_minutes: int | None = None
     enrichment_timeout_ms: int | None = None
     enrichment_max_attempts: int | None = None
     enrichment_alert_failure_rate_percent: int | None = None
     enrichment_alert_cooldown_minutes: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_nulls(cls, value):
+        if isinstance(value, dict):
+            null_fields = sorted(key for key, field_value in value.items() if field_value is None)
+            if null_fields:
+                raise ValueError(f"Config values cannot be null: {', '.join(null_fields)}")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +187,10 @@ def get_config():
         EXPERIENCE_LEVELS,
         HOURS_OLD,
         LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
+        LINKEDIN_DISCOVERY_MAX_WORKERS,
         LINKEDIN_FETCH_DESCRIPTION,
+        LINKEDIN_QUERIES_PER_RUN,
+        LINKEDIN_RESULTS_WANTED,
         LOCATIONS,
         MAX_WORKERS,
         RESULTS_WANTED,
@@ -185,18 +201,9 @@ def get_config():
         WATCHLIST,
     )
 
-    cfg_path = _uc.get_path()
-    saved_company_blocklist = _uc.load().get("company_blocklist")
-    company_blocklist = (
-        [str(value) for value in saved_company_blocklist if str(value).strip()]
-        if isinstance(saved_company_blocklist, list)
-        else COMPANY_BLOCKLIST
-    )
-    return {
-        "config_file": str(cfg_path),
-        "config_file_exists": cfg_path.exists(),
+    config_values = {
         "watchlist": WATCHLIST,
-        "company_blocklist": company_blocklist,
+        "company_blocklist": COMPANY_BLOCKLIST,
         "title_blacklist": TITLE_BLACKLIST,
         "target_job_titles": TARGET_JOB_TITLES,
         "experience_levels": EXPERIENCE_LEVELS,
@@ -208,12 +215,29 @@ def get_config():
         "run_interval_seconds": RUN_INTERVAL_SECONDS,
         "enrich_after_scrape": ENRICH_AFTER_SCRAPE,
         "linkedin_fetch_description": LINKEDIN_FETCH_DESCRIPTION,
+        "linkedin_discovery_max_workers": LINKEDIN_DISCOVERY_MAX_WORKERS,
+        "linkedin_queries_per_run": LINKEDIN_QUERIES_PER_RUN,
+        "linkedin_results_wanted": LINKEDIN_RESULTS_WANTED,
         "linkedin_discovery_cooldown_minutes": LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
         "enrichment_batch_limit": ENRICHMENT_BATCH_LIMIT,
         "enrichment_timeout_ms": ENRICHMENT_TIMEOUT_MS,
         "enrichment_max_attempts": ENRICHMENT_MAX_ATTEMPTS,
         "enrichment_alert_failure_rate_percent": ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
         "enrichment_alert_cooldown_minutes": ENRICHMENT_ALERT_COOLDOWN_MINUTES,
+    }
+    saved = _uc.load()
+    for key in config_values:
+        if key in saved and key.upper() not in os.environ:
+            config_values[key] = saved[key]
+    config_values["company_blocklist"] = [
+        str(value) for value in config_values["company_blocklist"] if str(value).strip()
+    ]
+
+    cfg_path = _uc.get_path()
+    return {
+        "config_file": str(cfg_path),
+        "config_file_exists": cfg_path.exists(),
+        **config_values,
     }
 
 

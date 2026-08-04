@@ -50,12 +50,13 @@ Hunt uses a dark olive-green, data-dense control dashboard for the job pipeline.
 ## Settings Information Architecture
 
 - `Targeting` owns C1 role titles, experience levels, company priority/block rules, title exclusions, locations, and job boards.
-- `Automation` owns C1 cadence, result limits, enrichment, and advanced runtime controls.
+- `Automation` owns C1 cadence, provider-specific request limits, enrichment, and advanced runtime controls. LinkedIn limits must be visually grouped and must not be conflated with the higher-throughput settings used by other sources.
 - `Resume` owns C2 tailoring and provider controls.
 - `System` owns persistence status, integrations, and maintenance links.
 - C1 targeting uses `target_job_titles` and `experience_levels`. The retired `search_terms` field must never appear in the UI or save payload.
 - Engineering and data are the fixed primary lanes; render any additional configured lanes after them and preserve those keys on save.
 - Blocked-company copy must state that exact normalized matches are rejected before database persistence. It must not imply that saving the list removes existing rows.
+- C1 file-backed scalar controls must state that saving and activation are separate: a scheduler restart is required before worker, interval, source, and request-limit changes take effect.
 
 OpenSpec change `design.md`, if introduced later, remains technical design and
 does not replace this UI contract.

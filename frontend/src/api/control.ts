@@ -483,6 +483,10 @@ export interface C1Config {
   hours_old: number
   run_interval_seconds: number
   enrich_after_scrape: boolean
+  linkedin_discovery_max_workers: number
+  linkedin_queries_per_run: number
+  linkedin_results_wanted: number
+  linkedin_fetch_description: boolean
   linkedin_discovery_cooldown_minutes: number
   enrichment_batch_limit: number
   enrichment_timeout_ms: number

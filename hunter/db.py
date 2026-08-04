@@ -158,6 +158,7 @@ LINKEDIN_AUTH_STATE_EXPIRED = "expired"
 LINKEDIN_AUTH_STATE_UNKNOWN = "unknown"
 HIRING_CAFE_COOLDOWN_UNTIL_KEY = "hiring_cafe_cooldown_until"
 LINKEDIN_DISCOVERY_COOLDOWN_UNTIL_KEY = "linkedin_discovery_cooldown_until"
+LINKEDIN_DISCOVERY_QUERY_CURSOR_KEY = "linkedin_discovery_query_cursor"
 REVIEW_AUDIT_LOG_KEY = "review_audit_log"
 
 # Backwards compatible: tests and older scripts may patch `db.DB_PATH` directly.
@@ -1363,6 +1364,30 @@ def get_linkedin_discovery_cooldown_state(*, now=None):
         "active": is_linkedin_discovery_in_cooldown(now=now),
         "until": until,
     }
+
+
+def get_linkedin_discovery_query_cursor():
+    state = get_runtime_state([LINKEDIN_DISCOVERY_QUERY_CURSOR_KEY]).get(
+        LINKEDIN_DISCOVERY_QUERY_CURSOR_KEY
+    )
+    try:
+        return max(0, int((state or {}).get("value", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_linkedin_discovery_query_cursor(value):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        _upsert_runtime_state(
+            cursor,
+            LINKEDIN_DISCOVERY_QUERY_CURSOR_KEY,
+            str(max(0, int(value))),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def restore_job_enrichment_claim(claimed_job, *, source=None):

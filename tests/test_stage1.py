@@ -6,6 +6,8 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -290,9 +292,14 @@ class Stage1Tests(unittest.TestCase):
         jobspy_fake = types.ModuleType("jobspy")
         jobspy_fake.scrape_jobs = fake_scrape_jobs
         with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
-            jobs = discovery.scrape_single("linkedin", "software engineer", "Canada", "engineering")
+            with patch.object(discovery, "LINKEDIN_RESULTS_WANTED", 25, create=True):
+                with patch.object(discovery, "LINKEDIN_FETCH_DESCRIPTION", False):
+                    jobs = discovery.scrape_single(
+                        "linkedin", "software engineer", "Canada", "engineering"
+                    )
 
-        self.assertEqual(scrape_calls[0]["linkedin_fetch_description"], True)
+        self.assertEqual(scrape_calls[0]["results_wanted"], 25)
+        self.assertEqual(scrape_calls[0]["linkedin_fetch_description"], False)
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
         self.assertEqual(job["job_url"], "https://www.linkedin.com/jobs/view/1")
@@ -302,6 +309,85 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(job["enrichment_status"], "pending")
         self.assertEqual(job["apply_host"], "boards.greenhouse.io")
         self.assertEqual(job["ats_type"], "greenhouse")
+
+    def test_scrape_batches_linkedin_queries_and_runs_only_one_at_a_time(self):
+        calls = []
+        active_linkedin = 0
+        max_active_linkedin = 0
+        lock = threading.Lock()
+        query_cursor = {"value": 0}
+
+        def fake_scrape_single(site, term, location, category):
+            nonlocal active_linkedin, max_active_linkedin
+            with lock:
+                active_linkedin += 1
+                max_active_linkedin = max(max_active_linkedin, active_linkedin)
+                calls.append((site, term, location, category))
+            time.sleep(0.02)
+            with lock:
+                active_linkedin -= 1
+            return []
+
+        def get_query_cursor():
+            return query_cursor["value"]
+
+        def set_query_cursor(value):
+            query_cursor["value"] = value
+
+        with (
+            patch.object(
+                discovery,
+                "SEARCH_QUERIES",
+                {"engineering": ["query-1", "query-2", "query-3", "query-4"]},
+            ),
+            patch.object(discovery, "LOCATIONS", ["Canada"]),
+            patch.object(discovery, "SITES", ["linkedin"]),
+            patch.object(discovery, "MAX_WORKERS", 10),
+            patch.object(discovery, "LINKEDIN_DISCOVERY_MAX_WORKERS", 1, create=True),
+            patch.object(discovery, "LINKEDIN_QUERIES_PER_RUN", 3, create=True),
+            patch.object(discovery, "get_linkedin_discovery_query_cursor", get_query_cursor),
+            patch.object(discovery, "set_linkedin_discovery_query_cursor", set_query_cursor),
+            patch.object(discovery, "init_db"),
+            patch.object(discovery, "C1Logger"),
+            patch.object(discovery, "scrape_single", side_effect=fake_scrape_single),
+            patch.object(discovery, "get_linkedin_discovery_cooldown_until", return_value=None),
+            patch.object(discovery, "is_linkedin_discovery_in_cooldown", return_value=False),
+        ):
+            first_summary = discovery.scrape(enrich_pending=False)
+            second_summary = discovery.scrape(enrich_pending=False)
+
+        self.assertEqual(
+            [term for site, term, _location, _category in calls if site == "linkedin"],
+            ["query-1", "query-2", "query-3", "query-4", "query-1", "query-2"],
+        )
+        self.assertEqual(max_active_linkedin, 1)
+        self.assertEqual(first_summary["linkedin_tasks_selected"], 3)
+        self.assertEqual(first_summary["linkedin_tasks_deferred"], 1)
+        self.assertEqual(second_summary["linkedin_tasks_selected"], 3)
+        self.assertEqual(second_summary["linkedin_tasks_deferred"], 1)
+
+    def test_linkedin_query_rotation_survives_scraper_module_restart(self):
+        path = self.make_temp_db_path()
+        old_db_path = db.DB_PATH
+        tasks = [
+            ("linkedin", "query-1", "Canada", "engineering"),
+            ("linkedin", "query-2", "Canada", "engineering"),
+            ("linkedin", "query-3", "Canada", "engineering"),
+        ]
+        try:
+            db.DB_PATH = path
+            db.init_db()
+
+            first = discovery._take_linkedin_task_batch(tasks, 2)
+            reloaded_discovery = importlib.reload(discovery)
+            second = reloaded_discovery._take_linkedin_task_batch(tasks, 2)
+
+            self.assertEqual([task[1] for task in first], ["query-1", "query-2"])
+            self.assertEqual([task[1] for task in second], ["query-3", "query-1"])
+        finally:
+            db.DB_PATH = old_db_path
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_scrape_single_enforces_configured_role_and_experience_targets(self):
         rows = [

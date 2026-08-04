@@ -125,6 +125,28 @@ def test_settings_exposes_linkedin_discovery_rate_limit_cooldown():
     assert "linkedin_discovery_cooldown_minutes" in mocks
 
 
+def test_settings_exposes_linkedin_discovery_request_limits():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "LinkedIn searches per cycle" in settings
+    assert "LinkedIn results per search" in settings
+    assert "LinkedIn parallel workers" in settings
+    assert "Fetch descriptions during LinkedIn discovery" in settings
+    assert "linkedin_queries_per_run" in settings
+    assert "linkedin_results_wanted" in settings
+    assert "linkedin_discovery_max_workers" in settings
+    assert "linkedin_fetch_description" in settings
+    assert "linkedin_queries_per_run" in control
+    assert "linkedin_results_wanted" in control
+    assert "linkedin_discovery_max_workers" in control
+    assert "linkedin_fetch_description" in control
+    assert "linkedin_queries_per_run" in mocks
+    assert "parseRequiredInteger" in settings
+    assert "Run settings were not saved" in settings
+
+
 def test_settings_exposes_c2_job_metadata_values():
     settings = read("frontend/src/pages/Settings/index.tsx")
 

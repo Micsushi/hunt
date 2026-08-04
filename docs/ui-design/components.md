@@ -29,4 +29,4 @@
 
 **Settings company policies:** priority and blocked-company lists sit together because they are mutually exclusive discovery outcomes. Blocked companies use exact normalized matching and are rejected before database persistence; existing rows are not silently deleted.
 
-**Settings discovery safety:** the Run settings panel exposes the persistent LinkedIn rate-limit cooldown. The first JobSpy LinkedIn HTTP 429 stops queued LinkedIn searches and future scheduler cycles skip LinkedIn until the cooldown expires; other selected boards continue.
+**Settings discovery safety:** the Run settings panel groups LinkedIn-specific traffic controls separately from other sources. Safe defaults select four rotating queries per cycle, cap each at 25 results, run one LinkedIn worker, and leave per-listing description fetching off. The persistent cooldown remains the backstop: the first JobSpy LinkedIn HTTP 429 stops queued searches and future scheduler cycles skip LinkedIn until it expires, while other selected boards continue. Copy must say that scalar changes require a C1 scheduler restart before activation.

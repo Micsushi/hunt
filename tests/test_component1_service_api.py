@@ -284,6 +284,92 @@ class HunterServiceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["linkedin_discovery_cooldown_minutes"], 180)
 
+    def test_config_exposes_linkedin_discovery_request_limits(self):
+        client = self._make_client()
+
+        with (
+            patch("hunter.config.LINKEDIN_DISCOVERY_MAX_WORKERS", 1),
+            patch("hunter.config.LINKEDIN_QUERIES_PER_RUN", 4),
+            patch("hunter.config.LINKEDIN_RESULTS_WANTED", 25),
+            patch("hunter.config.LINKEDIN_FETCH_DESCRIPTION", False),
+        ):
+            response = client.get("/config", headers=_auth())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["linkedin_discovery_max_workers"], 1)
+        self.assertEqual(response.json()["linkedin_queries_per_run"], 4)
+        self.assertEqual(response.json()["linkedin_results_wanted"], 25)
+        self.assertFalse(response.json()["linkedin_fetch_description"])
+
+    def test_config_patch_persists_linkedin_discovery_request_limits(self):
+        client = self._make_client()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(config_path)
+        updates = {
+            "linkedin_discovery_max_workers": 1,
+            "linkedin_queries_per_run": 4,
+            "linkedin_results_wanted": 25,
+            "linkedin_fetch_description": False,
+        }
+        try:
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                response = client.patch("/config", headers=_auth(), json=updates)
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(set(response.json()["updated_keys"]), set(updates))
+            persisted = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            self.assertEqual({key: persisted[key] for key in updates}, updates)
+        finally:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+
+    def test_config_get_reflects_saved_request_limits_without_service_restart(self):
+        client = self._make_client()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(config_path)
+        try:
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                saved = client.patch(
+                    "/config",
+                    headers=_auth(),
+                    json={"linkedin_queries_per_run": 8},
+                )
+                refreshed = client.get("/config", headers=_auth())
+
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(refreshed.status_code, 200)
+            self.assertEqual(refreshed.json()["linkedin_queries_per_run"], 8)
+        finally:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+
+    def test_config_rejects_unsafe_linkedin_discovery_request_limits(self):
+        client = self._make_client()
+        fd, config_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(config_path)
+        try:
+            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": config_path}, clear=False):
+                for updates in (
+                    {"linkedin_discovery_max_workers": 3},
+                    {"linkedin_discovery_max_workers": None},
+                    {"linkedin_queries_per_run": 0},
+                    {"linkedin_queries_per_run": 21},
+                    {"linkedin_queries_per_run": None},
+                    {"linkedin_results_wanted": 0},
+                    {"linkedin_results_wanted": 51},
+                    {"linkedin_results_wanted": None},
+                ):
+                    with self.subTest(updates=updates):
+                        response = client.patch("/config", headers=_auth(), json=updates)
+                        self.assertEqual(response.status_code, 422)
+            self.assertFalse(os.path.exists(config_path))
+        finally:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+
     def test_config_patch_persists_linkedin_discovery_cooldown_minutes(self):
         client = self._make_client()
         fd, config_path = tempfile.mkstemp(suffix=".json")

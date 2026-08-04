@@ -32,6 +32,15 @@ function textToList(text: string): string[] {
     .filter(Boolean)
 }
 
+function parseRequiredInteger(raw: string, label: string, min = 1, max?: number): number {
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < min || (max !== undefined && value > max)) {
+    const range = max === undefined ? `${min} or greater` : `between ${min} and ${max}`
+    throw new Error(`${label} must be a whole number ${range}.`)
+  }
+  return value
+}
+
 function settingListValue(
   settings: ComponentSetting[] | undefined,
   key: string,
@@ -363,6 +372,18 @@ function RunSettings({
   const [resultsWanted, setResultsWanted] = useState(String(cfg.results_wanted))
   const [hoursOld, setHoursOld] = useState(String(cfg.hours_old))
   const [maxWorkers, setMaxWorkers] = useState(String(cfg.max_workers))
+  const [linkedinMaxWorkers, setLinkedinMaxWorkers] = useState(
+    String(cfg.linkedin_discovery_max_workers ?? 1),
+  )
+  const [linkedinQueriesPerRun, setLinkedinQueriesPerRun] = useState(
+    String(cfg.linkedin_queries_per_run ?? 4),
+  )
+  const [linkedinResultsWanted, setLinkedinResultsWanted] = useState(
+    String(cfg.linkedin_results_wanted ?? 25),
+  )
+  const [linkedinFetchDescription, setLinkedinFetchDescription] = useState(
+    cfg.linkedin_fetch_description ?? false,
+  )
   const [linkedinCooldownMin, setLinkedinCooldownMin] = useState(
     String(cfg.linkedin_discovery_cooldown_minutes),
   )
@@ -370,11 +391,59 @@ function RunSettings({
   const [batchLimit, setBatchLimit] = useState(String(cfg.enrichment_batch_limit))
   const [timeoutMs, setTimeoutMs] = useState(String(cfg.enrichment_timeout_ms))
   const [maxAttempts, setMaxAttempts] = useState(String(cfg.enrichment_max_attempts))
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  function handleSave() {
+    try {
+      const updates: C1ConfigUpdates = {
+        run_interval_seconds: parseRequiredInteger(intervalSec, 'Run interval', 60),
+        results_wanted: parseRequiredInteger(resultsWanted, 'Indeed results per search'),
+        hours_old: parseRequiredInteger(hoursOld, 'Hours-old lookback'),
+        max_workers: parseRequiredInteger(maxWorkers, 'Non-LinkedIn parallel workers'),
+        linkedin_discovery_max_workers: parseRequiredInteger(
+          linkedinMaxWorkers,
+          'LinkedIn parallel workers',
+          1,
+          2,
+        ),
+        linkedin_queries_per_run: parseRequiredInteger(
+          linkedinQueriesPerRun,
+          'LinkedIn searches per cycle',
+          1,
+          20,
+        ),
+        linkedin_results_wanted: parseRequiredInteger(
+          linkedinResultsWanted,
+          'LinkedIn results per search',
+          1,
+          50,
+        ),
+        linkedin_fetch_description: linkedinFetchDescription,
+        linkedin_discovery_cooldown_minutes: parseRequiredInteger(
+          linkedinCooldownMin,
+          'LinkedIn rate-limit cooldown',
+        ),
+        enrich_after_scrape: enrichAfterScrape,
+        enrichment_batch_limit: parseRequiredInteger(batchLimit, 'Enrichment batch limit'),
+        enrichment_timeout_ms: parseRequiredInteger(timeoutMs, 'Enrichment timeout', 5000),
+        enrichment_max_attempts: parseRequiredInteger(maxAttempts, 'Max enrichment attempts'),
+      }
+      setValidationError(null)
+      onSave(updates)
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Enter valid run settings.')
+    }
+  }
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Run settings</h3>
+        <div>
+          <h3 className={styles.panelTitle}>Run settings</h3>
+          <p className={styles.panelDescription}>
+            Keep routine sources fast while tightly bounding LinkedIn discovery traffic.
+          </p>
+        </div>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -391,9 +460,9 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Results wanted per search
+          Indeed results per search
           <span className={styles.fieldHint}>
-            Max listings to fetch per search term (default 500).
+            Maximum listings to fetch from each non-LinkedIn search (default 500).
           </span>
           <input
             type="number"
@@ -417,27 +486,15 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Max parallel workers
-          <span className={styles.fieldHint}>Concurrent scrape/enrich workers (default 10).</span>
+          Non-LinkedIn parallel workers
+          <span className={styles.fieldHint}>
+            Concurrent workers for other sources (default 10).
+          </span>
           <input
             type="number"
             className={styles.input}
             value={maxWorkers}
             onChange={(e) => setMaxWorkers(e.target.value)}
-            min={1}
-          />
-        </label>
-        <label className={styles.field}>
-          LinkedIn rate-limit cooldown (minutes)
-          <span className={styles.fieldHint}>
-            After the first LinkedIn 429, stop queued searches and pause future cycles (default
-            180).
-          </span>
-          <input
-            type="number"
-            className={styles.input}
-            value={linkedinCooldownMin}
-            onChange={(e) => setLinkedinCooldownMin(e.target.value)}
             min={1}
           />
         </label>
@@ -475,6 +532,84 @@ function RunSettings({
           />
         </label>
       </div>
+      <fieldset className={styles.experienceFieldset}>
+        <legend>LinkedIn discovery limits</legend>
+        <p className={styles.matchingNote}>
+          With the defaults, Hunt rotates through four LinkedIn searches per cycle, runs them one at
+          a time, caps each at 25 results, and leaves descriptions for the enrichment stage.
+        </p>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            LinkedIn searches per cycle
+            <span className={styles.fieldHint}>
+              Remaining targeting queries rotate into later cycles (default 4).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinQueriesPerRun}
+              onChange={(e) => setLinkedinQueriesPerRun(e.target.value)}
+              min={1}
+              max={20}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn results per search
+            <span className={styles.fieldHint}>
+              A lower cap reduces pagination and downstream requests (default 25).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinResultsWanted}
+              onChange={(e) => setLinkedinResultsWanted(e.target.value)}
+              min={1}
+              max={50}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn parallel workers
+            <span className={styles.fieldHint}>
+              Keep this at one to avoid concurrent request bursts (maximum 2).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinMaxWorkers}
+              onChange={(e) => setLinkedinMaxWorkers(e.target.value)}
+              min={1}
+              max={2}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn rate-limit cooldown (minutes)
+            <span className={styles.fieldHint}>
+              After the first LinkedIn 429, stop queued searches and pause future cycles.
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinCooldownMin}
+              onChange={(e) => setLinkedinCooldownMin(e.target.value)}
+              min={1}
+            />
+          </label>
+        </div>
+        <label className={styles.checkLabel}>
+          <input
+            type="checkbox"
+            checked={linkedinFetchDescription}
+            onChange={(e) => setLinkedinFetchDescription(e.target.checked)}
+          />
+          <span>
+            Fetch descriptions during LinkedIn discovery
+            <span className={styles.fieldHint}>
+              Leave off. It adds one LinkedIn request per listing; enrichment can fetch details
+              later.
+            </span>
+          </span>
+        </label>
+      </fieldset>
       <label className={styles.checkLabel}>
         <input
           type="checkbox"
@@ -487,22 +622,15 @@ function RunSettings({
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
-          onClick={() =>
-            onSave({
-              run_interval_seconds: parseInt(intervalSec, 10),
-              results_wanted: parseInt(resultsWanted, 10),
-              hours_old: parseInt(hoursOld, 10),
-              max_workers: parseInt(maxWorkers, 10),
-              linkedin_discovery_cooldown_minutes: parseInt(linkedinCooldownMin, 10),
-              enrich_after_scrape: enrichAfterScrape,
-              enrichment_batch_limit: parseInt(batchLimit, 10),
-              enrichment_timeout_ms: parseInt(timeoutMs, 10),
-              enrichment_max_attempts: parseInt(maxAttempts, 10),
-            })
-          }
+          onClick={handleSave}
         >
           {saving ? 'Saving…' : 'Save run settings'}
         </button>
+        {validationError && (
+          <span className={`${styles.formStatus} ${styles.formStatusError}`} role="alert">
+            Run settings were not saved: {validationError}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -1935,8 +2063,8 @@ export function SettingsPage() {
           <div>
             <strong>Activation</strong>
             <p>
-              Changes apply on the next C1 scrape or enrichment cycle. Restart C1 only when you need
-              scalar runtime values applied immediately.
+              Changes are saved to C1's config file. Restart the C1 scheduler to activate worker,
+              interval, source, and request-limit changes; an active cycle keeps its current values.
             </p>
           </div>
           <span className={styles.configPath}>{cfg.config_file}</span>

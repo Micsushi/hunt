@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import threading
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 
 if __package__ is None or __package__ == "":
@@ -28,7 +29,10 @@ from hunter.config import (
     EXPERIENCE_LEVELS,
     HOURS_OLD,
     LINKEDIN_DISCOVERY_COOLDOWN_MINUTES,
+    LINKEDIN_DISCOVERY_MAX_WORKERS,
     LINKEDIN_FETCH_DESCRIPTION,
+    LINKEDIN_QUERIES_PER_RUN,
+    LINKEDIN_RESULTS_WANTED,
     LOCATIONS,
     MAX_WORKERS,
     RESULTS_WANTED,
@@ -44,9 +48,11 @@ from hunter.db import (
     clear_linkedin_discovery_cooldown,
     count_ready_jobs_for_enrichment,
     get_linkedin_discovery_cooldown_until,
+    get_linkedin_discovery_query_cursor,
     init_db,
     is_linkedin_discovery_in_cooldown,
     set_linkedin_discovery_cooldown_until,
+    set_linkedin_discovery_query_cursor,
 )
 from hunter.notifications import send_discord_webhook_message
 from hunter.search_lanes import title_matches_search_lane, title_matches_target_preferences
@@ -54,6 +60,7 @@ from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional
 
 _linkedin_discovery_blocked = threading.Event()
 _linkedin_discovery_guard_active = False
+_linkedin_query_cursor_lock = threading.Lock()
 
 
 class _LinkedInRateLimitHandler(logging.Handler):
@@ -208,7 +215,9 @@ def scrape_single(site, term, location, category):
             "site_name": [site],
             "search_term": term,
             "location": location,
-            "results_wanted": RESULTS_WANTED,
+            "results_wanted": (
+                max(1, min(50, LINKEDIN_RESULTS_WANTED)) if site == "linkedin" else RESULTS_WANTED
+            ),
             "hours_old": HOURS_OLD,
             "country_indeed": "Canada",
         }
@@ -273,6 +282,18 @@ def scrape_single(site, term, location, category):
         if job_data["job_url"]:
             jobs.append(job_data)
     return jobs
+
+
+def _take_linkedin_task_batch(tasks, limit):
+    if not tasks or limit <= 0:
+        return []
+
+    count = min(limit, len(tasks))
+    with _linkedin_query_cursor_lock:
+        start = get_linkedin_discovery_query_cursor() % len(tasks)
+        selected = [tasks[(start + offset) % len(tasks)] for offset in range(count)]
+        set_linkedin_discovery_query_cursor((start + count) % len(tasks))
+    return selected
 
 
 def run_pending_job_enrichment(
@@ -432,12 +453,20 @@ def scrape(
         for location in LOCATIONS
         for site in SITES
     ]
-    tasks = [
-        task
-        for task in candidate_tasks
-        if not (persisted_cooldown_active and task[0] == "linkedin")
-    ]
-    linkedin_tasks_skipped = len(candidate_tasks) - len(tasks)
+    non_linkedin_tasks = [task for task in candidate_tasks if task[0] != "linkedin"]
+    linkedin_candidate_tasks = [task for task in candidate_tasks if task[0] == "linkedin"]
+    if persisted_cooldown_active:
+        linkedin_tasks = []
+        linkedin_tasks_skipped = len(linkedin_candidate_tasks)
+        linkedin_tasks_deferred = 0
+    else:
+        linkedin_tasks = _take_linkedin_task_batch(
+            linkedin_candidate_tasks,
+            max(1, min(20, LINKEDIN_QUERIES_PER_RUN)),
+        )
+        linkedin_tasks_skipped = 0
+        linkedin_tasks_deferred = len(linkedin_candidate_tasks) - len(linkedin_tasks)
+    tasks = non_linkedin_tasks + linkedin_tasks
 
     logger.event(
         key="hunt_last_scrape_start",
@@ -447,8 +476,13 @@ def scrape(
         details={
             "task_count": len(tasks),
             "linkedin_tasks_skipped": linkedin_tasks_skipped,
+            "linkedin_tasks_selected": len(linkedin_tasks),
+            "linkedin_tasks_deferred": linkedin_tasks_deferred,
             "linkedin_discovery_cooldown_until": persisted_cooldown_until,
             "max_workers": MAX_WORKERS,
+            "linkedin_max_workers": LINKEDIN_DISCOVERY_MAX_WORKERS,
+            "linkedin_results_wanted": LINKEDIN_RESULTS_WANTED,
+            "linkedin_fetch_description": LINKEDIN_FETCH_DESCRIPTION,
             "enrich_pending": bool(enrich_pending),
             "enrich_limit": enrich_limit,
         },
@@ -457,16 +491,22 @@ def scrape(
     print(f"Starting {len(tasks)} scrape tasks with {MAX_WORKERS} workers...\n")
 
     try:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(scrape_single, site, term, location, category): (
-                    site,
-                    term,
-                    location,
-                    category,
+        with ExitStack() as stack:
+            futures = {}
+            if non_linkedin_tasks:
+                executor = stack.enter_context(ThreadPoolExecutor(max_workers=max(1, MAX_WORKERS)))
+                for task in non_linkedin_tasks:
+                    site, term, location, category = task
+                    future = executor.submit(scrape_single, site, term, location, category)
+                    futures[future] = task
+            if linkedin_tasks:
+                linkedin_executor = stack.enter_context(
+                    ThreadPoolExecutor(max_workers=max(1, min(2, LINKEDIN_DISCOVERY_MAX_WORKERS)))
                 )
-                for site, term, location, category in tasks
-            }
+                for task in linkedin_tasks:
+                    site, term, location, category = task
+                    future = linkedin_executor.submit(scrape_single, site, term, location, category)
+                    futures[future] = task
 
             for future in as_completed(futures):
                 jobs = future.result()
@@ -522,6 +562,8 @@ def scrape(
             "linkedin_discovery_cooldown_active": bool(cooldown_state["active"]),
             "linkedin_discovery_cooldown_until": cooldown_state["until"],
             "linkedin_discovery_cooldown_triggered": bool(cooldown_state["triggered"]),
+            "linkedin_tasks_selected": len(linkedin_tasks),
+            "linkedin_tasks_deferred": linkedin_tasks_deferred,
         }
         logger.event(
             key="hunt_last_scrape_end",
