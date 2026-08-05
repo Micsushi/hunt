@@ -12,7 +12,7 @@ const reconciliation = JSON.parse(
   unavailableSlots: Record<string, "maintenance" | "removed" | "closed" | "not_found" | "access_control">;
 };
 const manifest = corpusManifestFromCsv({
-  csv: readFileSync(resolve(root, "../wd_test_jobs.csv"), "utf8"),
+  csv: readFileSync(resolve(root, "corpus/workday-40/source.snapshot"), "utf8"),
   sourceRevision: reconciliation.sourceRevision,
   evidenceDigests: reconciliation.evidenceDigests,
   unavailableSlots: new Map(

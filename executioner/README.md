@@ -43,6 +43,30 @@ Future C1 synchronization for maintenance, runtime-error, and removed-posting st
 specified in [the C1/C3 job-status handoff](docs/c1-c3-job-status-handoff.md).
 C3 currently emits the typed factual outcome only; it does not mutate C1.
 
+## Future Chrome extension delivery
+
+The current C3 v3 browser adapter owns a Playwright-launched Chrome session. A
+Chrome extension is not required for the accepted implementation, but it is a
+candidate future delivery surface when C3 must operate inside a user's existing
+desktop Chrome session or be controlled from another device.
+
+Two future modes are intentionally preserved for evaluation:
+
+- Replace the Playwright adapter with a Chrome extension that inspects and
+  acts on the user's current Workday tab.
+- Keep the C3 orchestration service and add a paired desktop extension as the
+  browser-side executor. The server would choose bounded actions, while the
+  extension would perform them in the current tab. A local service could retain
+  resumes, profile values, secret handles, and file-upload authority so raw
+  private data does not need to pass through the remote server.
+
+Either mode requires a separate threat model and acceptance contract covering
+device pairing, authenticated encrypted transport, origin and tab scoping,
+reconnection, extension permissions, private-data boundaries, file uploads,
+MFA and CAPTCHA handoff, and visible operator control. This is a future option,
+not implemented or activated by the current package. It does not change the
+existing prohibition on final Submit.
+
 ## Stage 2 real-run preflight
 
 The owner input file belongs outside the repository and every worktree. Never
@@ -493,6 +517,21 @@ the other. Both proofs require cleanup, privacy, no retained message body, and
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
+
+## Public Workday test catalogs
+
+The repository root has two current Workday test CSVs:
+
+- `wd_test_jobs.csv` contains exactly 100 unique companies and one public job
+  per company. Each row was browser-verified through the Workday application
+  entry on 2026-08-05 and stops before account or form interaction.
+- `wd_test_jobs_stale.csv` contains 10 previously verified closed jobs. Use it
+  only for stale, removed, and not-found behavior.
+
+These live URL catalogs are independent of the accepted offline `WD40` corpus.
+The historical bytes used to validate that frozen manifest are retained as the
+non-CSV `corpus/workday-40/source.snapshot`, so refreshing public jobs does not
+rewrite accepted Stage 3 evidence.
 
 # Frozen corpus acceptance
 

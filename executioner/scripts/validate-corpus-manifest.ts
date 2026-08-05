@@ -19,7 +19,7 @@ const reconciliation = JSON.parse(
   availableSlots: number[];
   unavailableSlots: Record<string, "maintenance" | "removed" | "closed" | "not_found" | "access_control">;
 };
-const csv = readFileSync(resolve(root, "../wd_test_jobs.csv"), "utf8");
+const csv = readFileSync(resolve(root, "corpus/workday-40/source.snapshot"), "utf8");
 assert.equal(sha256(csv), reconciliation.sourceDigest, "frozen source CSV digest changed");
 const reconciled = corpusManifestFromCsv({
   csv,
