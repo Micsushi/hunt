@@ -1,6 +1,8 @@
 """User-editable config file for Hunt C1.
 
-Provides load/save helpers for hunt_user_config.json at the repo root.
+Provides load/save helpers for hunt_user_config.json at the repo root. Discovery
+preferences such as titles, experience levels, locations, and boards belong here
+rather than in source code.
 Priority chain for all tunables: env var > config file > hardcoded default.
 """
 
@@ -29,7 +31,11 @@ def load() -> dict[str, Any]:
         return {}
     with _lock:
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {}
+            data.pop("search_terms", None)
+            return data
         except Exception:
             return {}
 
@@ -43,6 +49,8 @@ def save(data: dict[str, Any]) -> None:
 def patch(updates: dict[str, Any]) -> dict[str, Any]:
     """Merge updates into the existing config file and save. Returns the merged config."""
     current = load()
-    current.update(updates)
+    clean_updates = dict(updates)
+    clean_updates.pop("search_terms", None)
+    current.update(clean_updates)
     save(current)
     return current

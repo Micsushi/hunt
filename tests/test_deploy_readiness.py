@@ -675,12 +675,11 @@ def test_public_hunter_defaults_are_generic():
     example = (REPO_ROOT / "hunt_user_config.example.json").read_text(encoding="utf-8")
 
     assert "agent-hunt-review.mshi.ca" not in config
-    assert '"engineering": ["software engineer"]' in config
+    assert 'TARGET_JOB_TITLES", {}' in config
+    assert 'EXPERIENCE_LEVELS", []' in config
     assert '_DEFAULT_LOCATIONS = ["Remote"]' in config
     assert "_DEFAULT_WATCHLIST: list[str] = []" in config
     assert "_DEFAULT_TITLE_BLACKLIST: list[str] = []" in config
-    assert "new grad" not in config
-    assert "intern" not in config
     assert "Canada" not in config
     assert "new grad" not in example
     assert "intern" not in example

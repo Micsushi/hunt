@@ -5,11 +5,12 @@
 
   "title_blacklist": [],
 
-  "search_terms": {
-    "engineering": [
-      "software engineer"
-    ]
+  "target_job_titles": {
+    "engineering": [],
+    "data": []
   },
+
+  "experience_levels": [],
 
   "locations": [
     "Remote"

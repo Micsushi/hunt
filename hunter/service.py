@@ -61,7 +61,8 @@ class EnrichRequest(BaseModel):
 class ConfigPatchRequest(BaseModel):
     watchlist: list[str] | None = None
     title_blacklist: list[str] | None = None
-    search_terms: dict[str, list[str]] | None = None
+    target_job_titles: dict[str, list[str]] | None = None
+    experience_levels: list[str] | None = None
     locations: list[str] | None = None
     sites: list[str] | None = None
     max_workers: int | None = None
@@ -175,14 +176,15 @@ def get_config():
         ENRICHMENT_BATCH_LIMIT,
         ENRICHMENT_MAX_ATTEMPTS,
         ENRICHMENT_TIMEOUT_MS,
+        EXPERIENCE_LEVELS,
         HOURS_OLD,
         LINKEDIN_FETCH_DESCRIPTION,
         LOCATIONS,
         MAX_WORKERS,
         RESULTS_WANTED,
         RUN_INTERVAL_SECONDS,
-        SEARCH_TERMS,
         SITES,
+        TARGET_JOB_TITLES,
         TITLE_BLACKLIST,
         WATCHLIST,
     )
@@ -193,7 +195,8 @@ def get_config():
         "config_file_exists": cfg_path.exists(),
         "watchlist": WATCHLIST,
         "title_blacklist": TITLE_BLACKLIST,
-        "search_terms": SEARCH_TERMS,
+        "target_job_titles": TARGET_JOB_TITLES,
+        "experience_levels": EXPERIENCE_LEVELS,
         "locations": LOCATIONS,
         "sites": SITES,
         "max_workers": MAX_WORKERS,

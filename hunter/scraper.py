@@ -22,20 +22,22 @@ from hunter.config import (
     ENRICHMENT_SLOW_MO_MS,
     ENRICHMENT_TIMEOUT_MS,
     ENRICHMENT_UI_VERIFY_BLOCKED,
+    EXPERIENCE_LEVELS,
     HOURS_OLD,
     LINKEDIN_FETCH_DESCRIPTION,
     LOCATIONS,
     MAX_WORKERS,
     RESULTS_WANTED,
     REVIEW_APP_PUBLIC_URL,
-    SEARCH_TERMS,
+    SEARCH_QUERIES,
     SITES,
+    TARGET_JOB_TITLES,
     TITLE_BLACKLIST,
     WATCHLIST,
 )
 from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
 from hunter.notifications import send_discord_webhook_message
-from hunter.search_lanes import title_matches_search_lane
+from hunter.search_lanes import title_matches_search_lane, title_matches_target_preferences
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
 
@@ -197,6 +199,14 @@ def scrape_single(site, term, location, category):
         if category and not title_matches_search_lane(title, category):
             continue
 
+        if not title_matches_target_preferences(
+            title,
+            category,
+            TARGET_JOB_TITLES,
+            EXPERIENCE_LEVELS,
+        ):
+            continue
+
         company = normalize_optional_str(row.get("company"))
 
         job_url, apply_url = build_job_urls(row, source)
@@ -325,7 +335,7 @@ def scrape(
     all_jobs = []
     tasks = [
         (site, term, location, category)
-        for category, terms in SEARCH_TERMS.items()
+        for category, terms in SEARCH_QUERIES.items()
         for term in terms
         for location in LOCATIONS
         for site in SITES

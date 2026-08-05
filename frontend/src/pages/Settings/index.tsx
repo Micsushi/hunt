@@ -124,16 +124,32 @@ function SearchConfig({
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
 }) {
-  const laneNames = Object.keys(cfg.search_terms)
-  const [lanes, setLanes] = useState<Record<string, string>>(() =>
-    Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.search_terms[k])])),
+  const laneNames = Array.from(
+    new Set(['engineering', 'data', ...Object.keys(cfg.target_job_titles)]),
+  )
+  const [targetTitles, setTargetTitles] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])]),
+    ),
+  )
+  const [experienceLevels, setExperienceLevels] = useState(
+    () => new Set(cfg.experience_levels),
   )
   const [locations, setLocations] = useState(() => listToText(cfg.locations))
   const [linkedinOn, setLinkedinOn] = useState(() => cfg.sites.includes('linkedin'))
   const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
 
   function updateLane(name: string, val: string) {
-    setLanes((prev) => ({ ...prev, [name]: val }))
+    setTargetTitles((prev) => ({ ...prev, [name]: val }))
+  }
+
+  function setExperienceLevel(level: string, enabled: boolean) {
+    setExperienceLevels((current) => {
+      const next = new Set(current)
+      if (enabled) next.add(level)
+      else next.delete(level)
+      return next
+    })
   }
 
   return (
@@ -144,12 +160,36 @@ function SearchConfig({
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} lane - search queries
+            {name.charAt(0).toUpperCase() + name.slice(1)} - Target job titles
             <textarea
               className={styles.textarea}
-              value={lanes[name] ?? ''}
+              value={targetTitles[name] ?? ''}
               onChange={(e) => updateLane(name, e.target.value)}
             />
+          </label>
+        ))}
+      </div>
+      <div className={styles.field}>
+        Experience levels
+        {[
+          ['internship', 'Internship', 'Intern, internship, co-op, and student searches'],
+          [
+            'junior',
+            'Junior',
+            'Junior, entry level, associate, Level 1, L1, and role I/1 variants',
+          ],
+          ['new_grad', 'New grad', 'New grad, graduate, and entry-level searches'],
+        ].map(([value, label, hint]) => (
+          <label key={value} className={styles.checkLabel}>
+            <input
+              type="checkbox"
+              checked={experienceLevels.has(value)}
+              onChange={(e) => setExperienceLevel(value, e.target.checked)}
+            />
+            <span>
+              {label}
+              <span className={styles.fieldHint}>{hint}</span>
+            </span>
           </label>
         ))}
       </div>
@@ -190,9 +230,10 @@ function SearchConfig({
             if (linkedinOn) sites.push('linkedin')
             if (indeedOn) sites.push('indeed')
             onSave({
-              search_terms: Object.fromEntries(
-                Object.entries(lanes).map(([k, v]) => [k, textToList(v)]),
+              target_job_titles: Object.fromEntries(
+                Object.entries(targetTitles).map(([k, v]) => [k, textToList(v)]),
               ),
+              experience_levels: Array.from(experienceLevels),
               locations: textToList(locations),
               sites,
             })
