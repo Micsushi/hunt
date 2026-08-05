@@ -60,6 +60,7 @@ export function createStage2RealJourneyProductionBinding(
       if (
         live === undefined ||
         resolved.input.sourceRevision !== invocation.source.sourceRevision ||
+        resolved.input.configSha256 !== invocation.config.configSha256 ||
         resolved.input.revisionId !== invocation.config.revisionId ||
         resolved.input.approvalId !== invocation.config.approvalId ||
         resolved.input.journeyId !== invocation.config.journeyId ||

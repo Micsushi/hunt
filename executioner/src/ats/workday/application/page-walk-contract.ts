@@ -181,7 +181,7 @@ export interface ApplicationWalkOptions {
 }
 
 export interface ApplicationWalkResume {
-  readonly currentPage: Exclude<ApplicationPage, "resume">;
+  readonly currentPage: ApplicationPage;
   readonly pageChecks: readonly ApplicationPageCheck[];
 }
 

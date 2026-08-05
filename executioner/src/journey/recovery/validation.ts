@@ -10,9 +10,10 @@ import type {
 export const recoveryPageOrder: Readonly<Record<RecoveryPageKind, number>> = {
   account: 0,
   verification: 1,
-  profile: 2,
-  questionnaire: 3,
-  review: 4,
+  resume: 2,
+  profile: 3,
+  questionnaire: 4,
+  review: 5,
 };
 
 export function validBrowserSnapshot(

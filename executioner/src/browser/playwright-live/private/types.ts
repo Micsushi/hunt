@@ -112,7 +112,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly accountPage?: SemanticAccountPageAdapter;
   readonly postingNavigation?: SemanticPostingNavigationAdapter;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
-  readonly applicationPage?: import("./application-page-types.ts").OwnedApplicationPageAdapter;
+  readonly applicationRuntime?: import("./workday-application-runtime.ts").OwnedWorkdayApplicationRuntimeOptions;
   readonly inspectionHoldBeforeCleanup?: () => Promise<void>;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;

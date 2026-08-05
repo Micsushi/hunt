@@ -15,6 +15,7 @@ import type {
 
 export interface Stage2ApplicationWalkInput {
   readonly sourceRevision: string;
+  readonly configSha256: string;
   readonly revisionId: string;
   readonly approvalId: string;
   readonly journeyId: JourneyId;

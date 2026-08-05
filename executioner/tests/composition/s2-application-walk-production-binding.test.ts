@@ -254,6 +254,10 @@ test("outer Review binding resolves owner sources and retains only live browser 
       async bind(request) {
         calls.push("live.bind");
         assert.equal(request.ownerSources.profileId, "profile-owner-approved");
+        assert.equal(
+          request.configSha256,
+          createHash("sha256").update(readFileSync(fixture.configPath)).digest("hex"),
+        );
         return {
           walk: {
             observer: { async observe() { return { ok: true as const, value: pages[observed++]! }; } },
@@ -288,7 +292,7 @@ test("outer Review binding resolves owner sources and retains only live browser 
       args: { configPath: fixture.configPath, evidenceRoot: fixture.evidenceRoot },
       source: { repositoryRoot: resolve(".."), sourceRevision },
       config: {
-        configSha256: "1".repeat(64),
+        configSha256: createHash("sha256").update(readFileSync(fixture.configPath)).digest("hex"),
         contractRevision: "s2-owner-inputs-v1",
         revisionId: String(owner.revisionId),
         approvalId: owner.approval.approvalId,

@@ -163,7 +163,8 @@ for (const checkpoint of ["profile", "questionnaire", "review"] as const) {
       assert.equal((await runStage2RealJourney(
         invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
       )).ok, true);
-      assert.deepEqual(received, plan.resume);
+      assert.deepEqual((received as { currentPage?: unknown }).currentPage,
+        checkpoint === "review" ? "pre_review" : checkpoint);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -444,8 +445,8 @@ function recoveryPlan(
 ): {
   input: RecoverBrowserInterruptionInput;
   dependencies: RecoveryDependencies;
-  resume: {
-    currentPage: "profile" | "questionnaire" | "pre_review";
+  resume: (state: RecoveryCheckpoint) => {
+    currentPage: "resume" | "profile" | "questionnaire" | "pre_review";
     pageChecks: readonly ReturnType<typeof check>[];
   };
 } {
@@ -480,8 +481,9 @@ function recoveryPlan(
     surface: "primary",
   });
   return {
-    resume: {
-      currentPage: recoveredPage === "review" ? "pre_review" : recoveredPage,
+    resume: (state) => ({
+      currentPage: state.page.kind === "review" ? "pre_review" : state.page.kind as
+        "resume" | "profile" | "questionnaire",
       pageChecks: [
         check("resume", "resume_verified", 1),
         check("profile", "profile_verified", 3),
@@ -489,7 +491,7 @@ function recoveryPlan(
           check("questionnaire", "questionnaire_verified", 2),
         ]),
       ],
-    },
+    }),
     input: {
       schemaVersion: 1,
       journeyId,

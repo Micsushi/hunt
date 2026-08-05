@@ -7,6 +7,7 @@ import { inspectWorkdayReview, stopAtVerifiedReview } from "../interaction/revie
 import {
   recoverBrowserInterruption,
   type RecoverBrowserInterruptionInput,
+  type RecoveryCheckpoint,
   type RecoveryDependencies,
 } from "../journey/recovery/index.ts";
 import { writeLiveEvidencePacket } from "../evidence/live/packet.ts";
@@ -26,7 +27,7 @@ export interface Stage2RealJourneyInvocation {
 export interface Stage2RealJourneyRecoveryPlan {
   readonly input: RecoverBrowserInterruptionInput;
   readonly dependencies: RecoveryDependencies;
-  readonly resume: ApplicationWalkResume;
+  readonly resume: (state: RecoveryCheckpoint) => ApplicationWalkResume;
 }
 
 export interface Stage2RealJourneyRuntime {
@@ -153,13 +154,7 @@ async function executeBoundJourney(
       if (!recovered.ok || recovered.value.kind !== "resumed") {
         return failed(signal.aborted ? "operation_cancelled" : "recovery_failed");
       }
-      const expectedResumePage = recovered.value.state.page.kind === "review"
-        ? "pre_review"
-        : recovered.value.state.page.kind;
-      if (plan.resume.currentPage !== expectedResumePage) {
-        return failed("recovery_failed");
-      }
-      resume = plan.resume;
+      resume = plan.resume(recovered.value.state);
     }
   } catch {
     return failed(signal.aborted ? "operation_cancelled" : "recovery_failed");

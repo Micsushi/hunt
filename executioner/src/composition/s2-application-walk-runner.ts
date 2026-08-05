@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,6 +50,7 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
   readonly ownerBinding: RealRunRuntimeBinding;
   readonly ownerSources: Stage2ApplicationOwnerSources;
   readonly sourceRevision: string;
+  readonly configSha256: string;
 }
 
 export interface Stage2ApplicationWalkRuntimeBinding {
@@ -82,6 +84,7 @@ export function createStage2ApplicationWalkProductionBinding(
         inspectCleanSourceRevision(executionerRoot)))();
       const config = readStablePrivateFile(options.configPath, 64 * 1024);
       const configPath = config.canonicalPath;
+      const configSha256 = createHash("sha256").update(config.bytes).digest("hex");
       const value = readOwnerConfig(config.bytes);
       const now = (dependencies.now ?? (() => new Date().toISOString()))();
       const admission = createPrivateRealRunAdmission(value, {
@@ -127,6 +130,7 @@ export function createStage2ApplicationWalkProductionBinding(
           ownerBinding: admission.binding,
           ownerSources: resolvedOwnerSources,
           sourceRevision: source.sourceRevision,
+          configSha256,
         }, signal);
       } catch {
         disposeOwnerResume(resolvedOwnerSources);
@@ -137,6 +141,7 @@ export function createStage2ApplicationWalkProductionBinding(
       return Object.freeze({
         input: Object.freeze({
           sourceRevision: source.sourceRevision,
+          configSha256,
           revisionId: owner.revisionId,
           approvalId: owner.approval.approvalId,
           journeyId: owner.journeyId as Stage2ApplicationWalkInput["journeyId"],

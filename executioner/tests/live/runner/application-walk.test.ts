@@ -97,6 +97,7 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
 function input() {
   return {
     sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+    configSha256: "a".repeat(64),
     revisionId: "revision_abcdefghijklmnop",
     approvalId: "approval_abcdefghijklmnop",
     journeyId: walkFixture.journeyId,

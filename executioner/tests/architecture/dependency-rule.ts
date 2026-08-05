@@ -49,6 +49,27 @@ export const componentSourceOwners = componentBoundaries.flatMap(
 
 const legacyRoots = /^(?:src\/)?(?:background|content|options|popup|shared)(?:\/|$)/;
 const legacyVersion = /(?:^|[/.-])v2(?:[/.-]|$)/;
+// F3 must retain the raw Playwright Page while this one closed runtime
+// assembles these exact independently owned application ports. Neither sibling
+// importers nor any additional peer target is admitted.
+const exactPeerAssemblyImports = new Map<string, ReadonlySet<string>>([[
+  "src/browser/playwright-live/private/workday-application-runtime.ts",
+  new Set([
+    "src/ats/workday/application/lane-composition.ts",
+    "src/ats/workday/application/playwright-page.ts",
+    "src/ats/workday/application/profile/index.ts",
+    "src/ats/workday/application/questions/index.ts",
+    "src/ats/workday/application/resume/index.ts",
+    "src/ats/workday/application/page-walk.ts",
+    "src/composition/s2-application-walk-runner.ts",
+    "src/form/discovery/discover-fields.ts",
+    "src/form/semantic-snapshot.ts",
+    "src/interaction/drivers/registry.ts",
+    "src/interaction/review/index.ts",
+    "src/interaction/verification/field-verifier.ts",
+    "src/safety/guards.ts",
+  ]),
+]]);
 
 function owner(path: string): string | undefined {
   const fixedOwner = fixedOwners.find(([pattern]) => pattern.test(path))?.[1];
@@ -138,7 +159,8 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       if (
         targetOwner === "contracts" ||
         targetOwner === importerOwner ||
-        importerOwner === "tests"
+        importerOwner === "tests" ||
+        exactPeerAssemblyImports.get(file.path)?.has(target) === true
       ) {
         return [];
       }

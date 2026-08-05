@@ -99,11 +99,10 @@ test("private owned-session inspection returns only a value-free structural snap
   }
 });
 
-test("scoped application access reuses the pinned page and revalidates ownership", async () => {
+test("application access denies callers when the fixed owned runtime is absent", async () => {
   const pages: FakePage[] = [];
   const context = new FakeContext(pages);
   let inspections = 0;
-  let accessed: unknown;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
     launcher: { async launchPersistentContext() { return context; } },
@@ -116,14 +115,6 @@ test("scoped application access reuses the pinned page and revalidates ownership
     profiles: new MemoryProfiles(),
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,
-    applicationPage: {
-      async execute(page, operation) {
-        accessed = page;
-        assert.deepEqual(operation, { kind: "observe" });
-        return Object.freeze({ pageKind: "questionnaire" as const });
-      },
-      dispose() {},
-    },
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -139,16 +130,13 @@ test("scoped application access reuses the pinned page and revalidates ownership
   }, { kind: "observe" }, new AbortController().signal);
 
   assert.deepEqual(result, {
-    ok: true,
-    value: { pageKind: "questionnaire" },
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
   });
-  assert.equal(accessed, pages[0]);
-  assert.equal(inspections, 3); // open, pre-access, post-access
-  assert.equal(JSON.stringify(result).includes("page"), true);
-  assert.equal(JSON.stringify(result).includes("navigations"), false);
+  assert.equal(inspections, 1);
 });
 
-test("scoped application mutation fails uncertain and invalidates when ownership changes", async () => {
+test("application mutation is unavailable without the fixed owned runtime", async () => {
   let inspections = 0;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
@@ -162,10 +150,6 @@ test("scoped application mutation fails uncertain and invalidates when ownership
     profiles: new MemoryProfiles(),
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,
-    applicationPage: {
-      async execute() { return undefined; },
-      dispose() {},
-    },
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -185,7 +169,7 @@ test("scoped application mutation fails uncertain and invalidates when ownership
     new AbortController().signal,
   ), {
     ok: false,
-    error: { code: "browser_effect_uncertain", retryable: false },
+    error: { code: "browser_session_missing", retryable: false },
   });
   assert.deepEqual(await provider[ownedApplicationPageAccess](
     { ...request, operationId: generatedOperationId("operation_application_write2") },

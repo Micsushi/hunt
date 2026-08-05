@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -12,26 +12,9 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import type { Page } from "playwright";
-
-import {
-  createApplicationLaneAcceptanceCollector,
-  type ApplicationLaneAcceptance,
-} from "../ats/workday/application/lane-composition.ts";
+import { createApplicationLaneAcceptanceCollector } from
+  "../ats/workday/application/lane-composition.ts";
 import { PlaywrightWorkdayApplicationPage } from "../ats/workday/application/playwright-page.ts";
-import {
-  completeWorkdayProfilePage,
-  PlaywrightWorkdayProfilePage,
-} from "../ats/workday/application/profile/index.ts";
-import {
-  createQuestionnairePageHandler,
-} from "../ats/workday/application/questions/index.ts";
-import {
-  createPlaywrightWorkdayResumePage,
-  createWorkdayResumeUploadDriver,
-  createWorkdayResumeUploadHandler,
-  createWorkdayResumeVerifier,
-} from "../ats/workday/application/resume/index.ts";
 import type {
   ApplicationPage,
   ApplicationPageCheck,
@@ -40,32 +23,28 @@ import type {
   ApplicationWalkDependencies,
 } from "../ats/workday/application/page-walk.ts";
 import type { ApplicationWalkResume } from "../ats/workday/application/page-walk.ts";
-import { inspectPage } from "../browser/adapter.ts";
 import { createPlaywrightPersistentBrowserSession } from "../browser/playwright-live/index.ts";
 import {
   ownedApplicationPageAccess,
   suspendOwnedApplicationSession,
   type OwnedApplicationOperation,
-  type OwnedApplicationPageAdapter,
   type OwnedApplicationPageCapability,
   type OwnedApplicationPageRequest,
 } from "../browser/playwright-live/private/application-page-types.ts";
-import type { PersistentPage } from "../browser/playwright-live/private/types.ts";
-import { PlaywrightBrowserSession } from "../browser/session.ts";
+import type {
+  OwnedWorkdayApplicationRuntimeOptions,
+  ReviewExpectedField,
+} from "../browser/playwright-live/private/workday-application-runtime.ts";
+import { isReviewExpectedField } from
+  "../browser/playwright-live/private/workday-application-runtime.ts";
 import {
-  browserPageId,
-  browserTargetToken,
-  boundedText,
-  createGeneratedIdAllocator,
   generatedOperationId,
-  guardRevision,
   fieldId,
   type BrowserPageId,
-  type BrowserSessionId,
   type FieldId,
   type OperationId,
 } from "../contracts/index.ts";
-import type { BrowserReadback, SemanticPageSnapshot } from "../contracts/index.ts";
+import type { SemanticPageSnapshot } from "../contracts/index.ts";
 import type {
   LiveBrowserSessionV1,
   LivePortResult,
@@ -81,18 +60,13 @@ import type {
   TargetPostingId,
   TargetTenantId,
 } from "../contracts/live/index.ts";
-import type { SanitizedStructuralObservationV1 } from "../contracts/live/index.ts";
 import { s2StableErrorPolicy } from "../contracts/s2-common-wire.ts";
-import { discoverFields } from "../form/discovery/discover-fields.ts";
-import { createSemanticSnapshot } from "../form/semantic-snapshot.ts";
-import { createFieldDriver } from "../interaction/drivers/registry.ts";
 import {
   workdayReviewSignatures,
   type ReviewReadOnlyLocator,
   type ReviewReadOnlyPage,
   type WorkdayReviewStructuralObservationV1,
 } from "../interaction/review/index.ts";
-import { createFieldVerifier } from "../interaction/verification/field-verifier.ts";
 import type {
   RecoveryBrowserPageTruth,
   RecoveryCheckpoint,
@@ -100,7 +74,6 @@ import type {
   RecoveryReconciliationRecord,
   RecoveryTerminal,
 } from "../journey/recovery/index.ts";
-import { createSafetyGuard } from "../safety/guards.ts";
 import type {
   Stage2ApplicationWalkRuntimeBindingRequest,
 } from "../composition/s2-application-walk-runner.ts";
@@ -127,14 +100,12 @@ interface OwnedApplicationBrowser extends OwnedApplicationPageCapability {
 export interface Stage2PlaywrightRuntimeOptions {
   readonly browser?: (
     request: Stage2ApplicationWalkRuntimeBindingRequest,
-    adapter: OwnedApplicationPageAdapter,
+    applicationRuntime: OwnedWorkdayApplicationRuntimeOptions,
   ) => OwnedApplicationBrowser;
   readonly now?: () => string;
   readonly nextOperationId?: () => OperationId;
   readonly timeoutMs?: number;
 }
-
-const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
 
 export function createStage2PlaywrightLiveRuntimeBinding(
   options: Stage2PlaywrightRuntimeOptions = {},
@@ -152,21 +123,23 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       const store = new RecoveryFileStore(
         request.owner.roots.runtime.path,
         `${request.owner.revisionId}.recovery.json`,
+        recoveryScopeFor(request, target),
       );
       const initialRecovery = store.load();
       const acceptances = createApplicationLaneAcceptanceCollector();
-      const adapter = new Stage2PlaywrightApplicationAdapter({
+      const applicationRuntime: OwnedWorkdayApplicationRuntimeOptions = Object.freeze({
         request,
         acceptances,
         nextOperationId,
         timeoutMs,
+        initialReviewExpected: initialRecovery?.reviewExpected ?? [],
       });
-      adapter.restoreReviewExpectations(initialRecovery?.reviewExpected ?? []);
-      const browser = options.browser?.(request, adapter) ??
+      let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
+      const browser = options.browser?.(request, applicationRuntime) ??
         createPlaywrightPersistentBrowserSession({
           binding: request.ownerBinding,
           timeoutMs,
-          applicationPage: adapter,
+          applicationRuntime,
         });
       const opened = await browser.open({
         schemaVersion: 1,
@@ -178,7 +151,6 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       if (!opened.ok) throw new TypeError("Playwright runtime binding denied");
 
       const session = opened.value.session;
-      adapter.bindSession(session);
       let checkpointRevision = initialRecovery?.checkpoint.revision ?? 0;
       let lastObservedPageId: BrowserPageId | undefined;
       const access = async <Value>(
@@ -226,7 +198,6 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           if (activeSignal.aborted) {
             return applicationFailure("operation_cancelled", "record", "none");
           }
-          if (progress.browserPage === "resume") return { ok: true as const, value: undefined };
           const pageKind = recoveryPage(progress.browserPage);
           if (pageKind === undefined) {
             return applicationFailure("failure_context_invalid", "record", "page_type");
@@ -247,11 +218,14 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             verification: "verified",
             terminal: null,
           });
-          if (!store.save(
+          const expected = await access<readonly ReviewExpectedField[]>(
+            { kind: "review_expectations" }, activeSignal,
+          );
+          if (!expected.ok || !store.save(
             checkpointRevision,
             state,
             progress.pageChecks,
-            adapter.reviewExpectations(),
+            expected.value,
           )) {
             return applicationFailure("recovery_state_ambiguous", "record", "none");
           }
@@ -290,7 +264,13 @@ export function createStage2PlaywrightLiveRuntimeBinding(
                 }),
               }),
               dependencies,
-              resume: resumeFromArtifact(artifact),
+              resume(state: RecoveryCheckpoint) {
+                const reconciled = store.load();
+                if (reconciled === null || !sameRecoveryCheckpoint(reconciled.checkpoint, state)) {
+                  throw new TypeError("recovery progress denied");
+                }
+                return resumeFromArtifact(reconciled);
+              },
             });
           },
         }),
@@ -330,7 +310,19 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         }),
         privacy: Object.freeze({
           async forbiddenTokens(activeSignal: AbortSignal) {
-            return adapter.forbiddenTokens(activeSignal);
+            const activeRequest = liveRequest;
+            if (activeSignal.aborted || activeRequest === undefined) {
+              throw new TypeError("privacy source revoked");
+            }
+            return forbiddenCorpus([
+              activeRequest.owner.target.url,
+              activeRequest.owner.target.host,
+              activeRequest.owner.target.tenant,
+              activeRequest.owner.target.posting,
+              activeRequest.owner.roots.runtime.path,
+              activeRequest.owner.roots.secrets.path,
+              activeRequest.owner.roots.evidence.path,
+            ], activeRequest.ownerSources.sensitiveValues);
           },
         }),
         cleanup: Object.freeze({
@@ -349,7 +341,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
               if (accepted === true) store.finalize();
               return true;
             } finally {
-              adapter.dispose();
+              liveRequest = undefined;
             }
           },
         }),
@@ -399,372 +391,11 @@ function applicationHandlers(options: {
   });
 }
 
-class Stage2PlaywrightApplicationAdapter implements OwnedApplicationPageAdapter {
-  #request: Stage2ApplicationWalkRuntimeBindingRequest | undefined;
-  #session: LiveBrowserSessionV1 | undefined;
-  readonly #acceptances: ReturnType<typeof createApplicationLaneAcceptanceCollector>;
-  readonly #nextOperationId: () => OperationId;
-  readonly #timeoutMs: number;
-  readonly #reviewExpected = new Map<string, ReviewExpectedField>();
-
-  constructor(options: {
-    readonly request: Stage2ApplicationWalkRuntimeBindingRequest;
-    readonly acceptances: ReturnType<typeof createApplicationLaneAcceptanceCollector>;
-    readonly nextOperationId: () => OperationId;
-    readonly timeoutMs: number;
-  }) {
-    this.#request = options.request;
-    this.#acceptances = options.acceptances;
-    this.#nextOperationId = options.nextOperationId;
-    this.#timeoutMs = options.timeoutMs;
-  }
-
-  bindSession(session: LiveBrowserSessionV1): void {
-    if (this.#session !== undefined) throw new TypeError("application adapter already bound");
-    this.#session = session;
-  }
-
-  dispose(): void {
-    this.#request = undefined;
-    this.#session = undefined;
-  }
-
-  reviewExpectations(): readonly ReviewExpectedField[] {
-    return Object.freeze([...this.#reviewExpected.values()]);
-  }
-
-  restoreReviewExpectations(values: readonly ReviewExpectedField[]): void {
-    if (this.#reviewExpected.size !== 0) throw new TypeError("review expectations already bound");
-    for (const value of values) {
-      if (!isReviewExpectedField(value) || this.#reviewExpected.has(value.fieldId)) {
-        throw new TypeError("review expectation recovery denied");
-      }
-      this.#reviewExpected.set(value.fieldId, Object.freeze({ ...value }));
-    }
-  }
-
-  forbiddenTokens(signal: AbortSignal): readonly string[] {
-    const request = this.#request;
-    if (signal.aborted || request === undefined) throw new TypeError("privacy source revoked");
-    return forbiddenCorpus([
-      request.owner.target.url,
-      request.owner.target.host,
-      request.owner.target.tenant,
-      request.owner.target.posting,
-      request.owner.roots.runtime.path,
-      request.owner.roots.secrets.path,
-      request.owner.roots.evidence.path,
-    ], request.ownerSources.sensitiveValues);
-  }
-
-  async execute(
-    ownedPage: PersistentPage,
-    operation: OwnedApplicationOperation,
-    signal: AbortSignal,
-  ): Promise<unknown> {
-    const page = playwrightPage(ownedPage);
-    const request = this.#request;
-    const session = this.#session;
-    if (request === undefined || session === undefined || signal.aborted) {
-      throw new TypeError("application adapter revoked");
-    }
-    switch (operation.kind) {
-      case "observe":
-      case "inspect_recovery":
-        return new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal);
-      case "next":
-        return new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).next(
-          operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0], signal,
-        );
-      case "reconcile_resume": {
-        const input = operation.input as Parameters<ApplicationPageHandlerPort<"resume">["reconcile"]>[0];
-        const resumePage = createPlaywrightWorkdayResumePage(page);
-        const result = await createWorkdayResumeUploadHandler({
-          driver: createWorkdayResumeUploadDriver(resumePage, { timeoutMs: this.#timeoutMs }),
-          verifier: createWorkdayResumeVerifier(resumePage, { maxAttempts: 20, intervalMs: 50 }),
-          replaceExisting: true,
-        }).upload(request.ownerSources.resumeIntent, signal);
-        if (!result.ok) throw new TypeError("resume reconciliation denied");
-        this.#acceptances.record(result.value);
-        this.#recordReviewExpectation("s1-field-resume", "resume_verified", "resume.pdf");
-        return verified("resume", "resume_verified", input.pageId);
-      }
-      case "reconcile_profile": {
-        const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
-        const result = await completeWorkdayProfilePage(
-          request.ownerSources.profilePlan,
-          new PlaywrightWorkdayProfilePage(page, {
-            pageType: request.ownerSources.profilePlan.pageType,
-            timeoutMs: this.#timeoutMs,
-          }),
-          signal,
-        );
-        if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
-          throw new TypeError("profile reconciliation denied");
-        }
-        this.#acceptances.record(Object.freeze({
-          schemaVersion: 1,
-          checkpoint: "profile_verified",
-          pageType: result.pageType,
-          verifiedFields: result.verifiedFields,
-          ownedDuplicateRows: 0,
-          independentlyVerified: true,
-          submitActivated: false,
-          privacyScan: "pass",
-        }));
-        this.#recordProfileReviewExpectations(request, result.verifiedFields);
-        return verified("profile", "profile_verified", input.pageId);
-      }
-      case "reconcile_questionnaire":
-        return this.#reconcileQuestionnaire(
-          page,
-          operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
-          request,
-          session,
-          signal,
-        );
-      case "reload":
-        await page.reload({ waitUntil: "domcontentloaded" });
-        return undefined;
-      case "capture_review": {
-        const application = await new PlaywrightWorkdayApplicationPage(
-          page,
-          { timeoutMs: this.#timeoutMs },
-        ).observe(signal);
-        if (!application.ok || application.value.page !== "pre_review" ||
-            application.value.submitActivated) throw new TypeError("Review page is unavailable");
-        const review = await captureIndependentReviewFields(page, this.#reviewExpected);
-        return Object.freeze({
-          application: application.value,
-          structure: await captureReviewStructure(page),
-          review,
-        });
-      }
-    }
-  }
-
-  async #reconcileQuestionnaire(
-    page: Page,
-    input: Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
-    request: Stage2ApplicationWalkRuntimeBindingRequest,
-    session: LiveBrowserSessionV1,
-    signal: AbortSignal,
-  ): Promise<unknown> {
-    await bindQuestionnaireTargets(page, input.pageId);
-    const semanticSessionId = `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
-    const semantic = new PlaywrightBrowserSession({
-      attached: { page, sessionId: semanticSessionId, pageId: input.pageId },
-      ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
-      timeoutMs: this.#timeoutMs,
-    });
-    try {
-      const observed = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
-      if (!observed.ok) return applicationFailure(observed.error.code, "question_control", "ui_behavior");
-      const snapshot = createSemanticSnapshot(
-        { kind: "workday", page: "questionnaire" }, discoverFields(observed.value.targets),
-      );
-      const facts = structuralObservations(snapshot.fields, request.owner.revisionId);
-      const questionnaire = createQuestionnairePageHandler({
-        profileQuery: request.ownerSources.profileQuery,
-        driver: createFieldDriver(semantic, createSafetyGuard()),
-        verifier: createFieldVerifier(semantic),
-        narrative: request.ownerSources.narrative,
-        nextOperationId: this.#nextOperationId,
-        allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
-        observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
-      });
-      const completed = await questionnaire.complete({
-        journeyId: session.journeyId,
-        sessionId: semanticSessionId,
-        pageId: input.pageId,
-        guardRevision: runtimeRevision,
-        profileId: request.ownerSources.profileId,
-        profileRevision: request.ownerSources.profileRevision,
-        resume: {
-          resumeId: request.ownerSources.resumeIntent.artifact.resumeId,
-          sha256: request.ownerSources.resumeIntent.artifact.sha256,
-        },
-        resumeArtifact: request.ownerSources.resumeIntent.artifact,
-        page: snapshot,
-      }, signal);
-      if (!completed.ok && new Set([
-        "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
-      ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
-      if (!completed.ok || completed.value.kind !== "verified" ||
-          completed.value.protectedPlaceholderCount !== 0) {
-        return applicationFailure("page_incomplete", "question_control", "question");
-      }
-      this.#acceptances.record(Object.freeze({
-        schemaVersion: 1,
-        checkpoint: "questionnaire_verified",
-        answers: completed.value.answers,
-        protectedPlaceholderCount: 0,
-        independentlyVerified: true,
-        submitActivated: false,
-        privacyScan: "pass",
-      }));
-      const after = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
-      if (!after.ok) throw new TypeError("questionnaire review truth unavailable");
-      const targets = new Map(after.value.targets.map((target) => [target.token, target]));
-      for (const answer of completed.value.answers) {
-        const field = snapshot.fields.find(({ fieldId }) => fieldId === answer.fieldId);
-        const target = field === undefined ? undefined : targets.get(field.target);
-        const value = target === undefined ? undefined : reviewReadbackValue(target.readback);
-        if (value === undefined) throw new TypeError("questionnaire review truth unavailable");
-        this.#recordReviewExpectation(answer.fieldId, answer.provenance, value);
-      }
-      return verified("questionnaire", "questionnaire_verified", input.pageId);
-    } finally {
-      await semantic.close({ sessionId: semanticSessionId }, new AbortController().signal);
-    }
-  }
-
-  #recordProfileReviewExpectations(
-    request: Stage2ApplicationWalkRuntimeBindingRequest,
-    verifiedFields: readonly { readonly fieldId: string; readonly provenance: string }[],
-  ): void {
-    const plans = [
-      ...request.ownerSources.profilePlan.fields,
-      ...request.ownerSources.profilePlan.repeatables.flatMap(({ rows }) =>
-        rows.flatMap(({ fields }) => fields)
-      ),
-    ];
-    for (const verified of verifiedFields) {
-      const candidates = plans.filter(({ fieldId: planned }) => planned === verified.fieldId);
-      if (candidates.length !== 1 || candidates[0]?.answer.kind !== "answered") {
-        throw new TypeError("profile review truth unavailable");
-      }
-      const plan = candidates[0];
-      if (plan.answer.kind !== "answered") throw new TypeError("profile review truth unavailable");
-      const value = plan.optionMapping?.visibleOption ?? plan.answer.value;
-      this.#recordReviewExpectation(verified.fieldId, verified.provenance, value);
-    }
-  }
-
-  #recordReviewExpectation(field: string, provenance: string, value: string): void {
-    if (this.#reviewExpected.has(field)) throw new TypeError("review field ambiguous");
-    const normalized = normalizeReviewValue(value);
-    if (normalized === "") throw new TypeError("review field value unavailable");
-    this.#reviewExpected.set(field, Object.freeze({
-      fieldId: field,
-      provenance,
-      valueSha256: createHash("sha256").update(normalized, "utf8").digest("hex"),
-    }));
-  }
-}
-
-interface ReviewExpectedField {
-  readonly fieldId: string;
-  readonly provenance: string;
-  readonly valueSha256: string;
-}
-
-function reviewReadbackValue(readback: BrowserReadback): string | undefined {
-  if (readback.kind === "text") return readback.value;
-  if (readback.kind === "selected") return readback.option ?? undefined;
-  if (readback.kind === "checked") return readback.checked ? "true" : "false";
-  return undefined;
-}
-
-function normalizeReviewValue(value: string): string {
-  return value.normalize("NFC").replace(/\s+/gu, " ").trim();
-}
-
-async function captureIndependentReviewFields(
-  page: Page,
-  expected: ReadonlyMap<string, ReviewExpectedField>,
-): Promise<{
-  readonly page: SemanticPageSnapshot;
-  readonly verification: readonly { readonly kind: "verified"; readonly fieldId: FieldId }[];
-}> {
-  if (expected.size === 0 || expected.size > 128) throw new TypeError("Review fields unavailable");
-  const rows = page.locator('[data-automation-id="applyFlowReviewPage"] [data-hunt-review-field-id]');
-  const count = await rows.count();
-  const seen = new Set<string>();
-  if (count > 0) {
-    if (count !== expected.size) throw new TypeError("Review fields incomplete or ambiguous");
-    for (let index = 0; index < count; index += 1) {
-      const row = rows.nth(index);
-      const id = await row.getAttribute("data-hunt-review-field-id");
-      if (id === null) throw new TypeError("Review field identity unavailable");
-      const value = normalizeReviewValue(await row.textContent() ?? "");
-      const fact = expected.get(id);
-      if (fact === undefined || seen.has(id) || value === "" ||
-          createHash("sha256").update(value, "utf8").digest("hex") !== fact.valueSha256 ||
-          fact.provenance.length === 0) throw new TypeError("Review field mismatch");
-      seen.add(id);
-    }
-  } else {
-    const realRows = page.locator(
-      '[data-automation-id="applyFlowReviewPage"] [data-automation-id^="formField-"]',
-    );
-    const realCount = await realRows.count();
-    const byHash = new Map<string, ReviewExpectedField>();
-    for (const fact of expected.values()) {
-      if (byHash.has(fact.valueSha256)) throw new TypeError("Review values ambiguous");
-      byHash.set(fact.valueSha256, fact);
-    }
-    if (realCount < 1 || realCount > 128) throw new TypeError("Review rows unavailable");
-    for (let index = 0; index < realCount; index += 1) {
-      const values = await realRows.nth(index).evaluate((root) => {
-        const leaves = [...root.querySelectorAll<HTMLElement>("*")]
-          .filter((element) => element.children.length === 0)
-          .map((element) => element.textContent ?? "");
-        return leaves.length === 0 ? [root.textContent ?? ""] : leaves;
-      });
-      const matched = new Set<string>();
-      for (const raw of values) {
-        const normalized = normalizeReviewValue(raw);
-        if (normalized === "") continue;
-        const fact = byHash.get(createHash("sha256").update(normalized, "utf8").digest("hex"));
-        if (fact !== undefined) matched.add(fact.fieldId);
-      }
-      if (matched.size === 0) throw new TypeError("Unknown Review row");
-      for (const id of matched) {
-        if (seen.has(id)) throw new TypeError("Review field ambiguous");
-        seen.add(id);
-      }
-    }
-  }
-  if (seen.size !== expected.size) throw new TypeError("Review fields incomplete");
-  const ids = [...expected.keys()].sort();
-  const fields = ids.map((id, index) => Object.freeze({
-    fieldId: fieldId(id),
-    target: browserTargetToken(`review-verified-${index}`),
-    label: boundedText(`Verified Review field ${index + 1}`),
-    required: true,
-    behavior: "text" as const,
-    options: Object.freeze([]),
-    state: "populated" as const,
-  }));
-  return Object.freeze({
-    page: Object.freeze({
-      pageIdentity: Object.freeze({ kind: "workday" as const, page: "review" as const }),
-      fields: Object.freeze(fields),
-    }),
-    verification: Object.freeze(fields.map(({ fieldId }) => Object.freeze({
-      kind: "verified" as const,
-      fieldId,
-    }))),
-  });
-}
-
 function handler<PageKind extends "resume" | "profile" | "questionnaire">(
   _page: PageKind,
   reconcile: ApplicationPageHandlerPort<PageKind>["reconcile"],
 ): ApplicationPageHandlerPort<PageKind> {
   return Object.freeze({ reconcile });
-}
-
-function verified<
-  PageKind extends "resume" | "profile" | "questionnaire",
-  Checkpoint extends PageKind extends "resume"
-    ? "resume_verified"
-    : PageKind extends "profile"
-      ? "profile_verified"
-      : "questionnaire_verified",
->(page: PageKind, checkpoint: Checkpoint, pageId: BrowserPageId) {
-  return { ok: true as const, value: { page, checkpoint, pageId, independentlyVerified: true as const } };
 }
 
 function applicationFailure(
@@ -812,86 +443,8 @@ function operationId(): OperationId {
   return generatedOperationId(`operation_${randomBytes(16).toString("hex")}`);
 }
 
-function playwrightPage(page: PersistentPage): Page {
-  if (!("locator" in page) || !("evaluate" in page) || !("reload" in page)) {
-    throw new TypeError("Playwright page capability unavailable");
-  }
-  return page as Page;
-}
-
-async function bindQuestionnaireTargets(page: Page, pageId: BrowserPageId): Promise<void> {
-  const result = await page.evaluate((declaredPageId) => {
-    const roots = document.querySelectorAll('[data-automation-id="applyFlowApplicationQuestionsPage"]');
-    if (roots.length !== 1) return false;
-    document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
-    const controls = roots[0]!.querySelectorAll<HTMLElement>(
-      'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
-    );
-    let index = 0;
-    for (const control of controls) {
-      if (control instanceof HTMLInputElement && control.type === "radio" &&
-          control.closest("fieldset") !== null) continue;
-      const normalize = (value: string | null | undefined) =>
-        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
-      let label = normalize(control.getAttribute("aria-label"));
-      if (label === "" && control instanceof HTMLFieldSetElement) {
-        label = normalize(control.querySelector(":scope > legend")?.textContent);
-      }
-      if (label === "" && (control instanceof HTMLInputElement ||
-          control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) {
-        label = normalize(control.labels?.[0]?.textContent);
-      }
-      if (label === "") label = normalize(control.getAttribute("placeholder"));
-      const reviewed: Record<string, string> = {
-        "Given name": "target-s1-field-given-name",
-        "Family name": "target-s1-field-family-name",
-        "Phone number": "target-s1-field-phone-number",
-        "Brief interest statement": "target-s1-field-interest",
-        "Are you authorized to work in this location?": "target-s1-field-work-authorization",
-        "I am at least 18 years of age.": "target-s1-field-age-requirement",
-        "Will you require sponsorship?": "target-s1-field-sponsorship",
-        "Country": "target-s1-field-country",
-        "Available start date": "target-s1-field-start-date",
-      };
-      control.setAttribute(
-        "data-hunt-target-token",
-        reviewed[label] ?? `target-unreviewed-${index}`,
-      );
-      index += 1;
-    }
-    return index > 0 && index <= 128;
-  }, pageId);
-  if (!result) throw new TypeError("questionnaire control binding denied");
-}
-
-function structuralObservations(
-  fields: readonly { readonly fieldId: FieldId; readonly required: boolean; readonly options: readonly unknown[] }[],
-  revisionId: string,
-): ReadonlyMap<string, SanitizedStructuralObservationV1> {
-  const values = new Map<string, SanitizedStructuralObservationV1>();
-  for (const [index, field] of fields.entries()) {
-    for (const layer of ["question", "visible_option"] as const) {
-      values.set(`${field.fieldId}:${layer}`, Object.freeze({
-        schemaVersion: 1,
-        observationId: `structural_observation_${index}_${layer}` as never,
-        layer,
-        sourceRevisionId: revisionId as never,
-        parentLineage: Object.freeze([]),
-        traitIds: Object.freeze([
-          `structural_trait_required_${field.required ? "yes" : "no"}` as never,
-        ]),
-        observedVariantId: null,
-        controlCount: 1,
-        requiredControlCount: field.required ? 1 : 0,
-        optionCount: field.options.length,
-      }));
-    }
-  }
-  return values;
-}
-
 function recoveryPage(page: ApplicationPage): RecoveryCheckpoint["page"]["kind"] | undefined {
-  if (page === "profile" || page === "questionnaire") return page;
+  if (page === "resume" || page === "profile" || page === "questionnaire") return page;
   if (page === "pre_review") return "review";
   return undefined;
 }
@@ -980,36 +533,6 @@ function recoveryFailure(code: string) {
   return { ok: false as const, error: { code: code as never } };
 }
 
-async function captureReviewStructure(page: Page): Promise<WorkdayReviewStructuralObservationV1> {
-  const root = page.locator(workdayReviewSignatures.reviewRoot);
-  const active = page.locator(workdayReviewSignatures.activeStep);
-  const errors = page.locator(workdayReviewSignatures.validationError);
-  const submit = root.getByRole("button", { name: workdayReviewSignatures.finalSubmitName });
-  const [rootCount, activeCount, errorCount, submitCount] = await Promise.all([
-    root.count(), active.count(), errors.count(), submit.count(),
-  ]);
-  if ([rootCount, activeCount, errorCount, submitCount].some((count) =>
-    !Number.isInteger(count) || count < 0 || count > 64
-  )) throw new TypeError("Review structure denied");
-  return Object.freeze({
-    schemaVersion: 1,
-    reviewRoot: Object.freeze({
-      count: rootCount,
-      visible: rootCount === 1 && await root.isVisible(),
-    }),
-    activeStep: Object.freeze({
-      count: activeCount,
-      visible: activeCount === 1 && await active.isVisible(),
-    }),
-    validationErrorCount: errorCount,
-    finalSubmit: Object.freeze({
-      count: submitCount,
-      visible: submitCount === 1 && await submit.isVisible(),
-      enabled: submitCount === 1 && await submit.isEnabled(),
-    }),
-  });
-}
-
 function reviewSnapshotPage(value: WorkdayReviewStructuralObservationV1): ReviewReadOnlyPage {
   return Object.freeze({
     locator(selector: string): ReviewReadOnlyLocator {
@@ -1045,20 +568,56 @@ function snapshotLocator(
 
 interface RecoveryArtifactV1 {
   readonly schemaVersion: 1;
+  readonly scope: RecoveryScopeV1;
   readonly checkpoint: RecoveryCheckpoint;
   readonly pageChecks: readonly ApplicationPageCheck[];
   readonly reviewExpected: readonly ReviewExpectedField[];
+}
+
+interface RecoveryScopeV1 {
+  readonly sourceRevision: string;
+  readonly configSha256: string;
+  readonly revisionId: string;
+  readonly approvalId: string;
+  readonly journeyId: string;
+  readonly targetHandleId: string;
+  readonly target: TargetIdentityV1;
+}
+
+function recoveryScopeFor(
+  request: Stage2ApplicationWalkRuntimeBindingRequest,
+  target: TargetIdentityV1,
+): RecoveryScopeV1 {
+  return Object.freeze({
+    sourceRevision: request.sourceRevision,
+    configSha256: request.configSha256,
+    revisionId: request.owner.revisionId,
+    approvalId: request.owner.approval.approvalId,
+    journeyId: request.owner.journeyId,
+    targetHandleId: request.owner.target.handleId,
+    target,
+  });
 }
 
 function resumeFromArtifact(artifact: RecoveryArtifactV1): ApplicationWalkResume {
   const currentPage = artifact.checkpoint.page.kind === "review"
     ? "pre_review"
     : artifact.checkpoint.page.kind;
-  if (currentPage !== "profile" && currentPage !== "questionnaire" &&
+  if (currentPage !== "resume" && currentPage !== "profile" && currentPage !== "questionnaire" &&
       currentPage !== "pre_review") {
     throw new TypeError("recovery progress denied");
   }
   return Object.freeze({ currentPage, pageChecks: artifact.pageChecks });
+}
+
+function sameRecoveryCheckpoint(left: RecoveryCheckpoint, right: RecoveryCheckpoint): boolean {
+  return left.schemaVersion === right.schemaVersion && left.journeyId === right.journeyId &&
+    left.sourceRevision === right.sourceRevision && left.revision === right.revision &&
+    left.page.id === right.page.id && left.page.kind === right.page.kind &&
+    left.verification === right.verification && left.terminal === right.terminal &&
+    left.target.schemaVersion === right.target.schemaVersion &&
+    left.target.atsFamily === right.target.atsFamily && left.target.hostId === right.target.hostId &&
+    left.target.tenantId === right.target.tenantId && left.target.postingId === right.target.postingId;
 }
 
 class RecoveryFileStore {
@@ -1066,8 +625,9 @@ class RecoveryFileStore {
   readonly #directory: string;
   readonly #path: string;
   readonly #recordPath: string;
+  readonly #scope: RecoveryScopeV1;
 
-  constructor(root: string, file: string) {
+  constructor(root: string, file: string, scope: RecoveryScopeV1) {
     if (!/^revision_[A-Za-z0-9_-]{16,64}\.recovery\.json$/u.test(file)) {
       throw new TypeError("recovery coordinate denied");
     }
@@ -1076,6 +636,7 @@ class RecoveryFileStore {
     mkdirSync(this.#directory, { recursive: true });
     this.#path = join(this.#directory, file);
     this.#recordPath = `${this.#path}.reconciliation`;
+    this.#scope = scope;
     this.#assertBoundary();
   }
 
@@ -1090,7 +651,9 @@ class RecoveryFileStore {
     const stable = readStablePrivateFile(this.#path, 64 * 1024);
     try {
       const value: unknown = JSON.parse(stable.bytes.toString("utf8"));
-      if (!isRecoveryArtifact(value)) throw new TypeError("recovery artifact denied");
+      if (!isRecoveryArtifact(value) || !sameRecoveryScope(value.scope, this.#scope)) {
+        throw new TypeError("recovery artifact scope denied");
+      }
       return value;
     } finally {
       stable.bytes.fill(0);
@@ -1113,6 +676,7 @@ class RecoveryFileStore {
     if (checks === undefined || expected === undefined) return false;
     return this.#write(this.#path, Object.freeze({
       schemaVersion: 1 as const,
+      scope: this.#scope,
       checkpoint: state,
       pageChecks: Object.freeze([...checks]),
       reviewExpected: Object.freeze([...expected]),
@@ -1179,18 +743,23 @@ class RecoveryFileStore {
 function isRecoveryArtifact(value: unknown): value is RecoveryArtifactV1 {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Partial<RecoveryArtifactV1>;
-  if (!hasExactKeys(value, ["schemaVersion", "checkpoint", "pageChecks", "reviewExpected"])) {
+  if (!hasExactKeys(value, ["schemaVersion", "scope", "checkpoint", "pageChecks", "reviewExpected"])) {
     return false;
   }
-  if (artifact.schemaVersion !== 1 || !Array.isArray(artifact.pageChecks) ||
+  if (artifact.schemaVersion !== 1 || !isRecoveryScope(artifact.scope) ||
+      !Array.isArray(artifact.pageChecks) ||
       !Array.isArray(artifact.reviewExpected) ||
       !isRecoveryCheckpoint(artifact.checkpoint)) return false;
-  const expectedPage = artifact.checkpoint.page.kind === "profile" ? "profile"
+  const expectedPage = artifact.checkpoint.page.kind === "resume" ? "resume"
+    : artifact.checkpoint.page.kind === "profile" ? "profile"
     : artifact.checkpoint.page.kind === "questionnaire" ? "questionnaire"
     : artifact.checkpoint.page.kind === "review" ? "pre_review" : undefined;
   if (expectedPage === undefined) return false;
-  const expectedCount = expectedPage === "profile" ? 2 : 3;
-  if (artifact.pageChecks.length !== expectedCount) return false;
+  const bounds = expectedPage === "resume" ? [1, 1] as const
+    : expectedPage === "profile" ? [1, 2] as const
+    : expectedPage === "questionnaire" ? [2, 3] as const
+    : [3, 3] as const;
+  if (artifact.pageChecks.length < bounds[0] || artifact.pageChecks.length > bounds[1]) return false;
   return artifact.pageChecks.every((check, index) => {
     if (typeof check !== "object" || check === null) return false;
     const page = ["resume", "profile", "questionnaire"][index];
@@ -1208,15 +777,39 @@ function isRecoveryArtifact(value: unknown): value is RecoveryArtifactV1 {
     artifact.reviewExpected.every(isReviewExpectedField);
 }
 
-function isReviewExpectedField(value: unknown): value is ReviewExpectedField {
-  if (typeof value !== "object" || value === null) return false;
-  const field = value as Partial<ReviewExpectedField>;
-  return hasExactKeys(value, ["fieldId", "provenance", "valueSha256"]) &&
-    typeof field.fieldId === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(field.fieldId) &&
-    typeof field.provenance === "string" && new Set([
-      "owner_provided", "resume_verified", "configured_template", "reviewed_catalog", "visible_option",
-    ]).has(field.provenance) &&
-    typeof field.valueSha256 === "string" && /^[0-9a-f]{64}$/u.test(field.valueSha256);
+function isRecoveryScope(value: unknown): value is RecoveryScopeV1 {
+  if (typeof value !== "object" || value === null || !hasExactKeys(value, [
+    "sourceRevision", "configSha256", "revisionId", "approvalId", "journeyId",
+    "targetHandleId", "target",
+  ])) return false;
+  const scope = value as Partial<RecoveryScopeV1>;
+  return typeof scope.sourceRevision === "string" && /^[0-9a-f]{40}$/u.test(scope.sourceRevision) &&
+    typeof scope.configSha256 === "string" && /^[0-9a-f]{64}$/u.test(scope.configSha256) &&
+    typeof scope.revisionId === "string" && /^revision_[A-Za-z0-9_-]{16,64}$/u.test(scope.revisionId) &&
+    typeof scope.approvalId === "string" && /^approval_[A-Za-z0-9_-]{16,64}$/u.test(scope.approvalId) &&
+    typeof scope.journeyId === "string" && /^journey_[A-Za-z0-9_-]{16,64}$/u.test(scope.journeyId) &&
+    typeof scope.targetHandleId === "string" && /^target_ref_[A-Za-z0-9_-]{16,64}$/u.test(scope.targetHandleId) &&
+    isTargetIdentity(scope.target);
+}
+
+function sameRecoveryScope(left: RecoveryScopeV1, right: RecoveryScopeV1): boolean {
+  return left.sourceRevision === right.sourceRevision && left.configSha256 === right.configSha256 &&
+    left.revisionId === right.revisionId && left.approvalId === right.approvalId &&
+    left.journeyId === right.journeyId && left.targetHandleId === right.targetHandleId &&
+    left.target.schemaVersion === right.target.schemaVersion &&
+    left.target.atsFamily === right.target.atsFamily && left.target.hostId === right.target.hostId &&
+    left.target.tenantId === right.target.tenantId && left.target.postingId === right.target.postingId;
+}
+
+function isTargetIdentity(value: unknown): value is TargetIdentityV1 {
+  if (typeof value !== "object" || value === null || !hasExactKeys(value, [
+    "schemaVersion", "atsFamily", "hostId", "tenantId", "postingId",
+  ])) return false;
+  const target = value as Partial<TargetIdentityV1>;
+  return target.schemaVersion === 1 && target.atsFamily === "workday" &&
+    typeof target.hostId === "string" && /^host_[A-Za-z0-9_-]{16,64}$/u.test(target.hostId) &&
+    typeof target.tenantId === "string" && /^tenant_[A-Za-z0-9_-]{16,64}$/u.test(target.tenantId) &&
+    typeof target.postingId === "string" && /^posting_[A-Za-z0-9_-]{16,64}$/u.test(target.postingId);
 }
 
 function isRecoveryCheckpoint(value: unknown): value is RecoveryCheckpoint {
@@ -1241,7 +834,7 @@ function isRecoveryCheckpoint(value: unknown): value is RecoveryCheckpoint {
     typeof page === "object" && page !== null && hasExactKeys(page, ["id", "kind"]) &&
     typeof page.id === "string" && page.id.length >= 1 && page.id.length <= 128 &&
     typeof page.kind === "string" &&
-    new Set(["profile", "questionnaire", "review"]).has(page.kind);
+    new Set(["resume", "profile", "questionnaire", "review"]).has(page.kind);
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {

@@ -46,6 +46,8 @@ import type {
   ApprovedTargetBinding,
   OwnedTargetInspection,
 } from "./private/types.ts";
+import { OwnedWorkdayApplicationRuntime } from
+  "./private/workday-application-runtime.ts";
 
 export class PlaywrightPersistentBrowserSession
   implements PersistentBrowserSession
@@ -63,6 +65,7 @@ export class PlaywrightPersistentBrowserSession
   #cleanupFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
+  readonly #applicationRuntime: OwnedWorkdayApplicationRuntime | undefined;
   readonly #openOperations = new Map<
     string,
     { readonly fingerprint: string; readonly result: Promise<OpenPortResult> }
@@ -85,6 +88,9 @@ export class PlaywrightPersistentBrowserSession
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
     this.#options = options;
+    this.#applicationRuntime = options.applicationRuntime === undefined
+      ? undefined
+      : new OwnedWorkdayApplicationRuntime(options.applicationRuntime);
     this.#accountAccess = new OwnedAccountPageCoordinator({
       adapter: options.accountPage,
       probe: options.probe,
@@ -122,7 +128,10 @@ export class PlaywrightPersistentBrowserSession
         ? previous.result
         : failure("browser_operation_replayed");
     }
-    const result = this.#openOnce(request, signal);
+    const result = this.#openOnce(request, signal).then((opened) => {
+      if (opened.ok) this.#applicationRuntime?.bindSession(opened.value.session);
+      return opened;
+    });
     this.#openOperations.set(request.operationId, { fingerprint, result });
     return result;
   }
@@ -456,7 +465,7 @@ export class PlaywrightPersistentBrowserSession
     if (
       request.schemaVersion !== 1 ||
       !isOwnedApplicationOperation(operation) ||
-      this.#options.applicationPage === undefined ||
+      this.#applicationRuntime === undefined ||
       this.#page === undefined ||
       this.#page.isClosed() ||
       this.#session === undefined ||
@@ -493,7 +502,7 @@ export class PlaywrightPersistentBrowserSession
     const effect = applicationOperationEffect(operation);
     try {
       const result = await bounded(
-        this.#options.applicationPage.execute(page, operation, signal),
+        this.#applicationRuntime.run(page, operation, signal),
         signal,
         this.#options.timeoutMs,
       );
@@ -568,6 +577,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
+    this.#applicationRuntime?.dispose();
     return closed ? { ok: true, value: undefined } : failure("browser_profile_cleanup_failed");
   }
 
@@ -818,6 +828,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
+    this.#applicationRuntime?.dispose();
     if (
       !contextCleanup ||
       !profileCleanup
@@ -850,6 +861,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
+    this.#applicationRuntime?.dispose();
     const cleaned = contextCleaned && profileCleaned;
     if (failedSession !== undefined) {
       if (cleaned) {

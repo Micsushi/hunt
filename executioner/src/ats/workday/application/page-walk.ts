@@ -84,7 +84,7 @@ export async function runApplicationPageWalk(
       return failure("browser_truth", resumed.error, current.value.page, 1);
     }
     startIndex = resumed.startIndex;
-    if (resume.currentPage !== "pre_review") {
+    if (resumed.advanceFromVerifiedCurrent) {
       const from = applicationPages[startIndex - 1]!;
       const expected = applicationPages[startIndex] ?? "pre_review";
       const advanced = await dependencies.navigation.next(
@@ -333,15 +333,20 @@ export async function runApplicationPageWalk(
 }
 
 function validateResume(
-  currentPage: Exclude<ApplicationPage, "resume">,
+  currentPage: ApplicationPage,
   checks: readonly ApplicationPageCheck[],
   truth: ApplicationPageTruth,
-): { readonly ok: true; readonly startIndex: number } | {
+): { readonly ok: true; readonly startIndex: number; readonly advanceFromVerifiedCurrent: boolean } | {
   readonly ok: false;
   readonly error: ApplicationPortFailure;
 } {
-  const expectedCount = currentPage === "profile" ? 2 : 3;
-  if (truth.page !== currentPage || checks.length !== expectedCount) {
+  const currentIndex = currentPage === "pre_review"
+    ? applicationPages.length
+    : applicationPages.indexOf(currentPage);
+  const minimumCount = currentPage === "pre_review" ? applicationPages.length : currentIndex;
+  const maximumCount = currentPage === "pre_review" ? applicationPages.length : currentIndex + 1;
+  if (truth.page !== currentPage || currentIndex < 0 ||
+      checks.length < minimumCount || checks.length > maximumCount || checks.length === 0) {
     return { ok: false, error: internalFailure(
       "recovery_state_ambiguous", "progress_projection", "record", "page_type",
     ) };
@@ -358,7 +363,8 @@ function validateResume(
       "recovery_state_ambiguous", "progress_projection", "record", "required_field",
     ) };
   }
-  if (currentPage !== "pre_review") {
+  const currentVerified = currentPage !== "pre_review" && checks.length === currentIndex + 1;
+  if (currentVerified) {
     const currentCheck = checks.at(-1)!;
     const observed = pageCheck(currentCheck.page, currentCheck.checkpoint, truth);
     if (
@@ -374,7 +380,11 @@ function validateResume(
   ) return { ok: false, error: internalFailure(
     "recovery_state_ambiguous", "progress_projection", "record", "required_field",
   ) };
-  return { ok: true, startIndex: expectedCount };
+  return {
+    ok: true,
+    startIndex: currentVerified ? currentIndex + 1 : currentIndex,
+    advanceFromVerifiedCurrent: currentVerified,
+  };
 }
 
 function sanitizeFailure(error: unknown): ApplicationPortFailure {

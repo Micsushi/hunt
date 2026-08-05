@@ -52,6 +52,7 @@ export type RecoveryAttemptSnapshot = Readonly<Record<RecoveryKind | "total", nu
 export type RecoveryPageKind =
   | "account"
   | "verification"
+  | "resume"
   | "profile"
   | "questionnaire"
   | "review";

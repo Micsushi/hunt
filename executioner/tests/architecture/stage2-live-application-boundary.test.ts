@@ -6,8 +6,22 @@ import {
   runStage2ApplicationWalkFromOwnerConfig,
 } from "../../src/composition/s2-application-walk-runner.ts";
 import { stage2RealJourneyRuntimeBinding } from "../../src/acceptance/s2-production-binding.ts";
+import type { PlaywrightPersistentBrowserFactoryOptions } from
+  "../../src/browser/playwright-live/factory.ts";
+import type { PlaywrightPersistentBrowserSessionOptions } from
+  "../../src/browser/playwright-live/private/types.ts";
+
+type FactoryCanInjectApplicationPage = "applicationPage" extends
+  keyof PlaywrightPersistentBrowserFactoryOptions ? true : false;
+type SessionCanInjectApplicationPage = "applicationPage" extends
+  keyof PlaywrightPersistentBrowserSessionOptions ? true : false;
+
+const factoryCanInjectApplicationPage: FactoryCanInjectApplicationPage = false;
+const sessionCanInjectApplicationPage: SessionCanInjectApplicationPage = false;
 
 test("the live CLI routes the outer gate into the bound F3-to-Review composition", async () => {
+  assert.equal(factoryCanInjectApplicationPage, false);
+  assert.equal(sessionCanInjectApplicationPage, false);
   const gateSource = await readFile(
     new URL("../../scripts/run-s2-acceptance.ts", import.meta.url),
     "utf8",
@@ -39,6 +53,21 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
   );
   assert.doesNotMatch(applicationCapability, /use:\s*\(page/u);
   assert.match(applicationCapability, /OwnedApplicationOperation/u);
+  assert.doesNotMatch(applicationCapability, /execute\s*\([^)]*page/u);
+  assert.doesNotMatch(applicationCapability, /PersistentPage/u);
+  const factory = await readFile(
+    new URL("../../src/browser/playwright-live/factory.ts", import.meta.url),
+    "utf8",
+  );
+  const session = await readFile(
+    new URL("../../src/browser/playwright-live/session.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(factory, /applicationPage\??:/u);
+  assert.doesNotMatch(factory, /options\.applicationPage/u);
+  assert.doesNotMatch(session, /options\.applicationPage\.execute/u);
+  assert.match(session, /new OwnedWorkdayApplicationRuntime\(options\.applicationRuntime\)/u);
+  assert.doesNotMatch(factory, /execute\s*:\s*(?:async\s*)?\([^)]*page/u);
   assert.match(runtime, /createPlaywrightPersistentBrowserSession/u);
   assert.doesNotMatch(runtime, /(?:click|press|activate)[A-Za-z]*(?:Submit|submit)/u);
   const composition = await readFile(

@@ -421,6 +421,26 @@ test("S2-F3 application composition owns only its exact integration seams", () =
   ]), []);
 });
 
+test("the raw-page owner admits only the exact closed Workday runtime assembler", () => {
+  const source = 'import { handler } from "../../../ats/workday/application/page-walk.ts";';
+  assert.deepEqual(dependencyViolations([{
+    path: "src/browser/playwright-live/private/workday-application-runtime.ts",
+    source,
+  }]), []);
+  assert.deepEqual(dependencyViolations([{
+    path: "src/browser/playwright-live/private/other-application-runtime.ts",
+    source,
+  }]), [
+    "src/browser/playwright-live/private/other-application-runtime.ts imports peer implementation src/ats/workday/application/page-walk.ts",
+  ]);
+  assert.deepEqual(dependencyViolations([{
+    path: "src/browser/playwright-live/private/workday-application-runtime.ts",
+    source: 'import { lifecycle } from "../../../account/lifecycle/index.ts";',
+  }]), [
+    "src/browser/playwright-live/private/workday-application-runtime.ts imports peer implementation src/account/lifecycle/index.ts",
+  ]);
+});
+
 test("composition may not import test-only source", () => {
   const files: SourceFile[] = [
     {

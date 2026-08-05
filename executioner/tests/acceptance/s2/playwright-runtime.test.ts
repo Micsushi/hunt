@@ -15,14 +15,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { chromium, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
+import type {
+  PersistentContext,
+  PersistentPage,
+} from "../../../src/browser/playwright-live/private/types.ts";
 import {
   ownedApplicationPageAccess,
-  isOwnedApplicationOperation,
   suspendOwnedApplicationSession,
   type OwnedApplicationOperation,
-  type OwnedApplicationPageAdapter,
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
+import { PlaywrightPersistentBrowserSession } from
+  "../../../src/browser/playwright-live/session.ts";
 
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { createConfiguredNarrativeProvider } from "../../../src/ats/workday/application/questions/index.ts";
@@ -57,8 +61,6 @@ test("one owned Playwright page completes application, recovers, proves Review, 
   const url = `http://127.0.0.1:${address.port}/application-questions`;
   const chromiumBrowser = await chromium.launch({ headless: true });
   const context = await chromiumBrowser.newContext();
-  const page = await context.newPage();
-  const owned = new FixtureOwnedBrowser(page, url);
   const artifact = resumeArtifact();
   const intent = createWorkdayResumeFileIntent({
     artifactId: artifact.resumeId,
@@ -70,8 +72,17 @@ test("one owned Playwright page completes application, recovers, proves Review, 
   const nextOperationId = () => generatedOperationId(
     `operation_${(++operation).toString().padStart(16, "0")}`,
   );
+  let owned: PlaywrightPersistentBrowserSession | undefined;
   const runtimeBinding = createStage2PlaywrightLiveRuntimeBinding({
-    browser: (_request, adapter) => owned.bindAdapter(adapter),
+    browser: (request, applicationRuntime) => owned = new PlaywrightPersistentBrowserSession({
+      binding: request.ownerBinding,
+      launcher: { async launchPersistentContext() { return redirectingContext(context, url); } },
+      probe: { async inspect() { return ownedMatchedFixture(); } },
+      profiles: new FixtureProfiles(),
+      applicationRuntime,
+      ids: () => "live_session_runtime_fixture_01" as LiveSessionId,
+      timeoutMs: 5_000,
+    }),
     now: () => "2026-08-05T12:00:00.000Z",
     nextOperationId,
     timeoutMs: 5_000,
@@ -82,7 +93,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       owner: owner(root, url),
       ownerBinding: {
         forPersistentBrowser: () => ({
-          targetUrl: url,
+          targetUrl: approvedFixtureTargetUrl,
           profilePath: join(root, "profile"),
           admittedAt: "2026-08-05T12:00:00.000Z",
           leaseExpiresAt: "2026-08-06T12:00:00.000Z",
@@ -111,6 +122,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
         ],
       },
       sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
     }, new AbortController().signal);
 
     const walked = await runApplicationPageWalk(runtime.walk, {
@@ -124,6 +136,8 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       "profile_verified",
       "questionnaire_verified",
     ]);
+    const page = context.pages()[0];
+    if (page === undefined || owned === undefined) throw new Error("owned fixture page missing");
     const recoveryPath = join(
       root,
       "stage2-acceptance",
@@ -132,11 +146,19 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     const recoveryText = readFileSync(recoveryPath, "utf8");
     assert.equal(recoveryText.includes("Exact configured interest statement."), false);
     const recoveryArtifact = JSON.parse(recoveryText) as {
-      readonly reviewExpected?: readonly { readonly fieldId?: string; readonly valueSha256?: string }[];
+      readonly reviewExpected?: readonly {
+        readonly fieldId?: string;
+        readonly rowIdentity?: string;
+        readonly valueSha256?: string;
+      }[];
     };
     assert.deepEqual(recoveryArtifact.reviewExpected?.map(({ fieldId }) => fieldId), [
       "s1-field-resume",
       "s1-field-interest",
+    ]);
+    assert.deepEqual(recoveryArtifact.reviewExpected?.map(({ rowIdentity }) => rowIdentity), [
+      "formField-s1-field-resume",
+      "formField-s1-field-interest",
     ]);
     assert.match(recoveryArtifact.reviewExpected?.[0]?.valueSha256 ?? "", /^[0-9a-f]{64}$/u);
 
@@ -150,10 +172,13 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     );
     assert.equal(recovered.ok, true);
     assert.equal(recovered.ok && recovered.value.kind, "resumed");
+    if (!recovered.ok || recovered.value.kind !== "resumed") {
+      throw new Error("recovery fixture did not resume");
+    }
     const continued = await runApplicationPageWalk(runtime.walk, {
       journeyId: journeyId("journey_runtime_fixture_01"),
       stopAfter: "pre_review",
-    }, new AbortController().signal, { resume: pending.resume });
+    }, new AbortController().signal, { resume: pending.resume(recovered.value.state) });
     assert.equal(continued.ok, true, JSON.stringify(continued));
 
     const reviewRoot = page.locator('[data-automation-id="applyFlowReviewPage"]');
@@ -166,15 +191,24 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     const resumeRow = reviewRoot.locator("section").first();
     await resumeRow.evaluate((node) => {
       node.removeAttribute("data-hunt-review-field-id");
-      node.setAttribute("data-automation-id", "formField-resume");
+      node.setAttribute("data-automation-id", "formField-s1-field-resume");
       node.innerHTML = '<span>Resume</span><span>resume.pdf</span>';
     });
     await row.evaluate((node) => {
-      node.setAttribute("data-automation-id", "formField-interest");
+      node.setAttribute("data-automation-id", "formField-s1-field-interest");
       node.innerHTML = '<span>Brief interest statement</span><span>Exact configured interest statement.</span>';
     });
     const realShape = await runtime.review.capture(new AbortController().signal);
     assert.equal(realShape.request.verification.length, 2);
+    await resumeRow.locator("span").nth(1).evaluate((node) => {
+      node.textContent = "Exact configured interest statement.";
+    });
+    await row.locator("span").nth(1).evaluate((node) => { node.textContent = "resume.pdf"; });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await resumeRow.locator("span").nth(1).evaluate((node) => { node.textContent = "resume.pdf"; });
+    await row.locator("span").nth(1).evaluate((node) => {
+      node.textContent = "Exact configured interest statement.";
+    });
     await row.evaluate((node) => {
       node.removeAttribute("data-automation-id");
       node.setAttribute("data-hunt-review-field-id", "s1-field-interest");
@@ -198,7 +232,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     const proof = stopAtVerifiedReview({ ...captured.request, structure });
     assert.equal(proof.kind, "review_confirmed");
     assert.equal(await page.evaluate(() => (window as never as { submitActivations: number }).submitActivations), 0);
-    assert.equal(owned.pageIdentities.size, 1);
+    assert.equal(context.pages().length, 1);
     const adversarial = await owned[ownedApplicationPageAccess]({
       schemaVersion: 1,
       journeyId: journeyId("journey_runtime_fixture_01"),
@@ -220,7 +254,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     assert.equal(forbidden.length <= 32, true);
     assert.equal(forbidden.every((value) => value.length >= 3 && value.length <= 512), true);
     assert.equal(await runtime.cleanup.close(new AbortController().signal, true), true);
-    assert.equal(owned.closed, true);
+    assert.equal(context.pages().length, 0);
     await assert.rejects(() => runtime.privacy.forbiddenTokens(new AbortController().signal));
     const revoked = await runtime.walk.observer.observe(new AbortController().signal);
     assert.equal(revoked.ok, false);
@@ -236,11 +270,9 @@ test("unexpected auth UI fails closed before any application mutation", async ()
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-auth-stop-"));
   const chromiumBrowser = await chromium.launch({ headless: true });
   const context = await chromiumBrowser.newContext();
-  const page = await context.newPage();
   const url = `data:text/html,${encodeURIComponent(
     '<html data-hunt-page-id="page-auth"><body><main data-automation-id="signInPage"><label>Email<input></label><button>Sign In</button></main></body></html>',
   )}`;
-  const owned = new FixtureOwnedBrowser(page, url);
   const artifact = resumeArtifact();
   const intent = createWorkdayResumeFileIntent({
     artifactId: artifact.resumeId,
@@ -249,9 +281,18 @@ test("unexpected auth UI fails closed before any application mutation", async ()
   });
   if (!intent.ok) throw new Error("resume fixture invalid");
   let operation = 100;
+  let owned: PlaywrightPersistentBrowserSession | undefined;
   try {
     const runtime = await createStage2PlaywrightLiveRuntimeBinding({
-      browser: (_request, adapter) => owned.bindAdapter(adapter),
+      browser: (request, applicationRuntime) => owned = new PlaywrightPersistentBrowserSession({
+        binding: request.ownerBinding,
+        launcher: { async launchPersistentContext() { return redirectingContext(context, url); } },
+        probe: { async inspect() { return ownedMatchedFixture(); } },
+        profiles: new FixtureProfiles(),
+        applicationRuntime,
+        ids: () => "live_session_runtime_fixture_01" as LiveSessionId,
+        timeoutMs: 2_000,
+      }),
       now: () => "2026-08-05T12:00:00.000Z",
       nextOperationId: () => generatedOperationId(
         `operation_${(++operation).toString().padStart(16, "0")}`,
@@ -259,7 +300,14 @@ test("unexpected auth UI fails closed before any application mutation", async ()
       timeoutMs: 2_000,
     }).bind({
       owner: owner(root, url),
-      ownerBinding: {} as never,
+      ownerBinding: {
+        forPersistentBrowser: () => ({
+          targetUrl: approvedFixtureTargetUrl,
+          profilePath: join(root, "profile"),
+          admittedAt: "2026-08-05T12:00:00.000Z",
+          leaseExpiresAt: "2026-08-06T12:00:00.000Z",
+        }),
+      } as never,
       ownerSources: {
         resumeIntent: intent.value,
         profilePlan: { pageType: "profile", fields: [], repeatables: [] },
@@ -273,13 +321,16 @@ test("unexpected auth UI fails closed before any application mutation", async ()
         sensitiveValues: ["Exact configured interest statement."],
       },
       sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
     }, new AbortController().signal);
     const walked = await runApplicationPageWalk(runtime.walk, {
       journeyId: journeyId("journey_runtime_fixture_01"),
       stopAfter: "pre_review",
     }, new AbortController().signal);
     assert.equal(walked.ok, false);
-    assert.deepEqual(owned.effects, ["read"]);
+    assert.notEqual(owned, undefined);
+    const page = context.pages()[0];
+    if (page === undefined) throw new Error("auth fixture page missing");
     assert.equal(await page.locator("input").inputValue(), "");
     assert.equal(await runtime.cleanup.close(new AbortController().signal), true);
   } finally {
@@ -289,6 +340,153 @@ test("unexpected auth UI fails closed before any application mutation", async ()
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Review accepts repeated equal values only when distinct stable identities bind exactly", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-review-equal-values-"));
+  const valueSha256 = createHash("sha256").update("resume.pdf", "utf8").digest("hex");
+  const artifact = {
+    ...validRecoveryArtifact("pre_review", 3),
+    reviewExpected: [
+      {
+        fieldId: "first-equal-field",
+        provenance: "owner_provided",
+        rowIdentity: "formField-first-equal-field",
+        valueSha256,
+      },
+      {
+        fieldId: "second-equal-field",
+        provenance: "configured_template",
+        rowIdentity: "formField-second-equal-field",
+        valueSha256,
+      },
+    ],
+  };
+  const directory = join(root, "stage2-acceptance");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    join(directory, "revision_0123456789abcdef.recovery.json"),
+    `${JSON.stringify(artifact)}\n`,
+    { mode: 0o600 },
+  );
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(equalValueReviewDocument());
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("fixture server unavailable");
+  const url = `http://127.0.0.1:${address.port}/review`;
+  const chromiumBrowser = await chromium.launch({ headless: true });
+  const context = await chromiumBrowser.newContext();
+  let owned: PlaywrightPersistentBrowserSession | undefined;
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: (request, applicationRuntime) => owned = new PlaywrightPersistentBrowserSession({
+        binding: request.ownerBinding,
+        launcher: { async launchPersistentContext() { return redirectingContext(context, url); } },
+        probe: { async inspect() { return ownedMatchedFixture(); } },
+        profiles: new FixtureProfiles(),
+        applicationRuntime,
+        ids: () => "live_session_review_equal_01" as LiveSessionId,
+        timeoutMs: 5_000,
+      }),
+      nextOperationId: operationIds(500),
+      now: () => "2026-08-05T12:00:00.000Z",
+      timeoutMs: 5_000,
+    }).bind({
+      owner: owner(root, url),
+      ownerBinding: {
+        forPersistentBrowser: () => ({
+          targetUrl: approvedFixtureTargetUrl,
+          profilePath: join(root, "profile"),
+          admittedAt: "2026-08-05T12:00:00.000Z",
+          leaseExpiresAt: "2026-08-06T12:00:00.000Z",
+        }),
+      } as never,
+      ownerSources: {} as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+    assert.notEqual(owned, undefined);
+    const captured = await runtime.review.capture(new AbortController().signal);
+    assert.deepEqual(captured.request.verification.map(({ fieldId }) => fieldId).sort(), [
+      "first-equal-field",
+      "second-equal-field",
+    ]);
+    const page = context.pages()[0];
+    if (page === undefined) throw new Error("equal-value Review fixture missing");
+    assert.equal(await page.evaluate(() => (window as never as { submitActivations: number }).submitActivations), 0);
+    assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
+  } finally {
+    await context.close();
+    await chromiumBrowser.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  { name: "Resume matched", stored: "resume", observed: "resume", checks: 1 },
+  { name: "Resume advanced to Profile", stored: "resume", observed: "profile", checks: 1 },
+  { name: "Profile matched", stored: "profile", observed: "profile", checks: 2 },
+  { name: "Profile advanced to Questionnaire", stored: "profile", observed: "questionnaire", checks: 2 },
+  { name: "Questionnaire matched", stored: "questionnaire", observed: "questionnaire", checks: 3 },
+  { name: "Questionnaire advanced to pre-Review", stored: "questionnaire", observed: "pre_review", checks: 3 },
+  { name: "pre-Review matched", stored: "pre_review", observed: "pre_review", checks: 3 },
+] as const) {
+  test(`${scenario.name} recovery persists an exact cursor across a second restart`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-restart-recovery-"));
+    const directory = join(root, "stage2-acceptance");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "revision_0123456789abcdef.recovery.json"),
+      `${JSON.stringify(validRecoveryArtifact(scenario.stored, scenario.checks))}\n`,
+      { mode: 0o600 },
+    );
+    let browserCalls = 0;
+    try {
+      for (let restart = 1; restart <= 2; restart += 1) {
+        const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+          browser: () => {
+            browserCalls += 1;
+            return closedRecoveryBrowser(scenario.observed);
+          },
+          nextOperationId: operationIds(restart * 100),
+          now: () => "2026-08-05T12:00:00.000Z",
+        }).bind({
+          owner: owner(root, "https://fixture.invalid/application-questions"),
+          ownerBinding: {} as never,
+          ownerSources: {} as never,
+          sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+          configSha256: "a".repeat(64),
+        }, new AbortController().signal);
+        const pending = await runtime.recovery.pending(new AbortController().signal);
+        assert.notEqual(pending, null);
+        if (pending === null) throw new Error("restart recovery artifact missing");
+        const recovered = await recoverBrowserInterruption(
+          pending.dependencies,
+          pending.input,
+          new AbortController().signal,
+        );
+        assert.equal(recovered.ok, true, JSON.stringify(recovered));
+        if (!recovered.ok || recovered.value.kind !== "resumed") {
+          throw new Error("restart recovery did not resume");
+        }
+        const cursor = pending.resume(recovered.value.state);
+        assert.equal(cursor.currentPage, scenario.observed);
+        assert.equal(cursor.pageChecks.length, scenario.checks);
+        assert.deepEqual(
+          cursor.pageChecks.map(({ page }) => page),
+          ["resume", "profile", "questionnaire"].slice(0, scenario.checks),
+        );
+        assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
+      }
+      assert.equal(browserCalls, 2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("recovery storage rejects a linked checkpoint directory before browser ownership", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-linked-recovery-"));
@@ -308,6 +506,7 @@ test("recovery storage rejects a linked checkpoint directory before browser owne
       ownerBinding: {} as never,
       ownerSources: {} as never,
       sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
     }, new AbortController().signal));
     assert.equal(browserCalls, 0);
   } finally {
@@ -316,6 +515,49 @@ test("recovery storage rejects a linked checkpoint directory before browser owne
     rmSync(outside, { recursive: true, force: true });
   }
 });
+
+for (const mismatch of [
+  "journeyId", "sourceRevision", "configSha256", "revisionId", "approvalId",
+  "targetHandleId", "hostId", "tenantId", "postingId",
+] as const) {
+  test(`recovery ${mismatch} scope mismatch opens no browser`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-scope-${mismatch}-`));
+    const directory = join(root, "stage2-acceptance");
+    mkdirSync(directory, { recursive: true });
+    const artifact = validRecoveryArtifact();
+    const scope = { ...artifact.scope, target: { ...artifact.scope.target } };
+    if (mismatch === "journeyId") scope.journeyId = "journey_wrong_scope_0001";
+    else if (mismatch === "sourceRevision") scope.sourceRevision = "f".repeat(40);
+    else if (mismatch === "configSha256") scope.configSha256 = "b".repeat(64);
+    else if (mismatch === "revisionId") scope.revisionId = "revision_wrong_scope_0001";
+    else if (mismatch === "approvalId") scope.approvalId = "approval_wrong_scope_0001";
+    else if (mismatch === "targetHandleId") scope.targetHandleId = "target_ref_wrong_scope_0001";
+    else scope.target[mismatch] = `${mismatch.replace("Id", "")}_wrong_scope_0001`;
+    writeFileSync(
+      join(directory, "revision_0123456789abcdef.recovery.json"),
+      `${JSON.stringify({ ...artifact, scope })}\n`,
+      { mode: 0o600 },
+    );
+    let browserCalls = 0;
+    try {
+      await assert.rejects(() => createStage2PlaywrightLiveRuntimeBinding({
+        browser: () => {
+          browserCalls += 1;
+          throw new Error("browser must not be acquired");
+        },
+      }).bind({
+        owner: owner(root, "https://fixture.invalid/application-questions"),
+        ownerBinding: {} as never,
+        ownerSources: {} as never,
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+        configSha256: "a".repeat(64),
+      }, new AbortController().signal));
+      assert.equal(browserCalls, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const [name, contents] of [
   ["empty", Buffer.alloc(0)],
@@ -343,6 +585,7 @@ for (const [name, contents] of [
         ownerBinding: {} as never,
         ownerSources: {} as never,
         sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+        configSha256: "a".repeat(64),
       }, new AbortController().signal));
       assert.equal(browserCalls, 0);
     } finally {
@@ -374,6 +617,7 @@ for (const orphan of ["reconciliation", "partial"] as const) {
         ownerBinding: {} as never,
         ownerSources: {} as never,
         sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+        configSha256: "a".repeat(64),
       }, new AbortController().signal));
       assert.equal(browserCalls, 0);
     } finally {
@@ -382,88 +626,181 @@ for (const orphan of ["reconciliation", "partial"] as const) {
   });
 }
 
-class FixtureOwnedBrowser {
-  readonly pageIdentities = new Set<Page>();
-  readonly effects: string[] = [];
-  closed = false;
-  readonly #page: Page;
-  readonly #url: string;
-  readonly #session: LiveBrowserSessionV1;
-  #adapter: OwnedApplicationPageAdapter | undefined;
+class FixtureProfiles {
+  marker: unknown;
 
-  constructor(page: Page, url: string) {
-    this.#page = page;
-    this.#url = url;
-    this.#session = {
-      schemaVersion: 1,
-      journeyId: journeyId("journey_runtime_fixture_01"),
-      sessionId: "live_session_runtime_fixture_01" as LiveSessionId,
-      profileLeaseId: "profile_lease_runtime_fixture_01" as ProfileLeaseId,
-      target: {
-        schemaVersion: 1,
-        atsFamily: "workday",
-        hostId: "host_0123456789abcdef" as never,
-        tenantId: "tenant_0123456789abcdef" as never,
-        postingId: "posting_0123456789abcdef" as never,
+  async read(): Promise<unknown> { return this.marker; }
+  async write(_path: string, marker: unknown): Promise<void> { this.marker = marker; }
+  async cleanup(): Promise<void> { this.marker = undefined; }
+  async cleanupPartial(): Promise<void> { this.marker = undefined; }
+}
+
+function ownedMatchedFixture() {
+  return {
+    ownership: "owned" as const,
+    target: { kind: "matched" as const },
+    snapshot: {
+      schemaVersion: 1 as const,
+      traitIds: Object.freeze([]),
+      controlCount: 1,
+      requiredControlCount: 0,
+      optionCount: 0,
+    },
+  };
+}
+
+function redirectingContext(context: BrowserContext, destination: string): PersistentContext {
+  const wrapped = new WeakMap<Page, PersistentPage>();
+  const pageFor = (page: Page): PersistentPage => {
+    const existing = wrapped.get(page);
+    if (existing !== undefined) return existing;
+    const proxy = new Proxy(page, {
+      get(target, property) {
+        if (property === "goto") {
+          return (_ignored: string, options?: { readonly waitUntil?: "commit" | "domcontentloaded" }) =>
+            target.goto(destination, options);
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
       },
-      leaseExpiresAt: "2026-08-06T12:00:00.000Z",
-    };
-  }
+    }) as unknown as PersistentPage;
+    wrapped.set(page, proxy);
+    return proxy;
+  };
+  return {
+    pages: () => context.pages().map(pageFor),
+    newPage: async () => pageFor(await context.newPage()),
+    close: () => context.close(),
+  };
+}
 
-  bindAdapter(adapter: OwnedApplicationPageAdapter): this {
-    this.#adapter = adapter;
-    return this;
-  }
+const approvedFixtureTargetUrl =
+  "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345";
 
-  async open() {
-    await this.#page.goto(this.#url);
-    return { ok: true as const, value: { kind: "opened" as const, session: this.#session } };
-  }
+function validRecoveryArtifact(
+  page: "resume" | "profile" | "questionnaire" | "pre_review" = "resume",
+  checkCount = 1,
+) {
+  const target = {
+    schemaVersion: 1,
+    atsFamily: "workday",
+    hostId: "host_0123456789abcdef",
+    tenantId: "tenant_0123456789abcdef",
+    postingId: "posting_0123456789abcdef",
+  };
+  return {
+    schemaVersion: 1,
+    scope: {
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+      revisionId: "revision_0123456789abcdef",
+      approvalId: "approval_0123456789abcdef",
+      journeyId: "journey_runtime_fixture_01",
+      targetHandleId: "target_ref_0123456789abcdef",
+      target,
+    },
+    checkpoint: {
+      schemaVersion: 1,
+      journeyId: "journey_runtime_fixture_01",
+      sourceRevision: "revision_0123456789abcdef",
+      revision: 1,
+      target,
+      page: {
+        id: `page-${page.replace("_", "-")}`,
+        kind: page === "pre_review" ? "review" : page,
+      },
+      verification: "verified",
+      terminal: null,
+    },
+    pageChecks: ["resume", "profile", "questionnaire"].slice(0, checkCount).map((checked) => ({
+      page: checked,
+      checkpoint: `${checked}_verified`,
+      independentlyVerified: true,
+      requiredFields: 1,
+      verifiedFields: 1,
+      duplicateRows: 0,
+    })),
+    reviewExpected: [],
+  };
+}
 
-  async reconcile() {
-    return { ok: true as const, value: { kind: "matched" as const, session: this.#session } };
-  }
+function operationIds(seed: number) {
+  let value = seed;
+  return () => generatedOperationId(`operation_${(++value).toString().padStart(16, "0")}`);
+}
 
-  async close() {
-    this.closed = true;
-    return { ok: true as const, value: undefined };
-  }
+function equalValueReviewDocument(): string {
+  return `<!doctype html>
+  <html data-hunt-page-id="page-pre-review" data-hunt-submit-activated="false">
+    <body data-hunt-application-page="pre_review">
+      <div data-automation-id="progressBarActiveStep">Review</div>
+      <main data-automation-id="applyFlowReviewPage">
+        <section data-automation-id="formField-first-equal-field"><span>First</span><span>resume.pdf</span></section>
+        <section data-automation-id="formField-second-equal-field"><span>Second</span><span>resume.pdf</span></section>
+        <button id="final-submit">Submit application</button>
+      </main>
+      <script>
+        window.submitActivations = 0;
+        document.querySelector('#final-submit').addEventListener('click', () => { window.submitActivations += 1; });
+      </script>
+    </body>
+  </html>`;
+}
 
-  async [suspendOwnedApplicationSession]() {
-    this.closed = true;
-    return { ok: true as const, value: undefined };
-  }
-
-  async [ownedApplicationPageAccess](
-    request: unknown,
-    operation: OwnedApplicationOperation,
-    signal: AbortSignal,
-  ) {
-    if (!isOwnedApplicationOperation(operation)) {
+function closedRecoveryBrowser(page: "resume" | "profile" | "questionnaire" | "pre_review") {
+  const target = validRecoveryArtifact().scope.target as never;
+  const session: LiveBrowserSessionV1 = {
+    schemaVersion: 1,
+    journeyId: journeyId("journey_runtime_fixture_01"),
+    sessionId: "live_session_runtime_fixture_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_runtime_fixture_01" as ProfileLeaseId,
+    target,
+    leaseExpiresAt: "2026-08-06T12:00:00.000Z",
+  };
+  return {
+    async open() {
+      return { ok: true as const, value: { kind: "opened" as const, session } };
+    },
+    async reconcile() {
+      return { ok: true as const, value: { kind: "matched" as const, session } };
+    },
+    async close() {
+      return { ok: true as const, value: undefined };
+    },
+    async [suspendOwnedApplicationSession]() {
+      return { ok: true as const, value: undefined };
+    },
+    async [ownedApplicationPageAccess](
+      _request: unknown,
+      operation: OwnedApplicationOperation,
+    ) {
+      if (operation.kind === "inspect_recovery") {
+        return { ok: true as const, value: {
+          ok: true as const,
+          value: {
+            page,
+            pageId: `page-${page.replace("_", "-")}`,
+            requiredFields: [],
+            c3OwnedDuplicateRows: 0,
+            submitActivated: false,
+          },
+        } };
+      }
+      if (operation.kind === "reload") {
+        return { ok: true as const, value: undefined };
+      }
       return {
         ok: false as const,
         error: { code: "browser_target_invalid" as const, retryable: false as const },
       };
-    }
-    this.pageIdentities.add(this.#page);
-    this.effects.push(operation.kind === "observe" || operation.kind === "inspect_recovery" ||
-        operation.kind === "capture_review" ? "read" : "mutation");
-    try {
-      if (this.#adapter === undefined) throw new Error("adapter unavailable");
-      return { ok: true as const, value: await this.#adapter.execute(this.#page as never, operation, signal) };
-    } catch {
-      return {
-        ok: false as const,
-        error: { code: "browser_effect_uncertain" as const, retryable: false as const },
-      };
-    }
-  }
+    },
+  };
 }
-
 function owner(root: string, url: string) {
   return {
     journeyId: "journey_runtime_fixture_01",
     revisionId: "revision_0123456789abcdef",
+    approval: { approvalId: "approval_0123456789abcdef" },
     profileRef: "profile_ref_0123456789abcdef",
     target: {
       handleId: "target_ref_0123456789abcdef",
