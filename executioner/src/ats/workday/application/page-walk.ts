@@ -364,6 +364,7 @@ function validateResume(
     ) };
   }
   const currentVerified = currentPage !== "pre_review" && checks.length === currentIndex + 1;
+  const browserAdvancedCurrent = currentPage !== "pre_review" && checks.length === currentIndex;
   if (currentVerified) {
     const currentCheck = checks.at(-1)!;
     const observed = pageCheck(currentCheck.page, currentCheck.checkpoint, truth);
@@ -374,10 +375,10 @@ function validateResume(
     ) return { ok: false, error: internalFailure(
       "recovery_state_ambiguous", "progress_projection", "record", "required_field",
     ) };
-  } else if (
+  } else if (!browserAdvancedCurrent && (
     truth.requiredFields.some(({ verification }) => verification !== "verified") ||
     truth.c3OwnedDuplicateRows !== 0
-  ) return { ok: false, error: internalFailure(
+  )) return { ok: false, error: internalFailure(
     "recovery_state_ambiguous", "progress_projection", "record", "required_field",
   ) };
   return {

@@ -420,7 +420,7 @@ export function isReviewExpectedField(value: unknown): value is ReviewExpectedFi
   const field = value as Partial<ReviewExpectedField>;
   return Object.keys(value).sort().join("|") ===
       ["fieldId", "provenance", "rowIdentity", "valueSha256"].sort().join("|") &&
-    typeof field.fieldId === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(field.fieldId) &&
+    typeof field.fieldId === "string" && isAcceptedFieldId(field.fieldId) &&
     typeof field.provenance === "string" && new Set([
       "owner_provided", "resume_verified", "configured_template", "reviewed_catalog", "visible_option",
     ]).has(field.provenance) &&
@@ -429,7 +429,12 @@ export function isReviewExpectedField(value: unknown): value is ReviewExpectedFi
 }
 
 function isStableRowIdentity(value: string): boolean {
-  return /^formField-[A-Za-z0-9_-]{1,128}$/u.test(value);
+  const prefix = "formField-";
+  return value.startsWith(prefix) && isAcceptedFieldId(value.slice(prefix.length));
+}
+
+function isAcceptedFieldId(value: string): boolean {
+  return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);
 }
 
 async function captureReviewStructure(page: Page): Promise<WorkdayReviewStructuralObservationV1> {

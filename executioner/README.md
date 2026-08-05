@@ -248,9 +248,12 @@ Inside the isolated boundary, the owned browser session constructs one fixed
 Workday runtime before effects; callers provide data only and cannot inject a
 raw-page callback. Before browser ownership, any recovery artifact must match
 the exact source revision, config digest, approval, journey, target handle, and
-target identity. Resume and every later verified page are checkpointed. After
-an interruption, reconciled browser truth and its complete verified prefix are
-persisted as the exact resumable cursor, including across a second restart.
+target identity in both its outer scope and embedded checkpoint. Resume and
+every later verified page are checkpointed. After an interruption, an immediate
+one-page browser advance may be reconciled even when that destination is still
+incomplete; skips, regressions, and unverified persisted prefixes are denied.
+Reconciled browser truth and its complete verified prefix are persisted as the
+exact resumable cursor, including across a second restart.
 This bounded recovery leads only into verified pre-Review page checks and
 independent Review proof. The Review Stopper admits only a complete non-empty
 set of stable row identities bound to the expected field IDs, provenance, and
@@ -268,8 +271,9 @@ single-use resume snapshot, then binds them to the same source, revision,
 approval, journey, target, and opaque references. A concrete Playwright
 application, recovery, and Review runtime adapter is bound by production. It
 owns one page, exposes only closed non-Submit operations, independently verifies
-exact Review field, value, and provenance bindings, and revokes owner-source
-access during cleanup.
+exact Review field, value, and provenance bindings for the admitted dotted
+field-ID grammar, and revokes owner-source access on failed open and during
+cleanup.
 Real proof is still owner-input blocked until the operator supplies an approved
 current owner config, immutable profile and resume sources, a valid account and
 session, and a protected evidence destination. Do not replace those inputs with

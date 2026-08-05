@@ -116,6 +116,57 @@ for (const scenario of [
   });
 }
 
+for (const scenario of [
+  { page: "profile" as const, prefixCount: 1, stopAfter: "profile_verified" as const },
+  { page: "questionnaire" as const, prefixCount: 2, stopAfter: "questionnaire_verified" as const },
+]) {
+  test(`reconciles an incomplete browser-advanced ${scenario.page} and persists a restartable checkpoint`, async () => {
+    const prefix = verifiedChecks(scenario.prefixCount);
+    const calls: string[] = [];
+    const first = await runApplicationPageWalk(
+      dependenciesFor([incompleteTruth(scenario.page), truth(scenario.page)], calls),
+      { journeyId: walkFixture.journeyId, stopAfter: scenario.stopAfter },
+      new AbortController().signal,
+      { resume: { currentPage: scenario.page, pageChecks: prefix } },
+    );
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(calls.some((call) => call.startsWith(`reconcile:${scenario.page}:`)), true);
+    if (!first.ok) return;
+    assert.equal(first.value.pageChecks.length, scenario.prefixCount + 1);
+
+    const restartCalls: string[] = [];
+    const restartTruths = scenario.page === "profile"
+      ? [truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")]
+      : [truth("questionnaire"), truth("pre_review")];
+    const second = await runApplicationPageWalk(
+      dependenciesFor(restartTruths, restartCalls),
+      { journeyId: walkFixture.journeyId },
+      new AbortController().signal,
+      { resume: { currentPage: scenario.page, pageChecks: first.value.pageChecks } },
+    );
+    assert.equal(second.ok, true, JSON.stringify(second));
+  });
+}
+
+test("recovery denies incomplete persisted fields, corrupted prefixes, skipped destinations, and regressions", async () => {
+  for (const resume of [
+    { currentPage: "profile" as const, pageChecks: verifiedChecks(2) },
+    { currentPage: "profile" as const, pageChecks: [{ ...verifiedChecks(1)[0]!, verifiedFields: 0 }] },
+    { currentPage: "questionnaire" as const, pageChecks: verifiedChecks(1) },
+    { currentPage: "profile" as const, pageChecks: verifiedChecks(3) },
+  ]) {
+    const calls: string[] = [];
+    const result = await runApplicationPageWalk(
+      dependenciesFor([incompleteTruth(resume.currentPage)], calls),
+      { journeyId: walkFixture.journeyId },
+      new AbortController().signal,
+      { resume },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(calls.some((call) => call.startsWith("reconcile:")), false);
+  }
+});
+
 test("reruns only the affected page after a bounded retryable handler failure", async () => {
   const calls: string[] = [];
   const truths = [
@@ -533,3 +584,26 @@ test("honors verification checkpoint stops without advancing beyond browser trut
   assert.equal(calls.some((call) => call.startsWith("next:")), false);
   assert.equal(calls.at(-1), "progress:resume_verified:1");
 });
+
+function verifiedChecks(count: number) {
+  return pageOrder.slice(0, count).map((page) => ({
+    page,
+    checkpoint: page === "resume" ? "resume_verified" as const
+      : page === "profile" ? "profile_verified" as const
+      : "questionnaire_verified" as const,
+    independentlyVerified: true as const,
+    requiredFields: 1,
+    verifiedFields: 1,
+    duplicateRows: 0,
+  }));
+}
+
+function incompleteTruth(page: "profile" | "questionnaire"): ApplicationPageTruth {
+  return {
+    ...truth(page),
+    requiredFields: [{
+      fieldId: walkFixture.fields[page],
+      verification: "unverified",
+    }],
+  };
+}

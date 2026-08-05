@@ -27,6 +27,8 @@ import {
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
+import { isReviewExpectedField } from
+  "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { createConfiguredNarrativeProvider } from "../../../src/ats/workday/application/questions/index.ts";
@@ -348,15 +350,15 @@ test("Review accepts repeated equal values only when distinct stable identities 
     ...validRecoveryArtifact("pre_review", 3),
     reviewExpected: [
       {
-        fieldId: "first-equal-field",
+        fieldId: "identity.given_name",
         provenance: "owner_provided",
-        rowIdentity: "formField-first-equal-field",
+        rowIdentity: "formField-identity.given_name",
         valueSha256,
       },
       {
-        fieldId: "second-equal-field",
+        fieldId: "address.line_1",
         provenance: "configured_template",
-        rowIdentity: "formField-second-equal-field",
+        rowIdentity: "formField-address.line_1",
         valueSha256,
       },
     ],
@@ -410,11 +412,24 @@ test("Review accepts repeated equal values only when distinct stable identities 
     assert.notEqual(owned, undefined);
     const captured = await runtime.review.capture(new AbortController().signal);
     assert.deepEqual(captured.request.verification.map(({ fieldId }) => fieldId).sort(), [
-      "first-equal-field",
-      "second-equal-field",
+      "address.line_1",
+      "identity.given_name",
     ]);
     const page = context.pages()[0];
     if (page === undefined) throw new Error("equal-value Review fixture missing");
+    const rows = page.locator('[data-automation-id="applyFlowReviewPage"] section');
+    await rows.nth(1).evaluate((node) =>
+      node.setAttribute("data-automation-id", "formField-identity.given_name")
+    );
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await rows.nth(1).evaluate((node) =>
+      node.setAttribute("data-automation-id", "formField-unknown.field")
+    );
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await rows.nth(1).evaluate((node) =>
+      node.setAttribute("data-automation-id", "formField-address.line_1")
+    );
+    assert.equal((await runtime.review.capture(new AbortController().signal)).request.verification.length, 2);
     assert.equal(await page.evaluate(() => (window as never as { submitActivations: number }).submitActivations), 0);
     assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
   } finally {
@@ -422,6 +437,29 @@ test("Review accepts repeated equal values only when distinct stable identities 
     await chromiumBrowser.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Review expected-field grammar matches every accepted field identifier shape", () => {
+  const valueSha256 = "a".repeat(64);
+  for (const fieldId of ["a", "identity.given_name", "a0._-"]) {
+    assert.equal(isReviewExpectedField({
+      fieldId,
+      provenance: "owner_provided",
+      rowIdentity: `formField-${fieldId}`,
+      valueSha256,
+    }), true, fieldId);
+  }
+  for (const fieldId of [
+    "A0", "_leading", "-leading", ".leading", "identity/given", "identity given",
+    "identity:given", "a".repeat(129),
+  ]) {
+    assert.equal(isReviewExpectedField({
+      fieldId,
+      provenance: "owner_provided",
+      rowIdentity: `formField-${fieldId}`,
+      valueSha256,
+    }), false, fieldId);
   }
 });
 
@@ -553,6 +591,56 @@ for (const mismatch of [
         configSha256: "a".repeat(64),
       }, new AbortController().signal));
       assert.equal(browserCalls, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const mismatch of [
+  "journeyId", "sourceRevision", "hostId", "tenantId", "postingId",
+] as const) {
+  test(`recovery inner checkpoint ${mismatch} mismatch opens no browser`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-inner-scope-${mismatch}-`));
+    const directory = join(root, "stage2-acceptance");
+    mkdirSync(directory, { recursive: true });
+    const artifact = validRecoveryArtifact();
+    const checkpoint = {
+      ...artifact.checkpoint,
+      target: { ...artifact.checkpoint.target },
+    };
+    if (mismatch === "journeyId") checkpoint.journeyId = "journey_wrong_inner_0001";
+    else if (mismatch === "sourceRevision") checkpoint.sourceRevision = "revision_wrong_inner_0001";
+    else checkpoint.target[mismatch] = `${mismatch.replace("Id", "")}_wrong_inner_0001`;
+    writeFileSync(
+      join(directory, "revision_0123456789abcdef.recovery.json"),
+      `${JSON.stringify({ ...artifact, checkpoint })}\n`,
+      { mode: 0o600 },
+    );
+    let browserCalls = 0;
+    let openCalls = 0;
+    try {
+      await assert.rejects(() => createStage2PlaywrightLiveRuntimeBinding({
+        browser: () => {
+          browserCalls += 1;
+          const browser = closedRecoveryBrowser("resume");
+          return {
+            ...browser,
+            async open(...args: Parameters<typeof browser.open>) {
+              openCalls += 1;
+              return browser.open(...args);
+            },
+          };
+        },
+      }).bind({
+        owner: owner(root, "https://fixture.invalid/application-questions"),
+        ownerBinding: {} as never,
+        ownerSources: {} as never,
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+        configSha256: "a".repeat(64),
+      }, new AbortController().signal));
+      assert.equal(browserCalls, 0);
+      assert.equal(openCalls, 0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -735,8 +823,8 @@ function equalValueReviewDocument(): string {
     <body data-hunt-application-page="pre_review">
       <div data-automation-id="progressBarActiveStep">Review</div>
       <main data-automation-id="applyFlowReviewPage">
-        <section data-automation-id="formField-first-equal-field"><span>First</span><span>resume.pdf</span></section>
-        <section data-automation-id="formField-second-equal-field"><span>Second</span><span>resume.pdf</span></section>
+        <section data-automation-id="formField-identity.given_name"><span>First</span><span>resume.pdf</span></section>
+        <section data-automation-id="formField-address.line_1"><span>Second</span><span>resume.pdf</span></section>
         <button id="final-submit">Submit application</button>
       </main>
       <script>

@@ -46,13 +46,21 @@ import type {
   ApprovedTargetBinding,
   OwnedTargetInspection,
 } from "./private/types.ts";
-import { OwnedWorkdayApplicationRuntime } from
+import {
+  OwnedWorkdayApplicationRuntime,
+  type OwnedWorkdayApplicationRuntimeOptions,
+} from
   "./private/workday-application-runtime.ts";
+
+type RetainedSessionOptions = Omit<
+  PlaywrightPersistentBrowserSessionOptions,
+  "applicationRuntime"
+>;
 
 export class PlaywrightPersistentBrowserSession
   implements PersistentBrowserSession
 {
-  readonly #options: PlaywrightPersistentBrowserSessionOptions;
+  readonly #options: RetainedSessionOptions;
   #context: PersistentContext | undefined;
   #page: PersistentPage | undefined;
   #session: LiveBrowserSessionV1 | undefined;
@@ -65,7 +73,7 @@ export class PlaywrightPersistentBrowserSession
   #cleanupFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
-  readonly #applicationRuntime: OwnedWorkdayApplicationRuntime | undefined;
+  readonly #applicationRuntime: RevocableWorkdayApplicationRuntime;
   readonly #openOperations = new Map<
     string,
     { readonly fingerprint: string; readonly result: Promise<OpenPortResult> }
@@ -87,10 +95,9 @@ export class PlaywrightPersistentBrowserSession
   #applicationPageActive = false;
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
-    this.#options = options;
-    this.#applicationRuntime = options.applicationRuntime === undefined
-      ? undefined
-      : new OwnedWorkdayApplicationRuntime(options.applicationRuntime);
+    const { applicationRuntime: runtimeOptions, ...retainedOptions } = options;
+    this.#options = Object.freeze(retainedOptions);
+    this.#applicationRuntime = new RevocableWorkdayApplicationRuntime(runtimeOptions);
     this.#accountAccess = new OwnedAccountPageCoordinator({
       adapter: options.accountPage,
       probe: options.probe,
@@ -128,10 +135,25 @@ export class PlaywrightPersistentBrowserSession
         ? previous.result
         : failure("browser_operation_replayed");
     }
-    const result = this.#openOnce(request, signal).then((opened) => {
-      if (opened.ok) this.#applicationRuntime?.bindSession(opened.value.session);
-      return opened;
-    });
+    const result = this.#openOnce(request, signal).then(
+      (opened) => {
+        if (!opened.ok) {
+          this.#applicationRuntime.revoke();
+          return opened;
+        }
+        try {
+          this.#applicationRuntime.current()?.bindSession(opened.value.session);
+          return opened;
+        } catch (error) {
+          this.#applicationRuntime.revoke();
+          throw error;
+        }
+      },
+      (error: unknown) => {
+        this.#applicationRuntime.revoke();
+        throw error;
+      },
+    );
     this.#openOperations.set(request.operationId, { fingerprint, result });
     return result;
   }
@@ -457,6 +479,7 @@ export class PlaywrightPersistentBrowserSession
     signal: AbortSignal,
   ): Promise<LivePortResult<unknown, PersistentBrowserErrorCode>> {
     if (signal.aborted) return cancelled();
+    const applicationRuntime = this.#applicationRuntime.current();
     if (
       this.#applicationPageActive ||
       this.#applicationPageOperations.has(request.operationId)
@@ -465,7 +488,7 @@ export class PlaywrightPersistentBrowserSession
     if (
       request.schemaVersion !== 1 ||
       !isOwnedApplicationOperation(operation) ||
-      this.#applicationRuntime === undefined ||
+      applicationRuntime === undefined ||
       this.#page === undefined ||
       this.#page.isClosed() ||
       this.#session === undefined ||
@@ -502,7 +525,7 @@ export class PlaywrightPersistentBrowserSession
     const effect = applicationOperationEffect(operation);
     try {
       const result = await bounded(
-        this.#applicationRuntime.run(page, operation, signal),
+        applicationRuntime.run(page, operation, signal),
         signal,
         this.#options.timeoutMs,
       );
@@ -577,7 +600,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
-    this.#applicationRuntime?.dispose();
+    this.#applicationRuntime.revoke();
     return closed ? { ok: true, value: undefined } : failure("browser_profile_cleanup_failed");
   }
 
@@ -828,7 +851,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
-    this.#applicationRuntime?.dispose();
+    this.#applicationRuntime.revoke();
     if (
       !contextCleanup ||
       !profileCleanup
@@ -861,7 +884,7 @@ export class PlaywrightPersistentBrowserSession
     this.#approvedTarget = undefined;
     this.#marker = undefined;
     this.#profilePath = undefined;
-    this.#applicationRuntime?.dispose();
+    this.#applicationRuntime.revoke();
     const cleaned = contextCleaned && profileCleaned;
     if (failedSession !== undefined) {
       if (cleaned) {
@@ -909,6 +932,26 @@ export class PlaywrightPersistentBrowserSession
       this.#options.timeoutMs,
     );
     return result.kind === "value";
+  }
+}
+
+class RevocableWorkdayApplicationRuntime {
+  #runtime: OwnedWorkdayApplicationRuntime | undefined;
+
+  constructor(options: OwnedWorkdayApplicationRuntimeOptions | undefined) {
+    this.#runtime = options === undefined
+      ? undefined
+      : new OwnedWorkdayApplicationRuntime(options);
+  }
+
+  current(): OwnedWorkdayApplicationRuntime | undefined {
+    return this.#runtime;
+  }
+
+  revoke(): void {
+    const runtime = this.#runtime;
+    this.#runtime = undefined;
+    runtime?.dispose();
   }
 }
 

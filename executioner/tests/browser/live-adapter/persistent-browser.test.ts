@@ -181,6 +181,107 @@ test("application mutation is unavailable without the fixed owned runtime", asyn
   });
 });
 
+test("application owner sources are deterministically revoked after close", async () => {
+  const context = new FakeContext([]);
+  let sourceReads = 0;
+  const ownerSources = new Proxy({}, {
+    get() {
+      sourceReads += 1;
+      throw new Error("revoked owner source was read");
+    },
+  });
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    applicationRuntime: {
+      request: { ownerSources } as never,
+      acceptances: { record() { throw new Error("acceptance must not run"); } },
+      nextOperationId: () => generatedOperationId("operation_revoked_source_01"),
+      timeoutMs: 100,
+      initialReviewExpected: [],
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_revoked_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+  assert.deepEqual(closed, { ok: true, value: undefined });
+  const denied = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_revoked_access_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+  }, { kind: "review_expectations" }, new AbortController().signal);
+  assert.deepEqual(denied, {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
+  assert.equal(sourceReads, 0);
+});
+
+test("application owner sources are revoked when open fails before launch", async () => {
+  const context = new FakeContext([]);
+  let sourceReads = 0;
+  const ownerSources = new Proxy({}, {
+    get() {
+      sourceReads += 1;
+      throw new Error("revoked owner source was read");
+    },
+  });
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    applicationRuntime: {
+      request: { ownerSources } as never,
+      acceptances: { record() { throw new Error("acceptance must not run"); } },
+      nextOperationId: () => generatedOperationId("operation_failed_open_revoke_01"),
+      timeoutMs: 100,
+      initialReviewExpected: [],
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const cancelled = new AbortController();
+  cancelled.abort();
+  assert.deepEqual(await provider.open(openRequest(), cancelled.signal), {
+    ok: false,
+    error: { code: "operation_cancelled", retryable: false },
+  });
+
+  const opened = await provider.open({
+    ...openRequest(),
+    operationId: generatedOperationId("operation_after_failed_open_01"),
+  }, new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const denied = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_after_failed_access_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+  }, { kind: "review_expectations" }, new AbortController().signal);
+  assert.deepEqual(denied, {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
+  assert.equal(sourceReads, 0);
+});
+
 test("application suspension closes the context but retains the exact restart marker", async () => {
   const context = new FakeContext([]);
   const profiles = new MemoryProfiles();

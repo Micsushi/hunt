@@ -66,7 +66,9 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
   assert.doesNotMatch(factory, /applicationPage\??:/u);
   assert.doesNotMatch(factory, /options\.applicationPage/u);
   assert.doesNotMatch(session, /options\.applicationPage\.execute/u);
-  assert.match(session, /new OwnedWorkdayApplicationRuntime\(options\.applicationRuntime\)/u);
+  assert.doesNotMatch(session, /this\.#options\s*=\s*options/u);
+  assert.match(session, /new RevocableWorkdayApplicationRuntime\(runtimeOptions\)/u);
+  assert.match(session, /this\.#applicationRuntime\.revoke\(\)/u);
   assert.doesNotMatch(factory, /execute\s*:\s*(?:async\s*)?\([^)]*page/u);
   assert.match(runtime, /createPlaywrightPersistentBrowserSession/u);
   assert.doesNotMatch(runtime, /(?:click|press|activate)[A-Za-z]*(?:Submit|submit)/u);

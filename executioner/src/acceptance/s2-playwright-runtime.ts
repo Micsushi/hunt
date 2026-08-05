@@ -651,7 +651,8 @@ class RecoveryFileStore {
     const stable = readStablePrivateFile(this.#path, 64 * 1024);
     try {
       const value: unknown = JSON.parse(stable.bytes.toString("utf8"));
-      if (!isRecoveryArtifact(value) || !sameRecoveryScope(value.scope, this.#scope)) {
+      if (!isRecoveryArtifact(value) || !sameRecoveryScope(value.scope, this.#scope) ||
+          !sameRecoveryCheckpointScope(value.checkpoint, value.scope)) {
         throw new TypeError("recovery artifact scope denied");
       }
       return value;
@@ -799,6 +800,19 @@ function sameRecoveryScope(left: RecoveryScopeV1, right: RecoveryScopeV1): boole
     left.target.schemaVersion === right.target.schemaVersion &&
     left.target.atsFamily === right.target.atsFamily && left.target.hostId === right.target.hostId &&
     left.target.tenantId === right.target.tenantId && left.target.postingId === right.target.postingId;
+}
+
+function sameRecoveryCheckpointScope(
+  checkpoint: RecoveryCheckpoint,
+  scope: RecoveryScopeV1,
+): boolean {
+  return checkpoint.journeyId === scope.journeyId &&
+    checkpoint.sourceRevision === scope.revisionId &&
+    checkpoint.target.schemaVersion === scope.target.schemaVersion &&
+    checkpoint.target.atsFamily === scope.target.atsFamily &&
+    checkpoint.target.hostId === scope.target.hostId &&
+    checkpoint.target.tenantId === scope.target.tenantId &&
+    checkpoint.target.postingId === scope.target.postingId;
 }
 
 function isTargetIdentity(value: unknown): value is TargetIdentityV1 {
