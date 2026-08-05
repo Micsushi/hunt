@@ -104,7 +104,7 @@ export function createStage2ApplicationWalkProductionBinding(
         new FileBackedStage2ApplicationOwnerSourceResolver({
           forbiddenRoots: [source.repositoryRoot],
         });
-      const ownerSources = await resolver.resolve({
+      const resolvedOwnerSources = await resolver.resolve({
         runtimeRoot: owner.roots.runtime.path,
         revisionId: owner.revisionId,
         approvalId: owner.approval.approvalId,
@@ -114,9 +114,10 @@ export function createStage2ApplicationWalkProductionBinding(
         resumeRef: owner.resumeRef,
         approvedAt: owner.approval.approvedAt,
       }, signal);
-      const sensitiveValues = applicationSensitiveValues(
+      let ownerSources: typeof resolvedOwnerSources | undefined = resolvedOwnerSources;
+      let sensitiveValues: readonly string[] | undefined = applicationSensitiveValues(
         owner,
-        ownerSources,
+        resolvedOwnerSources,
         configPath,
       );
       let runtime: Omit<Stage2ApplicationWalkDependencies, "evidence">;
@@ -124,11 +125,13 @@ export function createStage2ApplicationWalkProductionBinding(
         runtime = await dependencies.runtime.bind({
           owner,
           ownerBinding: admission.binding,
-          ownerSources,
+          ownerSources: resolvedOwnerSources,
           sourceRevision: source.sourceRevision,
         }, signal);
       } catch {
-        disposeOwnerResume(ownerSources);
+        disposeOwnerResume(resolvedOwnerSources);
+        ownerSources = undefined;
+        sensitiveValues = undefined;
         throw new TypeError("application binding denied");
       }
       return Object.freeze({
@@ -145,12 +148,16 @@ export function createStage2ApplicationWalkProductionBinding(
           cleanup: Object.freeze({
             async close(
               cleanupSignal: AbortSignal,
-              accepted = false,
+              accepted?: boolean,
             ): Promise<boolean> {
+              let cleaned = false;
               try {
-                return await runtime.cleanup.close(cleanupSignal, accepted);
+                cleaned = await runtime.cleanup.close(cleanupSignal, accepted);
+                return cleaned;
               } finally {
-                disposeOwnerResume(ownerSources);
+                if (ownerSources !== undefined) disposeOwnerResume(ownerSources);
+                ownerSources = undefined;
+                if (!cleaned || accepted !== undefined) sensitiveValues = undefined;
               }
             },
           }),
@@ -160,11 +167,18 @@ export function createStage2ApplicationWalkProductionBinding(
                 Stage2ApplicationWalkDependencies["evidence"]["write"]
               >[0],
             ): Promise<void> {
-              await writeApplicationWalkEvidence({
-                root: options.evidenceRoot,
-                acceptance,
-                sensitiveValues,
-              });
+              if (sensitiveValues === undefined) {
+                throw new TypeError("application evidence source revoked");
+              }
+              try {
+                await writeApplicationWalkEvidence({
+                  root: options.evidenceRoot,
+                  acceptance,
+                  sensitiveValues,
+                });
+              } finally {
+                sensitiveValues = undefined;
+              }
             },
           }),
         }),

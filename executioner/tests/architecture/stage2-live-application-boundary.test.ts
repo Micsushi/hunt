@@ -32,6 +32,13 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
     "utf8",
   );
   assert.match(runtime, /ownedApplicationPageAccess/u);
+  assert.doesNotMatch(runtime, /ownedApplicationPageAccess\][\s\S]{0,300}\(page\)/u);
+  const applicationCapability = await readFile(
+    new URL("../../src/browser/playwright-live/private/application-page-types.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(applicationCapability, /use:\s*\(page/u);
+  assert.match(applicationCapability, /OwnedApplicationOperation/u);
   assert.match(runtime, /createPlaywrightPersistentBrowserSession/u);
   assert.doesNotMatch(runtime, /(?:click|press|activate)[A-Za-z]*(?:Submit|submit)/u);
   const composition = await readFile(

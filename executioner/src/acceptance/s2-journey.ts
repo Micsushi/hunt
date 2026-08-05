@@ -1,4 +1,7 @@
-import type { ApplicationWalkResult } from "../ats/workday/application/page-walk.ts";
+import type {
+  ApplicationWalkResult,
+  ApplicationWalkResume,
+} from "../ats/workday/application/page-walk.ts";
 import type { ReviewStopRequest, ReviewReadOnlyPage } from "../interaction/review/index.ts";
 import { inspectWorkdayReview, stopAtVerifiedReview } from "../interaction/review/index.ts";
 import {
@@ -23,6 +26,7 @@ export interface Stage2RealJourneyInvocation {
 export interface Stage2RealJourneyRecoveryPlan {
   readonly input: RecoverBrowserInterruptionInput;
   readonly dependencies: RecoveryDependencies;
+  readonly resume: ApplicationWalkResume;
 }
 
 export interface Stage2RealJourneyRuntime {
@@ -30,7 +34,7 @@ export interface Stage2RealJourneyRuntime {
     pending(signal: AbortSignal): Promise<Stage2RealJourneyRecoveryPlan | null>;
   };
   readonly application: {
-    run(signal: AbortSignal): Promise<ApplicationWalkResult>;
+    run(signal: AbortSignal, resume?: ApplicationWalkResume): Promise<ApplicationWalkResult>;
   };
   readonly review: {
     capture(signal: AbortSignal): Promise<{
@@ -95,24 +99,35 @@ export async function runStage2RealJourney(
   }
 
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
+  if (pending.ok && !signal.aborted) {
+    try {
+      await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);
+    } catch {
+      const retained = await closeRuntime(runtime, false);
+      return retained ? failed("evidence_failed") : failed("cleanup_failed");
+    }
+    const finalized = await closeRuntime(runtime, true);
+    return finalized ? pending : failed("cleanup_failed");
+  }
+  const retained = await closeRuntime(runtime, false);
+  if (!retained) return failed("cleanup_failed");
+  return signal.aborted ? failed("operation_cancelled") : pending;
+}
+
+async function closeRuntime(
+  runtime: Stage2RealJourneyRuntime,
+  accepted: boolean,
+): Promise<boolean> {
   let cleaned = false;
   try {
     cleaned = await runtime.cleanup.close(
       new AbortController().signal,
-      pending.ok && !signal.aborted,
+      accepted,
     );
   } catch {
     cleaned = false;
   }
-  if (!cleaned) return failed("cleanup_failed");
-  if (!pending.ok) return pending;
-  if (signal.aborted) return failed("operation_cancelled");
-  try {
-    await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);
-  } catch {
-    return failed("evidence_failed");
-  }
-  return pending;
+  return cleaned;
 }
 
 async function executeBoundJourney(
@@ -122,6 +137,7 @@ async function executeBoundJourney(
   signal: AbortSignal,
 ): Promise<PendingJourneyResult> {
   if (signal.aborted) return failed("operation_cancelled");
+  let resume: ApplicationWalkResume | undefined;
   try {
     const plan = await runtime.recovery.pending(signal);
     if (plan !== null) {
@@ -137,6 +153,13 @@ async function executeBoundJourney(
       if (!recovered.ok || recovered.value.kind !== "resumed") {
         return failed(signal.aborted ? "operation_cancelled" : "recovery_failed");
       }
+      const expectedResumePage = recovered.value.state.page.kind === "review"
+        ? "pre_review"
+        : recovered.value.state.page.kind;
+      if (plan.resume.currentPage !== expectedResumePage) {
+        return failed("recovery_failed");
+      }
+      resume = plan.resume;
     }
   } catch {
     return failed(signal.aborted ? "operation_cancelled" : "recovery_failed");
@@ -145,7 +168,7 @@ async function executeBoundJourney(
   if (signal.aborted) return failed("operation_cancelled");
   let application: Extract<ApplicationWalkResult, { ok: true }>;
   try {
-    const result = await runtime.application.run(signal);
+    const result = await runtime.application.run(signal, resume);
     if (!verifiedPreReview(result)) return failed("pre_review_failed");
     application = result;
   } catch {

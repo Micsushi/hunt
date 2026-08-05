@@ -236,6 +236,24 @@ test("denies semantic, completion, verification, and state substitutes", async (
   assert.deepEqual(
     stopAtVerifiedReview({
       ...baseline,
+      page: { ...page, fields: [] },
+      verification: [],
+    }),
+    { kind: "review_denied", reason: "completion_unverified" },
+  );
+  assert.deepEqual(
+    stopAtVerifiedReview({
+      ...baseline,
+      verification: [
+        ...baseline.verification,
+        { kind: "verified", fieldId: fieldId("review-unknown") },
+      ],
+    }),
+    { kind: "review_denied", reason: "completion_unverified" },
+  );
+  assert.deepEqual(
+    stopAtVerifiedReview({
+      ...baseline,
       state: { ...state, status: "review_reached" },
     }),
     { kind: "review_denied", reason: "state_mismatch" },

@@ -1,5 +1,6 @@
 import {
   runApplicationPageWalk,
+  type ApplicationWalkResume,
 } from "../ats/workday/application/page-walk.ts";
 import type {
   Stage2ApplicationWalkDependencies,
@@ -71,13 +72,14 @@ export function createStage2RealJourneyProductionBinding(
       return Object.freeze({
         recovery: bound.recovery,
         application: Object.freeze({
-          run: (applicationSignal: AbortSignal) => runApplicationPageWalk(
+          run: (applicationSignal: AbortSignal, resume?: ApplicationWalkResume) => runApplicationPageWalk(
             resolved.dependencies.walk,
             {
               journeyId: resolved.input.journeyId,
               stopAfter: "pre_review",
             },
             applicationSignal,
+            { resume },
           ),
         }),
         review: bound.review,

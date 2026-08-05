@@ -10,7 +10,10 @@ import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
 import type { OwnedTargetObservation } from "../../../src/browser/playwright-live/private/types.ts";
-import { ownedApplicationPageAccess } from "../../../src/browser/playwright-live/private/application-page-types.ts";
+import {
+  ownedApplicationPageAccess,
+  suspendOwnedApplicationSession,
+} from "../../../src/browser/playwright-live/private/application-page-types.ts";
 
 test("opens one exact page through an isolated persistent context", async () => {
   const pages: FakePage[] = [];
@@ -100,6 +103,7 @@ test("scoped application access reuses the pinned page and revalidates ownership
   const pages: FakePage[] = [];
   const context = new FakeContext(pages);
   let inspections = 0;
+  let accessed: unknown;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
     launcher: { async launchPersistentContext() { return context; } },
@@ -112,12 +116,19 @@ test("scoped application access reuses the pinned page and revalidates ownership
     profiles: new MemoryProfiles(),
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,
+    applicationPage: {
+      async execute(page, operation) {
+        accessed = page;
+        assert.deepEqual(operation, { kind: "observe" });
+        return Object.freeze({ pageKind: "questionnaire" as const });
+      },
+      dispose() {},
+    },
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
   if (!opened.ok) return;
 
-  let accessed: unknown;
   const result = await provider[ownedApplicationPageAccess]({
     schemaVersion: 1,
     journeyId: liveFixtures.journeyId,
@@ -125,11 +136,7 @@ test("scoped application access reuses the pinned page and revalidates ownership
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
     now: liveFixtures.issuedAt,
-    effect: "read",
-  }, new AbortController().signal, async (page) => {
-    accessed = page;
-    return Object.freeze({ pageKind: "questionnaire" as const });
-  });
+  }, { kind: "observe" }, new AbortController().signal);
 
   assert.deepEqual(result, {
     ok: true,
@@ -155,6 +162,10 @@ test("scoped application mutation fails uncertain and invalidates when ownership
     profiles: new MemoryProfiles(),
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,
+    applicationPage: {
+      async execute() { return undefined; },
+      dispose() {},
+    },
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -167,24 +178,50 @@ test("scoped application mutation fails uncertain and invalidates when ownership
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
     now: liveFixtures.issuedAt,
-    effect: "mutation" as const,
   };
   assert.deepEqual(await provider[ownedApplicationPageAccess](
     request,
+    { kind: "reload" },
     new AbortController().signal,
-    async () => undefined,
   ), {
     ok: false,
     error: { code: "browser_effect_uncertain", retryable: false },
   });
   assert.deepEqual(await provider[ownedApplicationPageAccess](
     { ...request, operationId: generatedOperationId("operation_application_write2") },
+    { kind: "reload" },
     new AbortController().signal,
-    async () => undefined,
   ), {
     ok: false,
     error: { code: "browser_session_missing", retryable: false },
   });
+});
+
+test("application suspension closes the context but retains the exact restart marker", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const retainedMarker = profiles.marker;
+  const result = await provider[suspendOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_suspend_app_0001"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.equal(context.closed, true);
+  assert.equal(profiles.cleanupCount, 0);
+  assert.equal(profiles.marker, retainedMarker);
 });
 
 test("restart re-identifies the exact owned page without adopting foreign tabs", async () => {

@@ -67,6 +67,45 @@ test("walks every application page only after browser-truth verification and sto
   ]);
 });
 
+for (const resumedPage of ["profile", "questionnaire", "pre_review"] as const) {
+  test(`continues after the verified ${resumedPage} recovery checkpoint`, async () => {
+    const calls: string[] = [];
+    const count = resumedPage === "profile" ? 2 : 3;
+    const checks = pageOrder.slice(0, count).map((page) => ({
+      page,
+      checkpoint: page === "resume" ? "resume_verified" as const
+        : page === "profile" ? "profile_verified" as const
+        : "questionnaire_verified" as const,
+      independentlyVerified: true as const,
+      requiredFields: 1,
+      verifiedFields: 1,
+      duplicateRows: 0,
+    }));
+    const later = resumedPage === "profile"
+      ? [truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")]
+      : resumedPage === "questionnaire"
+        ? [truth("questionnaire"), truth("pre_review")]
+        : [truth("pre_review")];
+    const result = await runApplicationPageWalk(
+      dependenciesFor(later, calls),
+      { journeyId: walkFixture.journeyId },
+      new AbortController().signal,
+      { resume: { currentPage: resumedPage, pageChecks: checks } },
+    );
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.ok && result.value.pageChecks.slice(0, checks.length), checks);
+    assert.equal(result.ok && result.value.pageChecks.length, 3);
+    assert.equal(calls.some((call) => call.startsWith("reconcile:resume")), false);
+    assert.equal(calls.some((call) => call.startsWith("reconcile:profile")), false);
+    if (resumedPage !== "profile") {
+      assert.equal(calls.some((call) => call.startsWith("reconcile:questionnaire")), false);
+    }
+    if (resumedPage === "questionnaire") {
+      assert.equal(calls.includes("next:questionnaire:pre_review"), true);
+    }
+  });
+}
+
 test("reruns only the affected page after a bounded retryable handler failure", async () => {
   const calls: string[] = [];
   const truths = [

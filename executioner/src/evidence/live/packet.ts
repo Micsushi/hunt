@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   realpathSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
@@ -57,7 +58,6 @@ export function writeLiveEvidencePacket(
   const request = admitRequest(value);
   const root = admittedRoot(request.root);
   const target = join(root, "real-evidence");
-  if (existsSync(target)) denied();
 
   // Browser truth is serialized and sealed before diagnostic comparison exists.
   const browserTruthBytes = serialize(request.browserTruth);
@@ -126,6 +126,10 @@ export function writeLiveEvidencePacket(
     manifest.totalArtifactBytes + manifestBytes.byteLength > LIVE_EVIDENCE_MAX_TOTAL_BYTES) denied();
   scanForbiddenTokens([...artifacts, { bytes: manifestBytes }], request.forbiddenTokens);
 
+  if (existsSync(target)) {
+    return reconcileExistingPacket(target, request, artifacts);
+  }
+
   const partial = join(root, `.real-evidence-${randomBytes(16).toString("hex")}.partial`);
   try {
     mkdirSync(partial, { mode: 0o700 });
@@ -150,6 +154,83 @@ export function writeLiveEvidencePacket(
     rmSync(partial, { recursive: true, force: true });
     denied();
   }
+}
+
+function reconcileExistingPacket(
+  target: string,
+  request: AdmittedRequest,
+  expectedArtifacts: readonly { readonly file: LiveEvidenceArtifactManifestEntryV1["file"]; readonly bytes: Buffer }[],
+): LiveEvidenceArtifactManifestV1 {
+  try {
+    const manifestBytes = readExistingEvidenceFile(join(target, "manifest.json"), LIVE_EVIDENCE_MAX_MANIFEST_BYTES);
+    const manifest = JSON.parse(manifestBytes.toString("utf8")) as LiveEvidenceArtifactManifestV1;
+    exactObject(manifest, [
+      "schemaVersion", "manifestRevision", "sourceRevision", "configurationRevisionId",
+      "configurationApprovalId", "journeyId", "sealedAt", "privacyScan", "artifactCount",
+      "totalArtifactBytes", "retention", "artifacts",
+    ]);
+    exactObject(manifest.retention, [
+      "retentionDays", "deleteAfter", "disposition", "screenshotsRetained", "rawDomRetained",
+    ]);
+    if (
+      manifest.schemaVersion !== 1 ||
+      manifest.manifestRevision !== "s2-real-evidence-manifest-v1" ||
+      manifest.sourceRevision !== request.sourceRevision ||
+      manifest.configurationRevisionId !== request.configurationRevisionId ||
+      manifest.configurationApprovalId !== request.configurationApprovalId ||
+      manifest.journeyId !== request.journeyId || manifest.privacyScan !== "pass" ||
+      !Number.isFinite(Date.parse(manifest.sealedAt)) ||
+      manifest.retention.retentionDays !== request.retentionDays ||
+      manifest.retention.deleteAfter !== deleteAfter(manifest.sealedAt, request.retentionDays) ||
+      manifest.retention.disposition !== "delete_after_retention" ||
+      manifest.retention.screenshotsRetained !== false || manifest.retention.rawDomRetained !== false ||
+      manifest.artifactCount !== expectedArtifacts.length ||
+      !Array.isArray(manifest.artifacts) || manifest.artifacts.length !== expectedArtifacts.length
+    ) denied();
+    let total = 0;
+    for (const expected of expectedArtifacts) {
+      const entry = manifest.artifacts.find(({ file }) => file === expected.file);
+      if (entry === undefined) denied();
+      exactObject(entry, ["file", "bytes", "sha256"]);
+      const actual = readExistingEvidenceFile(join(target, expected.file), LIVE_EVIDENCE_MAX_ARTIFACT_BYTES);
+      total += actual.byteLength;
+      if (entry.bytes !== actual.byteLength || entry.sha256 !== digest(actual)) denied();
+      if (expected.file === "browser-truth.json") {
+        if (!actual.equals(expected.bytes)) denied();
+      } else {
+        const existingSummary = JSON.parse(actual.toString("utf8")) as Record<string, unknown>;
+        const expectedSummary = JSON.parse(expected.bytes.toString("utf8")) as Record<string, unknown>;
+        delete existingSummary.sealedAt;
+        delete expectedSummary.sealedAt;
+        if (JSON.stringify(existingSummary) !== JSON.stringify(expectedSummary)) denied();
+      }
+    }
+    if (manifest.totalArtifactBytes !== total) denied();
+    scanForbiddenTokens(
+      [
+        ...manifest.artifacts.map(({ file }) => ({ bytes: readExistingEvidenceFile(
+          join(target, file), LIVE_EVIDENCE_MAX_ARTIFACT_BYTES,
+        ) })),
+        { bytes: manifestBytes },
+      ],
+      request.forbiddenTokens,
+    );
+    return Object.freeze(manifest);
+  } catch {
+    return denied();
+  }
+}
+
+function readExistingEvidenceFile(path: string, maximumBytes: number): Buffer {
+  const before = lstatSync(path);
+  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1 ||
+      before.size < 1 || before.size > maximumBytes ||
+      realpathSync.native(path) !== resolve(path)) denied();
+  const bytes = readFileSync(path);
+  const after = statSync(path);
+  if (!after.isFile() || after.nlink !== 1 || after.size !== bytes.byteLength ||
+      after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) denied();
+  return bytes;
 }
 
 function admitRequest(value: unknown): AdmittedRequest {

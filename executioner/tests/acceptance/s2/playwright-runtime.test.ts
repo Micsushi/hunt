@@ -4,9 +4,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,7 +16,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { chromium, type Page } from "playwright";
-import { ownedApplicationPageAccess } from "../../../src/browser/playwright-live/private/application-page-types.ts";
+import {
+  ownedApplicationPageAccess,
+  isOwnedApplicationOperation,
+  suspendOwnedApplicationSession,
+  type OwnedApplicationOperation,
+  type OwnedApplicationPageAdapter,
+} from "../../../src/browser/playwright-live/private/application-page-types.ts";
 
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { createConfiguredNarrativeProvider } from "../../../src/ats/workday/application/questions/index.ts";
@@ -63,7 +71,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     `operation_${(++operation).toString().padStart(16, "0")}`,
   );
   const runtimeBinding = createStage2PlaywrightLiveRuntimeBinding({
-    browser: () => owned,
+    browser: (_request, adapter) => owned.bindAdapter(adapter),
     now: () => "2026-08-05T12:00:00.000Z",
     nextOperationId,
     timeoutMs: 5_000,
@@ -116,6 +124,21 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       "profile_verified",
       "questionnaire_verified",
     ]);
+    const recoveryPath = join(
+      root,
+      "stage2-acceptance",
+      "revision_0123456789abcdef.recovery.json",
+    );
+    const recoveryText = readFileSync(recoveryPath, "utf8");
+    assert.equal(recoveryText.includes("Exact configured interest statement."), false);
+    const recoveryArtifact = JSON.parse(recoveryText) as {
+      readonly reviewExpected?: readonly { readonly fieldId?: string; readonly valueSha256?: string }[];
+    };
+    assert.deepEqual(recoveryArtifact.reviewExpected?.map(({ fieldId }) => fieldId), [
+      "s1-field-resume",
+      "s1-field-interest",
+    ]);
+    assert.match(recoveryArtifact.reviewExpected?.[0]?.valueSha256 ?? "", /^[0-9a-f]{64}$/u);
 
     const pending = await runtime.recovery.pending(new AbortController().signal);
     assert.notEqual(pending, null);
@@ -127,19 +150,80 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     );
     assert.equal(recovered.ok, true);
     assert.equal(recovered.ok && recovered.value.kind, "resumed");
+    const continued = await runApplicationPageWalk(runtime.walk, {
+      journeyId: journeyId("journey_runtime_fixture_01"),
+      stopAfter: "pre_review",
+    }, new AbortController().signal, { resume: pending.resume });
+    assert.equal(continued.ok, true, JSON.stringify(continued));
 
+    const reviewRoot = page.locator('[data-automation-id="applyFlowReviewPage"]');
+    const row = reviewRoot.locator("section").nth(1);
+    await row.evaluate((node) => { node.textContent = "corrupted across transition"; });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await row.evaluate((node) => { node.textContent = "Exact configured interest statement."; });
+    await row.evaluate((node) => { node.removeAttribute("data-hunt-review-field-id"); });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    const resumeRow = reviewRoot.locator("section").first();
+    await resumeRow.evaluate((node) => {
+      node.removeAttribute("data-hunt-review-field-id");
+      node.setAttribute("data-automation-id", "formField-resume");
+      node.innerHTML = '<span>Resume</span><span>resume.pdf</span>';
+    });
+    await row.evaluate((node) => {
+      node.setAttribute("data-automation-id", "formField-interest");
+      node.innerHTML = '<span>Brief interest statement</span><span>Exact configured interest statement.</span>';
+    });
+    const realShape = await runtime.review.capture(new AbortController().signal);
+    assert.equal(realShape.request.verification.length, 2);
+    await row.evaluate((node) => {
+      node.removeAttribute("data-automation-id");
+      node.setAttribute("data-hunt-review-field-id", "s1-field-interest");
+      node.textContent = "Exact configured interest statement.";
+    });
+    await resumeRow.evaluate((node) => {
+      node.removeAttribute("data-automation-id");
+      node.setAttribute("data-hunt-review-field-id", "s1-field-resume");
+      node.textContent = "resume.pdf";
+    });
+    await reviewRoot.evaluate((root) => {
+      const extra = document.createElement("section");
+      extra.setAttribute("data-hunt-review-field-id", "unknown-extra-field");
+      extra.textContent = "unknown";
+      root.prepend(extra);
+    });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await reviewRoot.locator('[data-hunt-review-field-id="unknown-extra-field"]').evaluate((node) => node.remove());
     const captured = await runtime.review.capture(new AbortController().signal);
     const structure = await inspectWorkdayReview(captured.page);
     const proof = stopAtVerifiedReview({ ...captured.request, structure });
     assert.equal(proof.kind, "review_confirmed");
     assert.equal(await page.evaluate(() => (window as never as { submitActivations: number }).submitActivations), 0);
     assert.equal(owned.pageIdentities.size, 1);
+    const adversarial = await owned[ownedApplicationPageAccess]({
+      schemaVersion: 1,
+      journeyId: journeyId("journey_runtime_fixture_01"),
+      operationId: nextOperationId(),
+      sessionId: "live_session_runtime_fixture_01" as LiveSessionId,
+      target: {
+        schemaVersion: 1,
+        atsFamily: "workday",
+        hostId: "host_0123456789abcdef" as never,
+        tenantId: "tenant_0123456789abcdef" as never,
+        postingId: "posting_0123456789abcdef" as never,
+      },
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "submit", selector: "#final-submit" } as never, new AbortController().signal);
+    assert.equal(adversarial.ok, false);
+    assert.equal(await page.evaluate(() => (window as never as { submitActivations: number }).submitActivations), 0);
     const forbidden = await runtime.privacy.forbiddenTokens(new AbortController().signal);
     assert.equal(forbidden.includes(url), true);
     assert.equal(forbidden.length <= 32, true);
     assert.equal(forbidden.every((value) => value.length >= 3 && value.length <= 512), true);
     assert.equal(await runtime.cleanup.close(new AbortController().signal, true), true);
     assert.equal(owned.closed, true);
+    await assert.rejects(() => runtime.privacy.forbiddenTokens(new AbortController().signal));
+    const revoked = await runtime.walk.observer.observe(new AbortController().signal);
+    assert.equal(revoked.ok, false);
   } finally {
     await context.close();
     await chromiumBrowser.close();
@@ -167,7 +251,7 @@ test("unexpected auth UI fails closed before any application mutation", async ()
   let operation = 100;
   try {
     const runtime = await createStage2PlaywrightLiveRuntimeBinding({
-      browser: () => owned,
+      browser: (_request, adapter) => owned.bindAdapter(adapter),
       now: () => "2026-08-05T12:00:00.000Z",
       nextOperationId: () => generatedOperationId(
         `operation_${(++operation).toString().padStart(16, "0")}`,
@@ -233,6 +317,71 @@ test("recovery storage rejects a linked checkpoint directory before browser owne
   }
 });
 
+for (const [name, contents] of [
+  ["empty", Buffer.alloc(0)],
+  ["malformed", Buffer.from("{not-json")],
+  ["oversized", Buffer.alloc(64 * 1024 + 1, 0x61)],
+] as const) {
+  test(`${name} recovery state fails closed before browser ownership`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-${name}-recovery-`));
+    const directory = join(root, "stage2-acceptance");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "revision_0123456789abcdef.recovery.json"),
+      contents,
+      { mode: 0o600 },
+    );
+    let browserCalls = 0;
+    try {
+      await assert.rejects(() => createStage2PlaywrightLiveRuntimeBinding({
+        browser: () => {
+          browserCalls += 1;
+          throw new Error("browser must not be acquired");
+        },
+      }).bind({
+        owner: owner(root, "https://fixture.invalid/application-questions"),
+        ownerBinding: {} as never,
+        ownerSources: {} as never,
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      }, new AbortController().signal));
+      assert.equal(browserCalls, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const orphan of ["reconciliation", "partial"] as const) {
+  test(`orphan ${orphan} recovery state fails closed before browser ownership`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-orphan-${orphan}-`));
+    const directory = join(root, "stage2-acceptance");
+    mkdirSync(directory, { recursive: true });
+    const base = "revision_0123456789abcdef.recovery.json";
+    writeFileSync(
+      join(directory, orphan === "reconciliation" ? `${base}.reconciliation` : `${base}.deadbeef.tmp`),
+      "{}\n",
+      { mode: 0o600 },
+    );
+    let browserCalls = 0;
+    try {
+      await assert.rejects(() => createStage2PlaywrightLiveRuntimeBinding({
+        browser: () => {
+          browserCalls += 1;
+          throw new Error("browser must not be acquired");
+        },
+      }).bind({
+        owner: owner(root, "https://fixture.invalid/application-questions"),
+        ownerBinding: {} as never,
+        ownerSources: {} as never,
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      }, new AbortController().signal));
+      assert.equal(browserCalls, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 class FixtureOwnedBrowser {
   readonly pageIdentities = new Set<Page>();
   readonly effects: string[] = [];
@@ -240,6 +389,7 @@ class FixtureOwnedBrowser {
   readonly #page: Page;
   readonly #url: string;
   readonly #session: LiveBrowserSessionV1;
+  #adapter: OwnedApplicationPageAdapter | undefined;
 
   constructor(page: Page, url: string) {
     this.#page = page;
@@ -260,6 +410,11 @@ class FixtureOwnedBrowser {
     };
   }
 
+  bindAdapter(adapter: OwnedApplicationPageAdapter): this {
+    this.#adapter = adapter;
+    return this;
+  }
+
   async open() {
     await this.#page.goto(this.#url);
     return { ok: true as const, value: { kind: "opened" as const, session: this.#session } };
@@ -274,15 +429,28 @@ class FixtureOwnedBrowser {
     return { ok: true as const, value: undefined };
   }
 
-  async [ownedApplicationPageAccess]<Value>(
+  async [suspendOwnedApplicationSession]() {
+    this.closed = true;
+    return { ok: true as const, value: undefined };
+  }
+
+  async [ownedApplicationPageAccess](
     request: unknown,
-    _signal: AbortSignal,
-    use: (page: Page) => Promise<Value>,
+    operation: OwnedApplicationOperation,
+    signal: AbortSignal,
   ) {
+    if (!isOwnedApplicationOperation(operation)) {
+      return {
+        ok: false as const,
+        error: { code: "browser_target_invalid" as const, retryable: false as const },
+      };
+    }
     this.pageIdentities.add(this.#page);
-    this.effects.push((request as { readonly effect?: string }).effect ?? "unknown");
+    this.effects.push(operation.kind === "observe" || operation.kind === "inspect_recovery" ||
+        operation.kind === "capture_review" ? "read" : "mutation");
     try {
-      return { ok: true as const, value: await use(this.#page) };
+      if (this.#adapter === undefined) throw new Error("adapter unavailable");
+      return { ok: true as const, value: await this.#adapter.execute(this.#page as never, operation, signal) };
     } catch {
       return {
         ok: false as const,
@@ -345,7 +513,7 @@ function fixtureDocument(): string {
           } else if (kind === 'questionnaire') {
             document.body.innerHTML = '<main data-automation-id="applyFlowApplicationQuestionsPage"><label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label><button>Next</button></main>';
           } else {
-            document.body.innerHTML = '<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><button id="final-submit">Submit application</button></main>';
+            document.body.innerHTML = '<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><section data-hunt-review-field-id="s1-field-interest">Exact configured interest statement.</section><button id="final-submit">Submit application</button></main>';
             document.querySelector('#final-submit').addEventListener('click', () => { window.submitActivations += 1; document.documentElement.setAttribute('data-hunt-submit-activated', 'true'); });
           }
           const next = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Next');

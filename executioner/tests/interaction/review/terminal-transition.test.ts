@@ -6,6 +6,9 @@ import { test } from "node:test";
 
 import {
   browserPageId,
+  browserTargetToken,
+  boundedText,
+  fieldId,
   generatedOperationId,
   journeyId as exactJourneyId,
 } from "../../../src/contracts/index.ts";
@@ -35,13 +38,25 @@ test("verified Review transition is terminal and idempotent", async () => {
     }, signal);
     assert.equal(running.ok, true);
     if (!running.ok) return;
+    const requiredFieldId = fieldId("review-terminal-required");
 
     const stopped = stopAtVerifiedReview({
       state: running.value.state,
       operationId: generatedOperationId("operation_reviewterminal01"),
       pageId,
-      page: { pageIdentity: { kind: "workday", page: "review" }, fields: [] },
-      verification: [],
+      page: {
+        pageIdentity: { kind: "workday", page: "review" },
+        fields: [{
+          fieldId: requiredFieldId,
+          target: browserTargetToken("review-terminal-target"),
+          label: boundedText("Verified Review field"),
+          required: true,
+          behavior: "text",
+          options: [],
+          state: "populated",
+        }],
+      },
+      verification: [{ kind: "verified", fieldId: requiredFieldId }],
       completion: { kind: "complete", decision: { kind: "stop_review" } },
       structure: await inspectWorkdayReview(reviewPageFixture()),
     });

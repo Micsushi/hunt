@@ -4,6 +4,9 @@ import { test } from "node:test";
 
 import {
   browserPageId,
+  browserTargetToken,
+  boundedText,
+  fieldId,
   generatedOperationId,
   guardRevision,
   journeyId as exactJourneyId,
@@ -56,13 +59,25 @@ test("Review proof exposes structural facts without any callable target or actio
   const pageId = browserPageId("page-review");
   const journeyId = exactJourneyId("journey_reviewnosecret01");
   const operationId = generatedOperationId("operation_reviewnosecret01");
+  const requiredFieldId = fieldId("review-no-submit-required");
   const structure = await inspectWorkdayReview(reviewPageFixture());
   const result = stopAtVerifiedReview({
     state: { schemaVersion: 3, journeyId, status: "running", pageId, revision: 1 },
     operationId,
     pageId,
-    page: { pageIdentity: { kind: "workday", page: "review" }, fields: [] },
-    verification: [],
+    page: {
+      pageIdentity: { kind: "workday", page: "review" },
+      fields: [{
+        fieldId: requiredFieldId,
+        target: browserTargetToken("review-no-submit-target"),
+        label: boundedText("Verified Review field"),
+        required: true,
+        behavior: "text",
+        options: [],
+        state: "populated",
+      }],
+    },
+    verification: [{ kind: "verified", fieldId: requiredFieldId }],
     completion: { kind: "complete", decision: { kind: "stop_review" } },
     structure,
   });

@@ -103,6 +103,7 @@ export interface ApplicationWalkProgress {
   readonly browserPage: ApplicationPage;
   readonly completedPages: number;
   readonly reconciledPages: readonly ApplicationHandlerPage[];
+  readonly pageChecks: readonly ApplicationPageCheck[];
 }
 
 export interface ApplicationWalkDependencies {
@@ -176,6 +177,12 @@ export type ApplicationWalkResult = PortResult<
 
 export interface ApplicationWalkOptions {
   readonly pageRetryLimit?: number;
+  readonly resume?: ApplicationWalkResume;
+}
+
+export interface ApplicationWalkResume {
+  readonly currentPage: Exclude<ApplicationPage, "resume">;
+  readonly pageChecks: readonly ApplicationPageCheck[];
 }
 
 export interface ApplicationWalkInput {

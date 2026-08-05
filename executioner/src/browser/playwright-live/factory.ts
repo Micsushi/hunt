@@ -16,6 +16,7 @@ import {
   type PlaywrightVerificationNavigationTraceEvent,
 } from "./private/playwright-verification-navigation.ts";
 import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
+import type { OwnedApplicationPageAdapter } from "./private/application-page-types.ts";
 import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
 import { PlaywrightPersistentBrowserSession } from "./session.ts";
 
@@ -27,6 +28,7 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
     event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
       PlaywrightVerificationNavigationTraceEvent,
   ) => void;
+  readonly applicationPage?: OwnedApplicationPageAdapter;
 }
 
 export function createPlaywrightPersistentBrowserSession(
@@ -55,6 +57,7 @@ export function createPlaywrightPersistentBrowserSession(
     verificationNavigation: new PlaywrightVerificationNavigationAdapter({
       trace: options.accountTrace,
     }),
+    applicationPage: options.applicationPage,
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,

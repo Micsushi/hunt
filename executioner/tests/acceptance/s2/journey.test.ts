@@ -78,8 +78,8 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
       "application.run",
       "review.capture",
       "privacy.forbiddenTokens",
-      "cleanup.close",
       "acceptance.write",
+      "cleanup.close",
     ]);
     assert.deepEqual(accepted, {
       schemaVersion: 1,
@@ -106,6 +106,69 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("acceptance write failure retains recovery and exact evidence is retryable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retry-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const cleanupModes: boolean[] = [];
+  try {
+    const first = runtime([], evidenceRoot);
+    first.recovery.pending = async () => null;
+    first.cleanup.close = async (_signal, accepted = false) => {
+      cleanupModes.push(accepted);
+      return true;
+    };
+    assert.deepEqual(await runStage2RealJourney(
+      invocation(evidenceRoot), binding(first), {
+        now: () => "2026-08-05T12:00:00.000Z",
+        writeAcceptance: async () => { throw new Error("injected acceptance write failure"); },
+      }, new AbortController().signal,
+    ), { ok: false, code: "evidence_failed" });
+    assert.equal(existsSync(join(evidenceRoot, "real-evidence", "manifest.json")), true);
+    assert.deepEqual(cleanupModes, [false]);
+
+    const second = runtime([], evidenceRoot);
+    second.recovery.pending = async () => null;
+    second.cleanup.close = async (_signal, accepted = false) => {
+      cleanupModes.push(accepted);
+      return true;
+    };
+    assert.equal((await runStage2RealJourney(
+      invocation(evidenceRoot), binding(second), {
+        now: () => "2026-08-06T12:00:00.000Z",
+        writeAcceptance: async () => undefined,
+      }, new AbortController().signal,
+    )).ok, true);
+    assert.deepEqual(cleanupModes, [false, true]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const checkpoint of ["profile", "questionnaire", "review"] as const) {
+  test(`recovery at ${checkpoint} passes the exact durable walk cursor`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-recover-${checkpoint}-`));
+    const evidenceRoot = resolve(root, "evidence");
+    mkdirSync(evidenceRoot);
+    const value = runtime([], evidenceRoot);
+    const plan = recoveryPlan([], checkpoint);
+    let received: unknown;
+    value.recovery.pending = async () => plan;
+    value.application.run = async (_signal, resume) => {
+      received = resume;
+      return { ok: true, value: preReview() };
+    };
+    try {
+      assert.equal((await runStage2RealJourney(
+        invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+      )).ok, true);
+      assert.deepEqual(received, plan.resume);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("a recovery stop fails closed before application and still cleans the bound runtime", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-recovery-stop-"));
@@ -158,6 +221,7 @@ test("a recovery plan for another journey revision is rejected before recovery p
         },
       },
     },
+    resume: plan.resume,
   });
   try {
     assert.deepEqual(await runStage2RealJourney(
@@ -374,9 +438,16 @@ function reviewCapture() {
   };
 }
 
-function recoveryPlan(calls: string[]): {
+function recoveryPlan(
+  calls: string[],
+  recoveredPage: "profile" | "questionnaire" | "review" = "profile",
+): {
   input: RecoverBrowserInterruptionInput;
   dependencies: RecoveryDependencies;
+  resume: {
+    currentPage: "profile" | "questionnaire" | "pre_review";
+    pageChecks: readonly ReturnType<typeof check>[];
+  };
 } {
   const journeyId = config.journeyId as never;
   const recoveryRevision = config.revisionId as never;
@@ -388,7 +459,10 @@ function recoveryPlan(calls: string[]): {
     tenantId: "tenant_0123456789abcdef" as never,
     postingId: "posting_0123456789abcdef" as never,
   });
-  const page = Object.freeze({ id: "page-profile" as never, kind: "profile" as const });
+  const page = Object.freeze({
+    id: `page-${recoveredPage}` as never,
+    kind: recoveredPage,
+  });
   const checkpoint: RecoveryCheckpoint = Object.freeze({
     schemaVersion: 1,
     journeyId,
@@ -406,6 +480,16 @@ function recoveryPlan(calls: string[]): {
     surface: "primary",
   });
   return {
+    resume: {
+      currentPage: recoveredPage === "review" ? "pre_review" : recoveredPage,
+      pageChecks: [
+        check("resume", "resume_verified", 1),
+        check("profile", "profile_verified", 3),
+        ...(recoveredPage === "profile" ? [] : [
+          check("questionnaire", "questionnaire_verified", 2),
+        ]),
+      ],
+    },
     input: {
       schemaVersion: 1,
       journeyId,

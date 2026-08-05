@@ -45,8 +45,11 @@ export async function runApplicationPageWalk(
     throw new RangeError("pageRetryLimit must be a non-negative safe integer");
   }
 
-  const pageChecks: ApplicationPageCheck[] = [];
-  const reconciledPages: ApplicationHandlerPage[] = [];
+  const resume = options.resume;
+  const pageChecks: ApplicationPageCheck[] = resume === undefined
+    ? []
+    : [...resume.pageChecks];
+  const reconciledPages: ApplicationHandlerPage[] = pageChecks.map(({ page }) => page);
   const stopAfter = input.stopAfter ?? "pre_review";
   if (signal.aborted) {
     return failure(
@@ -74,7 +77,37 @@ export async function runApplicationPageWalk(
     );
   }
 
-  for (let index = 0; index < applicationPages.length; index += 1) {
+  let startIndex = 0;
+  if (resume !== undefined) {
+    const resumed = validateResume(resume.currentPage, pageChecks, current.value);
+    if (!resumed.ok) {
+      return failure("browser_truth", resumed.error, current.value.page, 1);
+    }
+    startIndex = resumed.startIndex;
+    if (resume.currentPage !== "pre_review") {
+      const from = applicationPages[startIndex - 1]!;
+      const expected = applicationPages[startIndex] ?? "pre_review";
+      const advanced = await dependencies.navigation.next(
+        { journeyId: input.journeyId, from, fromPageId: current.value.pageId, expected },
+        signal,
+      );
+      if (!advanced.ok) return failure("navigation", advanced.error, current.value.page, 1);
+      current = await dependencies.observer.observe(signal);
+      if (!current.ok) return failure("browser_truth", current.error, expected, 1);
+      if (current.value.page !== expected || current.value.submitActivated) {
+        return failure(
+          "navigation",
+          current.value.submitActivated ? submitFailure() : internalFailure(
+            "navigation_uncertain", "page_navigation", "next", "navigation",
+          ),
+          current.value.page,
+          1,
+        );
+      }
+    }
+  }
+
+  for (let index = startIndex; index < applicationPages.length; index += 1) {
     const page = applicationPages[index]!;
     const expected = applicationPages[index + 1] ?? "pre_review";
     if (current.value.page !== page) {
@@ -188,6 +221,7 @@ export async function runApplicationPageWalk(
         browserPage: page,
         completedPages: reconciledPages.length,
         reconciledPages: [...reconciledPages],
+        pageChecks: [...pageChecks],
       },
       signal,
     );
@@ -246,6 +280,7 @@ export async function runApplicationPageWalk(
       browserPage: "pre_review",
       completedPages: 3,
       reconciledPages: [...reconciledPages],
+      pageChecks: [...pageChecks],
     },
     signal,
   );
@@ -295,6 +330,51 @@ export async function runApplicationPageWalk(
       },
     };
   }
+}
+
+function validateResume(
+  currentPage: Exclude<ApplicationPage, "resume">,
+  checks: readonly ApplicationPageCheck[],
+  truth: ApplicationPageTruth,
+): { readonly ok: true; readonly startIndex: number } | {
+  readonly ok: false;
+  readonly error: ApplicationPortFailure;
+} {
+  const expectedCount = currentPage === "profile" ? 2 : 3;
+  if (truth.page !== currentPage || checks.length !== expectedCount) {
+    return { ok: false, error: internalFailure(
+      "recovery_state_ambiguous", "progress_projection", "record", "page_type",
+    ) };
+  }
+  for (let index = 0; index < checks.length; index += 1) {
+    const page = applicationPages[index];
+    const check = checks[index];
+    if (
+      page === undefined || check === undefined || check.page !== page ||
+      check.checkpoint !== checkpointFor(page) || check.independentlyVerified !== true ||
+      !Number.isSafeInteger(check.requiredFields) || check.requiredFields < 0 ||
+      check.verifiedFields !== check.requiredFields || check.duplicateRows !== 0
+    ) return { ok: false, error: internalFailure(
+      "recovery_state_ambiguous", "progress_projection", "record", "required_field",
+    ) };
+  }
+  if (currentPage !== "pre_review") {
+    const currentCheck = checks.at(-1)!;
+    const observed = pageCheck(currentCheck.page, currentCheck.checkpoint, truth);
+    if (
+      observed.requiredFields !== currentCheck.requiredFields ||
+      observed.verifiedFields !== currentCheck.verifiedFields ||
+      observed.duplicateRows !== 0
+    ) return { ok: false, error: internalFailure(
+      "recovery_state_ambiguous", "progress_projection", "record", "required_field",
+    ) };
+  } else if (
+    truth.requiredFields.some(({ verification }) => verification !== "verified") ||
+    truth.c3OwnedDuplicateRows !== 0
+  ) return { ok: false, error: internalFailure(
+    "recovery_state_ambiguous", "progress_projection", "record", "required_field",
+  ) };
+  return { ok: true, startIndex: expectedCount };
 }
 
 function sanitizeFailure(error: unknown): ApplicationPortFailure {

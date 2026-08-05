@@ -249,24 +249,27 @@ That runtime performs bounded recovery when an interruption is pending, then
 proves verified pre-Review page checks. The Review Stopper captures independent
 Review proof and observes only structural Submit presence. It exposes no Submit
 target or action. The privacy writer seals `real-evidence/manifest.json` before
-browser cleanup. Only a successful exact cleanup permits `acceptance.json`.
-The outer gate then reconciles that file against the captured revision and
-config, writes the acceptance manifest, and finalizes the exact prepared run.
+browser cleanup. The acceptance record is durably written before terminal
+recovery and profile cleanup; a failed evidence or acceptance write retains the
+exact resumable checkpoint. The outer gate then reconciles that file against
+the captured revision and config, writes the acceptance manifest, and finalizes
+the exact prepared run.
 
-The accepted immutable owner-source resolver and owned Playwright runtime are
-concrete in this composition. The resolver captures the protected config,
-profile plan, configured narrative, and single-use resume snapshot, then binds
-them to the same source, revision, approval, journey, target, and opaque
-references. The runtime owns one persistent application page, bounded recovery,
-independent Review observation, sanitized evidence, and cleanup without
-exposing Submit. This implementation is verified locally; it is not itself a
-passing real Workday acceptance run. Real proof still requires a currently
-approved owner config, immutable profile and resume sources, a valid account and
+The accepted immutable owner-source resolver is concrete in this composition.
+It captures the protected config, profile plan, configured narrative, and
+single-use resume snapshot, then binds them to the same source, revision,
+approval, journey, target, and opaque references. A concrete Playwright
+application, recovery, and Review runtime adapter is bound by production. It
+owns one page, exposes only closed non-Submit operations, independently verifies
+the expected Review values, and revokes owner-source access during cleanup.
+Real proof is still owner-input blocked until the operator supplies an approved
+current owner config, immutable profile and resume sources, a valid account and
 session, and a protected evidence destination. Do not replace those inputs with
-raw values, environment secrets, or a permissive fallback.
+raw values, paths, environment secrets, or a permissive fallback. Tier 2
+deterministic composition tests do not claim a real account acceptance run.
 
 The gate stops on the first failed phase. Stable failures include
-`quality_failed`, `source_changed`, `config_changed`,
+`quality_failed`, `source_changed`, `config_changed`, `runtime_binding_failed`,
 `real_journey_failed`, `result_reconciliation_failed`, and
 `cleanup_finalize_failed`. Cancellation returns `operation_cancelled`. A
 failure never automatically discards evidence or another run. Inspect the

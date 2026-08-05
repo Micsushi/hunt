@@ -171,6 +171,13 @@ export function stopAtVerifiedReview(
     .filter(({ required }) => required)
     .map(({ fieldId }) => fieldId)
     .filter((fieldId, index, all) => all.indexOf(fieldId) === index);
+  const allFieldIds = request.page.fields.map(({ fieldId }) => fieldId);
+  if (
+    requiredFieldIds.length === 0 ||
+    new Set(allFieldIds).size !== allFieldIds.length ||
+    request.verification.length !== requiredFieldIds.length ||
+    request.verification.some(({ fieldId }) => !requiredFieldIds.includes(fieldId))
+  ) return denied("completion_unverified");
   const verifiedRequiredFieldCount = requiredFieldIds.filter((fieldId) => {
     const results = request.verification.filter(
       (result) => result.fieldId === fieldId,

@@ -11,7 +11,11 @@ import type {
 } from "../../contracts/live/index.ts";
 import { inspectPinnedTarget, reconcileOwnedPages } from "./private/owned-page-inspection.ts";
 import {
+  applicationOperationEffect,
+  isOwnedApplicationOperation,
   ownedApplicationPageAccess,
+  suspendOwnedApplicationSession,
+  type OwnedApplicationOperation,
   type OwnedApplicationPageRequest,
 } from "./private/application-page-types.ts";
 import type {
@@ -76,6 +80,7 @@ export class PlaywrightPersistentBrowserSession
     { readonly fingerprint: string; readonly result: Promise<AccountEntryAdvancePortResult> }
   >();
   readonly #applicationPageOperations = new Set<string>();
+  readonly #applicationSuspendOperations = new Map<string, Promise<ClosePortResult>>();
   #applicationPageActive = false;
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
@@ -436,17 +441,12 @@ export class PlaywrightPersistentBrowserSession
     return this.#accountAccess.withAccess(request, signal, use);
   }
 
-  /**
-   * Runs one bounded application operation against the exact pinned page.
-   * The page authority exists only for the callback lifetime and is checked
-   * immediately before and after use. No terminal action is surfaced by this
-   * session API.
-   */
-  async [ownedApplicationPageAccess]<Value>(
+  /** Runs one closed application operation; raw Page authority never leaves this owner. */
+  async [ownedApplicationPageAccess](
     request: OwnedApplicationPageRequest,
+    operation: OwnedApplicationOperation,
     signal: AbortSignal,
-    use: (page: PersistentPage) => Promise<Value>,
-  ): Promise<LivePortResult<Value, PersistentBrowserErrorCode>> {
+  ): Promise<LivePortResult<unknown, PersistentBrowserErrorCode>> {
     if (signal.aborted) return cancelled();
     if (
       this.#applicationPageActive ||
@@ -455,7 +455,8 @@ export class PlaywrightPersistentBrowserSession
     const now = Date.parse(request.now);
     if (
       request.schemaVersion !== 1 ||
-      (request.effect !== "read" && request.effect !== "mutation") ||
+      !isOwnedApplicationOperation(operation) ||
+      this.#options.applicationPage === undefined ||
       this.#page === undefined ||
       this.#page.isClosed() ||
       this.#session === undefined ||
@@ -489,10 +490,15 @@ export class PlaywrightPersistentBrowserSession
 
     this.#applicationPageActive = true;
     this.#applicationPageOperations.add(request.operationId);
+    const effect = applicationOperationEffect(operation);
     try {
-      const result = await bounded(use(page), signal, this.#options.timeoutMs);
+      const result = await bounded(
+        this.#options.applicationPage.execute(page, operation, signal),
+        signal,
+        this.#options.timeoutMs,
+      );
       if (result.kind !== "value") {
-        if (request.effect === "mutation") {
+        if (effect === "mutation") {
           await this.#invalidateAccountSession();
           return failure("browser_effect_uncertain");
         }
@@ -516,7 +522,7 @@ export class PlaywrightPersistentBrowserSession
           )
         : failure("browser_session_invalidated");
       if (!after.ok || after.value.target.kind !== "matched") {
-        if (request.effect === "mutation") {
+        if (effect === "mutation") {
           await this.#invalidateAccountSession();
           return failure("browser_effect_uncertain");
         }
@@ -524,7 +530,7 @@ export class PlaywrightPersistentBrowserSession
       }
       return { ok: true, value: result.value };
     } catch {
-      if (request.effect === "mutation") {
+      if (effect === "mutation") {
         await this.#invalidateAccountSession();
         return failure("browser_effect_uncertain");
       }
@@ -532,6 +538,37 @@ export class PlaywrightPersistentBrowserSession
     } finally {
       this.#applicationPageActive = false;
     }
+  }
+
+  async [suspendOwnedApplicationSession](
+    request: PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<ClosePortResult> {
+    const prior = this.#applicationSuspendOperations.get(request.operationId);
+    if (prior !== undefined) return prior;
+    const result = this.#suspendApplicationOnce(request, signal);
+    this.#applicationSuspendOperations.set(request.operationId, result);
+    return result;
+  }
+
+  async #suspendApplicationOnce(
+    request: PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<ClosePortResult> {
+    if (signal.aborted || this.#context === undefined || this.#session === undefined ||
+        this.#marker === undefined || this.#profilePath === undefined ||
+        request.journeyId !== this.#session.journeyId ||
+        request.sessionId !== this.#session.sessionId) return failure("browser_session_missing");
+    const context = this.#context;
+    await this.#holdBeforeCleanup(context);
+    const closed = await this.#boundedCleanup(() => context.close());
+    this.#context = undefined;
+    this.#page = undefined;
+    this.#session = undefined;
+    this.#approvedTarget = undefined;
+    this.#marker = undefined;
+    this.#profilePath = undefined;
+    return closed ? { ok: true, value: undefined } : failure("browser_profile_cleanup_failed");
   }
 
   async withOwnedVerificationNavigationAccess(
