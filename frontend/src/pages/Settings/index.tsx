@@ -128,13 +128,9 @@ function SearchConfig({
     new Set(['engineering', 'data', ...Object.keys(cfg.target_job_titles)]),
   )
   const [targetTitles, setTargetTitles] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])]),
-    ),
+    Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])])),
   )
-  const [experienceLevels, setExperienceLevels] = useState(
-    () => new Set(cfg.experience_levels),
-  )
+  const [experienceLevels, setExperienceLevels] = useState(() => new Set(cfg.experience_levels))
   const [locations, setLocations] = useState(() => listToText(cfg.locations))
   const [linkedinOn, setLinkedinOn] = useState(() => cfg.sites.includes('linkedin'))
   const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
