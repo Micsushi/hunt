@@ -1,12 +1,42 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { createFrozenBundle, verifyFrozenBundle } from "../src/corpus/freeze/index.ts";
+import { createFrozenBundle } from "../src/corpus/freeze/index.ts";
 
-const executioner = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const executioner = resolve(fileURLToPath(import.meta.url), "..", "..");
 const repository = resolve(executioner, "..");
+const revision = git("rev-parse", "HEAD");
+const tree = git("rev-parse", "HEAD^{tree}");
+const clean = git("status", "--porcelain", "--untracked-files=all") === "";
+const corpus = resolve(executioner, "corpus", "workday-40");
+const fixtureRoot = resolve(executioner, "fixtures", "workday", "corpus");
+const bundlePath = resolve(
+  repository,
+  ".runtime",
+  "c3-s3-corpus",
+  revision,
+  "bundle.json",
+);
+
+const bundle = await createFrozenBundle({
+  repositoryRoot: repository,
+  executionerRoot: executioner,
+  sourceRevision: revision,
+  sourceTree: tree,
+  clean,
+  packageLockPath: resolve(executioner, "package-lock.json"),
+  manifestPath: resolve(corpus, "manifest.json"),
+  variantMapPath: resolve(corpus, "variants.json"),
+  fixtureManifestPath: resolve(fixtureRoot, "manifest.json"),
+  declarationsPath: resolve(corpus, "variant-declarations.json"),
+  impactPath: resolve(corpus, "contract-impact.json"),
+  baselinePath: resolve(corpus, "source-reconciliation.json"),
+  configPath: resolve(corpus, "acceptance.json"),
+  fixtureRoot,
+}, bundlePath);
+
+process.stdout.write(`${bundlePath}\n${bundle.runId}\n`);
 
 function git(...args: string[]): string {
   const result = spawnSync("git", args, {
@@ -19,43 +49,4 @@ function git(...args: string[]): string {
   if (result.error !== undefined) throw result.error;
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`);
   return result.stdout.trim();
-}
-
-function identity() {
-  return {
-    sourceRevision: git("rev-parse", "HEAD"),
-    sourceTree: git("rev-parse", "HEAD^{tree}"),
-    clean: git("status", "--porcelain", "--untracked-files=all") === "",
-  };
-}
-
-const args = process.argv.slice(2);
-if (args.length > 2 || (args.length > 0 && args[0] !== "--output")) {
-  throw new Error("usage: corpus:freeze [--output <bundle>]");
-}
-const current = identity();
-const bundlePath = resolve(
-  args[1] ?? joinRuntime(current.sourceRevision),
-);
-
-if (existsSync(bundlePath)) {
-  const bundle = await verifyFrozenBundle(bundlePath, current);
-  process.stdout.write(`${bundlePath}\n${bundle.runId}\n`);
-} else {
-  const s3 = resolve(executioner, "fixtures", "workday", "s3");
-  const bundle = await createFrozenBundle({
-    repositoryRoot: repository,
-    executionerRoot: executioner,
-    ...current,
-    packageLockPath: resolve(executioner, "package-lock.json"),
-    manifestPath: resolve(s3, "corpus-manifest.json"),
-    variantMapPath: resolve(s3, "variant-map.json"),
-    configPath: resolve(s3, "acceptance-config.json"),
-    fixtureRoot: resolve(s3, "cases"),
-  }, bundlePath);
-  process.stdout.write(`${bundlePath}\n${bundle.runId}\n`);
-}
-
-function joinRuntime(revision: string): string {
-  return resolve(repository, ".runtime", "c3-s3-corpus", revision, "bundle.json");
 }

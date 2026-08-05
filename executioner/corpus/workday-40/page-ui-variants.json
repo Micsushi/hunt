@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "planId": "workday-40-page-ui-v1",
+  "impactSha": "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+  "contractReopen": false,
+  "unactivatedTaskIds": [
+    "S3-F2-T4",
+    "S3-F2-T6",
+    "S3-F2-T8",
+    "S3-F2-T9",
+    "S3-F2-T10",
+    "S3-F2-T11",
+    "S3-F2-T12"
+  ],
+  "variants": [
+    {
+      "id": "WD-PAGE-AUTH-ACTION-V1",
+      "taskId": "S3-F2-T2",
+      "ownerRole": "workday-auth-page",
+      "fixtureId": "wd-page-auth-action-v1",
+      "fixturePath": "fixtures/workday/corpus/wd-page-auth-action-v1.json",
+      "semanticHash": "sha256.6b0479cb7eea3a5d0429e1368f8c7527bbb2256ec099056576f00d6eed09145c",
+      "productionModules": [
+        "src/account/entry/adapter.ts",
+        "src/ats/workday/live/account-state.ts"
+      ],
+      "supportModules": [
+        "src/browser/playwright-live/private/playwright-account-page.ts",
+        "src/browser/playwright-live/private/workday-structural-catalog.ts"
+      ],
+      "affectedSlots": [
+        "WD40-001", "WD40-002", "WD40-003", "WD40-004", "WD40-005", "WD40-006", "WD40-007", "WD40-008",
+        "WD40-010", "WD40-011", "WD40-012", "WD40-013", "WD40-014", "WD40-015", "WD40-016", "WD40-017",
+        "WD40-018", "WD40-019", "WD40-020", "WD40-022", "WD40-023", "WD40-024", "WD40-025", "WD40-026",
+        "WD40-027", "WD40-028", "WD40-029", "WD40-030", "WD40-031", "WD40-032", "WD40-033", "WD40-034",
+        "WD40-035", "WD40-036", "WD40-037", "WD40-038", "WD40-039", "WD40-040"
+      ],
+      "testModule": "tests/fixtures/workday/variants/wd-page-auth-action-v1/variant.test.ts",
+      "regressionModules": [
+        "tests/account/entry/account-entry.test.ts",
+        "tests/ats/workday/live-entry/account-state.test.ts",
+        "tests/browser/live-adapter/playwright-account-page.test.ts",
+        "tests/browser/live-adapter/workday-structural-catalog.test.ts"
+      ]
+    },
+    {
+      "id": "WD-PAGE-EXTERNAL-STATE-V1",
+      "taskId": "S3-F2-T3",
+      "ownerRole": "workday-page-detector",
+      "fixtureId": "wd-page-external-state-v1",
+      "fixturePath": "fixtures/workday/corpus/wd-page-external-state-v1.json",
+      "semanticHash": "sha256.ae067b70ab976b95fe2c451e37ed494d8616fc6305fc3f8f3e2cfd882ff32cae",
+      "productionModules": ["src/ats/workday/live/classifiers.ts"],
+      "supportModules": [
+        "src/browser/playwright-live/private/workday-owned-target-probe.ts",
+        "src/browser/playwright-live/private/workday-structural-catalog.ts"
+      ],
+      "affectedSlots": [
+        "WD40-001", "WD40-003", "WD40-005", "WD40-007", "WD40-014", "WD40-022",
+        "WD40-026", "WD40-028", "WD40-033", "WD40-035", "WD40-037"
+      ],
+      "testModule": "tests/fixtures/workday/variants/wd-page-external-state-v1/variant.test.ts",
+      "regressionModules": [
+        "tests/browser/live-adapter/workday-owned-target-probe.test.ts",
+        "tests/browser/live-adapter/workday-structural-catalog.test.ts"
+      ]
+    },
+    {
+      "id": "WD-UI-SCALAR-COMPOSITE-V1",
+      "taskId": "S3-F2-T7",
+      "ownerRole": "scalar-driver",
+      "fixtureId": "wd-ui-scalar-composite-v1",
+      "fixturePath": "fixtures/workday/corpus/wd-ui-scalar-composite-v1.json",
+      "semanticHash": "sha256.720d8ffd931fd9255304a1eb8a57a3285d9cf3f11f76f065dded6ef96eb454e6",
+      "productionModules": ["src/interaction/drivers/registry.ts"],
+      "supportModules": [
+        "src/browser/adapter.ts",
+        "src/interaction/verification/field-verifier.ts"
+      ],
+      "affectedSlots": ["WD40-007"],
+      "testModule": "tests/fixtures/workday/variants/wd-ui-scalar-composite-v1/variant.test.ts",
+      "regressionModules": [
+        "tests/browser/operations/mutation.test.ts",
+        "tests/browser/operations/observation.test.ts",
+        "tests/interaction/drivers/behaviors/behaviors.test.ts",
+        "tests/interaction/verification/field-verifier.test.ts"
+      ]
+    },
+    {
+      "id": "WD-UI-SOURCE-SELECT-V1",
+      "taskId": "S3-F2-T5",
+      "ownerRole": "search-select-driver",
+      "fixtureId": "wd-ui-source-select-v1",
+      "fixturePath": "fixtures/workday/corpus/wd-ui-source-select-v1.json",
+      "semanticHash": "sha256.08cc212000db98025bba5d57c72c707bbcd96bd1b2e20add24b2eeae95de49fb",
+      "productionModules": ["src/interaction/drivers/registry.ts"],
+      "supportModules": [
+        "src/browser/adapter.ts",
+        "src/interaction/verification/field-verifier.ts"
+      ],
+      "affectedSlots": ["WD40-002", "WD40-007"],
+      "testModule": "tests/fixtures/workday/variants/wd-ui-source-select-v1/variant.test.ts",
+      "regressionModules": [
+        "tests/browser/operations/mutation.test.ts",
+        "tests/browser/operations/observation.test.ts",
+        "tests/interaction/drivers/registry/registry.test.ts",
+        "tests/interaction/verification/field-verifier.test.ts"
+      ]
+    }
+  ],
+  "freeze": {
+    "algorithm": "sha256",
+    "digest": "sha256.c3ed1c3a2a91f93c27b4a47c34f65f8fe287b3a1b804513d8ce1f1a46edaffe4"
+  }
+}

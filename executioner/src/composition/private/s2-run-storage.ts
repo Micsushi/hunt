@@ -40,6 +40,7 @@ const ALLOWED_RETAINED_FILES = new Set([
   "monitor-ack.json",
   "monitor-visible.png",
   "process-audit.json",
+  "s2-acceptance-manifest.json",
 ]);
 
 export interface Stage2StoragePath {

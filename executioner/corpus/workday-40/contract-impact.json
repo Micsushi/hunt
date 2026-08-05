@@ -1,0 +1,684 @@
+{
+  "schemaVersion": 1,
+  "impactId": "workday-40-contract-impact-v1",
+  "impactSha": "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+  "basis": {
+    "manifestHash": "sha256.b479b438b39b2c3dc0cea390b4ee59d91c37a05fbae611087bae1c88c1b51745",
+    "fixtureManifestHash": "sha256.26bd91f5cd752e922457a96e769afaf1171f711214459b82ccb84710a3f82ce4",
+    "variantMapHash": "sha256.784d3ae623cdfeb4836c96efb06eeb7ac85a1d93ccec6d6240f820d975334bae",
+    "baselineHash": "sha256.897627457180998fd64998ea5e8fa3c6fbbe902e48c48279a7d2dc85a958e592",
+    "runtimeRevision": "16c48bd1470addc9d9480d785ae84e412edd55ef",
+    "acceptedS2ContractRevision": "16c48bd1470addc9d9480d785ae84e412edd55ef",
+    "acceptedS2ContractTree": "d9643fcac18a79d9506e68cbeebb1ba200809e64"
+  },
+  "classifications": [
+    {
+      "area": "page",
+      "disposition": "implementation-gap",
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1",
+        "WD-PAGE-EXTERNAL-STATE-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-auth-action-v1",
+        "wd-page-external-state-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ]
+    },
+    {
+      "area": "control",
+      "disposition": "implementation-gap",
+      "variantIds": [
+        "WD-UI-SCALAR-COMPOSITE-V1",
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "provingFixtures": [
+        "wd-ui-scalar-composite-v1",
+        "wd-ui-source-select-v1"
+      ],
+      "provingSlots": [
+        "WD40-002",
+        "WD40-007"
+      ]
+    },
+    {
+      "area": "question",
+      "disposition": "no-change",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": []
+    },
+    {
+      "area": "answer",
+      "disposition": "no-change",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": []
+    },
+    {
+      "area": "option",
+      "disposition": "no-change",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": []
+    },
+    {
+      "area": "error",
+      "disposition": "no-change",
+      "variantIds": [
+        "WD-PAGE-EXTERNAL-STATE-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-external-state-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-003",
+        "WD40-005",
+        "WD40-007",
+        "WD40-014",
+        "WD40-022",
+        "WD40-026",
+        "WD40-028",
+        "WD40-033",
+        "WD40-035",
+        "WD40-037"
+      ]
+    },
+    {
+      "area": "event",
+      "disposition": "no-change",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": []
+    },
+    {
+      "area": "evidence",
+      "disposition": "fixture-manifest-delta",
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1",
+        "WD-PAGE-EXTERNAL-STATE-V1",
+        "WD-UI-SCALAR-COMPOSITE-V1",
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-auth-action-v1",
+        "wd-page-external-state-v1",
+        "wd-ui-scalar-composite-v1",
+        "wd-ui-source-select-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ]
+    },
+    {
+      "area": "recovery",
+      "disposition": "no-change",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": []
+    }
+  ],
+  "allowedTerminalCodes": [
+    "application_ready",
+    "posting_unavailable:maintenance"
+  ],
+  "contractReopen": {
+    "required": false,
+    "owningStages": [],
+    "acceptedRevision": null
+  },
+  "taskActivations": [
+    {
+      "taskId": "S3-F2-T1",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1",
+        "WD-PAGE-EXTERNAL-STATE-V1",
+        "WD-UI-SCALAR-COMPOSITE-V1",
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-auth-action-v1",
+        "wd-page-external-state-v1",
+        "wd-ui-scalar-composite-v1",
+        "wd-ui-source-select-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ],
+      "exactDependencies": [
+        "S3-F1-T5"
+      ],
+      "exactBlocks": [
+        "S3-F2-T2",
+        "S3-F2-T3",
+        "S3-F2-T5",
+        "S3-F2-T7"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F2-T2",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-auth-action-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ],
+      "exactDependencies": [
+        "S3-F2-T1"
+      ],
+      "exactBlocks": [
+        "S3-F2-T13"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F2-T3",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-PAGE-EXTERNAL-STATE-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-external-state-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-003",
+        "WD40-005",
+        "WD40-007",
+        "WD40-014",
+        "WD40-022",
+        "WD40-026",
+        "WD40-028",
+        "WD40-033",
+        "WD40-035",
+        "WD40-037"
+      ],
+      "exactDependencies": [
+        "S3-F2-T1"
+      ],
+      "exactBlocks": [
+        "S3-F2-T13"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F2-T4",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T5",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "provingFixtures": [
+        "wd-ui-source-select-v1"
+      ],
+      "provingSlots": [
+        "WD40-002",
+        "WD40-007"
+      ],
+      "exactDependencies": [
+        "S3-F2-T1"
+      ],
+      "exactBlocks": [
+        "S3-F2-T13"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F2-T6",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T7",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-UI-SCALAR-COMPOSITE-V1"
+      ],
+      "provingFixtures": [
+        "wd-ui-scalar-composite-v1"
+      ],
+      "provingSlots": [
+        "WD40-007"
+      ],
+      "exactDependencies": [
+        "S3-F2-T1"
+      ],
+      "exactBlocks": [
+        "S3-F2-T13"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F2-T8",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T9",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T10",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T11",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T12",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F2-T13",
+      "decision": "activated",
+      "status": "activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1",
+        "WD-PAGE-EXTERNAL-STATE-V1",
+        "WD-UI-SCALAR-COMPOSITE-V1",
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "provingFixtures": [
+        "wd-page-auth-action-v1",
+        "wd-page-external-state-v1",
+        "wd-ui-scalar-composite-v1",
+        "wd-ui-source-select-v1"
+      ],
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ],
+      "exactDependencies": [
+        "S3-F2-T2",
+        "S3-F2-T3",
+        "S3-F2-T5",
+        "S3-F2-T7"
+      ],
+      "exactBlocks": [
+        "S3-F4-T1"
+      ],
+      "reason": "Sanitized corpus fixture evidence proves this reusable closure lane."
+    },
+    {
+      "taskId": "S3-F3-T1",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T2",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T3",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T4",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T5",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T6",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T7",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T8",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T9",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T10",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T11",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    },
+    {
+      "taskId": "S3-F3-T12",
+      "decision": "not-activated",
+      "status": "not-activated@sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+      "variantIds": [],
+      "provingFixtures": [],
+      "provingSlots": [],
+      "exactDependencies": [],
+      "exactBlocks": [],
+      "reason": "No sanitized corpus fixture proves this candidate; it remains retired from this impact freeze."
+    }
+  ]
+}

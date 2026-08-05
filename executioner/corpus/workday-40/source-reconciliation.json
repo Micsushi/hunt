@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "16c48bd1470addc9d9480d785ae84e412edd55ef",
+  "sourceDigest": "sha256.8d97fa19693de5a995595bfe1ca5793068d6308f51c83390b603fea915cdee65",
+  "evidenceDigests": [
+    "sha256.79586b4c086fa5fe65b1f4c49b2aa297c471b515c9d00c33ad3fb6fdcf71672f",
+    "sha256.f74a5a9d74f3ac074f01b6acd6f84ea59eaa86896dba6dfdd0e25217a36d4934"
+  ],
+  "observedAt": "2026-07-23",
+  "availableSlots": [2, 4, 6, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 27, 29, 30, 31, 32, 34, 36, 38, 39, 40],
+  "unavailableSlots": {
+    "1": "maintenance",
+    "3": "maintenance",
+    "5": "maintenance",
+    "7": "maintenance",
+    "14": "maintenance",
+    "22": "maintenance",
+    "26": "maintenance",
+    "28": "maintenance",
+    "33": "maintenance",
+    "35": "maintenance",
+    "37": "maintenance"
+  },
+  "classificationRule": "Final progress-gated replay outcome; exact maintenance pages are external site state, never product failure.",
+  "replacementDecision": "Retain unavailable slots unless an owner approves a tenant, intent, and account-mode equivalent replacement."
+}

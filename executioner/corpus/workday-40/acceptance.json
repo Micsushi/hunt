@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "mode": "deterministic_fixture",
+  "prerequisiteTask": "S3-F2-T13",
+  "impactSha": "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+  "maxAttemptsPerFixture": 2
+}

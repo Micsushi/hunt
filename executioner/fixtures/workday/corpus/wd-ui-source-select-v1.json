@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "captureMode": "read-only-approved-page",
+  "fixtureId": "wd-ui-source-select-v1",
+  "captureRevision": "legacy-v2-20260514",
+  "provingSlots": [
+    "WD40-002",
+    "WD40-007"
+  ],
+  "variantIds": [
+    "WD-UI-SOURCE-SELECT-V1"
+  ],
+  "observation": {
+    "pageKind": "application",
+    "siteState": "available",
+    "controls": [
+      {
+        "id": "source-select",
+        "kind": "listbox",
+        "role": "source",
+        "required": true,
+        "state": "empty"
+      }
+    ],
+    "questions": []
+  },
+  "semanticHash": "sha256.08cc212000db98025bba5d57c72c707bbcd96bd1b2e20add24b2eeae95de49fb"
+}

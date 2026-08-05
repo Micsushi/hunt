@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "captureMode": "read-only-approved-page",
+  "fixtureId": "wd-ui-scalar-composite-v1",
+  "captureRevision": "legacy-v2-20260514",
+  "provingSlots": [
+    "WD40-007"
+  ],
+  "variantIds": [
+    "WD-UI-SCALAR-COMPOSITE-V1"
+  ],
+  "observation": {
+    "pageKind": "application",
+    "siteState": "available",
+    "controls": [
+      {
+        "id": "phone-country",
+        "kind": "phone",
+        "role": "phone-country-code",
+        "required": true,
+        "state": "empty"
+      },
+      {
+        "id": "self-identify-date",
+        "kind": "composite-date",
+        "role": "self-identify-date",
+        "required": false,
+        "state": "empty"
+      }
+    ],
+    "questions": []
+  },
+  "semanticHash": "sha256.720d8ffd931fd9255304a1eb8a57a3285d9cf3f11f76f065dded6ef96eb454e6"
+}

@@ -278,6 +278,23 @@ test("the Stage 2 lifecycle owner does not widen unrelated account paths", () =>
   );
 });
 
+test("the exact Stage 2 Review Stopper subtree has F8 ownership", () => {
+  assert.deepEqual(
+    dependencyViolations([{
+      path: "src/interaction/review/index.ts",
+      source: 'import type { PageCompletionResult } from "../../contracts/index.ts";',
+    }]),
+    [],
+  );
+  assert.deepEqual(
+    dependencyViolations([{
+      path: "src/interaction/reviews/other.ts",
+      source: "export const other = true;",
+    }]),
+    ["src/interaction/reviews/other.ts has no component owner"],
+  );
+});
+
 test("Gmail auth and safe provider implementations have separate owners", () => {
   assert.deepEqual(
     dependencyViolations([
@@ -366,6 +383,40 @@ test("additive live runner and evidence lanes do not widen frozen ownership", ()
     {
       path: "src/live/evidence/account-access-evidence.ts",
       source: 'import { openSync } from "node:fs";',
+    },
+  ]), []);
+  assert.deepEqual(dependencyViolations([
+    {
+      path: "src/live/runner/other.ts",
+      source: 'import { walk } from "../../ats/workday/application/page-walk.ts";',
+    },
+    {
+      path: "src/live/evidence/other.ts",
+      source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
+    },
+  ]), [
+    "src/live/runner/other.ts imports peer implementation src/ats/workday/application/page-walk.ts",
+    "src/live/evidence/other.ts imports peer implementation src/ats/workday/application/page-walk-contract.ts",
+  ]);
+});
+
+test("S2-F3 application composition owns only its exact integration seams", () => {
+  assert.deepEqual(dependencyViolations([
+    {
+      path: "src/ats/workday/application/lane-composition.ts",
+      source: 'import { handler } from "./questions/index.ts";',
+    },
+    {
+      path: "src/ats/workday/application/questions/index.ts",
+      source: 'import { resolver } from "../../../../form/answers/resolver.ts";',
+    },
+    {
+      path: "src/live/runner/application-walk.ts",
+      source: 'import { walk } from "../../ats/workday/application/page-walk.ts";',
+    },
+    {
+      path: "src/live/evidence/application-walk-evidence.ts",
+      source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
     },
   ]), []);
 });

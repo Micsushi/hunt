@@ -28,6 +28,7 @@ export interface AtomicJsonEvidenceRequest {
     | "monitor-ack.json"
     | "process-audit.json"
     | "completion-audit.json"
+    | "s2-acceptance-manifest.json"
     | "storage-manifest.json"
     | "disposal-audit.json";
 }

@@ -1,12 +1,45 @@
 import { createHash } from "node:crypto";
 import {
-  open,
   mkdir,
+  open,
   readdir,
   readFile,
   stat,
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
+
+import {
+  validateContractImpact,
+  type ContractImpact,
+} from "../contract-impact/index.ts";
+import {
+  buildImpactMap,
+  validateImpactMap,
+  type VariantDeclaration,
+} from "../impact-map/index.ts";
+import { validateCorpusManifest } from "../manifest/index.ts";
+import { canonicalJson } from "../shared.ts";
+import { validateCorpusFixtures } from "../capture/index.ts";
+import { createCorpusBaseline } from "../runner/index.ts";
+
+export const acceptedImpactSha =
+  "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd" as const;
+export const acceptedPrerequisiteTask = "S3-F2-T13" as const;
+
+const dormantF3Paths = [
+  "catalogs/workday/reviewed-v1.json",
+  "fixtures/workday/s3",
+  "fixtures/workday/semantics",
+  "scripts/catalog-migrate.ts",
+  "scripts/catalog-validate.ts",
+  "scripts/corpus-semantic.ts",
+  "src/form/answers/semantic-engine.ts",
+  "src/form/answers/semantic-matrix.ts",
+  "src/form/options/semantic-options.ts",
+  "src/form/questions/migration",
+  "src/form/questions/workday-catalog.ts",
+  "tests/fixtures/workday/semantics",
+] as const;
 
 export interface FreezeSource {
   readonly repositoryRoot: string;
@@ -17,14 +50,35 @@ export interface FreezeSource {
   readonly packageLockPath: string;
   readonly manifestPath: string;
   readonly variantMapPath: string;
+  readonly fixtureManifestPath: string;
+  readonly declarationsPath: string;
+  readonly impactPath: string;
+  readonly baselinePath: string;
   readonly configPath: string;
   readonly fixtureRoot: string;
 }
 
-interface FrozenInput {
-  readonly kind: "package_lock" | "corpus_manifest" | "variant_map" | "runtime_config" | "fixture";
+export interface FrozenInput {
+  readonly kind:
+    | "package_lock"
+    | "corpus_manifest"
+    | "fixture_manifest"
+    | "variant_map"
+    | "variant_declarations"
+    | "contract_impact"
+    | "baseline"
+    | "runtime_config"
+    | "fixture";
   readonly path: string;
   readonly sha256: string;
+}
+
+export interface F3DormancySummary {
+  readonly taskCount: 12;
+  readonly activatedCount: 0;
+  readonly variantEvidenceCount: 0;
+  readonly fixtureEvidenceCount: 0;
+  readonly slotEvidenceCount: 0;
 }
 
 export interface FrozenCorpusBundle {
@@ -35,9 +89,11 @@ export interface FrozenCorpusBundle {
   readonly runId: string;
   readonly identity: string;
   readonly rootRelativeFromBundle: string;
-  readonly accountRefs: readonly string[];
-  readonly maxAttemptsPerSlot: number;
-  readonly mode: "deterministic_fixture" | "live_corpus";
+  readonly impactSha: typeof acceptedImpactSha;
+  readonly prerequisiteTask: typeof acceptedPrerequisiteTask;
+  readonly f3: F3DormancySummary;
+  readonly maxAttemptsPerFixture: number;
+  readonly mode: "deterministic_fixture";
   readonly inputs: readonly FrozenInput[];
   readonly seal: string;
 }
@@ -50,6 +106,18 @@ export interface CurrentFreezeIdentity {
 
 type JsonObject = Readonly<Record<string, unknown>>;
 
+interface AcceptedInputPaths {
+  readonly executionerRoot: string;
+  readonly manifestPath: string;
+  readonly variantMapPath: string;
+  readonly fixtureManifestPath: string;
+  readonly declarationsPath: string;
+  readonly impactPath: string;
+  readonly baselinePath: string;
+  readonly configPath: string;
+  readonly fixtureRoot: string;
+}
+
 export async function createFrozenBundle(
   source: FreezeSource,
   bundlePath: string,
@@ -58,75 +126,36 @@ export async function createFrozenBundle(
   if (!/^[0-9a-f]{40}$/u.test(source.sourceRevision)) invalid("source revision");
   if (!/^[0-9a-f]{40}$/u.test(source.sourceTree)) invalid("source tree");
 
-  const manifest = object(await json(source.manifestPath));
-  const slots = Array.isArray(manifest.slots) ? manifest.slots : [];
-  if (!exactKeys(manifest, ["schemaVersion", "slots"]) || manifest.schemaVersion !== 1 || slots.length !== 40) invalid("corpus manifest");
-  const slotIds = new Set<string>();
-  const families = new Set<string>();
-  for (const value of slots) {
-    const slot = object(value);
-    if (
-      !exactKeys(slot, ["slotId", "availability", "variantFamily"]) ||
-      !semanticId(slot.slotId) ||
-      slotIds.has(slot.slotId) ||
-      !semanticId(slot.variantFamily) ||
-      !["available", "removed", "closed", "not_found", "maintenance", "replaced"].includes(
-        String(slot.availability),
-      )
-    ) invalid("corpus manifest");
-    slotIds.add(slot.slotId);
-    families.add(slot.variantFamily);
-  }
-
-  const variantMap = object(await json(source.variantMapPath));
-  const mappedFamilies = Array.isArray(variantMap.families) ? variantMap.families : [];
-  if (
-    !exactKeys(variantMap, ["schemaVersion", "families"]) ||
-    variantMap.schemaVersion !== 1 ||
-    mappedFamilies.length !== families.size ||
-    !mappedFamilies.every(semanticId) ||
-    new Set(mappedFamilies).size !== mappedFamilies.length ||
-    ![...families].every((family) => mappedFamilies.includes(family))
-  ) invalid("variant map");
-
-  const config = object(await json(source.configPath));
-  const accountRefs = Array.isArray(config.accountRefs) ? config.accountRefs : [];
-  if (
-    !exactKeys(config, ["schemaVersion", "mode", "maxAttemptsPerSlot", "accountRefs"]) ||
-    config.schemaVersion !== 1 ||
-    (config.mode !== "deterministic_fixture" && config.mode !== "live_corpus") ||
-    !Number.isSafeInteger(config.maxAttemptsPerSlot) ||
-    Number(config.maxAttemptsPerSlot) < 1 ||
-    Number(config.maxAttemptsPerSlot) > 3 ||
-    accountRefs.length === 0 ||
-    !accountRefs.every(semanticId)
-  ) throw new Error("acceptance configuration invalid");
+  const { f3, maxAttemptsPerFixture } = await validateAcceptedInputs(source);
 
   const fixedInputs = [
     ["package_lock", source.packageLockPath],
     ["corpus_manifest", source.manifestPath],
+    ["fixture_manifest", source.fixtureManifestPath],
     ["variant_map", source.variantMapPath],
+    ["variant_declarations", source.declarationsPath],
+    ["contract_impact", source.impactPath],
+    ["baseline", source.baselinePath],
     ["runtime_config", source.configPath],
   ] as const;
-  const fixturePaths = await files(source.fixtureRoot);
-  if (fixturePaths.length === 0) invalid("fixture set");
-  const matrixPath = fixturePaths.find((path) => path.endsWith(`${sep}fixture-matrix.json`));
-  if (matrixPath === undefined) invalid("fixture matrix");
-  const matrix = object(await json(matrixPath));
-  const matrixFamilies = Array.isArray(matrix.families) ? matrix.families : [];
-  if (
-    !exactKeys(matrix, ["schemaVersion", "expected", "families"]) ||
-    matrix.schemaVersion !== 1 ||
-    matrix.expected !== "passed" ||
-    matrixFamilies.length !== mappedFamilies.length ||
-    !mappedFamilies.every((family) => matrixFamilies.includes(family))
-  ) invalid("fixture matrix");
+  const fixturePaths = (await files(source.fixtureRoot))
+    .filter((path) => resolve(path) !== resolve(source.fixtureManifestPath));
+  if (fixturePaths.length !== 4) invalid("accepted fixture set");
+
   const inputs: FrozenInput[] = [];
   for (const [kind, path] of fixedInputs) {
-    inputs.push({ kind, path: safeRelative(source.repositoryRoot, path), sha256: await hashFile(path) });
+    inputs.push({
+      kind,
+      path: safeRelative(source.repositoryRoot, path),
+      sha256: await hashFile(path),
+    });
   }
   for (const path of fixturePaths) {
-    inputs.push({ kind: "fixture", path: safeRelative(source.repositoryRoot, path), sha256: await hashFile(path) });
+    inputs.push({
+      kind: "fixture",
+      path: safeRelative(source.repositoryRoot, path),
+      sha256: await hashFile(path),
+    });
   }
   inputs.sort((left, right) => left.path.localeCompare(right.path));
 
@@ -135,23 +164,26 @@ export async function createFrozenBundle(
     sourceRevision: source.sourceRevision,
     sourceTree: source.sourceTree,
     slotCount: 40 as const,
-    accountRefs: Object.freeze(accountRefs as string[]),
-    maxAttemptsPerSlot: Number(config.maxAttemptsPerSlot),
-    mode: config.mode as "deterministic_fixture" | "live_corpus",
+    impactSha: acceptedImpactSha,
+    prerequisiteTask: acceptedPrerequisiteTask,
+    f3,
+    maxAttemptsPerFixture,
+    mode: "deterministic_fixture" as const,
     inputs: Object.freeze(inputs),
   };
-  const identity = hash(stable(identityCore));
+  const identity = hash(canonicalJson(identityCore));
   const unsealed = {
     ...identityCore,
-    rootRelativeFromBundle: relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || ".",
-    runId: `corpus-${hash(identity).slice(0, 20)}`,
+    runId: `corpus-${digestHex(identity).slice(0, 20)}`,
     identity,
+    rootRelativeFromBundle:
+      relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || ".",
   };
   const bundle: FrozenCorpusBundle = Object.freeze({
     ...unsealed,
-    seal: hash(stable(unsealed)),
+    seal: hash(canonicalJson(unsealed)),
   });
-  await writeLocked(bundlePath, `${stable(bundle)}\n`);
+  await writeLocked(bundlePath, `${canonicalJson(bundle)}\n`);
   return bundle;
 }
 
@@ -161,37 +193,362 @@ export async function verifyFrozenBundle(
 ): Promise<FrozenCorpusBundle> {
   const bundle = object(await json(bundlePath)) as unknown as FrozenCorpusBundle;
   const { seal, ...unsealed } = bundle;
+  const identityCore = {
+    schemaVersion: bundle.schemaVersion,
+    sourceRevision: bundle.sourceRevision,
+    sourceTree: bundle.sourceTree,
+    slotCount: bundle.slotCount,
+    impactSha: bundle.impactSha,
+    prerequisiteTask: bundle.prerequisiteTask,
+    f3: bundle.f3,
+    maxAttemptsPerFixture: bundle.maxAttemptsPerFixture,
+    mode: bundle.mode,
+    inputs: bundle.inputs,
+  };
   if (
+    !exactKeys(bundle as unknown as JsonObject, [
+      "schemaVersion",
+      "sourceRevision",
+      "sourceTree",
+      "slotCount",
+      "runId",
+      "identity",
+      "rootRelativeFromBundle",
+      "impactSha",
+      "prerequisiteTask",
+      "f3",
+      "maxAttemptsPerFixture",
+      "mode",
+      "inputs",
+      "seal",
+    ]) ||
     bundle.schemaVersion !== 1 ||
+    !/^[0-9a-f]{40}$/u.test(bundle.sourceRevision) ||
+    !/^[0-9a-f]{40}$/u.test(bundle.sourceTree) ||
     bundle.slotCount !== 40 ||
-    !Array.isArray(bundle.inputs) ||
-    seal !== hash(stable(unsealed)) ||
-    bundle.identity !== hash(stable({
-      schemaVersion: bundle.schemaVersion,
-      sourceRevision: bundle.sourceRevision,
-      sourceTree: bundle.sourceTree,
-      slotCount: bundle.slotCount,
-      accountRefs: bundle.accountRefs,
-      maxAttemptsPerSlot: bundle.maxAttemptsPerSlot,
-      mode: bundle.mode,
-      inputs: bundle.inputs,
-    })) ||
-    bundle.runId !== `corpus-${hash(bundle.identity).slice(0, 20)}`
-  ) throw new Error("frozen bundle invalid");
+    bundle.impactSha !== acceptedImpactSha ||
+    bundle.prerequisiteTask !== acceptedPrerequisiteTask ||
+    bundle.mode !== "deterministic_fixture" ||
+    !validF3(bundle.f3) ||
+    !Number.isSafeInteger(bundle.maxAttemptsPerFixture) ||
+    bundle.maxAttemptsPerFixture < 1 ||
+    bundle.maxAttemptsPerFixture > 3 ||
+    !validFrozenInputs(bundle.inputs) ||
+    !/^sha256\.[0-9a-f]{64}$/u.test(bundle.identity) ||
+    !/^sha256\.[0-9a-f]{64}$/u.test(bundle.seal) ||
+    seal !== hash(canonicalJson(unsealed)) ||
+    bundle.identity !== hash(canonicalJson(identityCore)) ||
+    bundle.runId !== `corpus-${digestHex(bundle.identity).slice(0, 20)}`
+  ) {
+    throw new Error("frozen bundle invalid");
+  }
   if (
     current !== undefined &&
     (!current.clean ||
       current.sourceRevision !== bundle.sourceRevision ||
       current.sourceTree !== bundle.sourceTree)
-  ) throw new Error("frozen source drift");
-  const root = resolve(dirname(resolve(bundlePath)), bundle.rootRelativeFromBundle);
+  ) {
+    throw new Error("frozen source drift");
+  }
+
+  const root = resolve(
+    dirname(resolve(bundlePath)),
+    bundle.rootRelativeFromBundle,
+  );
   for (const input of bundle.inputs) {
     const path = resolve(root, input.path);
-    if (!inside(root, path) || (await hashFile(path)) !== input.sha256) {
+    if (!inside(root, path) || await hashFile(path) !== input.sha256) {
       throw new Error(`frozen input drift: ${input.path}`);
     }
   }
+  const paths = await acceptedPathsFromBundle(bundle, root);
+  const accepted = await validateAcceptedInputs(paths);
+  if (
+    canonicalJson(accepted.f3) !== canonicalJson(bundle.f3) ||
+    accepted.maxAttemptsPerFixture !== bundle.maxAttemptsPerFixture
+  ) {
+    throw new Error("frozen acceptance assertions changed");
+  }
   return Object.freeze(bundle);
+}
+
+async function validateAcceptedInputs(
+  source: AcceptedInputPaths,
+): Promise<{
+  readonly f3: F3DormancySummary;
+  readonly maxAttemptsPerFixture: number;
+}> {
+  const manifest = await json(source.manifestPath);
+  const fixtureManifest = await json(source.fixtureManifestPath);
+  const variants = await json(source.variantMapPath);
+  const declarations = object(await json(source.declarationsPath));
+  const sourceReconciliation = object(await json(source.baselinePath));
+  const impact = await json(source.impactPath);
+  const config = object(await json(source.configPath));
+
+  assertNoErrors("corpus manifest", validateCorpusManifest(manifest));
+  assertNoErrors(
+    "corpus fixtures",
+    validateCorpusFixtures(source.fixtureRoot, fixtureManifest, manifest),
+  );
+  assertNoErrors(
+    "variant map",
+    validateImpactMap(
+      variants,
+      fixtureManifest,
+      manifest,
+      source.executionerRoot,
+    ),
+  );
+  assertDeclarations(declarations, fixtureManifest, variants);
+  const baseline = createCorpusBaseline({
+    manifest,
+    fixtures: fixtureManifest,
+    variants,
+    sourceRevision: reconciliationRevision(sourceReconciliation),
+    fixtureRoot: source.fixtureRoot,
+  });
+  assertNoErrors(
+    "contract impact",
+    validateContractImpact(impact, {
+      manifest,
+      fixtures: fixtureManifest,
+      variants,
+      baseline,
+    }),
+  );
+  const f3 = assertAcceptedImpact(impact as ContractImpact);
+  const maxAttemptsPerFixture = assertConfig(config);
+  const dormantArtifacts = await findDormantF3Artifacts(
+    source.executionerRoot,
+  );
+  if (dormantArtifacts.length > 0) {
+    throw new Error(
+      `dormant S3-F3 artifact present: ${dormantArtifacts.join(",")}`,
+    );
+  }
+  return { f3, maxAttemptsPerFixture };
+}
+
+async function acceptedPathsFromBundle(
+  bundle: FrozenCorpusBundle,
+  root: string,
+): Promise<AcceptedInputPaths> {
+  const path = (kind: FrozenInput["kind"]): string => {
+    const matches = bundle.inputs.filter((input) => input.kind === kind);
+    if (matches.length !== 1) throw new Error("frozen input set invalid");
+    return resolve(root, matches[0]!.path);
+  };
+  const packageLockPath = path("package_lock");
+  const fixtureManifestPath = path("fixture_manifest");
+  const fixtureRoot = dirname(fixtureManifestPath);
+  const expectedFixtures = (await files(fixtureRoot))
+    .filter((fixture) => resolve(fixture) !== resolve(fixtureManifestPath))
+    .map((fixture) => resolve(fixture))
+    .sort();
+  const frozenFixtures = bundle.inputs
+    .filter((input) => input.kind === "fixture")
+    .map((input) => resolve(root, input.path))
+    .sort();
+  if (
+    frozenFixtures.length !== 4 ||
+    canonicalJson(frozenFixtures) !== canonicalJson(expectedFixtures)
+  ) {
+    throw new Error("frozen fixture set invalid");
+  }
+  return {
+    executionerRoot: dirname(packageLockPath),
+    manifestPath: path("corpus_manifest"),
+    variantMapPath: path("variant_map"),
+    fixtureManifestPath,
+    declarationsPath: path("variant_declarations"),
+    impactPath: path("contract_impact"),
+    baselinePath: path("baseline"),
+    configPath: path("runtime_config"),
+    fixtureRoot,
+  };
+}
+
+function assertAcceptedImpact(impact: ContractImpact): F3DormancySummary {
+  if (impact.impactSha !== acceptedImpactSha) {
+    throw new Error("accepted impact SHA mismatch");
+  }
+  const prerequisite = impact.taskActivations.find(
+    (task) => task.taskId === acceptedPrerequisiteTask,
+  );
+  if (
+    prerequisite?.decision !== "activated" ||
+    !prerequisite.exactBlocks.includes("S3-F4-T1")
+  ) {
+    throw new Error("S3-F4 prerequisite mismatch");
+  }
+  const f3 = impact.taskActivations
+    .filter((task) => /^S3-F3-T(?:[1-9]|1[0-2])$/u.test(task.taskId));
+  const exactIds = Array.from(
+    { length: 12 },
+    (_, index) => `S3-F3-T${index + 1}`,
+  );
+  const byId = new Map(f3.map((task) => [task.taskId, task]));
+  if (
+    f3.length !== 12 ||
+    exactIds.some((id) => {
+      const task = byId.get(id);
+      return task === undefined ||
+      task.decision !== "not-activated" ||
+      task.variantIds.length !== 0 ||
+      task.provingFixtures.length !== 0 ||
+      task.provingSlots.length !== 0;
+    })
+  ) {
+    throw new Error("dormant S3-F3 assertion failed");
+  }
+  return Object.freeze({
+    taskCount: 12,
+    activatedCount: 0,
+    variantEvidenceCount: 0,
+    fixtureEvidenceCount: 0,
+    slotEvidenceCount: 0,
+  });
+}
+
+function assertConfig(config: JsonObject): number {
+  if (
+    !exactKeys(config, [
+      "schemaVersion",
+      "mode",
+      "prerequisiteTask",
+      "impactSha",
+      "maxAttemptsPerFixture",
+    ]) ||
+    config.schemaVersion !== 1 ||
+    config.mode !== "deterministic_fixture" ||
+    config.prerequisiteTask !== acceptedPrerequisiteTask ||
+    config.impactSha !== acceptedImpactSha ||
+    !Number.isSafeInteger(config.maxAttemptsPerFixture) ||
+    Number(config.maxAttemptsPerFixture) < 1 ||
+    Number(config.maxAttemptsPerFixture) > 3
+  ) {
+    throw new Error("acceptance configuration invalid");
+  }
+  return Number(config.maxAttemptsPerFixture);
+}
+
+function assertDeclarations(
+  declarations: JsonObject,
+  fixtureManifest: unknown,
+  variants: unknown,
+): void {
+  if (
+    !exactKeys(declarations, ["schemaVersion", "variants"]) ||
+    declarations.schemaVersion !== 1 ||
+    !Array.isArray(declarations.variants)
+  ) {
+    invalid("variant declarations");
+  }
+  const built = buildImpactMap(
+    fixtureManifest,
+    declarations.variants as readonly VariantDeclaration[],
+  );
+  if (canonicalJson(built) !== canonicalJson(variants)) {
+    invalid("variant declarations");
+  }
+}
+
+function reconciliationRevision(value: JsonObject): string {
+  if (
+    value.schemaVersion !== 1 ||
+    typeof value.sourceRevision !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(value.sourceRevision)
+  ) {
+    invalid("source reconciliation");
+  }
+  return value.sourceRevision;
+}
+
+export async function findDormantF3Artifacts(
+  executionerRoot: string,
+): Promise<readonly string[]> {
+  const found: string[] = [];
+  for (const path of dormantF3Paths) {
+    let dormant;
+    try {
+      dormant = await stat(resolve(executionerRoot, path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (
+      dormant.isDirectory() &&
+      (await files(resolve(executionerRoot, path))).length === 0
+    ) {
+      continue;
+    }
+    found.push(path);
+  }
+  const packageJson = object(
+    await json(resolve(executionerRoot, "package.json")),
+  );
+  const scripts = object(packageJson.scripts);
+  found.push(...Object.keys(scripts)
+    .filter((name) => /(?:catalog|semantic)/u.test(name))
+    .map((name) => `package-script:${name}`));
+  return Object.freeze([...new Set(found)].sort());
+}
+
+function validF3(value: unknown): value is F3DormancySummary {
+  const record = object(value);
+  return exactKeys(record, [
+    "taskCount",
+    "activatedCount",
+    "variantEvidenceCount",
+    "fixtureEvidenceCount",
+    "slotEvidenceCount",
+  ]) &&
+    record.taskCount === 12 &&
+    record.activatedCount === 0 &&
+    record.variantEvidenceCount === 0 &&
+    record.fixtureEvidenceCount === 0 &&
+    record.slotEvidenceCount === 0;
+}
+
+function validFrozenInputs(value: unknown): value is readonly FrozenInput[] {
+  if (!Array.isArray(value) || value.length !== 12) return false;
+  const allowed = new Set([
+    "package_lock",
+    "corpus_manifest",
+    "fixture_manifest",
+    "variant_map",
+    "variant_declarations",
+    "contract_impact",
+    "baseline",
+    "runtime_config",
+    "fixture",
+  ]);
+  const paths = new Set<string>();
+  for (const candidate of value) {
+    const input = object(candidate);
+    if (
+      !exactKeys(input, ["kind", "path", "sha256"]) ||
+      typeof input.kind !== "string" ||
+      !allowed.has(input.kind) ||
+      typeof input.path !== "string" ||
+      input.path === "" ||
+      input.path.includes("\\") ||
+      paths.has(input.path) ||
+      typeof input.sha256 !== "string" ||
+      !/^sha256\.[0-9a-f]{64}$/u.test(input.sha256)
+    ) {
+      return false;
+    }
+    paths.add(input.path);
+  }
+  return true;
+}
+
+function assertNoErrors(name: string, errors: readonly string[]): void {
+  if (errors.length > 0) {
+    throw new Error(`${name} invalid: ${errors.join("; ")}`);
+  }
 }
 
 async function json(path: string): Promise<unknown> {
@@ -199,18 +556,17 @@ async function json(path: string): Promise<unknown> {
 }
 
 function object(value: unknown): JsonObject {
-  if (value === null || Array.isArray(value) || typeof value !== "object") invalid("JSON object");
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    invalid("JSON object");
+  }
   return value as JsonObject;
 }
 
 function exactKeys(value: JsonObject, expected: readonly string[]): boolean {
   const keys = Object.keys(value).sort();
   const wanted = [...expected].sort();
-  return keys.length === wanted.length && keys.every((key, index) => key === wanted[index]);
-}
-
-function semanticId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9][a-z0-9._:-]{0,63}$/u.test(value);
+  return keys.length === wanted.length &&
+    keys.every((key, index) => key === wanted[index]);
 }
 
 async function files(root: string): Promise<string[]> {
@@ -224,31 +580,32 @@ async function files(root: string): Promise<string[]> {
 }
 
 async function hashFile(path: string): Promise<string> {
-  if (!(await stat(path)).isFile()) throw new Error(`frozen input unavailable: ${path}`);
+  if (!(await stat(path)).isFile()) {
+    throw new Error(`frozen input unavailable: ${path}`);
+  }
   return hash(await readFile(path));
 }
 
 function hash(value: string | Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
+  return `sha256.${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
+function digestHex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function safeRelative(root: string, path: string): string {
   const normalized = resolve(path);
-  if (!inside(root, normalized)) throw new Error("frozen input outside repository");
+  if (!inside(root, normalized)) {
+    throw new Error("frozen input outside repository");
+  }
   return relative(resolve(root), normalized).replaceAll(sep, "/");
 }
 
 function inside(root: string, path: string): boolean {
-  const rel = relative(resolve(root), resolve(path));
-  return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
+  const child = relative(resolve(root), resolve(path));
+  return child === "" ||
+    (!child.startsWith("..") && !child.includes(`..${sep}`));
 }
 
 async function writeLocked(path: string, value: string): Promise<void> {

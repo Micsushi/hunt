@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "taxonomyId": "workday-corpus-v1",
+  "fixtureManifestHash": "sha256.26bd91f5cd752e922457a96e769afaf1171f711214459b82ccb84710a3f82ce4",
+  "variants": [
+    {
+      "id": "WD-PAGE-AUTH-ACTION-V1",
+      "category": "page",
+      "ownerCategory": "workday-auth-page",
+      "primitiveIds": [
+        "page.auth.action",
+        "page.auth.transition"
+      ],
+      "productionModules": [
+        "src/account/entry/adapter.ts",
+        "src/ats/workday/live/account-state.ts"
+      ],
+      "dependsOn": [
+        "WD-PAGE-EXTERNAL-STATE-V1"
+      ],
+      "status": "observed",
+      "fixtureIds": [
+        "wd-page-auth-action-v1"
+      ],
+      "affectedSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ]
+    },
+    {
+      "id": "WD-PAGE-EXTERNAL-STATE-V1",
+      "category": "page",
+      "ownerCategory": "workday-page-detector",
+      "primitiveIds": [
+        "page.external.state"
+      ],
+      "productionModules": [
+        "src/ats/workday/live/classifiers.ts"
+      ],
+      "dependsOn": [],
+      "status": "observed",
+      "fixtureIds": [
+        "wd-page-external-state-v1"
+      ],
+      "affectedSlots": [
+        "WD40-001",
+        "WD40-003",
+        "WD40-005",
+        "WD40-007",
+        "WD40-014",
+        "WD40-022",
+        "WD40-026",
+        "WD40-028",
+        "WD40-033",
+        "WD40-035",
+        "WD40-037"
+      ]
+    },
+    {
+      "id": "WD-UI-SCALAR-COMPOSITE-V1",
+      "category": "ui",
+      "ownerCategory": "scalar-driver",
+      "primitiveIds": [
+        "ui.phone",
+        "ui.composite-date"
+      ],
+      "productionModules": [
+        "src/interaction/drivers/registry.ts"
+      ],
+      "dependsOn": [
+        "WD-PAGE-AUTH-ACTION-V1"
+      ],
+      "status": "observed",
+      "fixtureIds": [
+        "wd-ui-scalar-composite-v1"
+      ],
+      "affectedSlots": [
+        "WD40-007"
+      ]
+    },
+    {
+      "id": "WD-UI-SOURCE-SELECT-V1",
+      "category": "ui",
+      "ownerCategory": "search-select-driver",
+      "primitiveIds": [
+        "ui.search-select",
+        "ui.active-listbox"
+      ],
+      "productionModules": [
+        "src/interaction/drivers/registry.ts"
+      ],
+      "dependsOn": [
+        "WD-PAGE-AUTH-ACTION-V1"
+      ],
+      "status": "observed",
+      "fixtureIds": [
+        "wd-ui-source-select-v1"
+      ],
+      "affectedSlots": [
+        "WD40-002",
+        "WD40-007"
+      ]
+    }
+  ],
+  "freeze": {
+    "algorithm": "sha256",
+    "digest": "sha256.784d3ae623cdfeb4836c96efb06eeb7ac85a1d93ccec6d6240f820d975334bae"
+  }
+}

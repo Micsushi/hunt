@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sanitized Workday profile fixture</title>
+  <style>
+    body { font: 16px system-ui; margin: 2rem; }
+    label, section, .profile-row { display: block; margin: .75rem 0; }
+    [role="listbox"][hidden] { display: none; }
+    [role="option"] { cursor: pointer; padding: .25rem; }
+  </style>
+</head>
+<body data-hunt-profile-page-type="profile">
+  <main data-automation-id="applyFlowMyInfoPage">
+    <label>First Name<input required data-automation-id="legalNameSection_firstName"></label>
+    <label>Last Name<input required data-automation-id="legalNameSection_lastName"></label>
+    <label>Address Line 1<input required data-automation-id="addressSection_addressLine1"></label>
+    <label>City<input required data-automation-id="addressSection_city"></label>
+    <label>Country
+      <input required role="combobox" aria-controls="country-options" data-automation-id="addressSection_countryRegion" data-selected-label="">
+      <div id="country-options" role="listbox" hidden>
+        <div role="option">Canada</div>
+        <div role="option">United States</div>
+      </div>
+    </label>
+    <label>Postal Code<input required data-automation-id="addressSection_postalCode"></label>
+    <label>Phone Country Code
+      <input required role="combobox" aria-controls="phone-country-options" data-automation-id="phone-country-code" data-selected-label="">
+      <div id="phone-country-options" role="listbox" hidden>
+        <div role="option">Canada (+1)</div>
+        <div role="option">United States (+1)</div>
+      </div>
+    </label>
+    <label>Phone Number<input required type="tel" data-automation-id="phone-number"></label>
+
+    <section data-automation-id="workExperienceSection" data-repeatable-section="experience">
+      <h2>Work Experience</h2>
+      <div class="profile-row" data-automation-id="workExperience-0" data-row-id="experience-existing">
+        <label>Company<input required data-automation-id="workExperience-0--company" value="Analytical Engines"></label>
+        <label>Job Title<input required data-automation-id="workExperience-0--jobTitle" value="Programmer"></label>
+        <label>Start Date<input required type="date" data-automation-id="workExperience-0--startDate" value="2021-03-01"></label>
+        <button type="button" data-automation-id="delete">Remove</button>
+      </div>
+      <button type="button" data-automation-id="addWorkExperience" data-add-section="experience">Add Work Experience</button>
+    </section>
+
+    <section data-automation-id="educationSection" data-repeatable-section="education">
+      <h2>Education</h2>
+      <div class="profile-row" data-automation-id="education-0" data-row-id="education-empty" data-hunt-c3-owned="true">
+        <label>School<input required data-automation-id="education-0--school"></label>
+        <label>Degree<input required data-automation-id="education-0--degree"></label>
+        <label>End Date<input required type="date" data-automation-id="education-0--endDate"></label>
+        <button type="button" data-automation-id="delete">Remove</button>
+      </div>
+      <button type="button" data-automation-id="addEducation" data-add-section="education">Add Education</button>
+    </section>
+
+    <section data-automation-id="skillsSection" data-repeatable-section="skills">
+      <h2>Skills</h2>
+      <button type="button" data-automation-id="addSkill" data-add-section="skills">Add Skill</button>
+    </section>
+  </main>
+  <script>
+    const definitions = {
+      experience: [
+        ["company", "Company", "text"],
+        ["jobTitle", "Job Title", "text"],
+        ["startDate", "Start Date", "date"],
+      ],
+      education: [
+        ["school", "School", "text"],
+        ["degree", "Degree", "text"],
+        ["endDate", "End Date", "date"],
+      ],
+      skills: [["name", "Skill", "search_select"]],
+    };
+    let sequence = 1;
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const option = target.closest('[role="option"]');
+      if (option) {
+        const listbox = option.closest('[role="listbox"]');
+        const input = listbox?.id ? document.querySelector(`[aria-controls="${listbox.id}"]`) : null;
+        if (input instanceof HTMLInputElement) {
+          const label = option.textContent.trim();
+          input.value = label;
+          input.setAttribute("data-selected-label", label);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          listbox.hidden = true;
+        }
+        return;
+      }
+      const remove = target.closest('[data-automation-id="delete"]');
+      if (remove) {
+        remove.closest(".profile-row")?.remove();
+        return;
+      }
+      const add = target.closest("[data-add-section]");
+      if (!add) return;
+      const section = add.getAttribute("data-add-section");
+      const container = add.closest("[data-repeatable-section]");
+      if (!section || !container || !definitions[section]) return;
+      const rowId = `${section}-added-${sequence++}`;
+      const row = document.createElement("div");
+      row.className = "profile-row";
+      row.setAttribute("data-automation-id", rowId);
+      row.setAttribute("data-row-id", rowId);
+      for (const [suffix, labelText, kind] of definitions[section]) {
+        const label = document.createElement("label");
+        label.append(labelText);
+        const input = document.createElement("input");
+        input.required = true;
+        input.setAttribute("data-automation-id", `${rowId}--${suffix}`);
+        if (kind === "date") input.type = "date";
+        if (kind === "search_select") {
+          const listboxId = `${rowId}-options`;
+          input.setAttribute("role", "combobox");
+          input.setAttribute("aria-controls", listboxId);
+          input.setAttribute("data-selected-label", "");
+          const listbox = document.createElement("div");
+          listbox.id = listboxId;
+          listbox.setAttribute("role", "listbox");
+          listbox.hidden = true;
+          for (const skill of ["TypeScript", "Playwright"]) {
+            const item = document.createElement("div");
+            item.setAttribute("role", "option");
+            item.textContent = skill;
+            listbox.append(item);
+          }
+          label.append(input, listbox);
+        } else label.append(input);
+        row.append(label);
+      }
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.setAttribute("data-automation-id", "delete");
+      removeButton.textContent = "Remove";
+      row.append(removeButton);
+      container.insertBefore(row, add);
+    });
+    document.addEventListener("focusin", (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || input.getAttribute("role") !== "combobox") return;
+      const listbox = document.getElementById(input.getAttribute("aria-controls"));
+      if (listbox) listbox.hidden = false;
+    });
+  </script>
+</body>
+</html>

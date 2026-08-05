@@ -1,0 +1,831 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "workday-40",
+  "source": {
+    "kind": "committed_csv",
+    "reference": "wd_test_jobs.csv#rows-2-41",
+    "revision": "16c48bd1470addc9d9480d785ae84e412edd55ef",
+    "evidenceDigests": [
+      "sha256.79586b4c086fa5fe65b1f4c49b2aa297c471b515c9d00c33ad3fb6fdcf71672f",
+      "sha256.f74a5a9d74f3ac074f01b6acd6f84ea59eaa86896dba6dfdd0e25217a36d4934"
+    ]
+  },
+  "ownerApproval": {
+    "status": "approved",
+    "recordRef": "s3-f1-owner-delegation-2026-08-04",
+    "approvedAt": "2026-08-04"
+  },
+  "replacementPolicy": {
+    "immutableFields": [
+      "slotId",
+      "tenantRef",
+      "variantIntent",
+      "accountMode"
+    ],
+    "equivalenceFields": [
+      "tenantRef",
+      "variantIntent",
+      "accountMode"
+    ],
+    "unavailableIsProductFailure": false
+  },
+  "slots": [
+    {
+      "slotId": "WD40-001",
+      "jobRef": "sha256.ca70d2c24030064733db4691e1ae690471a70c9b8b5f602f77eb5ba6b4f843c4",
+      "sourceRef": "wd_test_jobs.csv#row-2",
+      "tenantRef": "tenant.377e7e2d7f4d7971",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-002",
+      "jobRef": "sha256.411c330903f545026842b07680334fa9e0f9bb49d8dfdd4f1828ebfe4397861e",
+      "sourceRef": "wd_test_jobs.csv#row-3",
+      "tenantRef": "tenant.28260881186fdc82",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-003",
+      "jobRef": "sha256.37b0e119e0430ada4617ccf326758674fee32dc6f0e8b9a13e3cea4da2f2250f",
+      "sourceRef": "wd_test_jobs.csv#row-4",
+      "tenantRef": "tenant.e80bd2477dfde9ee",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-004",
+      "jobRef": "sha256.f1b2c2ce5aa66514a3a9694c7e220dbf1085a0c533729bd7ff9ea6d451ca02e3",
+      "sourceRef": "wd_test_jobs.csv#row-5",
+      "tenantRef": "tenant.40a9f82e1fd65d66",
+      "tenantClass": "wd10",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-005",
+      "jobRef": "sha256.fec29630b96d91c30ae0b47f786789957e89692bce90ef3fdf9f9f97c29edc30",
+      "sourceRef": "wd_test_jobs.csv#row-6",
+      "tenantRef": "tenant.3c22427ac52b9741",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-006",
+      "jobRef": "sha256.0e4cdbc2760d6abd05a3d7440018eb9798b01d87298289c576a04c4afbca8fae",
+      "sourceRef": "wd_test_jobs.csv#row-7",
+      "tenantRef": "tenant.2e8af9d18947b4ca",
+      "tenantClass": "wd10",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-007",
+      "jobRef": "sha256.ccbbd7ded4cd9f911789708acb5178af0bed9eadfedf53f742163274fa96253a",
+      "sourceRef": "wd_test_jobs.csv#row-8",
+      "tenantRef": "tenant.0c6e44300e9d956a",
+      "tenantClass": "wd10",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-008",
+      "jobRef": "sha256.0e951f9449ad30d7eb449adbdafd18fc6cd637e4ad8342aa02ce6c76f27a84bc",
+      "sourceRef": "wd_test_jobs.csv#row-9",
+      "tenantRef": "tenant.e7c5d7279dc7f022",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-009",
+      "jobRef": "sha256.97e511146b0d56e24c4ea77416428d9ea0c30342c69a295848c51ea357be83be",
+      "sourceRef": "wd_test_jobs.csv#row-10",
+      "tenantRef": "tenant.0ff09d440dd4cfed",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-010",
+      "jobRef": "sha256.f22a5ef84664b09e565170261a8930357b4ae248ba9bae66eaca393fbc47b642",
+      "sourceRef": "wd_test_jobs.csv#row-11",
+      "tenantRef": "tenant.931d286850f035db",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-011",
+      "jobRef": "sha256.8275c517dd11f0797b82aa58dd2c6d385ac461ff9934de67af0073ce596e5c96",
+      "sourceRef": "wd_test_jobs.csv#row-12",
+      "tenantRef": "tenant.162a8f86b873fa37",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-012",
+      "jobRef": "sha256.621c78e74a2a04d6154ef07281bb61ea9c6f3de3828e7095c8995c28b0688251",
+      "sourceRef": "wd_test_jobs.csv#row-13",
+      "tenantRef": "tenant.b7f10d85f91798e6",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-013",
+      "jobRef": "sha256.7908d7dd78ed33f2783ddcc16ac7ede58f368304beb00c14b7ef95ebaaf42a65",
+      "sourceRef": "wd_test_jobs.csv#row-14",
+      "tenantRef": "tenant.0e07c2626aab5a56",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-014",
+      "jobRef": "sha256.e166951a078bd8385858e5d34ef025770afdf68e3553818b4b012b3fc606f0b3",
+      "sourceRef": "wd_test_jobs.csv#row-15",
+      "tenantRef": "tenant.4c5948891a6dc988",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-015",
+      "jobRef": "sha256.cb5e611fb96076e915f7a9c47a48747a2b743b6a1ee98db447ad4598283b844f",
+      "sourceRef": "wd_test_jobs.csv#row-16",
+      "tenantRef": "tenant.afd9152816d91776",
+      "tenantClass": "wd12",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-016",
+      "jobRef": "sha256.815cd1a74f538dc90f0d65071e1c503951d79fe29d96fd33c2bd6a925b597459",
+      "sourceRef": "wd_test_jobs.csv#row-17",
+      "tenantRef": "tenant.94099cd46adba6f6",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-017",
+      "jobRef": "sha256.ea469104ea6e4f991620b065dc3a068de74e4a29560588c997c6df47072abcdd",
+      "sourceRef": "wd_test_jobs.csv#row-18",
+      "tenantRef": "tenant.a8846ed1d60a3230",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-018",
+      "jobRef": "sha256.48066d1b90136b0f84e90bbc206c7719e4d1d65a35ac7bce85fda01ca0049e6e",
+      "sourceRef": "wd_test_jobs.csv#row-19",
+      "tenantRef": "tenant.2674e3fcfe5ce93a",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-019",
+      "jobRef": "sha256.bcda00c2fd8b64b1bc8eca583160faf6565457c5a06501d96a959b4d175217f1",
+      "sourceRef": "wd_test_jobs.csv#row-20",
+      "tenantRef": "tenant.9988bf0043fdb807",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-020",
+      "jobRef": "sha256.f40f2247e42528ca287702a8a414d1b7dbe154e3aa74a219d79219a90677500e",
+      "sourceRef": "wd_test_jobs.csv#row-21",
+      "tenantRef": "tenant.432986705f381553",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-021",
+      "jobRef": "sha256.2c5a07e79a805cc0a84ae1c6c28acc5ed1096b0c67542e5aedd5d9a5e2bacc72",
+      "sourceRef": "wd_test_jobs.csv#row-22",
+      "tenantRef": "tenant.83993db4bc854ec4",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-022",
+      "jobRef": "sha256.07eee677ea4dddef58b24ac7f37445aa945d27db3150899192befd464fbe3174",
+      "sourceRef": "wd_test_jobs.csv#row-23",
+      "tenantRef": "tenant.daa670f04e1e77d3",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-023",
+      "jobRef": "sha256.12b1f8a74e5de2644927de943fb11b3566e788ce3da87a65bb2e733f567aeb4d",
+      "sourceRef": "wd_test_jobs.csv#row-24",
+      "tenantRef": "tenant.8a5fb3315133ceb9",
+      "tenantClass": "wd12",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-024",
+      "jobRef": "sha256.d71654c8ddb38e817c56c08a5ccb4b2a4b306fca9376de17806b3b6ee0428f84",
+      "sourceRef": "wd_test_jobs.csv#row-25",
+      "tenantRef": "tenant.609a4c29f75a3fad",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-025",
+      "jobRef": "sha256.2067f410b046000405f4d39767f12b6858935229a57b51d223da0efa6ae10c9b",
+      "sourceRef": "wd_test_jobs.csv#row-26",
+      "tenantRef": "tenant.9b2c0083d089eb8b",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-026",
+      "jobRef": "sha256.f2bddb74f07588e0b32cfd8763463ef94a9872c2ff71467886dc73ade0395d4e",
+      "sourceRef": "wd_test_jobs.csv#row-27",
+      "tenantRef": "tenant.11fee6807d584ac6",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-027",
+      "jobRef": "sha256.1390c53cd41312ca2edd7c6aecf333297bc6d9bb269e1922a894ef64d73f7b15",
+      "sourceRef": "wd_test_jobs.csv#row-28",
+      "tenantRef": "tenant.167a318d2ed20ed1",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-028",
+      "jobRef": "sha256.ff7500e9215ace66cd57385360cb88934747bb0083c5468d61a037486a088c81",
+      "sourceRef": "wd_test_jobs.csv#row-29",
+      "tenantRef": "tenant.515d09fef80eabee",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-029",
+      "jobRef": "sha256.b379ff77f315bf0608105cd48d7befa3900fc0151b16de5f5cf19a257e0625ba",
+      "sourceRef": "wd_test_jobs.csv#row-30",
+      "tenantRef": "tenant.10828b9a3353bff3",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-030",
+      "jobRef": "sha256.1ff734efb8030b8def8b584fd68c6443f94d4e4fbe948d01884ac67bae846426",
+      "sourceRef": "wd_test_jobs.csv#row-31",
+      "tenantRef": "tenant.a0e53a8bf6517aef",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-031",
+      "jobRef": "sha256.7f393e3c669e5f8fe3a188e91286113083d87661d92672bbd3ee6404e4cd4420",
+      "sourceRef": "wd_test_jobs.csv#row-32",
+      "tenantRef": "tenant.08ac9f6c27d440ce",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-032",
+      "jobRef": "sha256.45210984fa52b26de59087e3912251d9132efe695140ad2bf7884fedf573ea4d",
+      "sourceRef": "wd_test_jobs.csv#row-33",
+      "tenantRef": "tenant.f4b62b94bb7934ba",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-033",
+      "jobRef": "sha256.729190504be9a2d5f93ce5636fbdc6fe1ba003377a84589da0aeffeba06d7fb6",
+      "sourceRef": "wd_test_jobs.csv#row-34",
+      "tenantRef": "tenant.adf6189887e5d2ea",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-034",
+      "jobRef": "sha256.4152107e92ef301157a828582843ddcb6ce5f38b7afa4d5e1bed71868ec446a3",
+      "sourceRef": "wd_test_jobs.csv#row-35",
+      "tenantRef": "tenant.7571463dae96a595",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-035",
+      "jobRef": "sha256.64443bbc53734c5c5edae7852639844d30b210e7e74a503243f40d8478fd8909",
+      "sourceRef": "wd_test_jobs.csv#row-36",
+      "tenantRef": "tenant.34252b00e2484749",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-036",
+      "jobRef": "sha256.37f4e27f75cfcfbc3582464e1751a12c538e88ba8cbd1d61a90d4713f0d9b8f0",
+      "sourceRef": "wd_test_jobs.csv#row-37",
+      "tenantRef": "tenant.510cf0fe78614cc1",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-037",
+      "jobRef": "sha256.34b55d85581d798f36b29c4af66a56337fe162005822a2a095e8d5882004f729",
+      "sourceRef": "wd_test_jobs.csv#row-38",
+      "tenantRef": "tenant.7def6394cceaa221",
+      "tenantClass": "wd3",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "unavailable",
+        "reason": "maintenance",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "retain-unavailable",
+        "reason": "No equivalent replacement was approved; retain this external site-state lane.",
+        "approvalRef": "s3-f1-owner-delegation-2026-08-04"
+      }
+    },
+    {
+      "slotId": "WD40-038",
+      "jobRef": "sha256.c0a37fc820106c57d2fa91b374eb1a6ec822b8e212eb7aa5865d8a7975b50ace",
+      "sourceRef": "wd_test_jobs.csv#row-39",
+      "tenantRef": "tenant.feda6290b2ff0ba2",
+      "tenantClass": "wd5",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-039",
+      "jobRef": "sha256.783c11c77224683b6fe902a66608a8fa8ced2c31d87773650441fe7e17b24b03",
+      "sourceRef": "wd_test_jobs.csv#row-40",
+      "tenantRef": "tenant.11eabda7c1785bfd",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    },
+    {
+      "slotId": "WD40-040",
+      "jobRef": "sha256.a3bf647e76db176ce64e9b05472d74b2553a5ead046f188c8d961c6c9e320bb8",
+      "sourceRef": "wd_test_jobs.csv#row-41",
+      "tenantRef": "tenant.9ead5b5404496938",
+      "tenantClass": "wd1",
+      "variantIntent": [
+        "workday-posting",
+        "account-or-direct-entry"
+      ],
+      "accountMode": "approved-existing-or-direct",
+      "availability": {
+        "kind": "available",
+        "observedAt": "2026-07-23"
+      },
+      "replacementDecision": {
+        "kind": "not-needed"
+      }
+    }
+  ],
+  "freeze": {
+    "algorithm": "sha256",
+    "digest": "sha256.b479b438b39b2c3dc0cea390b4ee59d91c37a05fbae611087bae1c88c1b51745"
+  }
+}

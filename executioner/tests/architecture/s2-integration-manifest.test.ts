@@ -8,7 +8,7 @@ const expected = {
   schemaVersion: 1,
   stage: "s2",
   feature: "s2-f2-t3",
-  assemblyBaseRevision: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
+  assemblyBaseRevision: "16c48bd1470addc9d9480d785ae84e412edd55ef",
   acceptedInputs: {
     s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
     s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
@@ -46,9 +46,10 @@ const expected = {
     s2F0VerificationMailboxJourneyBinding: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
     s2F2VerificationMailboxAdmission: "3c6b8c9323af5a76ef1b8040eafd5647ede512b5",
     s2F0AccountSubmitDiagnosticAndFreshCreate: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
+    s2F2MaintenanceReplayStorageIntegration: "16c48bd1470addc9d9480d785ae84e412edd55ef",
   },
-  frozenContractRevision: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
-  frozenContractTree: "8de764c33ad1ae8a7bb3f0b83d1b7052878a3e59",
+  frozenContractRevision: "16c48bd1470addc9d9480d785ae84e412edd55ef",
+  frozenContractTree: "d9643fcac18a79d9506e68cbeebb1ba200809e64",
 };
 
 test("S2-F2-T3 manifest pins the exact accepted non-self-referential assembly", () => {
@@ -58,7 +59,11 @@ test("S2-F2-T3 manifest pins the exact accepted non-self-referential assembly", 
     execFileSync("git", ["merge-base", "--is-ancestor", revision, expected.assemblyBaseRevision]);
   }
   assert.equal(
-    execFileSync("git", ["cat-file", "-t", expected.frozenContractTree], { encoding: "utf8" }).trim(),
-    "tree",
+    execFileSync(
+      "git",
+      ["rev-parse", `${expected.frozenContractRevision}^{tree}`],
+      { encoding: "utf8" },
+    ).trim(),
+    expected.frozenContractTree,
   );
 });

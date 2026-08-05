@@ -21,7 +21,7 @@ export function runWindowsIsolatedStage2Acceptance(
     "..",
     "..",
     "scripts",
-    "run-s2-acceptance.ts",
+    "run-s2-real.ts",
   );
   validateInputs(executable, runnerPath, arguments_);
   const encodedArguments = Buffer.from(JSON.stringify(arguments_), "utf8").toString("base64");

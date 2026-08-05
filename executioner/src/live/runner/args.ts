@@ -5,13 +5,27 @@ const RUN_KEY = /^run_\d{8}_[a-z0-9]{16}$/u;
 export type Stage2AcceptanceCheckpoint =
   | "account_access"
   | "mailbox_candidate"
-  | "account_verified";
+  | "account_verified"
+  | "resume_verified"
+  | "profile_verified"
+  | "questionnaire_verified"
+  | "pre_review";
 
 export interface Stage2AcceptanceArgs {
   readonly checkpoint: Stage2AcceptanceCheckpoint;
   readonly configPath: string;
   readonly evidenceRoot: string;
 }
+
+const checkpoints = new Set<string>([
+  "account_access",
+  "mailbox_candidate",
+  "account_verified",
+  "resume_verified",
+  "profile_verified",
+  "questionnaire_verified",
+  "pre_review",
+]);
 
 export function parseStage2AcceptanceArgs(
   values: readonly string[],
@@ -35,14 +49,16 @@ export function parseStage2AcceptanceArgs(
   if (
     configPath === undefined ||
     evidenceRoot === undefined ||
-    (checkpoint !== "account_access" &&
-      checkpoint !== "mailbox_candidate" &&
-      checkpoint !== "account_verified") ||
+    !validCheckpoint(checkpoint) ||
     !canonicalAbsolute(configPath) ||
     !canonicalAbsolute(evidenceRoot) ||
     !separatedStorageLayout(configPath, evidenceRoot)
   ) invalid();
   return Object.freeze({ checkpoint, configPath, evidenceRoot });
+}
+
+function validCheckpoint(value: unknown): value is Stage2AcceptanceCheckpoint {
+  return typeof value === "string" && checkpoints.has(value);
 }
 
 function separatedStorageLayout(configPath: string, evidenceRoot: string): boolean {

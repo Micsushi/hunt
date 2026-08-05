@@ -99,10 +99,10 @@ After the accepted browser navigation capability is integrated, run the
 bounded account-access checkpoint from a clean committed worktree:
 
 ```text
-npm run live:s2 -- --config C:\private\s2-owner-inputs.json --stop-after account_access --evidence-root C:\private\s2-evidence
+npm run live:s2:slice -- --config C:\private\s2-owner-inputs.json --stop-after account_access --evidence-root C:\private\s2-evidence
 ```
 
-On Windows, every headed live run requires a non-primary monitor. `live:s2`
+On Windows, every headed live run requires a non-primary monitor. `live:s2:slice`
 starts the entire acceptance runner inside a kill-on-close Windows Job on a
 named, non-switched desktop; Playwright and its owned Chrome descendants inherit
 that desktop. The browser launcher independently attests the desktop binding,
@@ -224,6 +224,60 @@ recorded paths and handoffs do not break; inventory never migrates or deletes it
 `storage:s2 -- prepare` remains the lower-level allocator for tests and manual
 recovery tooling. Normal live work uses `prepare:s2-run` so the durable binding
 cannot be replaced by a disposable per-job value.
+
+### Same-revision Stage 2 Review acceptance
+
+Use `live:s2` only for the approved final Stage 2 journey. It accepts the exact
+prepared run layout, and `--stop-after review` is the only checkpoint:
+
+```text
+npm run live:s2 -- --config C:\private\hunt-c3-storage\transient\<run>\owner-input.json --stop-after review --evidence-root C:\private\hunt-c3-storage\retained\<run>\evidence
+```
+
+The command first captures the production source revision and a SHA-256 digest
+plus opaque IDs from the owner config. It runs `npm run quality`, recaptures
+both inputs, runs the real journey in the isolated process boundary, and
+recaptures both inputs again. It accepts only an exact sanitized Review packet
+with independent Review proof, structural Submit presence,
+`submitActivated: false`, and `privacyScan: pass`. A pass writes
+`s2-acceptance-manifest.json`, finalizes only the bound run, removes only its
+transient tree, and records the disposal audit. Final job Submit remains
+forbidden and is not exposed by this command or the real runner.
+
+Inside the isolated boundary, one injected runtime is bound before effects.
+That runtime performs bounded recovery when an interruption is pending, then
+proves verified pre-Review page checks. The Review Stopper captures independent
+Review proof and observes only structural Submit presence. It exposes no Submit
+target or action. The privacy writer seals `real-evidence/manifest.json` before
+browser cleanup. Only a successful exact cleanup permits `acceptance.json`.
+The outer gate then reconciles that file against the captured revision and
+config, writes the acceptance manifest, and finalizes the exact prepared run.
+
+The accepted immutable owner-source resolver is concrete in this composition.
+It captures the protected config, profile plan, configured narrative, and
+single-use resume snapshot, then binds them to the same source, revision,
+approval, journey, target, and opaque references. The remaining live-only
+browser runtime adapter is not yet available. Until it is supplied through the
+production binding, `live:s2` stops with `runtime_binding_failed` before
+browser, recovery, or evidence effects. Do not replace that adapter with raw
+values, paths, environment secrets, or a permissive fallback. Tier 2
+deterministic composition tests remain valid, but this state is not a passing
+real acceptance run.
+
+The gate stops on the first failed phase. Stable failures include
+`quality_failed`, `source_changed`, `config_changed`,
+`real_journey_failed`, `result_reconciliation_failed`, and
+`cleanup_finalize_failed`. Cancellation returns `operation_cancelled`. A
+failure never automatically discards evidence or another run. Inspect the
+layout with `npm run storage:s2 -- inventory --storage-root <root>`, reconcile
+the exact retained and transient paths, and use `storage:s2 -- discard` only
+when inventory proves that exact run is unfinished. Do not rerun into the same
+layout. Prepare and provision a new prepared run, then repeat the one command
+with its new config and evidence paths.
+
+The lower checkpoints remain available as `live:s2:slice` for bounded F1/F2
+diagnostics. A slice is not the Stage 2 acceptance gate and cannot certify
+Review.
 
 ### Gmail authorization bootstrap
 
@@ -348,7 +402,7 @@ Run this only from the clean committed revision used to provision the short-live
 F2 handles:
 
 ```text
-npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after mailbox_candidate --evidence-root C:\private\s2-evidence
+npm run live:s2:slice -- --config C:\private\f2-owner-inputs.json --stop-after mailbox_candidate --evidence-root C:\private\s2-evidence
 ```
 
 The runner queries only `gmail-api-v1` through the scoped Gmail handle across an
@@ -377,7 +431,7 @@ candidates.
 Provision both active secret handles before running this checkpoint:
 
 ```text
-npm run live:s2 -- --config C:\private\f2-owner-inputs.json --stop-after account_verified --evidence-root C:\private\s2-evidence
+npm run live:s2:slice -- --config C:\private\f2-owner-inputs.json --stop-after account_verified --evidence-root C:\private\s2-evidence
 ```
 
 The runner inspects both handles before browser creation and classifies the
@@ -420,6 +474,7 @@ the other. Both proofs require cleanup, privacy, no retained message body, and
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
+
 # Frozen corpus acceptance
 
 The S3-F4 local acceptance workflow freezes one clean revision and its corpus
@@ -435,8 +490,17 @@ npm run package:verify
 npm run package:build
 ```
 
-The current checked-in corpus adapter is deterministic and synthetic while the
-accepted S3-F1/F2/F3 providers are unavailable. It proves the fail-closed ports,
-reconciliation, recovery, and packaging path, but is not live-corpus evidence.
-Its report status is `accepted_fixture` and `liveCorpusCertified` remains false.
+The checked-in corpus is the accepted S3 F1/F2 impact-bound source. The exact
+impact SHA is
+`sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd`,
+and F4 depends on `S3-F2-T13`. All twelve S3-F3 tasks remain dormant with zero
+variant, fixture, and slot evidence. Freeze and audit reject dormant semantic
+commands, catalogs, modules, or synthetic fixtures.
+
+Acceptance runs the four accepted fixtures and seals an offline reconciliation
+of `WD40-001` through `WD40-040`. It does not invent per-slot browser outcomes.
+Its report status is `accepted_fixture`; `liveCorpusCertified` and
+`liveReviewCertified` remain false. Stage 2 deterministic Tier 2 is accepted,
+but its live-only Playwright application/recovery/Review adapter remains
+separate work.
 See `docs/corpus-release.md` and `docs/owner-test-backlog.md`.

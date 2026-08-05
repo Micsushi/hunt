@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("mailbox checkpoint dispatch stays browser-free and evidence stays value-free", async () => {
-  const script = await read("scripts/run-s2-acceptance.ts");
+  const script = await read("scripts/run-s2-real.ts");
   const composition = await read("src/composition/s2-mailbox-candidate-runner.ts");
   const evidence = await read("src/live/evidence/mailbox-candidate-evidence.ts");
   assert.match(script, /checkpoint === "mailbox_candidate"/u);

@@ -1,13 +1,22 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
-import { mcpMethods } from "../../control/mcp/facade.ts";
 import { serializedSchemas } from "../../contracts/serialized.ts";
 import { s2CommonWireSchemas } from "../../contracts/s2-common-schemas.ts";
-import { scanPrivacyFiles, type FilePrivacyViolation } from "../../testing/contracts/privacy.ts";
-import { findLivePrivacyViolations } from "../../testing/live/privacy.ts";
 import { verifyAcceptanceReport } from "../acceptance/index.ts";
-import { verifyFrozenBundle, type CurrentFreezeIdentity } from "../freeze/index.ts";
+import {
+  acceptedImpactSha,
+  findDormantF3Artifacts,
+  verifyFrozenBundle,
+  type CurrentFreezeIdentity,
+} from "../freeze/index.ts";
+import { canonicalJson } from "../shared.ts";
+import {
+  findArtifactPrivacyViolations,
+  scanCorpusPrivacyFiles,
+  type FilePrivacyViolation,
+} from "./privacy.ts";
 
 export interface LargeModuleDisposition {
   readonly path: string;
@@ -19,6 +28,8 @@ export interface LargeModuleDisposition {
 export interface CorpusAuditReport {
   readonly schemaVersion: 1;
   readonly status: "passed" | "failed";
+  readonly acceptedImpactSha: typeof acceptedImpactSha;
+  readonly dormantF3Artifacts: readonly string[];
   readonly privacyViolations: readonly FilePrivacyViolation[];
   readonly exposedCapabilities: readonly string[];
   readonly largeModules: readonly LargeModuleDisposition[];
@@ -43,8 +54,11 @@ interface DispositionFile {
 }
 
 export async function runStaticCorpusAudit(executionerRoot: string): Promise<CorpusAuditReport> {
-  const privacyViolations = scanPrivacyFiles(executionerRoot);
-  const exposedCapabilities = [...mcpMethods].sort();
+  const privacyViolations = scanCorpusPrivacyFiles(executionerRoot);
+  const dormantF3Artifacts = await findDormantF3Artifacts(executionerRoot);
+  const exposedCapabilities = [
+    ...serializedSchemas.mcpRequest.properties.method.enum,
+  ].sort();
   const dispositions = JSON.parse(
     await readFile(join(executionerRoot, "docs", "module-size-dispositions.json"), "utf8"),
   ) as DispositionFile;
@@ -83,6 +97,7 @@ export async function runStaticCorpusAudit(executionerRoot: string): Promise<Cor
     largeModules.push({ path: normalized, lines, ...disposition });
   }
   if (privacyViolations.length > 0) blockingIssues.push("privacy_violation");
+  if (dormantF3Artifacts.length > 0) blockingIssues.push("dormant_f3_artifact_present");
   blockingIssues.push(...schemaIssues);
   if (exposedCapabilities.some((capability) => capability.includes("submit"))) {
     blockingIssues.push("submit_capability_exposed");
@@ -91,6 +106,8 @@ export async function runStaticCorpusAudit(executionerRoot: string): Promise<Cor
   return Object.freeze({
     schemaVersion: 1,
     status: blockingIssues.length === 0 ? "passed" : "failed",
+    acceptedImpactSha,
+    dormantF3Artifacts: Object.freeze([...dormantF3Artifacts]),
     privacyViolations: Object.freeze(privacyViolations),
     exposedCapabilities: Object.freeze(exposedCapabilities),
     largeModules: Object.freeze(largeModules.sort((left, right) => left.path.localeCompare(right.path))),
@@ -159,29 +176,37 @@ export async function auditAcceptanceArtifacts(
     const report = JSON.parse(await readFile(paths[2]!, "utf8")) as Record<string, unknown>;
     issues.push(...verifyAcceptanceReport(report));
     for (const [name, value] of [["bundle", bundle], ["ledger", ledger], ["report", report]] as const) {
-      for (const violation of findLivePrivacyViolations(value)) {
+      for (const violation of findArtifactPrivacyViolations(value)) {
         issues.push(`${name}_privacy:${violation}`);
       }
     }
+    const { seal: ledgerSeal, ...ledgerCore } = ledger;
     if (
       ledger.schemaVersion !== 1 ||
       ledger.bundleIdentity !== bundle.identity ||
+      ledgerSeal !== hash(canonicalJson(ledgerCore)) ||
       report.bundleIdentity !== bundle.identity ||
       report.runId !== bundle.runId ||
       report.mode !== bundle.mode ||
-      (report.status !== "accepted" && report.status !== "accepted_fixture") ||
+      report.impactSha !== acceptedImpactSha ||
+      report.status !== "accepted_fixture" ||
+      report.liveCorpusCertified !== false ||
+      report.liveReviewCertified !== false ||
       !Array.isArray(ledger.entries) ||
       !Array.isArray(report.entries) ||
-      stable(ledger.entries) !== stable(report.entries)
+      !Array.isArray(ledger.fixtures) ||
+      !Array.isArray(report.fixtures) ||
+      canonicalJson(ledger.entries) !== canonicalJson(report.entries) ||
+      canonicalJson(ledger.fixtures) !== canonicalJson(report.fixtures)
     ) issues.push("acceptance_artifact_reconciliation_invalid");
     if (
-      Array.isArray(report.entries) &&
-      report.entries.some((entry) =>
-        entry === null ||
-        typeof entry !== "object" ||
-        !("attempts" in entry) ||
-        typeof entry.attempts !== "number" ||
-        entry.attempts > bundle.maxAttemptsPerSlot
+      Array.isArray(report.fixtures) &&
+      report.fixtures.some((fixture) =>
+        fixture === null ||
+        typeof fixture !== "object" ||
+        !("attempts" in fixture) ||
+        typeof fixture.attempts !== "number" ||
+        fixture.attempts > bundle.maxAttemptsPerFixture
       )
     ) issues.push("acceptance_recovery_bound_invalid");
   } catch {
@@ -190,12 +215,8 @@ export async function auditAcceptanceArtifacts(
   return [...new Set(issues)].sort();
 }
 
-function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
+function hash(value: string): string {
+  return `sha256.${createHash("sha256").update(value).digest("hex")}`;
 }
 
 export function validateIssueDispositions(issues: readonly IssueDisposition[]): readonly string[] {

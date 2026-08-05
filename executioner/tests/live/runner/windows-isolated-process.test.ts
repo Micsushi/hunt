@@ -134,13 +134,22 @@ test("a pre-aborted launch confirms wrapper cleanup without waiting for timeout"
   assert.ok(Date.now() - startedAt < 3_000);
 });
 
-test("live:s2 enters through the isolated runner wrapper", async () => {
+test("live:s2 enters through the same-revision gate and its real slice remains isolated", async () => {
   const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
     readonly scripts?: Readonly<Record<string, string>>;
   };
-  assert.equal(packageJson.scripts?.["live:s2"], "node scripts/run-s2-isolated.ts");
+  assert.equal(packageJson.scripts?.["live:s2"], "node scripts/run-s2-acceptance.ts");
+  const gate = await readFile("scripts/run-s2-acceptance.ts", "utf8");
+  assert.match(gate, /executeStage2AcceptanceCli/u);
+  assert.match(gate, /createLocalStage2AcceptancePorts/u);
+  assert.match(gate, /import\.meta\.dirname/u);
+  const local = await readFile("src/acceptance/s2-local.ts", "utf8");
+  assert.match(local, /taskkill\.exe/u);
+  assert.match(local, /"\/PID"[\s\S]*"\/T"[\s\S]*"\/F"/u);
+  assert.doesNotMatch(local, /"\/IM"/u);
   const wrapper = await readFile("scripts/run-s2-isolated.ts", "utf8");
   assert.match(wrapper, /runWindowsIsolatedStage2Acceptance/u);
+  assert.match(wrapper, /run-s2-real/u);
   assert.doesNotMatch(wrapper, /connectOverCDP/u);
 });
 

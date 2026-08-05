@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "fixtureSet": "workday-40",
+  "fixtures": [
+    {
+      "id": "wd-page-auth-action-v1",
+      "path": "wd-page-auth-action-v1.json",
+      "semanticHash": "sha256.6b0479cb7eea3a5d0429e1368f8c7527bbb2256ec099056576f00d6eed09145c",
+      "provingSlots": [
+        "WD40-001",
+        "WD40-002",
+        "WD40-003",
+        "WD40-004",
+        "WD40-005",
+        "WD40-006",
+        "WD40-007",
+        "WD40-008",
+        "WD40-010",
+        "WD40-011",
+        "WD40-012",
+        "WD40-013",
+        "WD40-014",
+        "WD40-015",
+        "WD40-016",
+        "WD40-017",
+        "WD40-018",
+        "WD40-019",
+        "WD40-020",
+        "WD40-022",
+        "WD40-023",
+        "WD40-024",
+        "WD40-025",
+        "WD40-026",
+        "WD40-027",
+        "WD40-028",
+        "WD40-029",
+        "WD40-030",
+        "WD40-031",
+        "WD40-032",
+        "WD40-033",
+        "WD40-034",
+        "WD40-035",
+        "WD40-036",
+        "WD40-037",
+        "WD40-038",
+        "WD40-039",
+        "WD40-040"
+      ],
+      "variantIds": [
+        "WD-PAGE-AUTH-ACTION-V1"
+      ],
+      "captureRevision": "legacy-v2-20260723"
+    },
+    {
+      "id": "wd-page-external-state-v1",
+      "path": "wd-page-external-state-v1.json",
+      "semanticHash": "sha256.ae067b70ab976b95fe2c451e37ed494d8616fc6305fc3f8f3e2cfd882ff32cae",
+      "provingSlots": [
+        "WD40-001",
+        "WD40-003",
+        "WD40-005",
+        "WD40-007",
+        "WD40-014",
+        "WD40-022",
+        "WD40-026",
+        "WD40-028",
+        "WD40-033",
+        "WD40-035",
+        "WD40-037"
+      ],
+      "variantIds": [
+        "WD-PAGE-EXTERNAL-STATE-V1"
+      ],
+      "captureRevision": "legacy-v2-20260723"
+    },
+    {
+      "id": "wd-ui-scalar-composite-v1",
+      "path": "wd-ui-scalar-composite-v1.json",
+      "semanticHash": "sha256.720d8ffd931fd9255304a1eb8a57a3285d9cf3f11f76f065dded6ef96eb454e6",
+      "provingSlots": [
+        "WD40-007"
+      ],
+      "variantIds": [
+        "WD-UI-SCALAR-COMPOSITE-V1"
+      ],
+      "captureRevision": "legacy-v2-20260514"
+    },
+    {
+      "id": "wd-ui-source-select-v1",
+      "path": "wd-ui-source-select-v1.json",
+      "semanticHash": "sha256.08cc212000db98025bba5d57c72c707bbcd96bd1b2e20add24b2eeae95de49fb",
+      "provingSlots": [
+        "WD40-002",
+        "WD40-007"
+      ],
+      "variantIds": [
+        "WD-UI-SOURCE-SELECT-V1"
+      ],
+      "captureRevision": "legacy-v2-20260514"
+    }
+  ],
+  "freeze": {
+    "algorithm": "sha256",
+    "digest": "sha256.26bd91f5cd752e922457a96e769afaf1171f711214459b82ccb84710a3f82ce4"
+  }
+}

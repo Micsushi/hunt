@@ -5,8 +5,8 @@ Status: frozen
 The accepted Stage 1 base is
 `87c77e538d8bba378ec93516dbea3f4747beb822`. The machine-readable Stage 2
 contract source is
-`100b6bbf360f2c2e3cd93384e1fba7c115a92f15`, with exact tree
-`13a8406e9c296b77aead3a0f961beba1110fba61`. The machine-readable Stage 2
+`16c48bd1470addc9d9480d785ae84e412edd55ef`, with exact tree
+`d9643fcac18a79d9506e68cbeebb1ba200809e64`. The machine-readable Stage 2
 record is `docs/s2-contract-revision.json`. It freezes the Git tree object IDs
 for the complete contract surface, live contract subset, F9 live coordinator,
 deterministic live test kit, live contract tests, and offline walking
@@ -40,9 +40,9 @@ The manifest contains no live URL, account, mailbox, secret, profile, target
 token, or provider payload. It does not authorize provider access, deployment,
 publication, or final application submission.
 
-The current uncommitted availability-classification work is an authorized,
-compatible contract addition but is not yet a replacement freeze. It adds the
-`maintenance` and `runtime_error` posting-unavailability reasons and therefore intentionally leaves
-the clean-frozen-root gate failing until commit authority permits a new contract
-source commit and replacement tree object IDs. Do not weaken the gate or claim
-the old manifest covers the dirty amendment.
+This replacement freeze accepts the preserved integration at
+`16c48bd1470addc9d9480d785ae84e412edd55ef`. The compatible contract delta adds
+the `maintenance` and `runtime_error` posting-unavailability reasons without a
+wire-version change. The integration manifest also pins the protected replay
+ledger and storage lifecycle repairs in the current F2 composition. Exact tree
+object IDs replace the prior freeze; the clean-root gate remains mandatory.

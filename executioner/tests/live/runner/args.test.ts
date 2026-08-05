@@ -40,6 +40,22 @@ test("account-verified CLI accepts the same exact bounded flag set", () => {
   ]), { checkpoint: "account_verified", configPath: config, evidenceRoot: evidence });
 });
 
+for (const checkpoint of [
+  "resume_verified",
+  "profile_verified",
+  "questionnaire_verified",
+  "pre_review",
+] as const) {
+  test(`application CLI admits the ${checkpoint} checkpoint`, () => {
+    const { config, evidence } = storageLayout("abcdefghijklmnop");
+    assert.deepEqual(parseStage2AcceptanceArgs([
+      "--config", config,
+      "--stop-after", checkpoint,
+      "--evidence-root", evidence,
+    ]), { checkpoint, configPath: config, evidenceRoot: evidence });
+  });
+}
+
 test("account-access CLI rejects missing, duplicate, relative, and widened arguments", () => {
   const { config, evidence } = storageLayout("abcdefghijklmnop");
   const otherEvidence = storageLayout("qrstuvwxyzabcdef").evidence;

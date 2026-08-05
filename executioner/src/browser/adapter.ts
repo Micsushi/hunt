@@ -16,11 +16,13 @@ import {
 } from "../contracts/index.ts";
 
 const controlSelector = [
+  '[data-automation-id="dateSection"][data-hunt-target-token]',
   "fieldset[data-hunt-target-token]",
   'input:not([type="hidden"])',
   "textarea",
   "select",
   "button",
+  '[role="combobox"][data-hunt-target-token]',
   '[role="listbox"]',
   '[role="button"]',
 ].join(",");
@@ -36,6 +38,7 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
+  readonly interaction?: "owned-popup" | "composite-date";
 }
 
 export interface ResolvedBrowserTarget extends RawControl {
@@ -63,6 +66,7 @@ export async function inspectPage(
   const observations: BrowserObservation["targets"][number][] = [];
 
   for (const item of raw) {
+    if (item.declaredToken.length === 0) continue;
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
     const control = normalizeControl(item.control);
     const name = bounded(item.name);
@@ -197,13 +201,46 @@ export async function applyMutation(
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
     await locator.fill(mutation.text, { timeout: timeoutMs });
+    await locator.blur({ timeout: timeoutMs });
     return "applied";
   }
   if (mutation.kind === "set_date") {
     if (target.control.kind !== "date" || !/^\d{4}-\d{2}-\d{2}$/u.test(mutation.isoDate)) {
       return "invalid";
     }
+    if (target.interaction === "composite-date") {
+      const parts = [
+        ["dateSectionMonth", mutation.isoDate.slice(5, 7)],
+        ["dateSectionDay", mutation.isoDate.slice(8, 10)],
+        ["dateSectionYear", mutation.isoDate.slice(0, 4)],
+      ] as const;
+      const locators = parts.map(([automationId]) =>
+        locator.locator(`[data-automation-id="${automationId}"]`)
+      );
+      const ready = await Promise.all(locators.map(async (part) =>
+        await part.count() === 1 && await part.isVisible() && await part.isEditable()
+      ));
+      if (ready.some((value) => !value)) {
+        return "invalid";
+      }
+      const previous = await Promise.all(locators.map((part) => part.inputValue()));
+      try {
+        for (const [index, part] of locators.entries()) {
+          await part.fill(parts[index]![1], { timeout: timeoutMs });
+        }
+        await locators[2]!.blur({ timeout: timeoutMs });
+      } catch {
+        for (const [index, part] of locators.entries()) {
+          if (await part.count() === 1 && await part.isEditable()) {
+            await part.fill(previous[index]!, { timeout: timeoutMs }).catch(() => undefined);
+          }
+        }
+        return "invalid";
+      }
+      return "applied";
+    }
     await locator.fill(mutation.isoDate, { timeout: timeoutMs });
+    await locator.blur({ timeout: timeoutMs });
     return "applied";
   }
   if (mutation.kind === "set_checked") {
@@ -228,15 +265,42 @@ export async function applyMutation(
     }
     if (target.control.kind !== "select") return "invalid";
     const matches = target.control.options.filter((option) => option === mutation.option);
-    if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
+    if (target.interaction !== "owned-popup" && matches.length !== 1) {
+      return matches.length === 0 ? "invalid" : "ambiguous";
+    }
     if (target.control.element === "select") {
       await locator.selectOption({ label: mutation.option }, { timeout: timeoutMs });
       return "applied";
     }
-    const options = locator.getByRole("option", { name: mutation.option, exact: true });
-    const count = await options.count();
-    if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
-    await options.click({ timeout: timeoutMs });
+    let optionOwner = target.interaction === "owned-popup"
+      ? await ownedPopup(page, locator)
+      : locator;
+    const searchable = target.interaction === "owned-popup" &&
+      await locator.evaluate((element) => element instanceof HTMLInputElement);
+    if (
+      target.interaction === "owned-popup" &&
+      (optionOwner === undefined || (!searchable && !await optionOwner.isVisible()))
+    ) {
+      await locator.click({ timeout: timeoutMs });
+      optionOwner = await waitForOwnedPopup(page, locator, timeoutMs);
+    }
+    if (optionOwner === undefined) return "invalid";
+    let exact = await exactOwnedOption(optionOwner, mutation.option);
+    let previousSearch: string | undefined;
+    if (exact.count === 0 && target.interaction === "owned-popup") {
+      if (searchable) {
+        previousSearch = await locator.inputValue();
+        await locator.fill(mutation.option, { timeout: timeoutMs });
+        exact = await waitForExactOwnedOption(page, optionOwner, mutation.option, timeoutMs);
+      }
+    } else if (exact.count === 0) {
+      exact = await waitForExactOwnedOption(page, optionOwner, mutation.option, timeoutMs);
+    }
+    if (exact.count !== 1 || exact.locator === undefined) {
+      if (previousSearch !== undefined) await locator.fill(previousSearch, { timeout: timeoutMs });
+      return exact.count === 0 ? "invalid" : "ambiguous";
+    }
+    await exact.locator.click({ timeout: timeoutMs });
     return "applied";
   }
   if (target.control.kind !== "file" || upload === undefined) return "invalid";
@@ -301,7 +365,48 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       const aria = normalize(parentGroup?.getAttribute("aria-label"));
       return aria.length > 0 ? aria : normalize(input.name);
     };
+    const ownedListboxId = (element: Element): string | undefined => {
+      const ids = [element.getAttribute("aria-controls"), element.getAttribute("aria-owns")]
+        .flatMap((value) => value?.split(/\s+/u) ?? [])
+        .filter((id) => /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id));
+      const unique = [...new Set(ids)];
+      return unique.length === 1 ? unique[0] : undefined;
+    };
+    const ownedListbox = (element: Element): Element | undefined => {
+      const id = ownedListboxId(element);
+      const candidate = id === undefined ? null : document.getElementById(id);
+      return candidate?.getAttribute("role") === "listbox" ? candidate : undefined;
+    };
+    const selectedPopupLabel = (element: Element): string => {
+      const declared = normalize(element.getAttribute("aria-valuetext"));
+      if (declared.length > 0) return declared;
+      const field = element.closest('[data-automation-id="formField"]');
+      const selected = field === null
+        ? []
+        : [...field.querySelectorAll('[data-automation-id="selectedItem"]')]
+          .map((item) => normalize(item.textContent))
+          .filter(Boolean);
+      if (selected.length === 1) return selected[0]!;
+      const popupSelected = [...(ownedListbox(element)?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])]
+        .map((item) => normalize(item.textContent)).filter(Boolean);
+      return popupSelected.length === 1 ? popupSelected[0]! : "";
+    };
+    const compositeDateReadback = (element: Element): BrowserReadback => {
+      const selectors = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"];
+      const controls = selectors.map((id) => [...element.querySelectorAll<HTMLInputElement>(`[data-automation-id="${id}"]`)]);
+      if (controls.some((matches) => matches.length !== 1)) return { kind: "unavailable" };
+      const [month, day, year] = controls.map((matches) => normalize(matches[0]!.value));
+      if (month === "" && day === "" && year === "") return { kind: "empty" };
+      if (!/^\d{2}$/u.test(month!) || !/^\d{2}$/u.test(day!) || !/^\d{4}$/u.test(year!)) return { kind: "unavailable" };
+      const isoDate = `${year}-${month}-${day}`;
+      const date = new Date(`${isoDate}T00:00:00.000Z`);
+      return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === isoDate
+        ? { kind: "text", value: isoDate as never }
+        : { kind: "unavailable" };
+    };
     return elements.flatMap((element, index) => {
+      const compositeOwner = element.closest('[data-automation-id="dateSection"][data-hunt-target-token]');
+      if (compositeOwner !== null && compositeOwner !== element) return [];
       if (
         element instanceof HTMLInputElement &&
         element.type === "radio" &&
@@ -314,7 +419,20 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
-      if (element instanceof HTMLFieldSetElement) {
+      let interaction: "owned-popup" | "composite-date" | undefined;
+      if (element.getAttribute("data-automation-id") === "dateSection") {
+        control = { kind: "date", element: "input" };
+        readback = compositeDateReadback(element);
+        interaction = "composite-date";
+      } else if (element.getAttribute("role") === "combobox") {
+        if (ownedListboxId(element) === undefined) return [];
+        const options = [...(ownedListbox(element)?.querySelectorAll("[role=option]") ?? [])]
+          .map((option) => normalize(option.textContent)).filter(Boolean) as never[];
+        control = { kind: "select", element: "listbox", options };
+        const selected = selectedPopupLabel(element);
+        readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
+        interaction = "owned-popup";
+      } else if (element instanceof HTMLFieldSetElement) {
         const radios = [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
         if (radios.length === 0) return [];
         radioOptions = radios.map(nameOf).filter(Boolean);
@@ -387,10 +505,74 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         state,
         readback,
         radioOptions,
+        interaction,
       }];
     });
   });
   return raw as RawControl[];
+}
+
+async function ownedPopup(page: Page, control: Locator): Promise<Locator | undefined> {
+  const ids = [await control.getAttribute("aria-controls"), await control.getAttribute("aria-owns")]
+    .flatMap((value) => value?.split(/\s+/u) ?? [])
+    .filter((id) => /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id));
+  const unique = [...new Set(ids)];
+  if (unique.length !== 1) return undefined;
+  const popup = page.locator(`[id="${unique[0]}"][role="listbox"]`);
+  return await popup.count() === 1 ? popup : undefined;
+}
+
+async function waitForOwnedPopup(
+  page: Page,
+  control: Locator,
+  timeoutMs: number,
+): Promise<Locator | undefined> {
+  const ids = [await control.getAttribute("aria-controls"), await control.getAttribute("aria-owns")]
+    .flatMap((value) => value?.split(/\s+/u) ?? [])
+    .filter((id) => /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id));
+  const unique = [...new Set(ids)];
+  if (unique.length !== 1) return undefined;
+  const popup = page.locator(`[id="${unique[0]}"][role="listbox"]`);
+  try {
+    await popup.waitFor({ state: "attached", timeout: timeoutMs });
+  } catch {
+    return undefined;
+  }
+  return await popup.count() === 1 ? popup : undefined;
+}
+
+async function exactOwnedOption(
+  owner: Locator,
+  option: string,
+): Promise<{ readonly count: number; readonly locator?: Locator }> {
+  const exact = owner.getByRole("option", { name: option, exact: true });
+  const candidates = await exact.evaluateAll((elements) =>
+    elements.map((element, index) => ({
+      index,
+      leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
+    })),
+  );
+  const leaves = candidates.filter(({ leaf }) => leaf);
+  const owned = leaves.length > 0 ? leaves : candidates;
+  return {
+    count: owned.length,
+    ...(owned.length === 1 ? { locator: exact.nth(owned[0]!.index) } : {}),
+  };
+}
+
+async function waitForExactOwnedOption(
+  page: Page,
+  owner: Locator,
+  option: string,
+  timeoutMs: number,
+): Promise<{ readonly count: number; readonly locator?: Locator }> {
+  const deadline = Date.now() + timeoutMs;
+  let exact = await exactOwnedOption(owner, option);
+  while (exact.count === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
+    exact = await exactOwnedOption(owner, option);
+  }
+  return exact;
 }
 
 function bounded(value: string) {

@@ -1,19 +1,27 @@
 # S3-F4 acceptance summary
 
-The local acceptance implementation covers immutable freeze identities,
-fixture-first sequential reconciliation, bounded retry and restart, sealed
-browser-truth comparison, privacy and issue gates, and an allowlisted local
-package with SBOM and checksum.
+S3-F4 freezes the accepted Workday 40-slot manifest, four accepted page/UI
+fixtures, variant map, declarations, source reconciliation, package lock,
+runtime configuration, and exact contract-impact record:
 
-The checked-in 40-slot manifest and adapters are synthetic substitutes for the
-unavailable S3-F1/F2/F3 lane artifacts. A successful local report is therefore
-`accepted_fixture` with `liveCorpusCertified: false`. No real 40-job corpus,
-account, mailbox, Workday browser, or final Submit action is certified by this
-result.
+`sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd`
 
-Live-corpus acceptance remains blocked until accepted upstream providers and
-the frozen prior-corpus manifest are integrated. That integration must create a
-new clean revision and freeze. It may not relabel or reuse synthetic evidence.
+The prerequisite is accepted `S3-F2-T13`. All twelve S3-F3 tasks remain
+`not-activated` with zero variant, fixture, and slot evidence. Freeze and audit
+fail if any dormant semantic command, catalog, production module, or synthetic
+fixture is present.
 
-Tier 3 publication and Tier 4 owner testing remain separate, owner-controlled
-steps. See `corpus-release.md` and `owner-test-backlog.md`.
+Acceptance runs the four accepted structural fixtures first. It then seals an
+offline reconciliation of `WD40-001` through `WD40-040` against the frozen
+manifest and variant evidence. Thirty-eight slots have activated fixture
+variants. `WD40-009` and `WD40-021` are retained manifest slots with no
+activated variant. No per-slot browser outcome is invented.
+
+A passing report is `accepted_fixture` with
+`truthKind: offline_fixture_artifacts`, `liveCorpusCertified: false`, and
+`liveReviewCertified: false`. It does not certify a live Workday corpus,
+account, mailbox, application completion, or Review result.
+
+Stage 2 deterministic Tier 2 composition is accepted. Its owned live
+Playwright application, recovery, and Review adapter remains separate work.
+Final Submit is forbidden and absent from the MCP surface.

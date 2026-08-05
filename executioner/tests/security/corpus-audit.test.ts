@@ -4,10 +4,15 @@ import { test } from "node:test";
 
 import { runStaticCorpusAudit, validateIssueDispositions } from "../../src/corpus/audit/index.ts";
 
+const impactSha =
+  "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd";
+
 test("corpus audit preserves privacy, MCP capability, and module-size gates", async () => {
   const report = await runStaticCorpusAudit(resolve("."));
 
   assert.equal(report.status, "passed");
+  assert.equal(report.acceptedImpactSha, impactSha);
+  assert.deepEqual(report.dormantF3Artifacts, []);
   assert.deepEqual(report.privacyViolations, []);
   assert.deepEqual(report.exposedCapabilities, [
     "cancel_journey",

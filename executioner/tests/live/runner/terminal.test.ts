@@ -44,6 +44,17 @@ test("terminal output admits account-verified success without account or mailbox
   }), '{"status":"passed","checkpoint":"account_verified","sourceRevision":"0123456789abcdef0123456789abcdef01234567","revisionId":"revision_abcdefghijklmnop"}\n');
 });
 
+test("terminal output admits pre-Review success without application values", () => {
+  assert.equal(formatStage2TerminalResult({
+    ok: true,
+    acceptance: {
+      checkpoint: "pre_review",
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      revisionId: "revision_abcdefghijklmnop",
+    },
+  }), '{"status":"passed","checkpoint":"pre_review","sourceRevision":"0123456789abcdef0123456789abcdef01234567","revisionId":"revision_abcdefghijklmnop"}\n');
+});
+
 test("terminal output preserves only a bounded account-verification fact", () => {
   assert.equal(formatStage2TerminalResult({
     ok: false,

@@ -5,6 +5,8 @@
     "src/account/lifecycle/lifecycle.ts": { "disposition": "Retain the established lifecycle state machine.", "regressionImpact": "Covered by lifecycle, outcome, and receipt suites." },
     "src/browser/playwright-live/private/playwright-account-page.ts": { "disposition": "Retain the established page adapter boundary.", "regressionImpact": "Covered by live adapter and page tests." },
     "src/browser/playwright-live/session.ts": { "disposition": "Retain the established session ownership boundary.", "regressionImpact": "Covered by session, browser, and walking-skeleton suites." },
+    "src/browser/adapter.ts": { "disposition": "Retain the accepted S3 page and UI behavior adapter boundary.", "regressionImpact": "Covered by accepted S3 variant and browser adapter suites." },
+    "src/ats/workday/application/profile/handler.ts": { "disposition": "Retain the accepted Stage 2 profile handler boundary.", "regressionImpact": "Covered by profile handler, browser fixture, and application-walk suites." },
     "src/composition/private/s2-run-storage.ts": { "disposition": "Retain the established storage transaction boundary.", "regressionImpact": "Covered by storage and completion audit suites." },
     "src/composition/s2-account-verified-runner.ts": { "disposition": "Retain the established verified journey composition.", "regressionImpact": "Covered by verified runner and completion suites." },
     "src/composition/s2-gmail-bootstrap.ts": { "disposition": "Retain the established mailbox bootstrap boundary.", "regressionImpact": "Covered by bootstrap, privacy, and binding suites." },
@@ -21,6 +23,8 @@
     "src/testing/contracts/operation-cases.ts": { "disposition": "Retain the executable operation catalog together.", "regressionImpact": "Covered by operation, conformance, and component suites." },
     "src/testing/contracts/scenarios.ts": { "disposition": "Retain canonical contract scenarios together.", "regressionImpact": "Covered by conformance and stateful scenario suites." },
     "src/control/orchestrator/loop/index.ts": { "disposition": "Retain the established single journey loop boundary.", "regressionImpact": "Covered by page-loop, recovery, and race suites." },
-    "src/control/orchestrator/terminal/index.ts": { "disposition": "Retain terminal projection in its frozen owner.", "regressionImpact": "Covered by terminal, reporting, and progress suites." }
+    "src/control/orchestrator/terminal/index.ts": { "disposition": "Retain terminal projection in its frozen owner.", "regressionImpact": "Covered by terminal, reporting, and progress suites." },
+    "src/corpus/acceptance/index.ts": { "disposition": "Retain offline fixture execution, reconciliation, ledger, and report validation in one acceptance boundary.", "regressionImpact": "Covered by frozen acceptance, recovery, seal, and drift suites." },
+    "src/corpus/freeze/index.ts": { "disposition": "Retain accepted-source validation, dormant-F3 exclusion, hashing, and bundle sealing in one freeze boundary.", "regressionImpact": "Covered by accepted impact, dormancy, drift, and immutable bundle suites." }
   }
 }

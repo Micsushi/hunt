@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <main data-automation-id="applyFlowMyInfoPage">
+      <section data-automation-id="formField-resume">
+        <h2>Resume/CV</h2>
+        <label>
+          Upload a file
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            data-automation-id="file-upload-input-ref"
+            required
+          >
+        </label>
+        <div data-automation-id="file-upload-list"></div>
+        <div data-automation-id="file-upload-error" role="alert">
+          A file is required.
+        </div>
+      </section>
+    </main>
+    <script>
+      globalThis.uploadEffects = 0;
+      globalThis.deleteEffects = 0;
+      const input = document.querySelector('[data-automation-id="file-upload-input-ref"]');
+      const list = document.querySelector('[data-automation-id="file-upload-list"]');
+      const error = document.querySelector('[data-automation-id="file-upload-error"]');
+      input.addEventListener("change", () => {
+        globalThis.uploadEffects += 1;
+        list.replaceChildren();
+        if (input.files.length !== 1) return;
+        const item = document.createElement("div");
+        item.dataset.automationId = "file-upload-item";
+        item.dataset.uploadState = "success";
+        const success = document.createElement("span");
+        success.dataset.automationId = "file-upload-success";
+        success.textContent = "Upload complete";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.dataset.automationId = "delete-file";
+        remove.setAttribute("aria-label", "Delete Resume");
+        remove.textContent = "Delete";
+        remove.addEventListener("click", () => {
+          globalThis.deleteEffects += 1;
+          input.value = "";
+          item.remove();
+          error.hidden = false;
+        });
+        item.append(success, remove);
+        list.append(item);
+        error.hidden = true;
+      });
+    </script>
+  </body>
+</html>

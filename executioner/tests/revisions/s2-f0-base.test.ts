@@ -30,15 +30,15 @@ test("the Stage 2 F0 manifest freezes exact trees, versions, and adapters", () =
     s2ContractSourceTree,
     contractTreeOids: {
       "executioner/src/contracts":
-        "e263d7e127f9321dae8d62a0ccd0a33cd08e1d74",
+        "ad9f5a43e0bbe0e79661784dabf28b15b18e9ad8",
       "executioner/src/contracts/live":
-        "aa51ec15d16ed6049698475e3d3a368e332a9dc3",
+        "ac3971aae2a1ceb3703b0f8c8f171c884c4059d9",
       "executioner/src/control/orchestrator/live":
-        "34d1f754a0401945e8a25201206faa9813acf33c",
+        "6b38b5dee5a63989719045ef0de22df2a3f50590",
       "executioner/src/testing/live":
         "377d167ace83fa4d95798c221f4f776d86f209ac",
       "executioner/tests/live/contracts":
-        "ebf3738a6ec685b9222eab45986a72adbaa8c19b",
+        "31e36671a53a677207e3ffe36607edc5ca806752",
       "executioner/tests/live/walking-skeleton":
         "745b301fcc177e7feeefc1d65eb521a56a3d2292",
     },
