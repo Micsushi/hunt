@@ -274,6 +274,9 @@ owns one page, exposes only closed non-Submit operations, independently verifies
 exact Review field, value, and provenance bindings for the admitted dotted
 field-ID grammar, and revokes owner-source access on failed open and during
 cleanup.
+After terminal acceptance, suspension, normal close, or failed cleanup, the
+returned runtime retains only the value-free binding primitives needed by its
+closed ports, not the raw owner-source graph.
 Real proof is still owner-input blocked until the operator supplies an approved
 current owner config, immutable profile and resume sources, a valid account and
 session, and a protected evidence destination. Do not replace those inputs with

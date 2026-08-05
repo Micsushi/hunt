@@ -14,6 +14,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type {
@@ -714,6 +716,26 @@ for (const orphan of ["reconciliation", "partial"] as const) {
   });
 }
 
+for (const scenario of [
+  "terminal_accepted",
+  "suspend",
+  "close_default",
+  "cleanup_failure",
+  "cleanup_exception",
+  "mutation_exception",
+  "failed_open",
+  "factory_exception",
+] as const) {
+  test(`production binding releases owner sources after ${scenario.replaceAll("_", " ")}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-lifecycle-${scenario}-`));
+    try {
+      await proveOwnerSourcesReleased(root, scenario);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 class FixtureProfiles {
   marker: unknown;
 
@@ -884,6 +906,125 @@ function closedRecoveryBrowser(page: "resume" | "profile" | "questionnaire" | "p
     },
   };
 }
+
+type LifecycleScenario =
+  | "terminal_accepted"
+  | "suspend"
+  | "close_default"
+  | "cleanup_failure"
+  | "cleanup_exception"
+  | "mutation_exception"
+  | "failed_open"
+  | "factory_exception";
+
+async function proveOwnerSourcesReleased(
+  root: string,
+  scenario: LifecycleScenario,
+): Promise<void> {
+  let ownerSources: object | undefined = { sensitiveValues: ["private-owner-value"] };
+  const reference = new WeakRef(ownerSources);
+  const browser = lifecycleBrowser(scenario);
+  let runtime: Awaited<ReturnType<ReturnType<typeof createStage2PlaywrightLiveRuntimeBinding>["bind"]>> |
+    undefined;
+  try {
+    runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: scenario === "factory_exception"
+        ? () => { throw new Error("synthetic factory exception"); }
+        : () => browser,
+      now: () => "2026-08-05T12:00:00.000Z",
+      nextOperationId: operationIds(900),
+      timeoutMs: 100,
+    }).bind({
+      owner: owner(root, "https://fixture.invalid/application-questions"),
+      ownerBinding: {} as never,
+      ownerSources: ownerSources as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+  } catch (error) {
+    if (scenario !== "failed_open" && scenario !== "factory_exception") throw error;
+  } finally {
+    ownerSources = undefined;
+  }
+
+  if (scenario === "failed_open" || scenario === "factory_exception") {
+    assert.equal(runtime, undefined);
+  } else {
+    assert.notEqual(runtime, undefined);
+    if (runtime === undefined) return;
+    if (scenario === "terminal_accepted") {
+      assert.equal(await runtime.cleanup.close(new AbortController().signal, true), true);
+    } else if (scenario === "suspend") {
+      assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
+    } else if (scenario === "close_default") {
+      assert.equal(await runtime.cleanup.close(new AbortController().signal), true);
+    } else if (scenario === "cleanup_failure") {
+      assert.equal(await runtime.cleanup.close(new AbortController().signal), false);
+    } else if (scenario === "cleanup_exception") {
+      await assert.rejects(() => runtime!.cleanup.close(new AbortController().signal));
+    } else {
+      await assert.rejects(() => runtime!.walk.navigation.next({
+        journeyId: journeyId("journey_runtime_fixture_01"),
+        from: "resume",
+        fromPageId: "page-resume" as never,
+        expected: "profile",
+      }, new AbortController().signal));
+      assert.equal(await runtime.cleanup.close(new AbortController().signal), true);
+    }
+  }
+
+  await assertCollected(reference);
+  if (runtime !== undefined) assert.equal(typeof runtime.cleanup.close, "function");
+}
+
+function lifecycleBrowser(scenario: LifecycleScenario) {
+  const browser = closedRecoveryBrowser("resume");
+  return {
+    ...browser,
+    async open(...args: Parameters<typeof browser.open>) {
+      if (scenario === "failed_open") {
+        return {
+          ok: false as const,
+          error: { code: "browser_session_missing" as const, retryable: false as const },
+        };
+      }
+      return browser.open(...args);
+    },
+    async close(...args: Parameters<typeof browser.close>) {
+      if (scenario === "cleanup_failure") {
+        return {
+          ok: false as const,
+          error: { code: "browser_profile_cleanup_failed" as const, retryable: false as const },
+        };
+      }
+      if (scenario === "cleanup_exception") throw new Error("synthetic cleanup exception");
+      return browser.close(...args);
+    },
+    async [ownedApplicationPageAccess](
+      request: unknown,
+      operation: OwnedApplicationOperation,
+    ) {
+      if (scenario === "mutation_exception" && operation.kind === "next") {
+        throw new Error("synthetic mutation exception");
+      }
+      return browser[ownedApplicationPageAccess](request, operation);
+    },
+  };
+}
+
+setFlagsFromString("--expose-gc");
+const forceGarbageCollection = runInNewContext("gc") as () => void;
+
+async function assertCollected(reference: WeakRef<object>): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    forceGarbageCollection();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (reference.deref() === undefined) return;
+  }
+  assert.equal(reference.deref(), undefined, "returned runtime retained owner sources");
+}
+
 function owner(root: string, url: string) {
   return {
     journeyId: "journey_runtime_fixture_01",

@@ -120,9 +120,10 @@ export function createStage2PlaywrightLiveRuntimeBinding(
     ) {
       if (signal.aborted) throw new TypeError("Playwright runtime binding denied");
       const target = targetFor(request);
+      const revisionId = request.owner.revisionId;
       const store = new RecoveryFileStore(
         request.owner.roots.runtime.path,
-        `${request.owner.revisionId}.recovery.json`,
+        `${revisionId}.recovery.json`,
         recoveryScopeFor(request, target),
       );
       const initialRecovery = store.load();
@@ -208,7 +209,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           const state: RecoveryCheckpoint = Object.freeze({
             schemaVersion: 1,
             journeyId: session.journeyId,
-            sourceRevision: request.owner.revisionId as never,
+            sourceRevision: revisionId as never,
             revision: checkpointRevision + 1,
             target,
             page: Object.freeze({
@@ -255,7 +256,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
               input: Object.freeze({
                 schemaVersion: 1 as const,
                 journeyId: session.journeyId,
-                sourceRevision: request.owner.revisionId as never,
+                sourceRevision: revisionId as never,
                 expectedTarget: target,
                 operationId: nextOperationId(),
                 interruption: Object.freeze({
