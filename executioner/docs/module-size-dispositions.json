@@ -3,6 +3,7 @@
   "modules": {
     "src/account/entry/adapter.ts": { "disposition": "Retain the established account entry boundary.", "regressionImpact": "Covered by account entry and composition suites." },
     "src/account/lifecycle/lifecycle.ts": { "disposition": "Retain the established lifecycle state machine.", "regressionImpact": "Covered by lifecycle, outcome, and receipt suites." },
+    "src/acceptance/s2-playwright-runtime.ts": { "disposition": "Retain the owned Stage 2 application, recovery, Review, privacy, and cleanup binding as one fail-closed runtime boundary.", "regressionImpact": "Covered by Stage 2 Playwright runtime, persistent browser, session, recovery, Review, privacy, and acceptance suites." },
     "src/browser/playwright-live/private/playwright-account-page.ts": { "disposition": "Retain the established page adapter boundary.", "regressionImpact": "Covered by live adapter and page tests." },
     "src/browser/playwright-live/session.ts": { "disposition": "Retain the established session ownership boundary.", "regressionImpact": "Covered by session, browser, and walking-skeleton suites." },
     "src/browser/adapter.ts": { "disposition": "Retain the accepted S3 page and UI behavior adapter boundary.", "regressionImpact": "Covered by accepted S3 variant and browser adapter suites." },

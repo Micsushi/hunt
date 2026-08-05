@@ -57,6 +57,39 @@ test("owns exactly one page and leaves foreign pages alone", async () => {
   }
 });
 
+test("attached semantic session observes an already-owned page without closing it", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(dataPage(
+    '<label>Name <input required data-hunt-target-token="target-name"></label>',
+    "page-attached",
+  ));
+  const provider = new PlaywrightBrowserSession({
+    attached: {
+      page,
+      sessionId: "browser_session_attached00000001" as never,
+      pageId: "page-attached" as never,
+    },
+    ids: testIds("unused00000000000"),
+  });
+  try {
+    const observed = await provider.observe({
+      sessionId: "browser_session_attached00000001" as never,
+      pageId: "page-attached" as never,
+    }, new AbortController().signal);
+    assert.equal(observed.ok, true);
+    assert.equal(observed.ok && observed.value.targets.length, 1);
+    assert.deepEqual(await provider.close({
+      sessionId: "browser_session_attached00000001" as never,
+    }, new AbortController().signal), { ok: true, value: undefined });
+    assert.equal(page.isClosed(), false);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("pre-cancelled start is bounded and acquires no page", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();

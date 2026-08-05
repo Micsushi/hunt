@@ -10,7 +10,7 @@ published Tier 3 version. Never click final Workday Submit.
 - [ ] Interrupt one run and confirm restart retains the frozen identity and reruns all four fixtures within the retry bound.
 - [ ] Change one copied input and confirm freeze or acceptance stops on drift.
 - [ ] Inspect the tarball, SBOM, and checksum for account data, applicant data, evidence, fixtures, and runtime files.
-- [ ] After the separate live Playwright adapter is accepted and published, sample available and unavailable Workday journeys without activating final Submit.
+- [ ] With the owned Playwright adapter published, provision approved current owner config, immutable profile and resume sources, a valid account and session, and a protected evidence destination; then sample available and unavailable Workday journeys without activating final Submit.
 - [ ] Confirm no MCP request or browser control can expose or activate final Submit.
 
 Record the published version, result, notes, and limitation beside each item.

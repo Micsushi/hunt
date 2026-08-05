@@ -14,6 +14,7 @@ import type {
   Stage2RealJourneyRuntime,
   Stage2RealJourneyRuntimeBinding,
 } from "./s2-journey.ts";
+import { createStage2PlaywrightLiveRuntimeBinding } from "./s2-playwright-runtime.ts";
 
 export interface Stage2RealJourneyLiveRuntimeBinding {
   bind(
@@ -87,7 +88,7 @@ export function createStage2RealJourneyProductionBinding(
   });
 }
 
-// The immutable owner resolver is concrete. The remaining live-only browser
-// adapter must be supplied by the approved local operator composition.
 export const stage2RealJourneyRuntimeBinding:
-  Stage2RealJourneyRuntimeBinding | undefined = undefined;
+  Stage2RealJourneyRuntimeBinding = createStage2RealJourneyProductionBinding({
+    runtime: createStage2PlaywrightLiveRuntimeBinding(),
+  });

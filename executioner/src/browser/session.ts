@@ -48,6 +48,11 @@ type EffectResult<T> = Promise<
 
 export interface PlaywrightBrowserSessionOptions {
   readonly context?: BrowserContext;
+  readonly attached?: {
+    readonly page: Page;
+    readonly sessionId: BrowserSessionResult["sessionId"];
+    readonly pageId: BrowserSessionResult["pageId"];
+  };
   readonly ids: GeneratedIdAllocator;
   readonly timeoutMs?: number;
 }
@@ -56,6 +61,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   readonly #externalContext: BrowserContext | undefined;
   readonly #ids: GeneratedIdAllocator;
   readonly #timeoutMs: number;
+  readonly #attached: boolean;
   #browser: Browser | undefined;
   #context: BrowserContext | undefined;
   #page: Page | undefined;
@@ -71,9 +77,18 @@ export class PlaywrightBrowserSession implements BrowserSession {
   readonly #navigationOperations = new Set<string>();
 
   constructor(options: PlaywrightBrowserSessionOptions) {
+    if (options.attached !== undefined && options.context !== undefined) {
+      throw new TypeError("attached page cannot be combined with a browser context");
+    }
     this.#externalContext = options.context;
     this.#ids = options.ids;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
+    this.#attached = options.attached !== undefined;
+    if (options.attached !== undefined) {
+      this.#page = options.attached.page;
+      this.#sessionId = options.attached.sessionId;
+      this.#pageId = options.attached.pageId;
+    }
   }
 
   async start(
@@ -81,6 +96,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     signal: AbortSignal,
   ): SessionResult<BrowserSessionResult> {
     if (signal.aborted) return cancelled();
+    if (this.#attached) return failure("browser_page_owned");
     if (this.#invalidated) {
       await this.#releaseOwnedResources();
       this.#invalidated = false;
@@ -349,7 +365,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     this.#uploads.clear();
     this.#mutationOperations.clear();
     this.#navigationOperations.clear();
-    await page?.close().catch(() => undefined);
+    if (!this.#attached) await page?.close().catch(() => undefined);
     if (this.#externalContext === undefined) {
       await context?.close().catch(() => undefined);
       await browser?.close().catch(() => undefined);

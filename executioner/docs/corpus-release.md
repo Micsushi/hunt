@@ -32,9 +32,11 @@ fixtures. Retry is bounded by the frozen configuration. Fixes require a new
 clean commit and bundle path. Never patch a bundle, ledger, or report.
 
 The report can only be `accepted_fixture` or `rejected`. It never claims live
-corpus or live Review certification. The accepted Stage 2 deterministic gate
-does not replace its pending live-only Playwright application/recovery/Review
-adapter.
+corpus or live Review certification. The owned Stage 2 Playwright
+application/recovery/Review adapter is implemented and locally verified, but a
+real Workday proof still requires approved current owner config, immutable
+profile and resume sources, a valid account and session, and a protected
+evidence destination.
 
 `package:build` writes a tarball, CycloneDX SBOM, and SHA-256 checksum under the
 ignored repository `.runtime/c3-package` directory. The allowlist contains

@@ -143,9 +143,12 @@ export function createStage2ApplicationWalkProductionBinding(
         dependencies: Object.freeze({
           ...runtime,
           cleanup: Object.freeze({
-            async close(cleanupSignal: AbortSignal): Promise<boolean> {
+            async close(
+              cleanupSignal: AbortSignal,
+              accepted = false,
+            ): Promise<boolean> {
               try {
-                return await runtime.cleanup.close(cleanupSignal);
+                return await runtime.cleanup.close(cleanupSignal, accepted);
               } finally {
                 disposeOwnerResume(ownerSources);
               }

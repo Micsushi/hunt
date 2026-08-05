@@ -22,6 +22,9 @@ A passing report is `accepted_fixture` with
 `liveReviewCertified: false`. It does not certify a live Workday corpus,
 account, mailbox, application completion, or Review result.
 
-Stage 2 deterministic Tier 2 composition is accepted. Its owned live
-Playwright application, recovery, and Review adapter remains separate work.
-Final Submit is forbidden and absent from the MCP surface.
+Stage 2 deterministic Tier 2 composition and its owned Playwright application,
+recovery, and Review adapter are implemented and locally verified. Real Workday
+proof still requires approved current owner config, immutable profile and resume
+sources, a valid account and session, and a protected evidence destination.
+Stage 3 remains fixture-only. Final Submit is forbidden and absent from the MCP
+surface.

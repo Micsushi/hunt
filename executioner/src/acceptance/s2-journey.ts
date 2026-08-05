@@ -42,7 +42,7 @@ export interface Stage2RealJourneyRuntime {
     forbiddenTokens(signal: AbortSignal): Promise<readonly string[]>;
   };
   readonly cleanup: {
-    close(signal: AbortSignal): Promise<boolean>;
+    close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
   };
 }
 
@@ -97,7 +97,10 @@ export async function runStage2RealJourney(
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
   let cleaned = false;
   try {
-    cleaned = await runtime.cleanup.close(new AbortController().signal);
+    cleaned = await runtime.cleanup.close(
+      new AbortController().signal,
+      pending.ok && !signal.aborted,
+    );
   } catch {
     cleaned = false;
   }

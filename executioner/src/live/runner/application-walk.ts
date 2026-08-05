@@ -30,7 +30,7 @@ export interface Stage2ApplicationWalkDependencies {
   readonly walk: ApplicationWalkDependencies;
   readonly laneAcceptances: Pick<ApplicationLaneAcceptanceCollector, "snapshot">;
   readonly cleanup: {
-    close(signal: AbortSignal): Promise<boolean>;
+    close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
   };
   readonly evidence: ApplicationWalkAcceptanceWriter;
 }

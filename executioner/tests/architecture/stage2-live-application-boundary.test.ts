@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   runStage2ApplicationWalkFromOwnerConfig,
 } from "../../src/composition/s2-application-walk-runner.ts";
+import { stage2RealJourneyRuntimeBinding } from "../../src/acceptance/s2-production-binding.ts";
 
 test("the live CLI routes the outer gate into the bound F3-to-Review composition", async () => {
   const gateSource = await readFile(
@@ -25,6 +26,14 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
   );
   assert.match(production, /createStage2ApplicationWalkProductionBinding/u);
   assert.match(production, /createStage2RealJourneyProductionBinding/u);
+  assert.equal(typeof stage2RealJourneyRuntimeBinding.bind, "function");
+  const runtime = await readFile(
+    new URL("../../src/acceptance/s2-playwright-runtime.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(runtime, /ownedApplicationPageAccess/u);
+  assert.match(runtime, /createPlaywrightPersistentBrowserSession/u);
+  assert.doesNotMatch(runtime, /(?:click|press|activate)[A-Za-z]*(?:Submit|submit)/u);
   const composition = await readFile(
     new URL("../../src/acceptance/s2-journey.ts", import.meta.url),
     "utf8",
@@ -45,7 +54,7 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
   assert.match(slice, /s2-application-walk-runner/u);
 });
 
-test("production composition fails closed until the live application runtime is injected", async () => {
+test("the standalone F3 slice fails closed without an explicitly injected binding", async () => {
   const result = await runStage2ApplicationWalkFromOwnerConfig({
     configPath: "C:\\protected\\transient\\run_20260803_abcdefghijklmnop\\owner-input.json",
     evidenceRoot: "C:\\protected\\retained\\run_20260803_abcdefghijklmnop\\evidence",

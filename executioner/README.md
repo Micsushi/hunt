@@ -253,16 +253,17 @@ browser cleanup. Only a successful exact cleanup permits `acceptance.json`.
 The outer gate then reconciles that file against the captured revision and
 config, writes the acceptance manifest, and finalizes the exact prepared run.
 
-The accepted immutable owner-source resolver is concrete in this composition.
-It captures the protected config, profile plan, configured narrative, and
-single-use resume snapshot, then binds them to the same source, revision,
-approval, journey, target, and opaque references. The remaining live-only
-browser runtime adapter is not yet available. Until it is supplied through the
-production binding, `live:s2` stops with `runtime_binding_failed` before
-browser, recovery, or evidence effects. Do not replace that adapter with raw
-values, paths, environment secrets, or a permissive fallback. Tier 2
-deterministic composition tests remain valid, but this state is not a passing
-real acceptance run.
+The accepted immutable owner-source resolver and owned Playwright runtime are
+concrete in this composition. The resolver captures the protected config,
+profile plan, configured narrative, and single-use resume snapshot, then binds
+them to the same source, revision, approval, journey, target, and opaque
+references. The runtime owns one persistent application page, bounded recovery,
+independent Review observation, sanitized evidence, and cleanup without
+exposing Submit. This implementation is verified locally; it is not itself a
+passing real Workday acceptance run. Real proof still requires a currently
+approved owner config, immutable profile and resume sources, a valid account and
+session, and a protected evidence destination. Do not replace those inputs with
+raw values, environment secrets, or a permissive fallback.
 
 The gate stops on the first failed phase. Stable failures include
 `quality_failed`, `source_changed`, `config_changed`,
@@ -500,7 +501,7 @@ commands, catalogs, modules, or synthetic fixtures.
 Acceptance runs the four accepted fixtures and seals an offline reconciliation
 of `WD40-001` through `WD40-040`. It does not invent per-slot browser outcomes.
 Its report status is `accepted_fixture`; `liveCorpusCertified` and
-`liveReviewCertified` remain false. Stage 2 deterministic Tier 2 is accepted,
-but its live-only Playwright application/recovery/Review adapter remains
-separate work.
+`liveReviewCertified` remain false. The Stage 2 owned Playwright
+application/recovery/Review adapter is implemented and locally verified, but
+no real Workday proof is claimed by this Stage 3 fixture acceptance.
 See `docs/corpus-release.md` and `docs/owner-test-backlog.md`.

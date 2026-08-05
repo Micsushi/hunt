@@ -10,6 +10,10 @@ import type {
   PersistentBrowserSession,
 } from "../../contracts/live/index.ts";
 import { inspectPinnedTarget, reconcileOwnedPages } from "./private/owned-page-inspection.ts";
+import {
+  ownedApplicationPageAccess,
+  type OwnedApplicationPageRequest,
+} from "./private/application-page-types.ts";
 import type {
   OwnedAccountPageAccess,
   OwnedAccountPageAccessRequest,
@@ -71,6 +75,8 @@ export class PlaywrightPersistentBrowserSession
     string,
     { readonly fingerprint: string; readonly result: Promise<AccountEntryAdvancePortResult> }
   >();
+  readonly #applicationPageOperations = new Set<string>();
+  #applicationPageActive = false;
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
     this.#options = options;
@@ -428,6 +434,104 @@ export class PlaywrightPersistentBrowserSession
     use: (access: OwnedAccountPageAccess) => Promise<void>,
   ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
     return this.#accountAccess.withAccess(request, signal, use);
+  }
+
+  /**
+   * Runs one bounded application operation against the exact pinned page.
+   * The page authority exists only for the callback lifetime and is checked
+   * immediately before and after use. No terminal action is surfaced by this
+   * session API.
+   */
+  async [ownedApplicationPageAccess]<Value>(
+    request: OwnedApplicationPageRequest,
+    signal: AbortSignal,
+    use: (page: PersistentPage) => Promise<Value>,
+  ): Promise<LivePortResult<Value, PersistentBrowserErrorCode>> {
+    if (signal.aborted) return cancelled();
+    if (
+      this.#applicationPageActive ||
+      this.#applicationPageOperations.has(request.operationId)
+    ) return failure("browser_operation_replayed");
+    const now = Date.parse(request.now);
+    if (
+      request.schemaVersion !== 1 ||
+      (request.effect !== "read" && request.effect !== "mutation") ||
+      this.#page === undefined ||
+      this.#page.isClosed() ||
+      this.#session === undefined ||
+      this.#approvedTarget === undefined ||
+      this.#marker === undefined ||
+      request.journeyId !== this.#session.journeyId ||
+      request.sessionId !== this.#session.sessionId ||
+      !sameTarget(request.target, this.#session.target) ||
+      request.journeyId !== this.#marker.journeyId ||
+      request.sessionId !== this.#marker.sessionId ||
+      !sameTarget(request.target, this.#marker.target) ||
+      !Number.isFinite(now) ||
+      now < Date.parse(this.#marker.admittedAt) ||
+      now >= Date.parse(this.#session.leaseExpiresAt)
+    ) return failure("browser_session_missing");
+
+    const page = this.#page;
+    const approvedTarget = this.#approvedTarget;
+    const before = await inspectPinnedTarget(
+      page,
+      this.#options.probe,
+      approvedTarget,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!before.ok) return before;
+    if (before.value.target.kind !== "matched") {
+      return failure("browser_target_invalid");
+    }
+
+    this.#applicationPageActive = true;
+    this.#applicationPageOperations.add(request.operationId);
+    try {
+      const result = await bounded(use(page), signal, this.#options.timeoutMs);
+      if (result.kind !== "value") {
+        if (request.effect === "mutation") {
+          await this.#invalidateAccountSession();
+          return failure("browser_effect_uncertain");
+        }
+        return result.kind === "cancelled"
+          ? cancelled()
+          : failure(result.kind === "timeout"
+            ? "browser_timeout"
+            : "browser_target_stale");
+      }
+      const current = this.#page === page &&
+        this.#approvedTarget === approvedTarget &&
+        this.#session?.sessionId === request.sessionId;
+      const after = current
+        ? await inspectPinnedTarget(
+            page,
+            this.#options.probe,
+            approvedTarget,
+            request.target,
+            signal,
+            this.#options.timeoutMs,
+          )
+        : failure("browser_session_invalidated");
+      if (!after.ok || after.value.target.kind !== "matched") {
+        if (request.effect === "mutation") {
+          await this.#invalidateAccountSession();
+          return failure("browser_effect_uncertain");
+        }
+        return failure("browser_session_invalidated");
+      }
+      return { ok: true, value: result.value };
+    } catch {
+      if (request.effect === "mutation") {
+        await this.#invalidateAccountSession();
+        return failure("browser_effect_uncertain");
+      }
+      return failure("browser_target_stale");
+    } finally {
+      this.#applicationPageActive = false;
+    }
   }
 
   async withOwnedVerificationNavigationAccess(

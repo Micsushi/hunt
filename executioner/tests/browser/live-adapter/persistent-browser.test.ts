@@ -10,6 +10,7 @@ import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
 import type { OwnedTargetObservation } from "../../../src/browser/playwright-live/private/types.ts";
+import { ownedApplicationPageAccess } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 
 test("opens one exact page through an isolated persistent context", async () => {
   const pages: FakePage[] = [];
@@ -93,6 +94,97 @@ test("private owned-session inspection returns only a value-free structural snap
   for (const forbidden of ["page", "url", "origin", "path", "text", "html"]) {
     assert.equal(serialized.toLowerCase().includes(forbidden), false, forbidden);
   }
+});
+
+test("scoped application access reuses the pinned page and revalidates ownership", async () => {
+  const pages: FakePage[] = [];
+  const context = new FakeContext(pages);
+  let inspections = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        inspections += 1;
+        return ownedMatched();
+      },
+    },
+    profiles: new MemoryProfiles(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  let accessed: unknown;
+  const result = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_application_read_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+    effect: "read",
+  }, new AbortController().signal, async (page) => {
+    accessed = page;
+    return Object.freeze({ pageKind: "questionnaire" as const });
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { pageKind: "questionnaire" },
+  });
+  assert.equal(accessed, pages[0]);
+  assert.equal(inspections, 3); // open, pre-access, post-access
+  assert.equal(JSON.stringify(result).includes("page"), true);
+  assert.equal(JSON.stringify(result).includes("navigations"), false);
+});
+
+test("scoped application mutation fails uncertain and invalidates when ownership changes", async () => {
+  let inspections = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return new FakeContext([]); } },
+    probe: {
+      async inspect() {
+        inspections += 1;
+        return inspections < 3 ? ownedMatched() : { ownership: "foreign" };
+      },
+    },
+    profiles: new MemoryProfiles(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const request = {
+    schemaVersion: 1 as const,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_application_write1"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+    effect: "mutation" as const,
+  };
+  assert.deepEqual(await provider[ownedApplicationPageAccess](
+    request,
+    new AbortController().signal,
+    async () => undefined,
+  ), {
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  assert.deepEqual(await provider[ownedApplicationPageAccess](
+    { ...request, operationId: generatedOperationId("operation_application_write2") },
+    new AbortController().signal,
+    async () => undefined,
+  ), {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
 });
 
 test("restart re-identifies the exact owned page without adopting foreign tabs", async () => {
