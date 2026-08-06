@@ -405,7 +405,7 @@ async function classifyAfterSubmit(
   request: CredentialMutationRequest,
   signal: AbortSignal,
 ) {
-  const attempts = 20;
+  const attempts = 80;
   let inspected = await classify(dependencies, request, signal);
   for (let attempt = 1; attempt < attempts; attempt += 1) {
     if (

@@ -196,12 +196,51 @@ test("post-submit classification retries transient page states without repeating
   ).length, 1);
 });
 
+test("post-submit classification admits an exact state on the twenty-first observation", async () => {
+  const fixture = accountFixture(["create_account"]);
+  fixture.controls.set("accept_terms", { cardinality: 0, actionable: false });
+  let classificationCalls = 0;
+  let delayCalls = 0;
+  const adapter = createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => { delayCalls += 1; },
+    classifiedAccount: {
+      inspectClassifiedAccount: async () => ({
+        ok: true,
+        value: classificationCalls++ === 0
+          ? stateObservation("create_account")
+          : classificationCalls === 22
+            ? stateObservation("existing_account")
+            : classificationCalls % 2 === 0
+              ? { kind: "target_ambiguous" }
+              : { kind: "classification_stopped" },
+      }),
+    },
+  });
+
+  const result = await adapter.lifecycle.mutate(
+    request("create_account"),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+  });
+  assert.equal(classificationCalls, 22);
+  assert.equal(delayCalls, 20);
+  assert.deepEqual(fixture.operations.filter((operation) =>
+    operation.startsWith("activate:submit_")
+  ), ["activate:submit_create_account"]);
+});
+
 test("post-submit ambiguity exhausts bounded classification without accepting the mutation", async () => {
   const fixture = accountFixture(["existing_account"]);
   let classificationCalls = 0;
+  let delayCalls = 0;
   const result = await createAccountEntryCredentialMutationAdapter({
     ...fixture.dependencies,
-    postSubmitClassificationDelay: async () => {},
+    postSubmitClassificationDelay: async () => { delayCalls += 1; },
     classifiedAccount: {
       inspectClassifiedAccount: async () => ({
         ok: true,
@@ -216,7 +255,8 @@ test("post-submit ambiguity exhausts bounded classification without accepting th
     ok: false,
     error: { code: "credential_effect_uncertain", retryable: false },
   });
-  assert.equal(classificationCalls, 21);
+  assert.equal(classificationCalls - 1, 80);
+  assert.equal(delayCalls, 79);
   assert.equal(fixture.operations.filter((operation) =>
     operation === "activate:submit_sign_in"
   ).length, 1);
