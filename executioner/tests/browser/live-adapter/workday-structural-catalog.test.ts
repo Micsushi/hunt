@@ -280,11 +280,19 @@ test("a live-shaped standalone email provider choice uses its exact visible owne
   const result = await inspectWorkdayStructure(page, false, emptyInspector());
 
   assert.equal(result.kind, "snapshot");
+  const traits = result.kind === "snapshot" ? result.snapshot.traitIds : [];
+  assert.deepEqual(traits, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_navigation_email_sign_in_choice_v1",
+  ]);
   assert.equal(
     result.kind === "snapshot" &&
       classifyWorkdayAccountNavigation(result.snapshot).kind,
     "email_sign_in_choice",
   );
+  assert.equal(classifyLiveAccountState("account_entry", traits).kind, "existing_account");
+  assert.equal(traits.includes("structural_trait_account_sign_in_v1"), false);
 });
 
 test("an exact Workday provider-choice page is an existing-account entry boundary", async () => {

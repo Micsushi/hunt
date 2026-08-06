@@ -46,6 +46,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="createAccountPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
+  rule("structural_trait_page_account_entry_v1", EMAIL_SIGN_IN_CHOICE_SELECTOR),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
     EMAIL_SIGN_IN_CHOICE_SELECTOR,

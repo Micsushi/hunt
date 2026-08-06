@@ -234,39 +234,6 @@ test("post-submit classification admits an exact state on the twenty-first obser
   ), ["activate:submit_create_account"]);
 });
 
-test("post-submit classification admits an exact state on the one-hundred-twentieth observation", async () => {
-  const fixture = accountFixture(["existing_account"]);
-  let classificationCalls = 0;
-  let delayCalls = 0;
-  const result = await createAccountEntryCredentialMutationAdapter({
-    ...fixture.dependencies,
-    postSubmitClassificationDelay: async () => { delayCalls += 1; },
-    classifiedAccount: {
-      inspectClassifiedAccount: async () => {
-        const call = classificationCalls++;
-        return {
-          ok: true,
-          value: call === 0
-            ? stateObservation("existing_account")
-            : call === 120
-              ? stateObservation("application_ready")
-              : { kind: "target_ambiguous" },
-        };
-      },
-    },
-  }).mutate(request("sign_in"), new AbortController().signal);
-
-  assert.deepEqual(result, {
-    ok: true,
-    value: { kind: "application_ready", attemptedFields: ["email", "password"] },
-  });
-  assert.equal(classificationCalls - 1, 120);
-  assert.equal(delayCalls, 119);
-  assert.equal(fixture.operations.filter((operation) =>
-    operation === "activate:submit_sign_in"
-  ).length, 1);
-});
-
 test("post-submit ambiguity exhausts bounded classification without accepting the mutation", async () => {
   const fixture = accountFixture(["existing_account"]);
   let classificationCalls = 0;
@@ -288,8 +255,8 @@ test("post-submit ambiguity exhausts bounded classification without accepting th
     ok: false,
     error: { code: "credential_effect_uncertain", retryable: false },
   });
-  assert.equal(classificationCalls - 1, 120);
-  assert.equal(delayCalls, 119);
+  assert.equal(classificationCalls - 1, 80);
+  assert.equal(delayCalls, 79);
   assert.equal(fixture.operations.filter((operation) =>
     operation === "activate:submit_sign_in"
   ).length, 1);

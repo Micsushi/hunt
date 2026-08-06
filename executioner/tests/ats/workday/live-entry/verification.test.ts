@@ -72,6 +72,22 @@ test("known Workday structure produces a classified account observation", async 
   assert.match(result.value.classificationId, /^classification_/u);
 });
 
+test("standalone email provider choice composes through page and account classification", async () => {
+  const verifier = createLiveEntryVerifier(source([
+    inspection({ kind: "matched" }, snapshot([
+      LIVE_ENTRY_TRAITS.ats.workday,
+      LIVE_ENTRY_TRAITS.pages.account_entry,
+      "structural_trait_navigation_email_sign_in_choice_v1",
+    ])),
+  ]));
+  const result = await verifier.inspectFresh({ schemaVersion: 1, sessionId, target }, signal);
+
+  assert.equal(result.ok && result.value.kind, "classified_account");
+  if (!result.ok || result.value.kind !== "classified_account") return;
+  assert.equal(result.value.pageType, "account_entry");
+  assert.equal(result.value.state.kind, "existing_account");
+});
+
 test("page unknown keeps exact revision and ATS lineage in sanitized evidence", async () => {
   const verifier = createLiveEntryVerifier(source([
     inspection({ kind: "matched" }, snapshot([
