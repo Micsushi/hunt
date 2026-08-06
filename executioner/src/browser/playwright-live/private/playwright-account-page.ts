@@ -66,7 +66,8 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_rejection_email_wait_failed"
   | "submit_rejection_password_wait_failed"
   | "submit_rejection_password_confirmation_wait_failed"
-  | "submit_stabilization_failed";
+  | "submit_stabilization_failed"
+  | "submit_stabilization_deferred";
 
 interface AccountSubmitFailureDiagnosticV1 {
   readonly schemaVersion: 1;
@@ -95,8 +96,6 @@ const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
-const WORKDAY_LEGACY_SIGN_IN_DESTINATION_SELECTOR =
-  '[data-automation-id="signInSubmitButton"]';
 
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
@@ -321,6 +320,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               return;
             }
           }
+          this.#emit("submit_stabilization_failed");
           throw new Error("submit effect did not settle");
         }
         if (initial === "exact_fact") {
@@ -412,8 +412,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               this.#emit("submit_destination_observed");
               return;
             }
-            this.#emit("submit_stabilization_failed");
-            throw error;
+            this.#emit("submit_stabilization_deferred");
+            return;
           }
           this.#emit(
             observed === "destination"
@@ -586,9 +586,6 @@ function postSubmitDestinationSelectors(
     : '[data-automation-id="signInPage"]';
   return [
     opposingAccountPage,
-    ...(action === "submit_create_account"
-      ? [WORKDAY_LEGACY_SIGN_IN_DESTINATION_SELECTOR]
-      : []),
     ...POST_SUBMIT_DESTINATIONS,
   ];
 }

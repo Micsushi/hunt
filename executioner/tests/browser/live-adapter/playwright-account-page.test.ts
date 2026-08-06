@@ -40,9 +40,6 @@ const POST_SUBMIT_DESTINATION_SELECTORS = [
   ':text-is("Something went wrong")',
   ':text-is("{\\"503\\":\\"service-unavailable\\"}")',
 ] as const;
-const LEGACY_SIGN_IN_DESTINATION_SELECTOR =
-  '[data-automation-id="signInSubmitButton"]';
-
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
   const page = new FakePage(locator);
@@ -273,6 +270,7 @@ test("a submit that remains visible never claims a settled effect", async () => 
     "submit_diagnostic_alert_none",
     "submit_diagnostic_create_account_available",
     "submit_diagnostic_submit_visible",
+    "submit_stabilization_failed",
   ]);
 });
 
@@ -341,12 +339,13 @@ test("a stale credentials-or-locked alert is reported but cannot settle a new cl
   );
 
   assert.equal(events.includes("submit_exact_fact_observed"), false);
-  assert.deepEqual(events.slice(-5), [
+  assert.deepEqual(events.slice(-6), [
     "submit_diagnostic_page_sign_in",
     "submit_diagnostic_action_sign_in",
     "submit_diagnostic_alert_credentials_or_locked",
     "submit_diagnostic_create_account_available",
     "submit_diagnostic_submit_visible",
+    "submit_stabilization_failed",
   ]);
 });
 
@@ -457,6 +456,7 @@ test("an opted-in unsettled submit holds without another browser read or action"
     "submit_diagnostic_submit_visible",
     "submit_inspection_hold_started",
     "submit_inspection_hold_ended",
+    "submit_stabilization_failed",
   ]);
 });
 
@@ -946,10 +946,6 @@ test("a newly visible administrator password-reset alert settles sign-in exactly
     "submit_exact_fact_observed",
   ]);
   assert.equal(submit.clickCalls, 1);
-  assert.equal(page.calls.some((call) =>
-    (call as { readonly selector?: string }).selector ===
-      LEGACY_SIGN_IN_DESTINATION_SELECTOR
-  ), false);
 });
 
 test("a final exact snapshot reconciles sign-in after submit settlement waits exhaust", async () => {
@@ -1043,20 +1039,20 @@ test("rejection readiness identifies the exact failed semantic wait", async () =
       visibleWaitFails: failedWait === "password_confirmation",
     });
 
-    await assert.rejects(() => new PlaywrightAccountPageAdapter({
+    await new PlaywrightAccountPageAdapter({
       trace: (event) => events.push(event),
     }).activate(new FakePage(submit, absentDestination, new Map([
       ['[data-automation-id="email"]', email],
       ['[data-automation-id="password"]', password],
       ['[data-automation-id="verifyPassword"]', confirmation],
-    ])), action));
+    ])), action);
 
     assert.deepEqual(events, [
       "submit_hit_target_clear",
       "submit_click_started",
       "submit_click_succeeded",
       failureEvent,
-      "submit_stabilization_failed",
+      "submit_stabilization_deferred",
     ]);
     for (const field of [email, password, confirmation]) {
       assert.equal(field.clickCalls, 0);
@@ -1232,79 +1228,7 @@ test("create-account submit admits a newly visible exact modern sign-in form", a
   assert.equal(modern.isVisibleCalls, 2);
 });
 
-test("create-account submit admits a newly visible exact legacy sign-in destination", async () => {
-  const events: string[] = [];
-  const submit = new FakeLocator({
-    count: 1,
-    visible: true,
-    enabled: true,
-    editable: false,
-    visibleWaitFails: true,
-  });
-  const absent = new FakeLocator({
-    count: 0,
-    visible: false,
-    enabled: false,
-    editable: false,
-    visibleWaitFails: true,
-  });
-  const legacy = new FakeLocator({
-    count: 1,
-    visible: true,
-    visibleResults: [false],
-    enabled: true,
-    editable: false,
-  });
-
-  await new PlaywrightAccountPageAdapter({
-    trace: (event) => events.push(event),
-  }).activate(new FakePage(submit, absent, new Map([
-    [LEGACY_SIGN_IN_DESTINATION_SELECTOR, legacy],
-    ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absent],
-    ['[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])', absent],
-  ])), "submit_create_account");
-
-  assert.equal(submit.clickCalls, 1);
-  assert.deepEqual(legacy.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
-  assert.equal(events.at(-1), "submit_destination_observed");
-});
-
-test("legacy sign-in settlement fails closed on duplicate destination markers", async () => {
-  const submit = new FakeLocator({
-    count: 1,
-    visible: true,
-    enabled: true,
-    editable: false,
-    visibleWaitFails: true,
-  });
-  const absent = new FakeLocator({
-    count: 0,
-    visible: false,
-    enabled: false,
-    editable: false,
-    visibleWaitFails: true,
-  });
-  const duplicate = new FakeLocator({
-    count: 2,
-    visible: true,
-    enabled: true,
-    editable: false,
-  });
-
-  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
-    new FakePage(submit, absent, new Map([
-      [LEGACY_SIGN_IN_DESTINATION_SELECTOR, duplicate],
-      ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absent],
-      ['[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])', absent],
-    ])),
-    "submit_create_account",
-  ));
-
-  assert.equal(submit.clickCalls, 1);
-  assert.deepEqual(duplicate.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
-});
-
-test("modern sign-in settlement rejects hidden, pre-existing, and duplicate forms", async () => {
+test("modern sign-in settlement defers hidden, pre-existing, and duplicate forms", async () => {
   const modernSelector =
     '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
   const cases = [
@@ -1313,6 +1237,7 @@ test("modern sign-in settlement rejects hidden, pre-existing, and duplicate form
     new FakeLocator({ count: 2, visible: true, enabled: true, editable: false }),
   ];
   for (const modern of cases) {
+    const events: string[] = [];
     const submit = new FakeLocator({
       count: 1,
       visible: true,
@@ -1335,17 +1260,21 @@ test("modern sign-in settlement rejects hidden, pre-existing, and duplicate form
       visibleWaitFails: true,
     });
 
-    await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+    await new PlaywrightAccountPageAdapter({
+      trace: (event) => events.push(event),
+    }).activate(
       new FakePage(submit, absentDestination, new Map([
         [modernSelector, modern],
         ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absentOpposingOwner],
       ])),
       "submit_create_account",
-    ));
+    );
+    assert.equal(events.includes("submit_destination_observed"), false);
+    assert.equal(events.at(-1), "submit_stabilization_deferred");
   }
 });
 
-test("hidden attached semantic sign-in markup cannot settle create-account submit", async () => {
+test("hidden attached semantic sign-in markup defers create-account settlement", async () => {
   const signInOwnerSelector =
     '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
   const submit = new FakeLocator({
@@ -1370,19 +1299,23 @@ test("hidden attached semantic sign-in markup cannot settle create-account submi
     visibleWaitFails: true,
   });
 
-  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+  const events: string[] = [];
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(
     new FakePage(submit, absentStructuralDestination, new Map([
       [signInOwnerSelector, hiddenSignInOwner],
     ])),
     "submit_create_account",
-  ));
+  );
 
   assert.deepEqual(hiddenSignInOwner.waitForArguments, [
     { state: "visible", timeout: 10_000 },
   ]);
+  assert.equal(events.at(-1), "submit_stabilization_deferred");
 });
 
-test("submit stabilization fails closed when no known state appears", async () => {
+test("a successful submit click defers unknown stabilization to account classification", async () => {
   const events: string[] = [];
   const submit = new FakeLocator({
     count: 1,
@@ -1399,18 +1332,18 @@ test("submit stabilization fails closed when no known state appears", async () =
     attachedWaitFails: true,
   });
 
-  await assert.rejects(() => new PlaywrightAccountPageAdapter({
+  await new PlaywrightAccountPageAdapter({
     trace: (event) => events.push(event),
   }).activate(
     new FakePage(submit, absentDestination),
     "submit_sign_in",
-  ));
+  );
   assert.deepEqual(events, [
     "submit_hit_target_clear",
     "submit_click_started",
     "submit_click_succeeded",
     "submit_rejection_submit_owner_wait_failed",
-    "submit_stabilization_failed",
+    "submit_stabilization_deferred",
   ]);
 });
 

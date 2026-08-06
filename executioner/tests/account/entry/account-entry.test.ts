@@ -196,6 +196,32 @@ test("post-submit classification retries transient page states without repeating
   ).length, 1);
 });
 
+test("post-submit ambiguity exhausts bounded classification without accepting the mutation", async () => {
+  const fixture = accountFixture(["existing_account"]);
+  let classificationCalls = 0;
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => {},
+    classifiedAccount: {
+      inspectClassifiedAccount: async () => ({
+        ok: true,
+        value: classificationCalls++ === 0
+          ? stateObservation("existing_account")
+          : { kind: "target_ambiguous" },
+      }),
+    },
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_effect_uncertain", retryable: false },
+  });
+  assert.equal(classificationCalls, 21);
+  assert.equal(fixture.operations.filter((operation) =>
+    operation === "activate:submit_sign_in"
+  ).length, 1);
+});
+
 test("value-free trace reports only fixed account-stage identifiers", async () => {
   const fixture = accountFixture(["existing_account", "verification_required"]);
   const events: string[] = [];
