@@ -36,6 +36,7 @@ const POST_SUBMIT_DESTINATION_SELECTORS = [
   '[data-automation-id="accessDeniedPage"]',
   '[data-automation-id="securityChallenge"]',
   ':text-is("Something went wrong")',
+  ':text-is("{\\"503\\":\\"service-unavailable\\"}")',
 ] as const;
 
 test("inspects one exact semantic field without exposing its locator", async () => {

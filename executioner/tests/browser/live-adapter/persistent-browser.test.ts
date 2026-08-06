@@ -65,6 +65,30 @@ test("opens one exact page through an isolated persistent context", async () => 
   assert.deepEqual(findLivePrivacyViolations(result), []);
 });
 
+test("a fresh persistent context reuses its sole launch page instead of retaining about:blank", async () => {
+  const launchPage = new FakePage();
+  const context = new FakeContext([launchPage]);
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect(page) {
+      return page === launchPage ? ownedMatched() : { ownership: "foreign" };
+    } },
+    profiles: new MemoryProfiles(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+
+  const result = await provider.open(openRequest(), new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  assert.equal(context.newPageCount, 0);
+  assert.equal(context.pages().length, 1);
+  assert.deepEqual(launchPage.navigations, [
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  ]);
+});
+
 test("private owned-session inspection returns only a value-free structural snapshot", async () => {
   const context = new FakeContext([]);
   const provider = new PlaywrightPersistentBrowserSession({

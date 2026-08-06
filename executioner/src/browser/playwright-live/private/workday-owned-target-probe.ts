@@ -52,12 +52,6 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
         reason: "maintenance",
       });
     }
-    if (await confirmPersistentRuntimeError(probePage, signal)) {
-      return owned(emptyWorkdaySnapshot(), {
-        kind: "posting_unavailable",
-        reason: "runtime_error",
-      });
-    }
     const parsed = parseWorkdayTarget(probePage.url());
     if (parsed === undefined) {
       this.#matchedLineage.delete(probePage);
@@ -100,6 +94,23 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
       this.#matchedLineage.delete(probePage);
       return owned(emptyWorkdaySnapshot(), { kind: "target_ambiguous" });
     }
+    const allowPostingFreeRuntimeError =
+      this.#matchedLineage.get(probePage) === lineageKey;
+    const runtimeErrorUrl = probePage.url();
+    if (await confirmPersistentRuntimeError(
+      probePage,
+      expectedTarget,
+      allowPostingFreeRuntimeError,
+      signal,
+    )) {
+      return owned(emptyWorkdaySnapshot(), {
+        kind: "posting_unavailable",
+        reason: "runtime_error",
+      });
+    }
+    if (probePage.url() !== runtimeErrorUrl) {
+      return this.inspect(page, expectedTarget, signal);
+    }
     const preliminary = await inspectWorkdayStructure(
       probePage,
       parsed.routeIsPosting,
@@ -137,18 +148,44 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
 
 async function confirmPersistentRuntimeError(
   page: WorkdayProbePage,
+  expectedTarget: ApprovedTargetBinding,
+  allowPostingFree: boolean,
   signal: AbortSignal,
 ): Promise<boolean> {
-  if (!await isExactWorkdayRuntimeErrorPage(page)) return false;
+  if (
+    !matchesApprovedRuntimeErrorRoute(page, expectedTarget, allowPostingFree) ||
+    !await isExactWorkdayRuntimeErrorPage(page)
+  ) return false;
   for (let reload = 0; reload < runtimeErrorReloadLimit; reload += 1) {
     if (signal.aborted) throw signal.reason;
     await page.reload({
       waitUntil: "domcontentloaded",
       timeout: runtimeErrorReloadTimeoutMs,
     });
-    if (!await isExactWorkdayRuntimeErrorPage(page)) return false;
+    if (
+      !matchesApprovedRuntimeErrorRoute(page, expectedTarget, allowPostingFree) ||
+      !await isExactWorkdayRuntimeErrorPage(page)
+    ) return false;
   }
   return true;
+}
+
+function matchesApprovedRuntimeErrorRoute(
+  page: WorkdayProbePage,
+  expectedTarget: ApprovedTargetBinding,
+  allowPostingFree: boolean,
+): boolean {
+  const parsed = parseWorkdayTarget(page.url());
+  const expected = parseExpectedHost(expectedTarget.approved.host);
+  if (parsed === undefined || expected === undefined) return false;
+  if (
+    parsed.hostFamily !== expected.hostFamily ||
+    parsed.tenant !== expectedTarget.approved.tenant ||
+    parsed.host !== expectedTarget.approved.host
+  ) return false;
+  return parsed.postings.length === 1
+    ? parsed.postings[0] === expectedTarget.approved.posting
+    : parsed.postings.length === 0 && allowPostingFree;
 }
 
 async function confirmPersistentMaintenance(

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -112,6 +115,7 @@ test("secondary launch accepts uniformly DPI-scaled minimized bounds", async () 
 });
 
 test("visible secondary launch attests isolation before Playwright launch", async () => {
+  const tempProfilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-profile-"));
   let directLaunches = 0;
   let isolatedLaunches = 0;
   const order: string[] = [];
@@ -140,10 +144,10 @@ test("visible secondary launch attests isolation before Playwright launch", asyn
       directLaunches += 1;
       return context as never;
     },
-    visibleLaunch: async (profilePath, window) => {
+    visibleLaunch: async (launchedProfilePath, window) => {
       order.push("launch");
       isolatedLaunches += 1;
-      assert.equal(profilePath, "C:\\safe-profile");
+      assert.equal(launchedProfilePath, tempProfilePath);
       assert.deepEqual(window, { x: 1747, y: 40, width: 1400, height: 832 });
       return context as never;
     },
@@ -151,11 +155,66 @@ test("visible secondary launch attests isolation before Playwright launch", asyn
     visibleWindow: () => ({ x: 1747, y: 40, width: 1400, height: 832 }),
   });
 
-  await launcher.launchPersistentContext("C:\\safe-profile", { headless: false });
+  try {
+    await launcher.launchPersistentContext(tempProfilePath, { headless: false });
+    assert.equal(directLaunches, 0);
+    assert.equal(isolatedLaunches, 1);
+    assert.deepEqual(order, ["attest", "launch"]);
+  } finally {
+    await rm(tempProfilePath, { recursive: true, force: true });
+  }
+});
 
-  assert.equal(directLaunches, 0);
-  assert.equal(isolatedLaunches, 1);
-  assert.deepEqual(order, ["attest", "launch"]);
+test("production launch disables Chrome password storage in the isolated profile", async () => {
+  const profilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-profile-"));
+  const defaultPath = join(profilePath, "Default");
+  await mkdir(defaultPath);
+  await writeFile(join(defaultPath, "Preferences"), JSON.stringify({
+    credentials_enable_service: true,
+    profile: { password_manager_enabled: true, preserved: "yes" },
+    preserved: { value: 7 },
+  }));
+  const page = {};
+  const context = {
+    pages: () => [page],
+    newPage: async () => page,
+    newCDPSession: async () => ({
+      send: async (method: string) => method === "Browser.getWindowForTarget"
+        ? { windowId: 77 }
+        : {
+            bounds: {
+              left: 1747,
+              top: 40,
+              width: 1400,
+              height: 810,
+              windowState: "minimized",
+            },
+          },
+      detach: async () => undefined,
+    }),
+  };
+  const launcher = new PlaywrightPersistentContextLauncher({
+    launch: async (launchedProfilePath) => {
+      const preferences = JSON.parse(
+        await readFile(join(launchedProfilePath, "Default", "Preferences"), "utf8"),
+      ) as Record<string, unknown>;
+      assert.equal(preferences.credentials_enable_service, false);
+      assert.deepEqual(preferences.profile, {
+        password_manager_enabled: false,
+        preserved: "yes",
+      });
+      assert.deepEqual(preferences.preserved, { value: 7 });
+      return context as never;
+    },
+    isolatedDesktop: async () => undefined,
+    visibleWindow: () => ({ x: 1747, y: 40, width: 1400, height: 832 }),
+  });
+
+  try {
+    await launcher.launchPersistentContext(profilePath, { headless: false });
+  } finally {
+    await rm(profilePath, { recursive: true, force: true });
+  }
 });
 
 test("secondary launch fails closed when Chrome restores the window", async () => {
@@ -191,6 +250,7 @@ test("secondary launch fails closed when Chrome restores the window", async () =
 });
 
 test("unsafe-window cleanup retries and supersedes placement failure", async () => {
+  const profilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-profile-"));
   let closeCalls = 0;
   const page = {};
   const context = {
@@ -221,9 +281,13 @@ test("unsafe-window cleanup retries and supersedes placement failure", async () 
     visibleWindow: () => ({ x: 1747, y: 40, width: 1400, height: 832 }),
   });
 
-  await assert.rejects(
-    launcher.launchPersistentContext("C:\\safe-profile", { headless: false }),
-    /window safety cleanup failed/u,
-  );
-  assert.equal(closeCalls, 2);
+  try {
+    await assert.rejects(
+      launcher.launchPersistentContext(profilePath, { headless: false }),
+      /window safety cleanup failed/u,
+    );
+    assert.equal(closeCalls, 2);
+  } finally {
+    await rm(profilePath, { recursive: true, force: true });
+  }
 });

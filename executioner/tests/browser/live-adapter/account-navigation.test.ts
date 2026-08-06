@@ -53,6 +53,23 @@ test("an already reached account, verification, or application boundary performs
   }
 });
 
+test("an activation error reconciles an exact application boundary without repeating the effect", async () => {
+  const harness = await openedHarness({
+    applicationAfterApply: true,
+    activationFailureAfterEffect: "apply_manually",
+  });
+
+  const result = await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
+  assert.deepEqual(harness.adapter.actions, ["start_application", "apply_manually"]);
+  assert.equal(harness.context.effects, 2);
+  assert.equal(harness.context.closeCount, 0);
+});
+
 test("unknown, structural ambiguity, and access challenges stop before navigation", async () => {
   for (const [traits, expected] of [
     [[], invalid()],
@@ -275,6 +292,8 @@ async function openedHarness(options: {
   readonly popupAfterEffect?: boolean;
   readonly remainApplyChoice?: boolean;
   readonly emailSignInChoice?: boolean;
+  readonly applicationAfterApply?: boolean;
+  readonly activationFailureAfterEffect?: "start_application" | "apply_manually" | "sign_in_with_email";
 } = {}) {
   const context = new FakeContext();
   const profiles = new MemoryProfiles();
@@ -294,8 +313,13 @@ async function openedHarness(options: {
       else if (action === "apply_manually") {
         context.phase = options.remainApplyChoice
           ? "apply_choice"
-          : options.emailSignInChoice ? "email_sign_in_choice" : "account";
+          : options.emailSignInChoice
+            ? "email_sign_in_choice"
+            : options.applicationAfterApply ? "application" : "account";
       } else context.phase = "account";
+      if (options.activationFailureAfterEffect === action) {
+        throw new Error("activation result unavailable");
+      }
     },
   );
   let checks = 0;
@@ -357,6 +381,7 @@ function phaseTraits(phase: FakeContext["phase"]): readonly string[] {
       "structural_trait_navigation_email_sign_in_choice_v1",
     ];
   }
+  if (phase === "application") return ["structural_trait_page_profile_step_v1"];
   return [
     "structural_trait_page_account_entry_v1",
     "structural_trait_account_create_v1",
@@ -430,7 +455,7 @@ class FakePage {
 class FakeContext {
   closeCount = 0;
   effects = 0;
-  phase: "posting" | "apply_choice" | "email_sign_in_choice" | "account" = "posting";
+  phase: "posting" | "apply_choice" | "email_sign_in_choice" | "account" | "application" = "posting";
   readonly ownedPages = [new FakePage()];
   pages(): FakePage[] { return this.ownedPages; }
   async newPage(): Promise<FakePage> { return this.ownedPages[0]!; }

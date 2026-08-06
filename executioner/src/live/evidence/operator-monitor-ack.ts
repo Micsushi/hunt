@@ -52,6 +52,16 @@ export interface OperatorMonitorRequestBinding {
   readonly targetHandleId: string;
 }
 
+export interface OperatorMonitorInspectionHoldRequest {
+  readonly runtimeRoot: string;
+  readonly evidenceRoot: string;
+  readonly journeyId: string;
+  readonly targetHandleId: string;
+  readonly host: string;
+  readonly tenant: string;
+  readonly posting: string;
+}
+
 interface OperatorMonitorRequestV1 {
   readonly schemaVersion: 1;
   readonly requestRevision: "s2-operator-monitor-request-v1";
@@ -158,6 +168,26 @@ export async function waitForOperatorMonitorAcknowledgement(
       await new Promise((resolveDelay) => setTimeout(resolveDelay, pollMs));
     }
   }
+}
+
+export function createOperatorMonitorInspectionHold(
+  request: OperatorMonitorInspectionHoldRequest,
+  wait: (
+    root: string,
+    expected: OperatorMonitorRequestBinding,
+  ) => Promise<unknown> = waitForOperatorMonitorAcknowledgement,
+): () => Promise<void> {
+  return async () => {
+    const monitorRequest = writeOperatorMonitorRequest({
+      root: request.runtimeRoot,
+      journeyId: request.journeyId,
+      targetHandleId: request.targetHandleId,
+      host: request.host,
+      tenant: request.tenant,
+      posting: request.posting,
+    });
+    await wait(request.evidenceRoot, monitorRequest);
+  };
 }
 
 function exactAcknowledgement(

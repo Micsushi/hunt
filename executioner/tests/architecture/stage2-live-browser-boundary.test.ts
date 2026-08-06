@@ -112,26 +112,26 @@ test("factory wires the private hold without widening the public browser facade"
   assert.equal(publicFacade.includes("unsettledInspectionHold"), false);
 });
 
-test("production account access replaces the timed hold with protected monitor acknowledgement", async () => {
+test("production account access wires the lazy protected monitor hold", async () => {
   const composition = await readFile(
     "src/composition/s2-account-access-runner.ts",
     "utf8",
   );
   const factory = await source("factory.ts");
-  assert.match(composition, /writeOperatorMonitorRequest/u);
+  assert.match(composition, /createOperatorMonitorInspectionHold/u);
   assert.match(composition, /owner\.roots\.runtime\.path/u);
-  assert.match(composition, /waitForOperatorMonitorAcknowledgement/u);
+  assert.doesNotMatch(composition, /writeOperatorMonitorRequest/u);
   assert.match(composition, /inspectionHold/u);
   assert.match(factory, /options\.inspectionHold/u);
 });
 
-test("full account verification uses the same target-bound monitor handshake", async () => {
+test("full account verification uses the same lazy target-bound monitor hold", async () => {
   const composition = await readFile(
     "src/composition/s2-account-verified-runner.ts",
     "utf8",
   );
-  assert.match(composition, /writeOperatorMonitorRequest/u);
-  assert.match(composition, /waitForOperatorMonitorAcknowledgement/u);
+  assert.match(composition, /createOperatorMonitorInspectionHold/u);
+  assert.doesNotMatch(composition, /writeOperatorMonitorRequest/u);
   assert.match(composition, /inspectionHold/u);
   assert.match(composition, /owner\.roots\.runtime\.path/u);
 });

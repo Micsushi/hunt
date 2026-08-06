@@ -112,6 +112,11 @@ export const WORKDAY_RUNTIME_ERROR_SELECTORS = Object.freeze([
   ':text-is("Something went wrong")',
   ':text-is("Please refresh the page and then try again.")',
 ]);
+const WORKDAY_RAW_503_SELECTOR = ':text-is("{\\"503\\":\\"service-unavailable\\"}")';
+export const WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS = Object.freeze([
+  WORKDAY_RUNTIME_ERROR_SELECTORS[0]!,
+  WORKDAY_RAW_503_SELECTOR,
+]);
 
 const controlSelector = 'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"]';
 const requiredSelector = '[required], [aria-required="true"]';
@@ -224,7 +229,15 @@ export async function isExactWorkdayMaintenancePage(
 export async function isExactWorkdayRuntimeErrorPage(
   page: WorkdayStructuralPage,
 ): Promise<boolean> {
-  for (const selector of WORKDAY_RUNTIME_ERROR_SELECTORS) {
+  return await allExactVisible(page, WORKDAY_RUNTIME_ERROR_SELECTORS) ||
+    await anyExactVisible(page, [WORKDAY_RAW_503_SELECTOR]);
+}
+
+async function allExactVisible(
+  page: WorkdayStructuralPage,
+  selectors: readonly string[],
+): Promise<boolean> {
+  for (const selector of selectors) {
     if (!await anyExactVisible(page, [selector])) return false;
   }
   return true;

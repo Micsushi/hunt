@@ -206,15 +206,15 @@ test("value-free trace reports only fixed account-stage identifiers", async () =
   }).mutate(request("sign_in"), new AbortController().signal);
 
   assert.deepEqual(events, [
-    "initial_existing_account",
+    "initial_state_existing_account",
     "owned_access_started",
     "fields_admitted",
     "credentials_resolved",
     "email_verified",
     "password_verified",
     "submit_reinspect_succeeded",
-    "submit_activate_started",
-    "submit_activated",
+    "account_submit_activate_started",
+    "account_submit_activated",
     "post_submit_classify_started",
     "post_submit_verification_required",
   ]);
@@ -329,7 +329,7 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
   assert.equal(fixture.classificationCalls, 3);
   assert.equal(fixture.resolverCalls, 1);
   assert.deepEqual(events.slice(0, 3), [
-    "initial_existing_account",
+    "initial_state_existing_account",
     "owned_access_started",
     "account_mode_switched_to_create_account",
   ]);
@@ -395,7 +395,7 @@ test("sign-in traces its semantic switch from an initial create page", async () 
     "activate:submit_sign_in",
   ]);
   assert.deepEqual(events.slice(0, 3), [
-    "initial_create_account",
+    "initial_state_create_account",
     "owned_access_started",
     "account_mode_switched_to_sign_in",
   ]);

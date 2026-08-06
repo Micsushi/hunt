@@ -57,8 +57,7 @@ import {
 } from "../account/lifecycle/mailbox-polling.ts";
 import { writeAccountVerifiedEvidence } from "../live/evidence/account-verified-evidence.ts";
 import {
-  waitForOperatorMonitorAcknowledgement,
-  writeOperatorMonitorRequest,
+  createOperatorMonitorInspectionHold,
 } from "../live/evidence/operator-monitor-ack.ts";
 import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime-binding.ts";
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
@@ -397,9 +396,10 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
       ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
       : undefined;
-    const monitorRequest = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
-      ? writeOperatorMonitorRequest({
-        root: owner.roots.runtime.path,
+    const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      ? createOperatorMonitorInspectionHold({
+        runtimeRoot: owner.roots.runtime.path,
+        evidenceRoot: owner.roots.evidence.path,
         journeyId: owner.journeyId,
         targetHandleId: owner.target.handleId,
         host: owner.target.host,
@@ -410,14 +410,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     const browser = createPlaywrightPersistentBrowserSession({
       binding: admission.binding,
       accountTrace: valueFreeTrace,
-      inspectionHold: monitorRequest === undefined
-        ? undefined
-        : async () => {
-          await waitForOperatorMonitorAcknowledgement(
-            owner.roots.evidence.path,
-            monitorRequest,
-          );
-        },
+      inspectionHold,
     });
     const structural = createPlaywrightLiveEntryStructuralSource(browser);
     const classified = createClassifiedAccountObservationSource(

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -10,6 +11,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  createOperatorMonitorInspectionHold,
   MONITOR_ACK_FILE,
   MONITOR_REQUEST_FILE,
   MONITOR_SCREENSHOT_FILE,
@@ -95,6 +97,34 @@ test("monitor hold resolves only after a valid acknowledgement appears", async (
     assert.equal((await waiting).classification, "maintenance");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("monitor request becomes visible only after the inspection hold begins", async () => {
+  const runtime = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-runtime-"));
+  const evidence = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-evidence-"));
+  try {
+    let waited = false;
+    const hold = createOperatorMonitorInspectionHold({
+      runtimeRoot: runtime,
+      evidenceRoot: evidence,
+      journeyId: "journey_abcdefghijklmnop",
+      targetHandleId: "target_ref_abcdefghijklmnop",
+      host: "blackrock.wd1.myworkdayjobs.com",
+      tenant: "blackrock",
+      posting: "R265422",
+    }, async (_root, binding) => {
+      waited = true;
+      assert.equal(binding.path, join(runtime, MONITOR_REQUEST_FILE));
+    });
+
+    assert.equal(existsSync(join(runtime, MONITOR_REQUEST_FILE)), false);
+    await hold();
+    assert.equal(existsSync(join(runtime, MONITOR_REQUEST_FILE)), true);
+    assert.equal(waited, true);
+  } finally {
+    rmSync(runtime, { recursive: true, force: true });
+    rmSync(evidence, { recursive: true, force: true });
   }
 });
 

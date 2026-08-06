@@ -23,8 +23,8 @@ export type AccountActionIntent =
   | "accept_terms";
 
 export type AccountEntryTraceEvent =
-  | "initial_existing_account"
-  | "initial_create_account"
+  | "initial_state_existing_account"
+  | "initial_state_create_account"
   | "owned_access_started"
   | "account_mode_switched_to_sign_in"
   | "account_mode_switched_to_create_account"
@@ -34,9 +34,9 @@ export type AccountEntryTraceEvent =
   | "password_verified"
   | "submit_reinspect_succeeded"
   | "submit_reinspect_failed"
-  | "submit_activate_started"
-  | "submit_activate_failed"
-  | "submit_activated"
+  | "account_submit_activate_started"
+  | "account_submit_activate_failed"
+  | "account_submit_activated"
   | "post_submit_classify_started"
   | "post_submit_classify_retry"
   | "post_submit_classify_failed"

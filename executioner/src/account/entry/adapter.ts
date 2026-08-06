@@ -87,8 +87,8 @@ async function mutateOnce(
   emit(
     dependencies,
     initial.value.state.kind === "existing_account"
-      ? "initial_existing_account"
-      : "initial_create_account",
+      ? "initial_state_existing_account"
+      : "initial_state_create_account",
   );
   if (noSecretState(initial.value)) {
     return { ok: true, value: accountStateResult(initial.value.state, []) };
@@ -236,17 +236,17 @@ async function mutateOnce(
             return accountStateResult(state.state, ["email", "password"]);
           }
           emit(dependencies, "submit_reinspect_succeeded");
-          emit(dependencies, "submit_activate_started");
+          emit(dependencies, "account_submit_activate_started");
           const activated = await access.activate(submit);
           if (!activated.ok) {
-            emit(dependencies, "submit_activate_failed");
+            emit(dependencies, "account_submit_activate_failed");
             const activationFailure = mapBrowserFailure(activated.error.code);
             localFailure = await cleanupPopulated(access, populated, dependencies)
               ? activationFailure
               : failure("credential_effect_uncertain");
             return accountStateResult(state.state, ["email", "password"]);
           }
-          emit(dependencies, "submit_activated");
+          emit(dependencies, "account_submit_activated");
           emit(dependencies, "post_submit_classify_started");
           const reconciled = await classifyAfterSubmit(dependencies, request, signal);
           if (!reconciled.ok || reconciled.value.kind !== "classified_account") {

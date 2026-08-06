@@ -289,8 +289,18 @@ export class PlaywrightPersistentBrowserSession
           value: { kind: "reattached", session: this.#session },
         };
       }
+      const launchPages = this.#context.pages().filter((page) => !page.isClosed());
+      if (launchPages.length > 1) {
+        const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
+        if (!cleaned.resourcesCleaned) return failure("browser_profile_cleanup_failed");
+        return cleaned.inspectionPassed
+          ? failure("browser_target_ambiguous")
+          : failure("browser_effect_uncertain");
+      }
       const pageResult = await bounded(
-        this.#context.newPage(),
+        launchPages.length === 1
+          ? Promise.resolve(launchPages[0]!)
+          : this.#context.newPage(),
         signal,
         this.#options.timeoutMs,
       );
@@ -725,7 +735,18 @@ export class PlaywrightPersistentBrowserSession
         this.#options.timeoutMs,
       );
       transitionCount += 1;
-      if (activated.kind !== "value") return this.#uncertainAdvanceFailure();
+      if (activated.kind !== "value") {
+        if (activated.kind !== "cancelled") {
+          const recovered = await this.#reconcileAfterUncertainActivation(
+            state.kind,
+            request,
+            signal,
+          );
+          if (recovered === "retry") continue;
+          if (recovered !== undefined) return recovered;
+        }
+        return this.#uncertainAdvanceFailure();
+      }
       const reconciled = await reconcileOwnedPages(
         this.#context!,
         this.#options.probe,
@@ -812,6 +833,48 @@ export class PlaywrightPersistentBrowserSession
     return navigationRank(settled.kind) > navigationRank(previous)
       ? "retry"
       : failure("browser_target_invalid");
+  }
+
+  async #reconcileAfterUncertainActivation(
+    previous: "job_posting" | "apply_choice" | "email_sign_in_choice",
+    request: AccountEntryAdvanceRequest,
+    signal: AbortSignal,
+  ): Promise<AccountEntryAdvancePortResult | "retry" | undefined> {
+    const reconciled = await reconcileOwnedPages(
+      this.#context!,
+      this.#options.probe,
+      this.#approvedTarget!,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!reconciled.ok) return undefined;
+    if (reconciled.value.kind !== "matched") {
+      return this.#stopAfterTargetFact(reconciled.value);
+    }
+    this.#page = reconciled.value.page;
+    const inspected = await inspectPinnedTarget(
+      this.#page,
+      this.#options.probe,
+      this.#approvedTarget!,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!inspected.ok) return undefined;
+    if (inspected.value.target.kind !== "matched") {
+      return this.#stopAfterTargetFact(inspected.value.target);
+    }
+    const settled = classifyWorkdayAccountNavigation(inspected.value.snapshot);
+    if (settled.kind === "account_boundary") {
+      return { ok: true, value: { kind: "account_boundary" } };
+    }
+    if (
+      settled.kind !== "ambiguous" &&
+      settled.kind !== "invalid" &&
+      navigationRank(settled.kind) > navigationRank(previous)
+    ) return "retry";
+    return undefined;
   }
 
   async #uncertainAdvanceFailure(): Promise<AccountEntryAdvancePortResult> {

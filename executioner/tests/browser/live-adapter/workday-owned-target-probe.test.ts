@@ -421,6 +421,103 @@ test("production probe reloads an exact Workday runtime-error shell three times 
   assert.equal(page.reloads, 3);
 });
 
+test("production probe classifies the exact raw Workday 503 body after bounded reloads", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  await probe.inspect(page, expected, new AbortController().signal);
+  page.currentUrl =
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345/apply/applyManually";
+  page.counts = {
+    ':text-is("{\\"503\\":\\"service-unavailable\\"}")': 1,
+  };
+
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned({ kind: "posting_unavailable", reason: "runtime_error" }),
+  );
+  assert.equal(page.reloads, 3);
+});
+
+test("runtime-error bodies never bypass exact target ownership", async () => {
+  const cases = [
+    [
+      "https://careers.example.invalid/job/Example_R12345",
+      { ownership: "foreign" },
+    ],
+    [
+      "https://approved.wd6.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      owned({ kind: "target_mismatch", dimension: "host" }),
+    ],
+    [
+      "https://other.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      owned({ kind: "target_mismatch", dimension: "tenant" }),
+    ],
+    [
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R99999",
+      owned({ kind: "target_mismatch", dimension: "posting" }),
+    ],
+  ] as const;
+
+  for (const [url, expectedResult] of cases) {
+    const page = new ProbePage(url, {
+      ':text-is("{\\"503\\":\\"service-unavailable\\"}")': 1,
+    });
+    assert.deepEqual(
+      await new WorkdayOwnedTargetProbe().inspect(
+        page,
+        expected,
+        new AbortController().signal,
+      ),
+      expectedResult,
+    );
+    assert.equal(page.reloads, 0);
+  }
+});
+
+test("a cleared runtime error re-admits ownership after its reload redirect", async () => {
+  const redirects = [
+    [
+      "https://careers.example.invalid/job/Example_R12345",
+      { ownership: "foreign" },
+    ],
+    [
+      "https://approved.wd6.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      owned({ kind: "target_mismatch", dimension: "host" }),
+    ],
+    [
+      "https://other.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      owned({ kind: "target_mismatch", dimension: "tenant" }),
+    ],
+    [
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R99999",
+      owned({ kind: "target_mismatch", dimension: "posting" }),
+    ],
+  ] as const;
+
+  for (const [redirectUrl, expectedResult] of redirects) {
+    const page = new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+      { ':text-is("{\\"503\\":\\"service-unavailable\\"}")': 1 },
+      {},
+      (current) => {
+        current.currentUrl = redirectUrl;
+        current.counts = {};
+      },
+    );
+    assert.deepEqual(
+      await new WorkdayOwnedTargetProbe().inspect(
+        page,
+        expected,
+        new AbortController().signal,
+      ),
+      expectedResult,
+    );
+    assert.equal(page.reloads, 1);
+  }
+});
+
 test("production probe continues when the Workday runtime-error shell clears", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const page = new ProbePage(

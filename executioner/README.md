@@ -512,10 +512,12 @@ that fallback. An exact private `account_exists` fact may also switch once to
 Sign In, while an ordinary sign-in rejection never implies account absence.
 
 For monitored live runs, set `HUNT_C3_LIVE_INSPECTION_HOLD=1`. The runner writes
-`monitor-request.json` under its transient runtime root before browser work and
-will not complete browser cleanup until an independent monitor inspects the
-actual visible post-action page. The monitor saves `monitor-visible.png` in the
-retained evidence root, then acknowledges the exact request:
+`monitor-request.json` under its transient runtime root only when the one-shot
+inspection hold begins. Its presence proves the hold and acknowledgement window
+overlap. The runner will not complete browser cleanup until an independent
+monitor inspects the actual visible post-action page. The monitor waits for the
+request, saves `monitor-visible.png` in the retained evidence root, then
+acknowledges the exact request:
 
 ```text
 npm run ack:s2-monitor -- --evidence-root C:\private\hunt-c3-storage\retained\...\evidence --monitor-request C:\private\hunt-c3-storage\transient\...\runtime\monitor-request.json --classification application_ready

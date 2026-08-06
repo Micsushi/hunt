@@ -10,7 +10,7 @@ import type { PersistentPage } from "./types.ts";
 import {
   WORKDAY_ACCOUNT_FACT_SELECTORS,
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
-  WORKDAY_RUNTIME_ERROR_SELECTORS,
+  WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS,
   WORKDAY_SIGN_IN_REJECTION_SELECTORS,
 } from "./workday-structural-catalog.ts";
 
@@ -104,7 +104,7 @@ const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="mfaChallenge"]',
   '[data-automation-id="accessDeniedPage"]',
   '[data-automation-id="securityChallenge"]',
-  WORKDAY_RUNTIME_ERROR_SELECTORS[0]!,
+  ...WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS,
 ];
 
 export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter {

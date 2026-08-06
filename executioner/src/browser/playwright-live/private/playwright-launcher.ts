@@ -2,6 +2,17 @@ import {
   chromium,
   type BrowserContext,
 } from "playwright";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import type {
   PersistentContext,
@@ -53,6 +64,7 @@ export class PlaywrightPersistentContextLauncher
   ): Promise<PersistentContext> {
     const visibleWindow = options.headless ? undefined : this.#visibleWindow();
     if (visibleWindow !== undefined) await this.#isolatedDesktop();
+    await disablePasswordStorage(profilePath);
     const context = visibleWindow === undefined
       ? await this.#launch(profilePath, { headless: options.headless })
       : await this.#visibleLaunch(profilePath, visibleWindow);
@@ -79,6 +91,76 @@ function visiblePersistentLaunchOptions(
       `--window-size=${window.width},${window.height}`,
     ],
   };
+}
+
+const preferencesByteLimit = 1_048_576;
+
+async function disablePasswordStorage(profilePath: string): Promise<void> {
+  const resolvedProfile = resolve(profilePath);
+  const defaultPath = resolve(resolvedProfile, "Default");
+  if (dirname(defaultPath) !== resolvedProfile) {
+    throw new TypeError("invalid browser profile path");
+  }
+  await mkdir(defaultPath, { recursive: true, mode: 0o700 });
+  for (const path of [resolvedProfile, defaultPath]) {
+    const metadata = await lstat(path);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new TypeError("invalid browser profile path");
+    }
+    if (comparable(await realpath(path)) !== comparable(path)) {
+      throw new TypeError("invalid browser profile path");
+    }
+  }
+
+  const preferencesPath = resolve(defaultPath, "Preferences");
+  const partialPath = resolve(defaultPath, ".hunt-preferences.tmp");
+  let preferences: Record<string, unknown> = {};
+  try {
+    const metadata = await lstat(preferencesPath);
+    if (
+      !metadata.isFile() ||
+      metadata.isSymbolicLink() ||
+      (await stat(preferencesPath)).size > preferencesByteLimit
+    ) throw new TypeError("invalid browser preferences");
+    const parsed = JSON.parse(await readFile(preferencesPath, "utf8")) as unknown;
+    if (!isRecord(parsed)) throw new TypeError("invalid browser preferences");
+    preferences = parsed;
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+
+  const profile = isRecord(preferences.profile) ? preferences.profile : {};
+  const serialized = JSON.stringify({
+    ...preferences,
+    credentials_enable_service: false,
+    profile: {
+      ...profile,
+      password_manager_enabled: false,
+    },
+  });
+  if (Buffer.byteLength(serialized, "utf8") > preferencesByteLimit) {
+    throw new RangeError("browser preferences exceed bounded size");
+  }
+  await rm(partialPath, { force: true });
+  await writeFile(partialPath, serialized, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  await rename(partialPath, preferencesPath);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "code" in error && error.code === "ENOENT";
+}
+
+function comparable(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
 async function closeUnsafeWindowContext(context: BrowserContext): Promise<void> {
