@@ -75,13 +75,12 @@ email sealed from `HUNT_C3_TEST_ACCOUNT_EMAIL`. Never load secret-looking
 `HUNT_*` values into the process environment when invoking C3 provisioning
 commands; pass the protected source file only to the pinned migration command.
 
-Each Workday target also needs an exact sender policy. The target hostname and
-tenant are derived from the approved job URL, but the sender address cannot be
-safely inferred from that URL. Use a previously observed, owner-approved exact
-sender for that tenant. When no sender is known, record the job as needing
-sender discovery and inspect the first real verification email before retrying
-with an approved policy. Do not weaken the Gmail query to accept arbitrary
-senders.
+For each verification request, Gmail searches only for the current job's company
+within the preceding hour. The lower bound is fixed when the journey starts and
+the upper bound advances with each poll. No sender allowlist is required. A
+message is usable only when exactly one candidate remains and its exact recipient,
+Workday tenant, target, and HTTPS verification link all validate. Multiple or
+mismatched candidates fail closed.
 
 ### Per-job account and Gmail provisioning
 
@@ -107,9 +106,10 @@ npm run migrate:s2-env-account -- `
   --sha256 $accountSha256
 ```
 
-Create protected, external sender-policy and Gmail-bootstrap JSON files using
+Create protected, external company-policy and Gmail-bootstrap JSON files using
 the exact schemas in the Gmail authorization section of `executioner/README.md`.
-Bind them to the newly prepared owner file, the target host and tenant, the
+Put the current job's company, target host, and tenant in the company policy.
+Bind the bootstrap to the newly prepared owner file, that policy file, the
 preallocated Gmail handle, the Desktop client ID, and the protected installed
 client path. Then provision Gmail:
 
@@ -165,12 +165,11 @@ admission, and human Google consent outside Terraform.
 The catalog harness already automates fresh-realm selection, immutable run and
 shard creation, exclusive result recording, and complete-run compilation. A
 single operator command can safely automate the remaining mechanical steps per
-job: prepare the journey, pin and migrate the Workday credentials, generate
-protected target-bound policy/bootstrap files, reuse the Gmail refresh grant,
-launch the bounded live slice, and record its result.
+job: prepare the journey, pin and migrate the Workday credentials, generate the
+protected target-bound company-policy and bootstrap files, reuse the Gmail
+refresh grant, launch the bounded live slice, and record its result.
 
-That command must still stop for three non-automatable inputs: the first Google
-sign-in/MFA/consent, an unknown tenant's exact verification sender, and any
+That command must still stop for the first Google sign-in/MFA/consent and any
 Workday CAPTCHA/MFA/access-control challenge. These are explicit blocked or
 manual outcomes, not reasons to broaden mailbox or browser permissions.
 
@@ -211,8 +210,9 @@ including page/account/mailbox misclassification, incorrect typing or clicks,
 missed clicks, late or missed verification, wrong verification parameters,
 unexpected waits, and navigation misclassification.
 
-`verification_required` starts as `unknown`. Record `email_link` when Gmail
-returns a navigable confirmation link. Record `email_code` and
+`verification_required` starts as `unknown`. Search only for the current job's
+company within the fixed preceding-hour window. Record `email_link` when Gmail
+returns one uniquely validated confirmation link. Record `email_code` and
 `unsupported_code` when the message supplies only a numeric code that the
 current runner cannot consume. Jobs that already expose an account for the
 current email must be recorded as `existing_sign_in`, not silently treated as a

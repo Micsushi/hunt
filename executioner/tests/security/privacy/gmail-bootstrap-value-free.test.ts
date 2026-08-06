@@ -31,11 +31,12 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
   assert.match(embedded, /CredReadW/u);
   assert.match(embedded, /CredWriteW/u);
   assert.match(embedded, /CredDeleteW/u);
-  assert.match(embedded, /senderAddress/u);
+  assert.match(embedded, /companyName/u);
+  assert.doesNotMatch(embedded, /senderAddress/u);
   assert.doesNotMatch(embedded, /InputBox|Microsoft\.VisualBasic|Interaction\./u);
   assert.doesNotMatch(
     ordinaryNodeSurface,
-    /process\.env|process\.argv|client_secret|refresh_token|senderAddress/iu,
+    /process\.env|process\.argv|client_secret|refresh_token|companyName/iu,
   );
   assert.doesNotMatch(
     [
@@ -51,9 +52,9 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
     /login_hint|loginHint/u,
   );
   assert.match(child, /env:\s*\{\s*SystemRoot:/u);
-  assert.doesNotMatch(coordinator, /access_token|refresh_token|client_secret|senderAddress|recipientAddress/u);
-  assert.doesNotMatch(cli, /readFile\([^)]*(?:installedClient|senderPolicy)|client_secret|senderAddress/iu);
-  assert.doesNotMatch(revokeCli, /client_secret|refresh_token|senderAddress|recipientAddress|login_hint/iu);
+  assert.doesNotMatch(coordinator, /access_token|refresh_token|client_secret|companyName|recipientAddress/u);
+  assert.doesNotMatch(cli, /readFile\([^)]*(?:installedClient|senderPolicy)|client_secret|companyName/iu);
+  assert.doesNotMatch(revokeCli, /client_secret|refresh_token|companyName|recipientAddress|login_hint/iu);
   assert.doesNotMatch(cli, /environment\[[^\]]+\]|process\.env\./u);
   assert.match(cli, /SECRET_ENVIRONMENT/u);
   assert.deepEqual(JSON.parse(ownership), [
@@ -82,7 +83,7 @@ test("Gmail bootstrap keeps OAuth and mailbox values inside the trusted child", 
       durableOutput: "none",
     },
     {
-      value: "sender_address",
+      value: "company_name",
       ordinaryNode: "none",
       trustedWindowsHelper: "sole_reader_current_bundle_binding",
       durableOutput: "dpapi_ciphertext_only",

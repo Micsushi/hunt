@@ -184,7 +184,7 @@ test("trusted helper frames the Gmail bundle for the resolver's exact one-item d
   );
   const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
   const root = await mkdtemp(join(tmpdir(), "hunt-gmail-bundle-frame-"));
-  const bundle = new TextEncoder().encode('{"format":"gmail-oauth-bundle-v1","accessValue":"synthetic"}');
+  const bundle = new TextEncoder().encode('{"format":"gmail-oauth-bundle-v2","accessValue":"synthetic"}');
   try {
     const sourcePath = join(root, "helper.cs");
     const bundlePath = join(root, "bundle.bin");
@@ -405,11 +405,15 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /ReadSenderPolicy/u);
   assert.doesNotMatch(source, /InputBox|Microsoft\.VisualBasic|Interaction\./u);
   assert.match(source, /exactBundle\["senderPolicyId"\] = binding\["senderPolicyId"\]/u);
-  assert.match(source, /exactBundle\["senderAddress"\] = sender/u);
+  assert.match(source, /exactBundle\["format"\] = "gmail-oauth-bundle-v2"/u);
+  assert.match(source, /exactBundle\["companyName"\] = companyName/u);
+  assert.match(source, /string companyName = null/u);
+  assert.match(source, /finally[\s\S]*companyName = null/u);
   const authorizeMethod = /private static HuntGmailToken Authorize[\s\S]*?private static string ReceiveCode/u.exec(source)?.[0] ?? "";
   assert.doesNotMatch(authorizeMethod, /senderAddress|senderPolicy|notifications@/iu);
   const bundleBlock = /IDictionary<string, object> exactBundle[\s\S]*?WriteOutput\(sealedValue\)/u.exec(source)?.[0] ?? "";
   assert.doesNotMatch(bundleBlock, /login_hint|loginHint|accountEmail/u);
+  assert.doesNotMatch(bundleBlock, /senderAddress/u);
   assert.doesNotMatch(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
   const cancelBlock = /const cancel = \(\) => \{[\s\S]*?\n      \};/u.exec(source)?.[0] ?? "";
@@ -1620,33 +1624,36 @@ test("embedded helper exact-parses only the matching installed loopback client",
   }
 });
 
-test("embedded helper exact-parses one target-bound lowercase sender policy", async () => {
+test("embedded helper exact-parses one target-bound company policy", async () => {
   const source = await readFile(
     "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
     "utf8",
   );
   const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
-  const root = await mkdtemp(join(tmpdir(), "hunt-sender-policy-parser-"));
+  const root = await mkdtemp(join(tmpdir(), "hunt-company-policy-parser-"));
   try {
     const sourcePath = join(root, "helper.cs");
     const validPath = join(root, "valid.json");
     const bomPath = join(root, "bom.json");
     const invalid = [
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v1", senderAddress: "notifications@example.invalid" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "Notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "other.example.invalid", verificationTenant: "tenant" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "other" },
-      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant", extra: true },
-      { schemaVersion: 2, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-sender-policy-v2", senderAddress: "notifications@example.invalid", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v0", companyName: "Accenture", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: " Accenture ", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "Accenture\nJobs", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "x".repeat(201), verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "Accenture", verificationHost: "other.example.invalid", verificationTenant: "tenant" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "Accenture", verificationHost: "tenant.example.invalid", verificationTenant: "other" },
+      { schemaVersion: 1, contractRevision: "s2-gmail-company-policy-v1", companyName: "Accenture", verificationHost: "tenant.example.invalid", verificationTenant: "tenant", extra: true },
+      { schemaVersion: 2, contractRevision: "s2-gmail-company-policy-v1", companyName: "Accenture", verificationHost: "tenant.example.invalid", verificationTenant: "tenant" },
     ];
     const invalidPaths = invalid.map((_, index) => join(root, `invalid-${index}.json`));
     await Promise.all([
       writeFile(sourcePath, csharp),
       writeFile(validPath, JSON.stringify({
         schemaVersion: 1,
-        contractRevision: "s2-gmail-sender-policy-v2",
-        senderAddress: "notifications@example.invalid",
+        contractRevision: "s2-gmail-company-policy-v1",
+        companyName: "Accenture",
         verificationHost: "tenant.example.invalid",
         verificationTenant: "tenant",
       })),
@@ -1654,8 +1661,8 @@ test("embedded helper exact-parses one target-bound lowercase sender policy", as
         Buffer.from([0xef, 0xbb, 0xbf]),
         Buffer.from(JSON.stringify({
           schemaVersion: 1,
-          contractRevision: "s2-gmail-sender-policy-v2",
-          senderAddress: "notifications@example.invalid",
+          contractRevision: "s2-gmail-company-policy-v1",
+          companyName: "Accenture",
           verificationHost: "tenant.example.invalid",
           verificationTenant: "tenant",
         })),
@@ -1667,7 +1674,7 @@ test("embedded helper exact-parses one target-bound lowercase sender policy", as
       [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command",
-        "$invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadSenderPolicy',[Reflection.BindingFlags]'NonPublic,Static'); try { $sender=$method.Invoke($null,@($env:HUNT_TEST_VALID,'tenant.example.invalid','tenant')); if($sender -ne 'notifications@example.invalid') { exit 21 } } catch { exit 22 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,'tenant.example.invalid','tenant')); exit 23 } catch {} }; exit 0",
+        "$invalid=$env:HUNT_TEST_INVALIDS | ConvertFrom-Json; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies 'System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; $method=[HuntInteractiveGmailOAuthSealer].GetMethod('ReadSenderPolicy',[Reflection.BindingFlags]'NonPublic,Static'); try { $company=$method.Invoke($null,@($env:HUNT_TEST_VALID,'tenant.example.invalid','tenant')); if($company -cne 'Accenture') { exit 21 } } catch { exit 22 }; foreach($path in $invalid) { try { $null=$method.Invoke($null,@($path,'tenant.example.invalid','tenant')); exit 23 } catch {} }; exit 0",
       ],
       {
         shell: false,

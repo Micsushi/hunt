@@ -28,7 +28,7 @@ export type GmailHttpClientTraceEvent =
   | "gmail_message_parse_failed";
 export interface GmailQueryAuthority {
   readonly accessValue: string;
-  readonly senderAddress: string;
+  readonly companyName: string;
   readonly recipientAddress: string;
   readonly verificationHost: string;
   readonly verificationTtlSeconds: number;
@@ -65,7 +65,7 @@ export class GmailHttpClient {
     listUrl.searchParams.set(
       "q",
       [
-        `from:${authority.senderAddress}`,
+        exactPhrase(authority.companyName),
         `to:${authority.recipientAddress}`,
         `after:${Math.floor(Date.parse(window.notBefore) / 1_000)}`,
         `before:${Math.ceil(Date.parse(window.notAfter) / 1_000)}`,
@@ -164,6 +164,10 @@ export class GmailHttpClient {
       );
     }
   }
+}
+
+function exactPhrase(value: string): string {
+  return `"${value.replace(/[\\"]/gu, "\\$&")}"`;
 }
 
 function opaqueReplayCoordinate(providerIdentity: string): Uint8Array {

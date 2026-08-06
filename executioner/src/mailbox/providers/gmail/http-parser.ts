@@ -61,7 +61,6 @@ export function parseMessageIds(value: unknown): readonly string[] {
 export function parseGmailMessage(
   value: unknown,
   expected: {
-    readonly senderAddress: string;
     readonly recipientAddress: string;
     readonly verificationHost: string;
     readonly notBefore: string;
@@ -98,10 +97,7 @@ export function parseGmailMessage(
   }
   const headers = headerMap(value.payload.headers);
   emit(trace, "gmail_message_headers_admitted");
-  if (
-    address(headers.get("from")) !== expected.senderAddress ||
-    address(headers.get("to")) !== expected.recipientAddress
-  ) {
+  if (address(headers.get("to")) !== expected.recipientAddress) {
     return null;
   }
   emit(trace, "gmail_message_addresses_admitted");

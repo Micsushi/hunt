@@ -10,7 +10,7 @@ import { createMailboxCandidateBindings } from "../../src/composition/s2-mailbox
 const now = "2026-08-02T02:05:29.000Z";
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 
-test("mailbox composition binds an exact trailing 24-hour interval containing the existing message", () => {
+test("mailbox composition binds the current company search to the exact preceding hour", () => {
   const owner = ownerInputs();
   const verificationOperationId = "operation_abcdefghijklmnop" as OperationId;
   const value = createMailboxCandidateBindings(
@@ -19,15 +19,14 @@ test("mailbox composition binds an exact trailing 24-hour interval containing th
     now,
     verificationOperationId,
   );
-  assert.equal(value.input.notBefore, "2026-08-01T02:05:29.000Z");
+  assert.equal(value.input.notBefore, "2026-08-02T01:05:29.000Z");
   assert.equal(value.input.notAfter, now);
   assert.equal(
     Date.parse(value.input.notAfter) - Date.parse(value.input.notBefore),
-    24 * 60 * 60 * 1_000,
+    60 * 60 * 1_000,
   );
-  assert.notEqual(value.input.notBefore, "2026-08-02T01:05:29.000Z");
-  assert.equal(Date.parse("2026-08-01T21:44:48.000Z") >= Date.parse(value.input.notBefore), true);
-  assert.equal(Date.parse("2026-08-01T21:44:48.000Z") <= Date.parse(value.input.notAfter), true);
+  assert.equal(Date.parse("2026-08-02T01:44:48.000Z") >= Date.parse(value.input.notBefore), true);
+  assert.equal(Date.parse("2026-08-02T01:44:48.000Z") <= Date.parse(value.input.notAfter), true);
   assert.notEqual(value.input.notBefore, owner.approval.approvedAt);
   assert.equal(value.input.recipientBindingId, owner.recipientBindingId);
   assert.equal(value.input.targetHandleId, owner.target.handleId);
@@ -42,10 +41,14 @@ test("mailbox composition binds an exact trailing 24-hour interval containing th
   assert.equal(JSON.stringify(value.input).includes(owner.target.url), false);
 });
 
-test("mailbox acceptance runbook pins the exact trailing 24-hour query window", () => {
-  const readme = readFileSync("README.md", "utf8");
-  assert.match(readme, /exact trailing 24-hour window/u);
-  assert.doesNotMatch(readme, /trailing 60-minute window/u);
+test("authenticated catalog runbook pins the company-specific preceding-hour query", () => {
+  const runbook = readFileSync("docs/authenticated-catalog-testing.md", "utf8");
+  assert.match(runbook, /current job's company[\s\S]*preceding hour/u);
+  assert.match(runbook, /No sender allowlist is required/u);
+  assert.doesNotMatch(
+    runbook,
+    /sender-policy|exact sender policy|owner-approved exact sender|unknown tenant's exact verification sender/u,
+  );
 });
 
 function ownerInputs(): RealRunOwnerInputsV1 {

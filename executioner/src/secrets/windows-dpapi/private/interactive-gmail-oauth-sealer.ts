@@ -286,7 +286,7 @@ public static class HuntInteractiveGmailOAuthSealer
         byte[] sealedValue = null;
         HuntGmailToken token = null;
         InstalledClient installedClient = null;
-        string sender = null;
+        string companyName = null;
         try
         {
             input = ReadInput(out revoke, out reconcile);
@@ -310,7 +310,7 @@ public static class HuntInteractiveGmailOAuthSealer
             ValidateClient(clientId);
             ValidateBinding(binding);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
-            sender = ReadSenderPolicy(
+            companyName = ReadSenderPolicy(
                 senderPolicyConfigPath,
                 (string)binding["verificationHost"],
                 (string)binding["verificationTenant"]
@@ -329,7 +329,7 @@ public static class HuntInteractiveGmailOAuthSealer
             ValidateExpiry(gmailMetadata, token.ExpiresIn, token.ReceivedAt);
             string profileEmail = token.ProfileEmail;
             IDictionary<string, object> exactBundle = new Dictionary<string, object>();
-            exactBundle["format"] = "gmail-oauth-bundle-v1";
+            exactBundle["format"] = "gmail-oauth-bundle-v2";
             exactBundle["accessValue"] = token.AccessValue;
             exactBundle["journeyId"] = binding["journeyId"];
             exactBundle["recipientBindingId"] = binding["recipientBindingId"];
@@ -337,7 +337,7 @@ public static class HuntInteractiveGmailOAuthSealer
             exactBundle["target"] = binding["target"];
             exactBundle["scope"] = Scope;
             exactBundle["recipientAddress"] = profileEmail;
-            exactBundle["senderAddress"] = sender;
+            exactBundle["companyName"] = companyName;
             exactBundle["verificationHost"] = binding["verificationHost"];
             exactBundle["verificationTenant"] = binding["verificationTenant"];
             exactBundle["verificationTtlSeconds"] = binding["verificationTtlSeconds"];
@@ -359,7 +359,7 @@ public static class HuntInteractiveGmailOAuthSealer
             Clear(account);
             if (token != null) token.Clear();
             if (installedClient != null) installedClient.Clear();
-            sender = null;
+            companyName = null;
             if (input != null) foreach (byte[] section in input) Clear(section);
         }
     }
@@ -997,18 +997,20 @@ public static class HuntInteractiveGmailOAuthSealer
                 throw new InvalidDataException();
             IDictionary<string, object> policy = ExactObject(StrictUtf8(bytes));
             ExactKeys(policy, new string[] {
-                "schemaVersion", "contractRevision", "senderAddress",
+                "schemaVersion", "contractRevision", "companyName",
                 "verificationHost", "verificationTenant"
             });
             if (IntegerField(policy, "schemaVersion", 1, 1) != 1 ||
-                StringField(policy, "contractRevision", 25, 25) != "s2-gmail-sender-policy-v2" ||
+                StringField(policy, "contractRevision", 26, 26) != "s2-gmail-company-policy-v1" ||
                 StringField(policy, "verificationHost", 3, 253) != expectedHost ||
                 StringField(policy, "verificationTenant", 1, 253) != expectedTenant)
                 throw new InvalidDataException();
-            string sender = StringField(policy, "senderAddress", 3, 254);
-            if (!ValidEmail(sender) || sender != sender.ToLowerInvariant())
+            string companyName = StringField(policy, "companyName", 1, 200);
+            if (!String.Equals(companyName, companyName.Trim(), StringComparison.Ordinal))
                 throw new InvalidDataException();
-            return sender;
+            foreach (char character in companyName)
+                if (Char.IsControl(character)) throw new InvalidDataException();
+            return companyName;
         }
         catch { throw new FlowException(10); }
         finally { Clear(bytes); }

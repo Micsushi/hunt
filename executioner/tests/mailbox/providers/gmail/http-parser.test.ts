@@ -8,7 +8,6 @@ import {
 } from "../../../../src/mailbox/providers/gmail/http-parser.ts";
 
 const expected = {
-  senderAddress: "workday@example.invalid",
   recipientAddress: "applicant@example.invalid",
   verificationHost: "tenant.example.invalid",
   notBefore: "2026-08-01T12:00:00.000Z",
@@ -25,7 +24,7 @@ function message(overrides: Record<string, unknown> = {}) {
     internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
     payload: {
       headers: [
-        { name: "From", value: `Workday <${expected.senderAddress}>` },
+        { name: "From", value: "Unexpected Sender <random@mailer.example.invalid>" },
         { name: "To", value: `Applicant <${expected.recipientAddress}>` },
       ],
       parts: [
@@ -206,28 +205,20 @@ test("an out-of-range timestamp is a stable malformed-response failure", () => {
   );
 });
 
-test("wrong sender, recipient, time, or host is not a candidate", () => {
+test("accepts an arbitrary sender but rejects the wrong recipient, time, or host", () => {
   const cases = [
     message({
       payload: {
         ...message().payload,
         headers: [
-          { name: "From", value: "other@example.invalid" },
-          { name: "To", value: expected.recipientAddress },
-        ],
-      },
-    }),
-    message({
-      payload: {
-        ...message().payload,
-        headers: [
-          { name: "From", value: expected.senderAddress },
+          { name: "From", value: "any-sender@example.invalid" },
           { name: "To", value: "other@example.invalid" },
         ],
       },
     }),
     message({ internalDate: String(Date.parse("2026-08-01T11:59:59.999Z")) }),
   ];
+  assert.notEqual(parseGmailMessage(message(), expected), null);
   for (const value of cases) assert.equal(parseGmailMessage(value, expected), null);
   assert.equal(
     parseGmailMessage(message(), { ...expected, verificationHost: "other.example.invalid" }),

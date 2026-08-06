@@ -25,7 +25,7 @@ void resolverCompatibility;
 const senderPolicyId =
   "sender_policy_0123456789abcdef" as SenderPolicyId;
 const recipientAddress = "applicant@example.invalid";
-const senderAddress = "workday@example.invalid";
+const companyName = "Acme Research";
 const verificationHost = "tenant.example.invalid";
 const verificationTenant = "example-tenant";
 const verificationTarget =
@@ -34,14 +34,14 @@ const accessValue = "synthetic-private-auth-value";
 
 function sealedBundle(overrides: Record<string, unknown> = {}): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
-    format: "gmail-oauth-bundle-v1",
+    format: "gmail-oauth-bundle-v2",
     scope: "https://www.googleapis.com/auth/gmail.readonly",
     accessValue,
     journeyId: liveFixtures.journeyId,
     recipientBindingId: liveFixtures.mailboxPollRequest.recipientBindingId,
     senderPolicyId,
     recipientAddress,
-    senderAddress,
+    companyName,
     target: liveFixtures.target,
     verificationHost,
     verificationTenant,
@@ -61,10 +61,11 @@ async function withFakeGmail(
     if (requestUrl.pathname.endsWith("/messages")) {
       assert.equal(requestUrl.searchParams.get("maxResults"), "2");
       const query = requestUrl.searchParams.get("q") ?? "";
-      assert.match(query, /from:workday@example\.invalid/u);
+      assert.match(query, /"Acme Research"/u);
       assert.match(query, /to:applicant@example\.invalid/u);
       assert.match(query, /after:\d+/u);
       assert.match(query, /before:\d+/u);
+      assert.doesNotMatch(query, /(?:^|\s)from:/u);
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ messages: [{ id: "synthetic-message-id" }] }));
       return;
@@ -77,7 +78,7 @@ async function withFakeGmail(
         internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
         payload: {
           headers: [
-            { name: "From", value: senderAddress },
+            { name: "From", value: "random@mailer.example.invalid" },
             { name: "To", value: recipientAddress },
           ],
           body: {
@@ -183,6 +184,7 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
 
 test("one readonly DPAPI callback returns only safe metadata and commits one admitted raw handle", async () => {
   await withFakeGmail(async (baseUrl, httpCalls) => {
+    assert.doesNotMatch(new TextDecoder().decode(sealedBundle()), /senderAddress/u);
     const harness = buildExecutor(baseUrl);
     const result = await harness.executor.query(
       {
@@ -339,7 +341,7 @@ test("zero, ambiguous, and expired candidates remain exact and never commit raw 
         internalDate: String(Date.parse(message?.receivedAt ?? "invalid")),
         payload: {
           headers: [
-            { name: "From", value: senderAddress },
+            { name: "From", value: "random@mailer.example.invalid" },
             { name: "To", value: recipientAddress },
           ],
           body: {
@@ -384,6 +386,15 @@ test("wrong scope or sealed binding fails before HTTP and emits no raw handle", 
   await withFakeGmail(async (baseUrl, httpCalls) => {
     const cases = [
       [sealedBundle({ scope: "https://mail.google.com/" }), "gmail_auth_denied"],
+      [sealedBundle({ companyName: "" }), "gmail_auth_denied"],
+      [sealedBundle({ companyName: " Acme Research" }), "gmail_auth_denied"],
+      [sealedBundle({ companyName: "Acme\nResearch" }), "gmail_auth_denied"],
+      [sealedBundle({ companyName: "x".repeat(201) }), "gmail_auth_denied"],
+      [sealedBundle({
+        format: "gmail-oauth-bundle-v1",
+        senderAddress: "workday@example.invalid",
+        companyName: undefined,
+      }), "gmail_auth_denied"],
       [sealedBundle({ extra: "not-admitted" }), "gmail_auth_denied"],
       [sealedBundle({ journeyId: liveFixtures.otherJourneyId }), "mailbox_query_invalid"],
       [sealedBundle({ recipientBindingId: "recipient_fedcba9876543210" }), "mailbox_query_invalid"],

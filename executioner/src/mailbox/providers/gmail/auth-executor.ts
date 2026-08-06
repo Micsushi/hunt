@@ -255,7 +255,7 @@ function validSourceRequest(
 
 interface SealedGmailBundle {
   readonly accessValue: string;
-  readonly senderAddress: string;
+  readonly companyName: string;
   readonly recipientAddress: string;
   readonly verificationHost: string;
   readonly verificationTtlSeconds: number;
@@ -280,12 +280,12 @@ function parseSealedBundle(
   if (!record(value)) throw new GmailProviderFailure("gmail_auth_denied");
   const exactKeys = [
     "accessValue",
+    "companyName",
     "format",
     "journeyId",
     "recipientAddress",
     "recipientBindingId",
     "scope",
-    "senderAddress",
     "senderPolicyId",
     "target",
     "verificationHost",
@@ -294,15 +294,15 @@ function parseSealedBundle(
   ];
   if (
     JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(exactKeys) ||
-    value.format !== "gmail-oauth-bundle-v1" ||
+    value.format !== "gmail-oauth-bundle-v2" ||
     value.scope !== "https://www.googleapis.com/auth/gmail.readonly" ||
     typeof value.accessValue !== "string" ||
     value.accessValue.length < 1 ||
     value.accessValue.length > 4_096 ||
     typeof value.recipientAddress !== "string" ||
     !email(value.recipientAddress) ||
-    typeof value.senderAddress !== "string" ||
-    !email(value.senderAddress) ||
+    typeof value.companyName !== "string" ||
+    !company(value.companyName) ||
     typeof value.verificationHost !== "string" ||
     !host(value.verificationHost) ||
     typeof value.verificationTenant !== "string" ||
@@ -340,8 +340,8 @@ function parseSealedBundle(
   }
   return {
     accessValue: value.accessValue,
+    companyName: value.companyName,
     recipientAddress: value.recipientAddress,
-    senderAddress: value.senderAddress,
     verificationHost: value.verificationHost,
     verificationTtlSeconds: Number(value.verificationTtlSeconds),
   };
@@ -404,6 +404,13 @@ function email(value: string): boolean {
   return value === value.toLowerCase() &&
     value.length <= 254 &&
     /^[^\s@]+@[^\s@]+$/u.test(value);
+}
+
+function company(value: string): boolean {
+  return value.length >= 1 &&
+    value.length <= 200 &&
+    value === value.trim() &&
+    !/[\p{Cc}]/u.test(value);
 }
 
 function host(value: string): boolean {

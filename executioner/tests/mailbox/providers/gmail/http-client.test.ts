@@ -8,11 +8,35 @@ import { GmailProviderFailure } from "../../../../src/mailbox/providers/gmail/ht
 
 const authority = {
   accessValue: "synthetic-private-auth-value",
-  senderAddress: "workday@example.invalid",
+  companyName: "Acme \"Research\" \\ Labs",
   recipientAddress: "applicant@example.invalid",
   verificationHost: "tenant.example.invalid",
   verificationTtlSeconds: 900,
 };
+
+test("queries the exact company and recipient within the bounded window without a sender restriction", async () => {
+  let query = "";
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    query = requestUrl.searchParams.get("q") ?? "";
+    response.end(JSON.stringify({ messages: [] }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    assert.deepEqual(
+      await new GmailHttpClient({ baseUrl, allowLoopbackHttp: true })
+        .query(authority, window, new AbortController().signal),
+      [],
+    );
+    assert.match(query, /^"Acme \\"Research\\" \\\\ Labs" to:/u);
+    assert.match(query, /to:applicant@example\.invalid/u);
+    assert.match(query, /after:1785585600/u);
+    assert.match(query, /before:1785586500/u);
+    assert.doesNotMatch(query, /(?:^|\s)from:/u);
+  } finally {
+    await close(server);
+  }
+});
 const window = {
   notBefore: "2026-08-01T12:00:00.000Z",
   notAfter: "2026-08-01T12:15:00.000Z",
@@ -70,7 +94,7 @@ test("never follows redirects and fails closed before pagination", async () => {
       internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
       payload: {
         headers: [
-          { name: "From", value: authority.senderAddress },
+          { name: "From", value: "arbitrary-sender@mailer.example.invalid" },
           { name: "To", value: authority.recipientAddress },
         ],
         body: {
@@ -109,7 +133,7 @@ test("emits only value-free parser stage diagnostics", async () => {
       internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
       payload: {
         headers: [
-          { name: "From", value: authority.senderAddress },
+          { name: "From", value: "arbitrary-sender@mailer.example.invalid" },
           { name: "To", value: authority.recipientAddress },
         ],
         body: {
@@ -159,7 +183,7 @@ test("derives a stable opaque replay coordinate from the provider message identi
       internalDate: String(Date.parse("2026-08-01T12:05:00.000Z")),
       payload: {
         headers: [
-          { name: "From", value: authority.senderAddress },
+          { name: "From", value: "arbitrary-sender@mailer.example.invalid" },
           { name: "To", value: authority.recipientAddress },
         ],
         body: {

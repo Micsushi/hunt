@@ -343,35 +343,38 @@ Create a bootstrap JSON file outside every repository with exactly these fields:
   "gmailHandleId": "secret_handle_...",
   "desktopClientId": "...apps.googleusercontent.com",
   "installedClientConfigPath": "C:\\absolute\\protected\\google-installed-client.json",
-  "senderPolicyConfigPath": "C:\\absolute\\protected\\gmail-sender-policy.json",
+  "senderPolicyConfigPath": "C:\\absolute\\protected\\gmail-company-policy.json",
   "verificationHost": "tenant.wd5.myworkdayjobs.com"
 }
 ```
 
-Create the sender-policy file at the configured path with exactly this stable,
+Create the company-policy file at the configured path with exactly this stable,
 owner-approved policy:
 
 ```json
 {
   "schemaVersion": 1,
-  "contractRevision": "s2-gmail-sender-policy-v2",
-  "senderAddress": "notifications@example.invalid",
+  "contractRevision": "s2-gmail-company-policy-v1",
+  "companyName": "Example Company",
   "verificationHost": "tenant.wd5.myworkdayjobs.com",
   "verificationTenant": "tenant"
 }
 ```
 
-The sender policy is target-bound. Its host and tenant must exactly match the
-current approved Workday target, so a sender observed for another tenant cannot
-silently produce a false empty-mailbox result.
+The company policy is target-bound. Its host and tenant must exactly match the
+current approved Workday target. The bootstrap field remains named
+`senderPolicyConfigPath` for wire compatibility, but the referenced file is a
+company policy; no sender allowlist is used. Gmail searches for the exact current
+company within the preceding hour, then independently validates the exact
+recipient, Workday tenant and target, HTTPS verification link, and unique result.
 
 Use an owner-approved Google Desktop OAuth client JSON with Gmail API access.
 Keep both referenced files regular, bounded, distinct, outside every repository,
 and under protected current-user ACLs. The bootstrap file contains only their
 canonical absolute paths and the expected client ID; never copy the client
-secret or sender address into bootstrap arguments, environment, logs, or Node
-configuration. Enter only the verification hostname in the bootstrap JSON,
-never a full link or token. Then run:
+secret or company policy contents into bootstrap arguments, environment, logs,
+or Node configuration. Enter only the verification hostname in the bootstrap
+JSON, never a full link or token. Then run:
 
 ```text
 npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
@@ -395,12 +398,12 @@ delete only that exact file, and retry.
 
 Node sees only canonical paths and the expected client ID; it never reads either
 referenced JSON file. The trusted Windows child is their sole content reader. It
-accepts only the exact installed-client shape and one exact versioned lowercase
-sender address, then binds that address into the current derived sender policy,
-journey, recipient, and target bundle. There is no sender prompt. The child uses
+accepts only the exact installed-client shape and one exact versioned company
+policy, then binds that company into the current derived policy, journey,
+recipient, and target bundle. There is no sender prompt. The child uses
 the client secret only in the token exchange, alongside an ephemeral IPv4
 loopback callback, PKCE S256, and only `gmail.readonly`. It confirms the Gmail
-profile matches the DPAPI-protected Workday email. OAuth, mailbox, sender, and
+profile matches the DPAPI-protected Workday email. OAuth, mailbox, company, and
 bundle values stay in that child; Node receives only DPAPI CurrentUser
 ciphertext. Recreate both short-lived handles instead of mixing F1 and F2 expiry
 values. This command does not query Gmail or consume the message.
@@ -450,8 +453,8 @@ result.
 | expected desktop client ID | exact equality input | exact equality check | none |
 | installed-client canonical path | admission and ACL only | bounded file open | none |
 | installed-client JSON and client secret | none | sole reader; token form only | none |
-| sender-policy canonical path | admission and ACL only | bounded file open | none |
-| sender address | none | sole reader; current bundle binding | DPAPI ciphertext only |
+| company-policy canonical path | admission and ACL only | bounded file open | none |
+| company name | none | sole reader; current bundle binding | DPAPI ciphertext only |
 | Gmail access token and mailbox identity | none | OAuth/profile/bundle sealing | DPAPI ciphertext only |
 | Gmail refresh grant | none | OAuth refresh, revocation, and Windows Credential Manager only | current-user Generic Credential, maximum 512 bytes, under a scope-bound opaque target |
 

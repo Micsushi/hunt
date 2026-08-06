@@ -24,7 +24,7 @@
     "durableOutput": "none"
   },
   {
-    "value": "sender_address",
+    "value": "company_name",
     "ordinaryNode": "none",
     "trustedWindowsHelper": "sole_reader_current_bundle_binding",
     "durableOutput": "dpapi_ciphertext_only"

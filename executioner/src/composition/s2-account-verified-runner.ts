@@ -135,7 +135,7 @@ export function createAccountVerifiedBindings(
     tenantId: `tenant_${targetSuffix}` as TargetTenantId,
     postingId: `posting_${targetSuffix}` as TargetPostingId,
   });
-  const notBefore = new Date(Date.parse(now) - 24 * 60 * 60 * 1_000).toISOString();
+  const notBefore = new Date(Date.parse(now) - 60 * 60 * 1_000).toISOString();
   const mailboxRequest = Object.freeze({
     schemaVersion: 1 as const,
     journeyId: owner.journeyId as never,
