@@ -71,6 +71,10 @@ export type AccountAccessTargetFact =
   | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
   | { readonly kind: "target_ambiguous" }
   | {
+      readonly kind: "manual_intervention";
+      readonly reason: "captcha" | "mfa" | "access_control";
+    }
+  | {
       readonly kind: "posting_unavailable";
       readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error";
     };
@@ -296,9 +300,12 @@ async function enterAndProve(
     mutated.value.attemptedFields[1] === "password";
   const directApplicationAccess = mutated.value.kind === "application_ready" &&
     mutated.value.attemptedFields.length === 0;
-  if ((!fullCredentialSet && !directApplicationAccess) ||
+  const manualIntervention = mutated.value.kind === "manual_intervention" &&
+    (fullCredentialSet || mutated.value.attemptedFields.length === 0);
+  if ((!fullCredentialSet && !directApplicationAccess && !manualIntervention) ||
       (mutated.value.kind !== "verification_required" &&
-        mutated.value.kind !== "application_ready")) {
+        mutated.value.kind !== "application_ready" &&
+        mutated.value.kind !== "manual_intervention")) {
     recorder.record(
       "S2_CREDENTIAL_MUTATION",
       "mutate",
@@ -313,6 +320,12 @@ async function enterAndProve(
     "step_completed",
     mutateOperation,
   );
+  if (manualIntervention) {
+    return targetFailure({
+      kind: "manual_intervention",
+      reason: mutated.value.reason,
+    });
+  }
 
   const accountOutcome = mutated.value.kind as
     "verification_required" | "application_ready";
@@ -398,6 +411,18 @@ function terminalResult(
 ): TerminalResultV4 | null {
   if (result.ok) return null;
   if (result.fact !== undefined) {
+    if (result.fact.kind === "manual_intervention") {
+      return Object.freeze({
+        schemaVersion: 4 as const,
+        journeyId,
+        status: "blocked" as const,
+        completedPages: 0,
+        factualOutcome: {
+          source: "account_access" as const,
+          result: result.fact,
+        },
+      });
+    }
     return Object.freeze({
       schemaVersion: 4 as const,
       journeyId,
@@ -498,6 +523,8 @@ function targetFailure(fact: AccountAccessTargetFact): {
     ? Object.freeze({ kind: fact.kind, dimension: fact.dimension })
     : fact.kind === "posting_unavailable"
       ? Object.freeze({ kind: fact.kind, reason: fact.reason })
-      : Object.freeze({ kind: fact.kind });
+      : fact.kind === "manual_intervention"
+        ? Object.freeze({ kind: fact.kind, reason: fact.reason })
+        : Object.freeze({ kind: fact.kind });
   return Object.freeze({ ok: false, code: fact.kind, fact: copied });
 }

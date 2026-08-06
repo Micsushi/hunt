@@ -477,6 +477,77 @@ test("thrown cleanup is converted to a bounded cleanup failure", async () => {
   );
 });
 
+test("a factual account access-control stop seals blocked diagnostics without acceptance", async () => {
+  let diagnostic: AccountAccessDiagnostics | undefined;
+  let evidenceCalls = 0;
+  const dependencies = successfulDependencies();
+  dependencies.credentials = {
+    async mutate() {
+      return {
+        ok: true,
+        value: {
+          kind: "manual_intervention",
+          reason: "access_control",
+          attemptedFields: ["email", "password"],
+        },
+      };
+    },
+  } as CredentialMutationAdapter;
+  dependencies.evidence = { async write() { evidenceCalls += 1; } };
+  dependencies.diagnostics = {
+    async write(value) { diagnostic = value; },
+  };
+
+  const result = await runStage2AccountAccess(
+    input(), dependencies, new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    code: "manual_intervention",
+    fact: { kind: "manual_intervention", reason: "access_control" },
+  });
+  assert.equal(evidenceCalls, 0);
+  assert.equal(diagnostic?.status, "blocked");
+  assert.deepEqual(diagnostic?.terminal, {
+    schemaVersion: 4,
+    journeyId: input().journeyId,
+    status: "blocked",
+    completedPages: 0,
+    factualOutcome: {
+      source: "account_access",
+      result: { kind: "manual_intervention", reason: "access_control" },
+    },
+  });
+});
+
+test("a pre-credential manual intervention is also a factual blocked outcome", async () => {
+  const dependencies = successfulDependencies();
+  dependencies.credentials = {
+    async mutate() {
+      return {
+        ok: true,
+        value: {
+          kind: "manual_intervention",
+          reason: "captcha",
+          attemptedFields: [],
+        },
+      };
+    },
+  } as CredentialMutationAdapter;
+
+  assert.deepEqual(
+    await runStage2AccountAccess(
+      input(), dependencies, new AbortController().signal,
+    ),
+    {
+      ok: false,
+      code: "manual_intervention",
+      fact: { kind: "manual_intervention", reason: "captcha" },
+    },
+  );
+});
+
 test("monitor uncertainty fails the run without misreporting successful cleanup", async () => {
   let diagnostic: AccountAccessDiagnostics | undefined;
   const dependencies = successfulDependencies();

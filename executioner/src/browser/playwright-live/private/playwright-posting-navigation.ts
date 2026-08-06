@@ -128,7 +128,7 @@ export class PlaywrightPostingNavigationAdapter
 async function waitForDestination(page: Pick<Page, "locator">): Promise<void> {
   await page.locator(ACCOUNT_OR_APPLICATION_DESTINATION).first().waitFor({
     state: "attached",
-    timeout: 10_000,
+    timeout: 20_000,
   });
 }
 
@@ -183,7 +183,7 @@ async function waitForEmailSignInDestination(
 ): Promise<void> {
   await page.locator(EMAIL_SIGN_IN_DESTINATION).first().waitFor({
     state: "attached",
-    timeout: 10_000,
+    timeout: 20_000,
   });
 }
 

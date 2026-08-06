@@ -12,6 +12,7 @@ const SIGN_IN_EXACT_FACT_SELECTORS = [
   WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
   ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
   WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+  WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
 ] as const;
 const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
@@ -19,6 +20,7 @@ const SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS = [
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
   ':text-is("You may have entered the wrong email address or password or your account might be locked.")',
+  WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
   '[role="alert"]',
   '[data-automation-id="createAccountLink"]',
 ] as const;
@@ -911,6 +913,80 @@ test("a create-account rejection waits for confirmation with the semantic form",
   assert.equal(submit.clickCalls, 1);
 });
 
+test("a newly visible administrator password-reset alert settles sign-in exactly", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    hiddenWaitFails: true,
+  });
+  const reset = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: false,
+    editable: false,
+  });
+  const page = new FakePage(submit, undefined, new Map([[
+    WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
+    reset,
+  ]]));
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(page, "submit_sign_in");
+
+  assert.deepEqual(reset.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.deepEqual(events.slice(-2), [
+    "submit_diagnostic_alert_password_reset_required",
+    "submit_exact_fact_observed",
+  ]);
+  assert.equal(submit.clickCalls, 1);
+});
+
+test("a final exact snapshot reconciles sign-in after submit settlement waits exhaust", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const signInDestination = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false, true],
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, absentDestination, new Map([
+    ['[data-automation-id="signInPage"]', signInDestination],
+  ])), "submit_create_account");
+
+  assert.equal(submit.clickCalls, 1);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_rejection_submit_owner_wait_failed",
+    "submit_destination_observed",
+  ]);
+});
+
 test("rejection readiness identifies the exact failed semantic wait", async () => {
   const cases = [
     ["submit_sign_in", "submit", "submit_rejection_submit_owner_wait_failed"],
@@ -1404,6 +1480,7 @@ class FakePage {
       selector === '[data-automation-id="signInPage"]' ||
       selector === '[data-automation-id="createAccountPage"]' ||
       selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked ||
+      selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired ||
       selector === '[role="alert"]'
     ) return this.absentExactFactLocator;
     if (selector === '[data-automation-id="candidateHomePage"]') {

@@ -48,6 +48,7 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_diagnostic_page_create_account"
   | "submit_diagnostic_page_unknown"
   | "submit_diagnostic_alert_credentials_or_locked"
+  | "submit_diagnostic_alert_password_reset_required"
   | "submit_diagnostic_alert_unknown"
   | "submit_diagnostic_alert_none"
   | "submit_diagnostic_create_account_available"
@@ -71,7 +72,11 @@ interface AccountSubmitFailureDiagnosticV1 {
   readonly schemaVersion: 1;
   readonly action: "submit_sign_in" | "submit_create_account";
   readonly page: "sign_in" | "create_account" | "unknown";
-  readonly alert: "credentials_or_locked" | "unknown_visible" | "none";
+  readonly alert:
+    | "credentials_or_locked"
+    | "password_reset_required"
+    | "unknown_visible"
+    | "none";
   readonly createAccountActionAvailable: boolean;
   readonly submitControlVisible: boolean;
   readonly rawPageTextRetained: false;
@@ -178,6 +183,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       let postClickDestinationLocators: readonly Locator[] = [];
       let postClickDestinations: readonly Promise<"transition">[] = [];
       let credentialsOrLockedCanSettle = false;
+      let passwordResetRequiredCanSettle = false;
       let opposingSubmitOwner: Locator | undefined;
       let opposingSubmitOwnerCanSettle = false;
       let modernSignInDestination: Locator | undefined;
@@ -204,6 +210,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         );
         credentialsOrLockedCanSettle = factSelectors.some((selector, index) =>
           selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked &&
+          !visibleBeforeClick[index]
+        );
+        passwordResetRequiredCanSettle = factSelectors.some((selector, index) =>
+          selector === WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired &&
           !visibleBeforeClick[index]
         );
         opposingSubmitOwner = semanticLocator(
@@ -238,6 +248,21 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           waitForExactVisible(destination).then(() => "transition" as const)
         );
         const exactFact = waitForExactFact(postClickExactFactLocators);
+        const emitExactSignInAlert = async () => {
+          if (
+            passwordResetRequiredCanSettle &&
+            await exactVisible(playwrightPage(page).locator(
+              WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
+            ))
+          ) {
+            this.#emit("submit_diagnostic_alert_password_reset_required");
+          } else if (
+            credentialsOrLockedCanSettle &&
+            await exactVisible(playwrightPage(page).locator(
+              WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+            ))
+          ) this.#emit("submit_diagnostic_alert_credentials_or_locked");
+        };
         let initial: "transition" | "exact_fact";
         try {
           initial = await Promise.any([
@@ -260,6 +285,8 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           this.#emit(
             diagnostic.alert === "credentials_or_locked"
               ? "submit_diagnostic_alert_credentials_or_locked"
+              : diagnostic.alert === "password_reset_required"
+                ? "submit_diagnostic_alert_password_reset_required"
               : diagnostic.alert === "unknown_visible"
                 ? "submit_diagnostic_alert_unknown"
                 : "submit_diagnostic_alert_none",
@@ -283,6 +310,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
             }
             this.#emit("submit_inspection_hold_ended");
             if (await anyExactVisible(postClickExactFactLocators)) {
+              await emitExactSignInAlert();
               this.#emit("submit_exact_fact_observed");
               return;
             }
@@ -294,12 +322,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           throw new Error("submit effect did not settle");
         }
         if (initial === "exact_fact") {
-          if (
-            credentialsOrLockedCanSettle &&
-            await exactVisible(playwrightPage(page).locator(
-              WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
-            ))
-          ) this.#emit("submit_diagnostic_alert_credentials_or_locked");
+          await emitExactSignInAlert();
           this.#emit("submit_exact_fact_observed");
         } else {
           let observed: "destination" | "rejection" | "exact_fact";
@@ -332,12 +355,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               throw error;
             }
             if (observed === "exact_fact") {
-              if (
-                credentialsOrLockedCanSettle &&
-                await exactVisible(playwrightPage(page).locator(
-                  WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
-                ))
-              ) this.#emit("submit_diagnostic_alert_credentials_or_locked");
+              await emitExactSignInAlert();
               this.#emit("submit_exact_fact_observed");
               return;
             }
@@ -379,6 +397,19 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               }
             }
           } catch (error) {
+            if (await anyExactVisible(postClickExactFactLocators)) {
+              await emitExactSignInAlert();
+              this.#emit("submit_exact_fact_observed");
+              return;
+            }
+            if (
+              await anyExactVisible(postClickDestinationLocators) ||
+              opposingSubmitOwnerCanSettle && await exactVisible(opposingSubmitOwner!) ||
+              modernSignInDestinationCanSettle && await exactVisible(modernSignInDestination!)
+            ) {
+              this.#emit("submit_destination_observed");
+              return;
+            }
             this.#emit("submit_stabilization_failed");
             throw error;
           }
@@ -408,11 +439,20 @@ async function inspectSubmitFailure(
 ): Promise<AccountSubmitFailureDiagnosticV1> {
   try {
     const source = playwrightPage(page);
-    const [signIn, createAccount, knownAlert, anyAlert, createAccountAction, submitVisible] =
+    const [
+      signIn,
+      createAccount,
+      knownAlert,
+      passwordResetRequired,
+      anyAlert,
+      createAccountAction,
+      submitVisible,
+    ] =
       await Promise.all([
         exactVisible(source.locator('[data-automation-id="signInPage"]')),
         exactVisible(source.locator('[data-automation-id="createAccountPage"]')),
         exactVisible(source.locator(WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked)),
+        exactVisible(source.locator(WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired)),
         exactVisible(source.locator(WORKDAY_VISIBLE_ALERT_SELECTOR)),
         exactActionable(source.locator('[data-automation-id="createAccountLink"]')),
         submit.isVisible(),
@@ -421,7 +461,13 @@ async function inspectSubmitFailure(
       schemaVersion: 1,
       action,
       page: signIn === createAccount ? "unknown" : signIn ? "sign_in" : "create_account",
-      alert: knownAlert ? "credentials_or_locked" : anyAlert ? "unknown_visible" : "none",
+      alert: knownAlert
+        ? "credentials_or_locked"
+        : passwordResetRequired
+          ? "password_reset_required"
+          : anyAlert
+            ? "unknown_visible"
+            : "none",
       createAccountActionAvailable: createAccountAction,
       submitControlVisible: submitVisible,
       rawPageTextRetained: false,
@@ -552,6 +598,7 @@ function postSubmitExactFactSelectors(
         WORKDAY_ACCOUNT_FACT_SELECTORS.absent,
         ...WORKDAY_INLINE_VERIFICATION_SELECTORS,
         WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+        WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
       ]
     : [WORKDAY_ACCOUNT_FACT_SELECTORS.exists];
 }

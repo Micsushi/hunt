@@ -70,6 +70,25 @@ test("Apply Manually waits for an admitted account or application destination", 
   assert.equal(page.destinationWaits, 1);
 });
 
+test("Apply Manually gives the exact destination 20 seconds without repeating a failed click", async () => {
+  const trace: string[] = [];
+  const page = new SemanticPage(
+    { "button:Apply Manually": locator() },
+    { destinationAvailable: false },
+  );
+  const adapter = new PlaywrightPostingNavigationAdapter({
+    trace: (event) => trace.push(event),
+  });
+
+  await assert.rejects(() => adapter.activate(page, "apply_manually"));
+
+  assert.deepEqual(page.clicked, ["button:Apply Manually"]);
+  assert.deepEqual(page.destinationWaitArguments, [
+    { state: "attached", timeout: 20_000 },
+  ]);
+  assert.equal(trace.at(-1), "posting_apply_manually_destination_wait_failed");
+});
+
 test("Apply Manually admits the exact identity-provider choice page without self-settling email sign-in", async () => {
   const choiceSelector =
     '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
@@ -118,6 +137,10 @@ test("Apply Manually accepts an admitted destination opened in a popup", async (
 class SemanticPage {
   readonly clicked: string[] = [];
   readonly destinationQueries: string[] = [];
+  readonly destinationWaitArguments: Array<{
+    readonly state: "attached" | "visible";
+    readonly timeout: number;
+  }> = [];
   destinationWaits = 0;
   readonly #locators: Readonly<Record<string, LocatorState>>;
   readonly #destinationAvailable: boolean;
@@ -150,8 +173,9 @@ class SemanticPage {
     const item = locator();
     return {
       ...item,
-      waitFor: async () => {
+      waitFor: async (options) => {
         this.destinationWaits += 1;
+        this.destinationWaitArguments.push(options);
         if (!this.#destinationAvailable) throw new Error("destination absent");
       },
     };
@@ -174,7 +198,10 @@ interface LocatorState {
   click(): Promise<void>;
   nth(index: number): LocatorState;
   first(): LocatorState;
-  waitFor(options: { readonly state: "visible"; readonly timeout: number }): Promise<void>;
+  waitFor(options: {
+    readonly state: "attached" | "visible";
+    readonly timeout: number;
+  }): Promise<void>;
 }
 
 function locator(visible = true, enabled = true, count = 1): LocatorState {

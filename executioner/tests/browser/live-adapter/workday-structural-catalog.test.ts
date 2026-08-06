@@ -13,6 +13,8 @@ const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
 const ACCOUNT_CREATED_VERIFICATION_SELECTOR =
   ':text-is("An email has been sent to you. Please verify your account.")';
+const PASSWORD_RESET_REQUIRED_SELECTOR =
+  '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))';
 
 test("an inline verification gate outranks retained sign-in controls", async () => {
   const messages = [
@@ -114,7 +116,7 @@ test("hidden or ambiguous inline messages do not overclaim verification", async 
 test("a generic visible alert does not overclaim the semantic account state", async () => {
   const page: WorkdayStructuralPage = {
     locator: (selector) => ({
-      count: async () => selector.includes('[role="alert"]') ? 1 : 0,
+      count: async () => selector === '[role="alert"]' ? 1 : 0,
     }),
   };
 
@@ -126,6 +128,46 @@ test("a generic visible alert does not overclaim the semantic account state", as
     "structural_trait_page_account_entry_v1",
     "structural_trait_account_sign_in_v1",
   ]);
+});
+
+test("an exact administrator password-reset alert is an access-control challenge", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === PASSWORD_RESET_REQUIRED_SELECTOR ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, signInInspector());
+
+  assert.equal(result.kind, "snapshot");
+  assert.equal(
+    result.kind === "snapshot" && result.snapshot.traitIds.includes(
+      "structural_trait_challenge_access_control_v1",
+    ),
+    true,
+  );
+});
+
+test("hidden or ambiguous administrator password-reset alerts stay unclassified", async () => {
+  for (const [count, visible] of [[1, false], [2, true]] as const) {
+    const page: WorkdayStructuralPage = {
+      locator: (selector) => ({
+        count: async () => selector === PASSWORD_RESET_REQUIRED_SELECTOR ? count : 0,
+        isVisible: async () => visible,
+      }),
+    };
+
+    const result = await inspectWorkdayStructure(page, false, signInInspector());
+
+    assert.equal(result.kind, "snapshot");
+    assert.equal(
+      result.kind === "snapshot" && result.snapshot.traitIds.includes(
+        "structural_trait_challenge_access_control_v1",
+      ),
+      false,
+    );
+  }
 });
 
 test("only exact Workday account-fact markers produce absence or existence traits", async () => {

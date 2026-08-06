@@ -71,6 +71,8 @@ export const WORKDAY_ACCOUNT_FACT_SELECTORS = Object.freeze({
 export const WORKDAY_SIGN_IN_REJECTION_SELECTORS = Object.freeze({
   credentialsOrLocked:
     ':text-is("You may have entered the wrong email address or password or your account might be locked.")',
+  passwordResetRequired:
+    '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))',
 });
 
 const accountRules = Object.freeze([
@@ -92,6 +94,10 @@ const challengeRules = Object.freeze([
   rule("structural_trait_challenge_mfa_v1", '[data-automation-id="mfaChallenge"]'),
   rule("structural_trait_challenge_access_control_v1", '[data-automation-id="accessDeniedPage"]'),
   rule("structural_trait_challenge_access_control_v1", '[data-automation-id="securityChallenge"]'),
+  rule(
+    "structural_trait_challenge_access_control_v1",
+    WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
+  ),
 ] satisfies readonly TraitRule[]);
 
 const unavailableRules = Object.freeze([
