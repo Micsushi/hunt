@@ -754,6 +754,39 @@ test("diagnostic hold runs before successful browser close", async () => {
   assert.equal(context.closed, true);
 });
 
+test("diagnostic hold rejection fails closed after guaranteed browser cleanup", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    inspectionHoldBeforeCleanup: async () => {
+      throw new Error("monitor acknowledgement unavailable");
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_diagnostic_hold_close_2"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  assert.equal(context.closed, true);
+  assert.equal(profiles.marker, undefined);
+});
+
 test("close succeeds after account ownership invalidation cleaned the exact session", async () => {
   const { provider, opened } = await openedProviderThatInvalidatesAfterFill();
   if (!opened.ok) return;

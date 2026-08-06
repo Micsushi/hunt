@@ -477,6 +477,29 @@ test("thrown cleanup is converted to a bounded cleanup failure", async () => {
   );
 });
 
+test("monitor uncertainty fails the run without misreporting successful cleanup", async () => {
+  let diagnostic: AccountAccessDiagnostics | undefined;
+  const dependencies = successfulDependencies();
+  dependencies.browser = {
+    ...dependencies.browser,
+    async close() {
+      return {
+        ok: false,
+        error: { code: "browser_effect_uncertain", retryable: false },
+      } as const;
+    },
+  };
+  dependencies.diagnostics = {
+    async write(value) { diagnostic = value; },
+  };
+
+  assert.deepEqual(
+    await runStage2AccountAccess(input(), dependencies, new AbortController().signal),
+    { ok: false, code: "browser_effect_uncertain" },
+  );
+  assert.equal(diagnostic?.cleanup, "pass");
+});
+
 test("an already-invalidated browser cleanup does not mask credential effect uncertainty", async () => {
   const dependencies = successfulDependencies();
   dependencies.credentials = {

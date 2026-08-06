@@ -83,6 +83,7 @@ export type GmailBootstrapErrorCode =
   | "gmail_refresh_unavailable"
   | "gmail_oauth_cancelled"
   | "gmail_oauth_denied"
+  | "gmail_oauth_handoff_unavailable"
   | "gmail_identity_mismatch"
   | "gmail_scope_invalid"
   | "gmail_token_expiry_invalid"
@@ -539,6 +540,9 @@ function sealerError(error: unknown, signal: AbortSignal): GmailBootstrapErrorCo
   const message = error instanceof Error ? error.message : "";
   if (signal.aborted || message === "Gmail OAuth cancelled") return "gmail_oauth_cancelled";
   if (message === "Gmail OAuth denied") return "gmail_oauth_denied";
+  if (message === "Gmail OAuth handoff unavailable") {
+    return "gmail_oauth_handoff_unavailable";
+  }
   if (message === "Gmail OAuth client invalid") return "gmail_oauth_client_invalid";
   if (message === "Gmail sender policy invalid") return "gmail_sender_policy_invalid";
   if (message === "Gmail refresh grant invalid") return "gmail_refresh_grant_invalid";

@@ -340,7 +340,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /AuthorizationEndpoint = "https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth"/u);
   assert.match(source, /InstalledClientAuthUri = "https:\/\/accounts\.google\.com\/o\/oauth2\/auth"/u);
   assert.match(source, /CertificateEndpoint = "https:\/\/www\.googleapis\.com\/oauth2\/v1\/certs"/u);
-  assert.match(source, /AcquireTokenWithLookup\([\s\S]*new WindowsCredentialManagerGrantStore\(\)[\s\S]*new WindowsGmailOAuthClient\(\)/u);
+  assert.match(source, /AcquireTokenWithLookup\([\s\S]*new WindowsCredentialManagerGrantStore\(\)[\s\S]*new WindowsGmailOAuthClient\([\s\S]*AuthorizationHandoffPath/u);
   assert.match(source, /AuthorizationUrl\(clientId, redirect, state, challenge, loginHint\)/u);
   assert.match(source, /\{ "login_hint", loginHint \}/u);
   assert.match(
@@ -410,7 +410,7 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.doesNotMatch(authorizeMethod, /senderAddress|senderPolicy|notifications@/iu);
   const bundleBlock = /IDictionary<string, object> exactBundle[\s\S]*?WriteOutput\(sealedValue\)/u.exec(source)?.[0] ?? "";
   assert.doesNotMatch(bundleBlock, /login_hint|loginHint|accountEmail/u);
-  assert.match(source, /windowsHide:\s*false/u);
+  assert.doesNotMatch(source, /windowsHide:\s*false/u);
   assert.match(source, /shell:\s*false/u);
   const cancelBlock = /const cancel = \(\) => \{[\s\S]*?\n      \};/u.exec(source)?.[0] ?? "";
   assert.match(cancelBlock, /terminalError = new Error\("Gmail OAuth cancelled"\)/u);
@@ -425,6 +425,70 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   const revokeInputBlock = /private static bool RevokeFromInput[\s\S]*?private static bool DeleteFromInput/u
     .exec(source)?.[0] ?? "";
   assert.doesNotMatch(revokeInputBlock, /ProtectedData|ReadAccountEmail|accountCiphertext/u);
+});
+
+test("production Gmail authorization never launches the Windows default browser", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const authorize = /private static HuntGmailToken Authorize[\s\S]*?private static string ReceiveCode/u
+    .exec(source)?.[0] ?? "";
+
+  assert.doesNotMatch(authorize, /Process\.Start|UseShellExecute/u);
+  assert.match(authorize, /WriteAuthorizationHandoff/u);
+  assert.match(authorize, /DeleteAuthorizationHandoff/u);
+  assert.match(source, /using System\.Security\.AccessControl;/u);
+  assert.match(source, /using System\.Security\.Principal;/u);
+  assert.match(source, /ValidateAuthorizationDirectory/u);
+  assert.match(source, /FileSystemRights\.Write[\s\S]*FileShare\.None[\s\S]*acl/u);
+  assert.match(source, /FileShare\.None/u);
+  assert.match(source, /FileMode\.CreateNew/u);
+  assert.match(source, /WaitOne\(TimeSpan\.FromSeconds\(210\)\)/u);
+  const reconcileBlock = /private static bool DeleteFromInput[\s\S]*?private static HuntGmailToken AcquireToken/u
+    .exec(source)?.[0] ?? "";
+  assert.match(reconcileBlock, /DeleteAuthorizationHandoffIfPresent/u);
+  assert.match(source, /code === 13[\s\S]*Gmail OAuth handoff unavailable/u);
+});
+
+test("trusted authorization handoff is exclusive, exact, and deleted", async () => {
+  const source = await readFile(
+    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
+    "utf8",
+  );
+  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-handoff-"));
+  try {
+    const sourcePath = join(root, "helper.cs");
+    const clientPath = join(root, "google-installed-client.json");
+    const authorization = "https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic";
+    await writeFile(sourcePath, csharp);
+    const result = spawnSync(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-Command",
+        String.raw`$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $current=[Security.Principal.WindowsIdentity]::GetCurrent().User; $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18'); $directory=[IO.Path]::GetDirectoryName($env:HUNT_TEST_CLIENT); $directoryAcl=[Security.AccessControl.DirectorySecurity]::new(); $directoryAcl.SetOwner($current); $directoryAcl.SetAccessRuleProtection($true,$false); $directoryAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($current,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)); $directoryAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($system,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)); [IO.Directory]::SetAccessControl($directory,$directoryAcl); $flags=[Reflection.BindingFlags]'NonPublic,Static'; $type=[HuntInteractiveGmailOAuthSealer]; $pathMethod=$type.GetMethod('AuthorizationHandoffPath',$flags); $write=$type.GetMethod('WriteAuthorizationHandoff',$flags); $delete=$type.GetMethod('DeleteAuthorizationHandoff',$flags); if($null -eq $pathMethod -or $null -eq $write -or $null -eq $delete) { exit 141 }; $path=[string]$pathMethod.Invoke($null,@($env:HUNT_TEST_CLIENT)); if([IO.Path]::GetFileName($path) -ne 'gmail-oauth-authorization.url') { exit 142 }; try { $write.Invoke($null,@($path,($env:HUNT_TEST_AUTH+[Environment]::NewLine))); exit 143 } catch {}; if([IO.File]::Exists($path)) { exit 144 }; try { $write.Invoke($null,@($path,$env:HUNT_TEST_AUTH)) } catch { exit (160+$_.Exception.InnerException.ExitCode) }; $expected='[InternetShortcut]'+[Environment]::NewLine+'URL='+$env:HUNT_TEST_AUTH+[Environment]::NewLine; if([IO.File]::ReadAllText($path,[Text.Encoding]::ASCII) -cne $expected) { exit 145 }; $acl=[IO.File]::GetAccessControl($path); if(-not $acl.AreAccessRulesProtected -or -not $acl.GetOwner([Security.Principal.SecurityIdentifier]).Equals($current)) { exit 146 }; $currentFull=$false; foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) { if($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) { if(-not $rule.IdentityReference.Equals($current) -and -not $rule.IdentityReference.Equals($system)) { exit 147 }; if($rule.IdentityReference.Equals($current) -and (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl)) { $currentFull=$true } } }; if(-not $currentFull) { exit 148 }; try { $write.Invoke($null,@($path,$env:HUNT_TEST_AUTH)); exit 149 } catch { if($_.Exception.InnerException.ExitCode -ne 13) { exit 150 } }; $delete.Invoke($null,@($path)); if([IO.File]::Exists($path)) { exit 151 }; exit 0`,
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          HUNT_TEST_SOURCE: sourcePath,
+          HUNT_TEST_CLIENT: clientPath,
+          HUNT_TEST_AUTH: authorization,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("trusted authorization URL contains one encoded private login hint", async () => {

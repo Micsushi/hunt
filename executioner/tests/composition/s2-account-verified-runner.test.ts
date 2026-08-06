@@ -207,6 +207,38 @@ test("cleanup failure denies the lifecycle result with the stable cleanup code",
   });
 });
 
+test("monitor uncertainty during close is preserved after successful cleanup", async () => {
+  const session = browserSession();
+  const browser = fakeBrowser(session, []);
+  browser.close = async () => ({
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  const lifecycle = createCleanupBoundAccountVerifiedLifecycle({
+    browser,
+    openRequest: openRequest(),
+    reconcileOperationId: "operation_reconcilemonitor1" as OperationId,
+    advanceOperationId: "operation_advancemonitor1234" as OperationId,
+    closeOperationId: "operation_close_monitor123456" as OperationId,
+    now,
+    runLifecycle: async () => ({
+      ok: true,
+      value: {
+        kind: "account_ready",
+        path: "verified_account",
+        independentlyObserved: true,
+        verificationCandidateCount: 1,
+        verificationConsumed: true,
+      },
+    }),
+  });
+
+  assert.deepEqual(await lifecycle.run(new AbortController().signal), {
+    ok: false,
+    error: { code: "browser_effect_uncertain" },
+  });
+});
+
 test("thrown cleanup is the same stable cleanup denial", async () => {
   const session = browserSession();
   const browser = fakeBrowser(session, []);

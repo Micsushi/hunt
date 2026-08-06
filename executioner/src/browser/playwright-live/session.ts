@@ -57,6 +57,11 @@ type RetainedSessionOptions = Omit<
   "applicationRuntime"
 >;
 
+interface FailedOpenCleanupResult {
+  readonly inspectionPassed: boolean;
+  readonly resourcesCleaned: boolean;
+}
+
 export class PlaywrightPersistentBrowserSession
   implements PersistentBrowserSession
 {
@@ -71,6 +76,8 @@ export class PlaywrightPersistentBrowserSession
   #closedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   #cleanupFailedSessionId: LiveBrowserSessionV1["sessionId"] | undefined;
   #cleanupFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
+  #inspectionFailedSessionId: LiveBrowserSessionV1["sessionId"] | undefined;
+  #inspectionFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
   readonly #applicationRuntime: RevocableWorkdayApplicationRuntime;
@@ -242,7 +249,8 @@ export class PlaywrightPersistentBrowserSession
               runtime.profilePath,
               persisted,
             );
-            if (!cleaned) return failure("browser_profile_cleanup_failed");
+            if (!cleaned.resourcesCleaned) return failure("browser_profile_cleanup_failed");
+            if (!cleaned.inspectionPassed) return failure("browser_effect_uncertain");
             if (inspected.kind === "cancelled") return cancelled();
             return failure(
               inspected.kind === "timeout"
@@ -263,13 +271,14 @@ export class PlaywrightPersistentBrowserSession
             runtime.profilePath,
             persisted,
           );
-          return cleaned
+          if (!cleaned.resourcesCleaned) return failure("browser_profile_cleanup_failed");
+          return cleaned.inspectionPassed
             ? failure(
                 owned.length === 0
                   ? "browser_session_missing"
                   : "browser_target_ambiguous",
               )
-            : failure("browser_profile_cleanup_failed");
+            : failure("browser_effect_uncertain");
         }
         this.#page = owned[0];
         this.#session = sessionFromMarker(persisted, request);
@@ -287,7 +296,7 @@ export class PlaywrightPersistentBrowserSession
       );
       if (pageResult.kind !== "value") {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-        return cleaned
+        return cleaned.resourcesCleaned
           ? failure("browser_effect_uncertain")
           : failure("browser_profile_cleanup_failed");
       }
@@ -299,7 +308,7 @@ export class PlaywrightPersistentBrowserSession
       );
       if (navigation.kind !== "value") {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-        return cleaned
+        return cleaned.resourcesCleaned
           ? failure("browser_effect_uncertain")
           : failure("browser_profile_cleanup_failed");
       }
@@ -310,7 +319,7 @@ export class PlaywrightPersistentBrowserSession
       );
       if (inspected.kind !== "value") {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-        return cleaned
+        return cleaned.resourcesCleaned
           ? failure("browser_effect_uncertain")
           : failure("browser_profile_cleanup_failed");
       }
@@ -320,9 +329,10 @@ export class PlaywrightPersistentBrowserSession
         !admissibleInitialTarget(observation.target)
       ) {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-        return cleaned
+        if (!cleaned.resourcesCleaned) return failure("browser_profile_cleanup_failed");
+        return cleaned.inspectionPassed
           ? failure("browser_target_invalid")
-          : failure("browser_profile_cleanup_failed");
+          : failure("browser_effect_uncertain");
       }
       this.#session = {
         schemaVersion: 1,
@@ -349,7 +359,7 @@ export class PlaywrightPersistentBrowserSession
       );
       if (written.kind !== "value") {
         const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-        return cleaned
+        return cleaned.resourcesCleaned
           ? failure("browser_effect_uncertain")
           : failure("browser_profile_cleanup_failed");
       }
@@ -357,7 +367,7 @@ export class PlaywrightPersistentBrowserSession
       return { ok: true, value: { kind: "opened", session: this.#session } };
     } catch {
       const cleaned = await this.#cleanupFailedOpen(runtime.profilePath);
-      return cleaned
+      return cleaned.resourcesCleaned
         ? failure("browser_effect_uncertain")
         : failure("browser_profile_cleanup_failed");
     }
@@ -592,7 +602,7 @@ export class PlaywrightPersistentBrowserSession
         request.journeyId !== this.#session.journeyId ||
         request.sessionId !== this.#session.sessionId) return failure("browser_session_missing");
     const context = this.#context;
-    await this.#holdBeforeCleanup(context);
+    const inspectionPassed = await this.#holdBeforeCleanup(context);
     const closed = await this.#boundedCleanup(() => context.close());
     this.#context = undefined;
     this.#page = undefined;
@@ -601,7 +611,13 @@ export class PlaywrightPersistentBrowserSession
     this.#marker = undefined;
     this.#profilePath = undefined;
     this.#applicationRuntime.revoke();
-    return closed ? { ok: true, value: undefined } : failure("browser_profile_cleanup_failed");
+    if (!closed) return failure("browser_profile_cleanup_failed");
+    if (!inspectionPassed) {
+      this.#inspectionFailedSessionId = request.sessionId;
+      this.#inspectionFailedJourneyId = request.journeyId;
+      return failure("browser_effect_uncertain");
+    }
+    return { ok: true, value: undefined };
   }
 
   async withOwnedVerificationNavigationAccess(
@@ -761,11 +777,12 @@ export class PlaywrightPersistentBrowserSession
   async #stopAfterTargetFact(
     fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
   ): Promise<AccountEntryAdvancePortResult> {
-    const cleaned = this.#profilePath !== undefined &&
-      await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
-    return cleaned
+    if (this.#profilePath === undefined) return failure("browser_profile_cleanup_failed");
+    const cleaned = await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
+    if (!cleaned.resourcesCleaned) return failure("browser_profile_cleanup_failed");
+    return cleaned.inspectionPassed
       ? { ok: true, value: copyAdvanceFact(fact) }
-      : failure("browser_profile_cleanup_failed");
+      : failure("browser_effect_uncertain");
   }
 
   async #reclassifyAfterUnavailableControl(
@@ -798,9 +815,9 @@ export class PlaywrightPersistentBrowserSession
   }
 
   async #uncertainAdvanceFailure(): Promise<AccountEntryAdvancePortResult> {
-    const cleaned = this.#profilePath !== undefined &&
-      await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
-    return cleaned
+    if (this.#profilePath === undefined) return failure("browser_profile_cleanup_failed");
+    const cleaned = await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
+    return cleaned.resourcesCleaned
       ? failure("browser_effect_uncertain")
       : failure("browser_profile_cleanup_failed");
   }
@@ -822,6 +839,12 @@ export class PlaywrightPersistentBrowserSession
       return failure("browser_profile_cleanup_failed");
     }
     if (
+      this.#inspectionFailedSessionId === request.sessionId &&
+      this.#inspectionFailedJourneyId === request.journeyId
+    ) {
+      return failure("browser_effect_uncertain");
+    }
+    if (
       this.#closedSessionId === request.sessionId &&
       this.#closedJourneyId === request.journeyId
     ) {
@@ -841,7 +864,7 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
-    await this.#holdBeforeCleanup(context);
+    const inspectionPassed = await this.#holdBeforeCleanup(context);
     const contextCleanup = await this.#boundedCleanup(() => context.close());
     const profileCleanup = await this.#boundedCleanup(
       () => this.#options.profiles.cleanup(profilePath, marker),
@@ -862,16 +885,21 @@ export class PlaywrightPersistentBrowserSession
     }
     this.#closedSessionId = closedSession.sessionId;
     this.#closedJourneyId = closedSession.journeyId;
+    if (!inspectionPassed) {
+      this.#inspectionFailedSessionId = closedSession.sessionId;
+      this.#inspectionFailedJourneyId = closedSession.journeyId;
+      return failure("browser_effect_uncertain");
+    }
     return { ok: true, value: undefined };
   }
 
   async #cleanupFailedOpen(
     profilePath: string,
     marker?: ProfileMarkerV1,
-  ): Promise<boolean> {
+  ): Promise<FailedOpenCleanupResult> {
     const context = this.#context;
     const failedSession = this.#session;
-    await this.#holdBeforeCleanup(context);
+    const inspectionPassed = await this.#holdBeforeCleanup(context);
     const contextCleaned = await this.#boundedCleanup(
       () => context?.close() ?? Promise.resolve(),
     );
@@ -887,15 +915,18 @@ export class PlaywrightPersistentBrowserSession
     this.#applicationRuntime.revoke();
     const cleaned = contextCleaned && profileCleaned;
     if (failedSession !== undefined) {
-      if (cleaned) {
+      if (cleaned && inspectionPassed) {
         this.#closedSessionId = failedSession.sessionId;
         this.#closedJourneyId = failedSession.journeyId;
+      } else if (cleaned) {
+        this.#inspectionFailedSessionId = failedSession.sessionId;
+        this.#inspectionFailedJourneyId = failedSession.journeyId;
       } else {
         this.#cleanupFailedSessionId = failedSession.sessionId;
         this.#cleanupFailedJourneyId = failedSession.journeyId;
       }
     }
-    return cleaned;
+    return { inspectionPassed, resourcesCleaned: cleaned };
   }
 
   #resetTerminalCleanup(): void {
@@ -903,6 +934,8 @@ export class PlaywrightPersistentBrowserSession
     this.#closedJourneyId = undefined;
     this.#cleanupFailedSessionId = undefined;
     this.#cleanupFailedJourneyId = undefined;
+    this.#inspectionFailedSessionId = undefined;
+    this.#inspectionFailedJourneyId = undefined;
   }
 
   async #cleanupDetachedContext(
@@ -916,12 +949,13 @@ export class PlaywrightPersistentBrowserSession
     );
   }
 
-  async #holdBeforeCleanup(context: PersistentContext | undefined): Promise<void> {
-    if (context === undefined || this.#options.inspectionHoldBeforeCleanup === undefined) return;
+  async #holdBeforeCleanup(context: PersistentContext | undefined): Promise<boolean> {
+    if (context === undefined || this.#options.inspectionHoldBeforeCleanup === undefined) return true;
     try {
       await this.#options.inspectionHoldBeforeCleanup();
+      return true;
     } catch {
-      // Diagnostics cannot prevent guaranteed browser cleanup.
+      return false;
     }
   }
 

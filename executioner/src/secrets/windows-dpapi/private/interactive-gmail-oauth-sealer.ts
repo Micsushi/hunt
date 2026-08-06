@@ -20,13 +20,14 @@ $source = @'
 using System;
 using System.ComponentModel;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Web;
 using System.Web.Script.Serialization;
@@ -91,13 +92,20 @@ public static class HuntInteractiveGmailOAuthSealer
 
     private sealed class WindowsGmailOAuthClient : IHuntGmailOAuthClient
     {
+        private readonly string authorizationHandoffPath;
+
+        public WindowsGmailOAuthClient(string path)
+        {
+            authorizationHandoffPath = path;
+        }
+
         public HuntGmailToken AuthorizeInteractive(
             string clientId,
             string clientSecret,
             string loginHint
         )
         {
-            return Authorize(clientId, clientSecret, loginHint);
+            return Authorize(clientId, clientSecret, loginHint, authorizationHandoffPath);
         }
 
         public HuntGmailToken Refresh(
@@ -314,7 +322,9 @@ public static class HuntInteractiveGmailOAuthSealer
                 accountEmail,
                 (string)binding["recipientBindingId"],
                 new WindowsCredentialManagerGrantStore(),
-                new WindowsGmailOAuthClient()
+                new WindowsGmailOAuthClient(
+                    AuthorizationHandoffPath(installedClientConfigPath)
+                )
             );
             ValidateExpiry(gmailMetadata, token.ExpiresIn, token.ReceivedAt);
             string profileEmail = token.ProfileEmail;
@@ -382,6 +392,8 @@ public static class HuntInteractiveGmailOAuthSealer
     {
         byte[] account = null;
         InstalledClient installedClient = null;
+        Exception failure = null;
+        bool deleted = false;
         try
         {
             account = ProtectedData.Unprotect(input[1], input[0], DataProtectionScope.CurrentUser);
@@ -392,12 +404,23 @@ public static class HuntInteractiveGmailOAuthSealer
             if (!ValidRecipientBindingId(recipientBindingId)) throw new FlowException(11);
             ValidateClient(clientId);
             installedClient = ReadInstalledClient(installedClientConfigPath, clientId);
-            return DeleteGrantAndLookup(
-                clientId,
-                accountEmail,
-                recipientBindingId,
-                new WindowsCredentialManagerGrantStore()
+            string authorizationHandoffPath = AuthorizationHandoffPath(
+                installedClientConfigPath
             );
+            try
+            {
+                deleted = DeleteGrantAndLookup(
+                    clientId,
+                    accountEmail,
+                    recipientBindingId,
+                    new WindowsCredentialManagerGrantStore()
+                );
+            }
+            catch (Exception error) { failure = error; }
+            try { DeleteAuthorizationHandoffIfPresent(authorizationHandoffPath); }
+            catch (Exception error) { if (failure == null) failure = error; }
+            if (failure != null) throw failure;
+            return deleted;
         }
         finally
         {
@@ -991,7 +1014,12 @@ public static class HuntInteractiveGmailOAuthSealer
         finally { Clear(bytes); }
     }
 
-    private static HuntGmailToken Authorize(string clientId, string clientSecret, string loginHint)
+    private static HuntGmailToken Authorize(
+        string clientId,
+        string clientSecret,
+        string loginHint,
+        string authorizationHandoffPath
+    )
     {
         byte[] verifierBytes = RandomBytes(64);
         byte[] stateBytes = RandomBytes(32);
@@ -1003,13 +1031,15 @@ public static class HuntInteractiveGmailOAuthSealer
         string challenge = Base64Url(challengeBytes);
         Clear(challengeBytes);
         TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+        bool handoffCreated = false;
         try
         {
             listener.Start(1);
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             string redirect = "http://127.0.0.1:" + port + "/oauth2callback";
             string authorization = AuthorizationUrl(clientId, redirect, state, challenge, loginHint);
-            Process.Start(new ProcessStartInfo(authorization) { UseShellExecute = true });
+            WriteAuthorizationHandoff(authorizationHandoffPath, authorization);
+            handoffCreated = true;
             string code = ReceiveCode(listener, port, state);
             DateTimeOffset receivedAt = DateTimeOffset.UtcNow;
             IDictionary<string, object> response = RequestJson(
@@ -1037,7 +1067,130 @@ public static class HuntInteractiveGmailOAuthSealer
             clientSecret = null;
             loginHint = null;
             listener.Stop();
+            if (handoffCreated) DeleteAuthorizationHandoff(authorizationHandoffPath);
         }
+    }
+
+    private static string AuthorizationHandoffPath(string installedClientConfigPath)
+    {
+        string directory = Path.GetDirectoryName(installedClientConfigPath);
+        if (String.IsNullOrWhiteSpace(directory) ||
+            !String.Equals(Path.GetFullPath(directory), directory, StringComparison.OrdinalIgnoreCase))
+            throw new FlowException(9);
+        DirectoryInfo info = new DirectoryInfo(directory);
+        if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new FlowException(9);
+        ValidateAuthorizationDirectory(directory);
+        return Path.Combine(directory, "gmail-oauth-authorization.url");
+    }
+
+    private static void ValidateAuthorizationDirectory(string directory)
+    {
+        try
+        {
+            SecurityIdentifier current = WindowsIdentity.GetCurrent().User;
+            SecurityIdentifier system = new SecurityIdentifier("S-1-5-18");
+            DirectorySecurity security = Directory.GetAccessControl(
+                directory,
+                AccessControlSections.Access | AccessControlSections.Owner
+            );
+            SecurityIdentifier owner = (SecurityIdentifier)security.GetOwner(
+                typeof(SecurityIdentifier)
+            );
+            if (!owner.Equals(current) || !security.AreAccessRulesProtected)
+                throw new InvalidDataException();
+            bool currentFullControl = false;
+            AuthorizationRuleCollection rules = security.GetAccessRules(
+                true,
+                true,
+                typeof(SecurityIdentifier)
+            );
+            foreach (FileSystemAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow) continue;
+                SecurityIdentifier identity = (SecurityIdentifier)rule.IdentityReference;
+                if (rule.IsInherited || (!identity.Equals(current) && !identity.Equals(system)))
+                    throw new InvalidDataException();
+                if (identity.Equals(current) &&
+                    (rule.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl)
+                    currentFullControl = true;
+            }
+            if (!currentFullControl) throw new InvalidDataException();
+        }
+        catch { throw new FlowException(9); }
+    }
+
+    private static void WriteAuthorizationHandoff(string path, string authorization)
+    {
+        byte[] bytes = null;
+        try
+        {
+            if (String.IsNullOrWhiteSpace(path) ||
+                !String.Equals(Path.GetFullPath(path), path, StringComparison.OrdinalIgnoreCase) ||
+                String.IsNullOrWhiteSpace(authorization) ||
+                !authorization.StartsWith(AuthorizationEndpoint + "?", StringComparison.Ordinal) ||
+                authorization.IndexOfAny(new char[] { '\r', '\n', '\0' }) >= 0)
+                throw new FlowException(3);
+            if (File.Exists(path)) throw new FlowException(13);
+            bytes = Encoding.ASCII.GetBytes(
+                "[InternetShortcut]\r\nURL=" + authorization + "\r\n"
+            );
+            SecurityIdentifier current = WindowsIdentity.GetCurrent().User;
+            SecurityIdentifier system = new SecurityIdentifier("S-1-5-18");
+            FileSecurity acl = new FileSecurity();
+            acl.SetOwner(current);
+            acl.SetAccessRuleProtection(true, false);
+            acl.AddAccessRule(new FileSystemAccessRule(
+                current,
+                FileSystemRights.FullControl,
+                AccessControlType.Allow
+            ));
+            acl.AddAccessRule(new FileSystemAccessRule(
+                system,
+                FileSystemRights.FullControl,
+                AccessControlType.Allow
+            ));
+            using (FileStream stream = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileSystemRights.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough,
+                acl
+            ))
+            {
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush(true);
+            }
+        }
+        catch (FlowException) { throw; }
+        catch (IOException)
+        {
+            if (File.Exists(path)) throw new FlowException(13);
+            throw new FlowException(3);
+        }
+        catch { throw new FlowException(3); }
+        finally { Clear(bytes); }
+    }
+
+    private static void DeleteAuthorizationHandoffIfPresent(string path)
+    {
+        if (File.Exists(path)) DeleteAuthorizationHandoff(path);
+    }
+
+    private static void DeleteAuthorizationHandoff(string path)
+    {
+        try
+        {
+            FileInfo info = new FileInfo(path);
+            if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0 ||
+                info.Length < 32 || info.Length > 16384)
+                throw new InvalidDataException();
+            File.Delete(path);
+            if (File.Exists(path)) throw new IOException();
+        }
+        catch { throw new FlowException(3); }
     }
 
     private static HuntGmailToken RefreshToken(
@@ -1242,7 +1395,7 @@ public static class HuntInteractiveGmailOAuthSealer
     private static string ReceiveCode(TcpListener listener, int port, string state)
     {
         IAsyncResult pending = listener.BeginAcceptTcpClient(null, null);
-        if (!pending.AsyncWaitHandle.WaitOne(TimeSpan.FromMinutes(5))) throw new FlowException(8);
+        if (!pending.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(210))) throw new FlowException(8);
         using (TcpClient client = listener.EndAcceptTcpClient(pending))
         {
             IPEndPoint peer = client.Client.RemoteEndPoint as IPEndPoint;
@@ -1714,7 +1867,7 @@ export class WindowsInteractiveGmailOAuthSealer {
       executable: options.executable,
       maxOutputBytes: this.#bound + 9,
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      windowsHide: false,
+      windowsHide: true,
     });
   }
 
@@ -2024,8 +2177,10 @@ function childFailure(code: number | null): Error {
                   ? "Gmail sender policy invalid"
                   : code === 11
                     ? "Gmail refresh grant invalid"
-                    : code === 12
+                  : code === 12
                       ? "Gmail refresh unavailable"
+                    : code === 13
+                      ? "Gmail OAuth handoff unavailable"
               : "Gmail OAuth sealing failed";
   return new Error(message);
 }

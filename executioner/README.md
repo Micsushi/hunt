@@ -377,7 +377,22 @@ never a full link or token. Then run:
 npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
 ```
 
-All path, ACL, and exact-handle checks finish before the system browser opens.
+All path, ACL, and exact-handle checks finish before authorization begins. C3
+never opens, focuses, or controls a browser for Google consent. When interactive
+consent is required, the trusted Windows child creates the protected one-time
+`gmail-oauth-authorization.url` handoff beside the installed-client JSON and
+waits for its loopback callback. The operator opens that file in a browser of
+their choice, completes Google sign-in, MFA, and consent, and leaves the
+provisioning command running. The child verifies that the parent directory has
+the exact protected current-user ACL, creates the handoff with an exact
+current-user-and-SYSTEM ACL, and never shares the file while writing it. Open it
+promptly because the callback expires after 210 seconds. The handoff is deleted
+after the callback, timeout, cancellation reconciliation, or other ordinary
+failure. Do not copy, share, or log its contents. If a machine or process crash
+still leaves a stale handoff, the next attempt fails distinctly as
+`gmail_oauth_handoff_unavailable`. First confirm no Gmail bootstrap is running,
+delete only that exact file, and retry.
+
 Node sees only canonical paths and the expected client ID; it never reads either
 referenced JSON file. The trusted Windows child is their sole content reader. It
 accepts only the exact installed-client shape and one exact versioned lowercase
@@ -399,7 +414,8 @@ exact `gmail.readonly` scope; it contains no raw email. The grant is limited to
 512 UTF-8 bytes. It also stores a separate durable lookup under an opaque
 SHA-256 binding of the client ID and recipient binding. That lookup contains
 only the 64-character grant locator. Later bootstraps for the same binding
-refresh silently and do not open a browser. A missing grant starts the consent flow, but a malformed, revoked,
+refresh silently and do not require a consent handoff. A missing grant starts
+the consent flow, but a malformed, revoked,
 rejected, or wrong-scope existing grant fails as `gmail_refresh_grant_invalid`
 with no same-attempt interactive fallback. A network or timeout failure, or HTTP
 408, 429, or 5xx, fails as `gmail_refresh_unavailable`; it preserves the stored

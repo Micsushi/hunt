@@ -314,7 +314,7 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
         if (!result.ok && closed.error.code === "browser_session_missing") {
           return result;
         }
-        return lifecycleFailure("browser_profile_cleanup_failed");
+        return lifecycleFailure(closed.error.code);
       } catch {
         return lifecycleFailure("browser_profile_cleanup_failed");
       }

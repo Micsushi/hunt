@@ -202,10 +202,12 @@ export async function runStage2AccountAccess(
         if (
           closeResult.error.code !== "browser_session_missing" ||
           pending.ok
-        ) {
-          recorder.record("F3", "close", "step_failed", closeOperation);
-          pending = failure(closeResult.error.code);
-          cleanup = "failed";
+          ) {
+            recorder.record("F3", "close", "step_failed", closeOperation);
+            pending = failure(closeResult.error.code);
+            cleanup = closeResult.error.code === "browser_effect_uncertain"
+              ? "pass"
+              : "failed";
         } else {
           recorder.record("F3", "close", "step_completed", closeOperation);
         }
