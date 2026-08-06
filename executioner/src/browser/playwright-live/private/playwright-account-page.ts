@@ -95,6 +95,8 @@ const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+const WORKDAY_LEGACY_SIGN_IN_DESTINATION_SELECTOR =
+  '[data-automation-id="signInSubmitButton"]';
 
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
@@ -582,7 +584,13 @@ function postSubmitDestinationSelectors(
   const opposingAccountPage = action === "submit_sign_in"
     ? '[data-automation-id="createAccountPage"]'
     : '[data-automation-id="signInPage"]';
-  return [opposingAccountPage, ...POST_SUBMIT_DESTINATIONS];
+  return [
+    opposingAccountPage,
+    ...(action === "submit_create_account"
+      ? [WORKDAY_LEGACY_SIGN_IN_DESTINATION_SELECTOR]
+      : []),
+    ...POST_SUBMIT_DESTINATIONS,
+  ];
 }
 
 async function waitForExactVisible(locator: Locator): Promise<void> {

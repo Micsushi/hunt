@@ -40,6 +40,8 @@ const POST_SUBMIT_DESTINATION_SELECTORS = [
   ':text-is("Something went wrong")',
   ':text-is("{\\"503\\":\\"service-unavailable\\"}")',
 ] as const;
+const LEGACY_SIGN_IN_DESTINATION_SELECTOR =
+  '[data-automation-id="signInSubmitButton"]';
 
 test("inspects one exact semantic field without exposing its locator", async () => {
   const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
@@ -944,6 +946,10 @@ test("a newly visible administrator password-reset alert settles sign-in exactly
     "submit_exact_fact_observed",
   ]);
   assert.equal(submit.clickCalls, 1);
+  assert.equal(page.calls.some((call) =>
+    (call as { readonly selector?: string }).selector ===
+      LEGACY_SIGN_IN_DESTINATION_SELECTOR
+  ), false);
 });
 
 test("a final exact snapshot reconciles sign-in after submit settlement waits exhaust", async () => {
@@ -1224,6 +1230,78 @@ test("create-account submit admits a newly visible exact modern sign-in form", a
 
   assert.deepEqual(modern.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
   assert.equal(modern.isVisibleCalls, 2);
+});
+
+test("create-account submit admits a newly visible exact legacy sign-in destination", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absent = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const legacy = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false],
+    enabled: true,
+    editable: false,
+  });
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, absent, new Map([
+    [LEGACY_SIGN_IN_DESTINATION_SELECTOR, legacy],
+    ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absent],
+    ['[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])', absent],
+  ])), "submit_create_account");
+
+  assert.equal(submit.clickCalls, 1);
+  assert.deepEqual(legacy.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
+  assert.equal(events.at(-1), "submit_destination_observed");
+});
+
+test("legacy sign-in settlement fails closed on duplicate destination markers", async () => {
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const absent = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const duplicate = new FakeLocator({
+    count: 2,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+
+  await assert.rejects(() => new PlaywrightAccountPageAdapter().activate(
+    new FakePage(submit, absent, new Map([
+      [LEGACY_SIGN_IN_DESTINATION_SELECTOR, duplicate],
+      ['[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]', absent],
+      ['[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])', absent],
+    ])),
+    "submit_create_account",
+  ));
+
+  assert.equal(submit.clickCalls, 1);
+  assert.deepEqual(duplicate.waitForArguments, [{ state: "visible", timeout: 10_000 }]);
 });
 
 test("modern sign-in settlement rejects hidden, pre-existing, and duplicate forms", async () => {

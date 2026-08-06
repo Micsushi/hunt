@@ -70,6 +70,22 @@ test("Apply Manually waits for an admitted account or application destination", 
   assert.equal(page.destinationWaits, 1);
 });
 
+test("inspection gives an exact Apply control twenty seconds then stays fail closed", async () => {
+  const waits: Array<{
+    readonly state: "attached" | "visible";
+    readonly timeout: number;
+  }> = [];
+  const page = new SemanticPage({ "button:Apply": absentLocator(waits) });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  assert.deepEqual(await adapter.inspect(page, "start_application"), {
+    cardinality: 0,
+    actionable: false,
+  });
+  assert.deepEqual(waits, [{ state: "visible", timeout: 20_000 }]);
+  assert.deepEqual(page.clicked, []);
+});
+
 test("Apply Manually gives the exact destination 20 seconds without repeating a failed click", async () => {
   const trace: string[] = [];
   const page = new SemanticPage(
@@ -228,5 +244,25 @@ function delayedLocator(): LocatorState {
     nth() { return this; },
     first() { return this; },
     waitFor: async () => { ready = true; },
+  };
+}
+
+function absentLocator(
+  waits: Array<{
+    readonly state: "attached" | "visible";
+    readonly timeout: number;
+  }>,
+): LocatorState {
+  return {
+    count: async () => 0,
+    isVisible: async () => false,
+    isEnabled: async () => false,
+    click: async () => undefined,
+    nth() { return this; },
+    first() { return this; },
+    waitFor: async (options) => {
+      waits.push(options);
+      throw new Error("not visible before timeout");
+    },
   };
 }

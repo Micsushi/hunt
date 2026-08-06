@@ -192,6 +192,6 @@ async function waitForAnyCandidate(
   action: PostingNavigationAction,
 ): Promise<void> {
   await Promise.any(candidateLocators(page, action).map((candidate) =>
-    candidate.first().waitFor({ state: "visible", timeout: 5_000 })
+    candidate.first().waitFor({ state: "visible", timeout: 20_000 })
   )).catch(() => undefined);
 }
