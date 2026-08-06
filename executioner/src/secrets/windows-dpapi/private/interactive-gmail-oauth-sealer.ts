@@ -1471,7 +1471,7 @@ public static class HuntInteractiveGmailOAuthSealer
         int bound,
         bool refreshRequest)
     {
-        ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
         request.Method = method;
         request.AllowAutoRedirect = false;

@@ -401,16 +401,20 @@ function enforceLimits(
     artifacts.reduce((total, { bytes }) => total + bytes.byteLength, 0) > LIVE_EVIDENCE_MAX_TOTAL_BYTES) denied();
 }
 
-function scanForbiddenTokens(
+export function scanForbiddenTokens(
   artifacts: readonly { readonly bytes: Buffer }[],
   forbiddenTokens: readonly string[],
 ): void {
   for (const token of forbiddenTokens) {
-    const bytes = Buffer.from(token, "utf8");
+    const rawBytes = Buffer.from(token, "utf8");
+    const escapedBytes = Buffer.from(JSON.stringify(token).slice(1, -1), "utf8");
     try {
-      if (artifacts.some((artifact) => artifact.bytes.includes(bytes))) denied();
+      if (artifacts.some((artifact) =>
+        artifact.bytes.includes(rawBytes) || artifact.bytes.includes(escapedBytes)
+      )) denied();
     } finally {
-      bytes.fill(0);
+      rawBytes.fill(0);
+      escapedBytes.fill(0);
     }
   }
 }

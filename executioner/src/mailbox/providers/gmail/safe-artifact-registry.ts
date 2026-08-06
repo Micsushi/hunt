@@ -73,6 +73,29 @@ export class GmailSafeArtifactRegistry {
     delegate.cleanup();
   }
 
+  async inspectForAtomicConsume(
+    request: VerificationArtifactInspectRequest,
+    signal: AbortSignal,
+  ): Promise<AvailableVerificationArtifact | null> {
+    const delegate = this.#delegates.get(request.handleId);
+    if (delegate === undefined) return null;
+    if (signal.aborted) {
+      this.discard(request.handleId);
+      return null;
+    }
+    try {
+      const result = await delegate.port.inspect(request, signal);
+      if (!result.ok || result.value.state !== "available") {
+        this.discard(request.handleId);
+        return null;
+      }
+      return { ...result.value, state: "available" };
+    } catch {
+      this.discard(request.handleId);
+      return null;
+    }
+  }
+
   async takeForAtomicConsume(
     request: VerificationArtifactInspectRequest,
     signal: AbortSignal,

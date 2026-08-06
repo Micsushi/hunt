@@ -23,7 +23,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
-    "quality": "npm run typecheck && npm test",
+    "quality": "npm run typecheck && npm test && npm run corpus:verify",
     "provision:s2-account": "node scripts/provision-s2-account.ts",
     "migrate:s2-v2-account": "node scripts/migrate-s2-v2-account.ts",
     "migrate:s2-env-account": "node scripts/migrate-s2-env-account.ts",
@@ -51,6 +51,8 @@
     "corpus:freeze": "node scripts/freeze-corpus.ts",
     "corpus:accept": "node scripts/accept-corpus.ts",
     "audit": "node scripts/audit-corpus.ts",
+    "audit:static": "node scripts/audit-corpus.ts --static",
+    "corpus:verify": "npm run corpus:validate && npm run corpus:fixtures:validate && npm run corpus:map:validate && npm run corpus:impact:validate && npm run corpus:page-ui:plan && npm run audit:static && npm run package:verify",
     "package:build": "node scripts/package.ts",
     "package:verify": "node scripts/package-verify.ts"
   },

@@ -23,7 +23,9 @@ npm run package:build
 `corpus:freeze` requires a clean committed revision. It pins the source
 revision/tree, package lock, accepted manifest, fixture manifest and files,
 variant map and declarations, source reconciliation, acceptance configuration,
-and exact impact SHA. Drift, F3 activation/evidence, dormant semantic artifacts,
+the retained historical `source.snapshot`, and exact impact SHA. The snapshot
+comes from ancestor `16c48bd1470addc9d9480d785ae84e412edd55ef`; it is deliberately
+independent of the current public catalog. Drift, F3 activation/evidence, dormant semantic artifacts,
 or a changed prerequisite blocks the freeze.
 
 `corpus:accept` executes the four accepted fixtures and creates a sealed offline
@@ -40,7 +42,8 @@ evidence destination.
 
 `package:build` writes a tarball, CycloneDX SBOM, and SHA-256 checksum under the
 ignored repository `.runtime/c3-package` directory. The allowlist contains
-compiled JavaScript, declarations, and these release notes. It excludes
+generated `package.json` and `README.md`, compiled JavaScript, declarations, and
+these release notes. It excludes
 fixtures, tests, frozen bundles, ledgers, evidence, account data, and local
 configuration.
 

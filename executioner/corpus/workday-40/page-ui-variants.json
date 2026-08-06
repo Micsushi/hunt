@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "planId": "workday-40-page-ui-v1",
-  "impactSha": "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd",
+  "impactSha": "sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4",
   "contractReopen": false,
   "unactivatedTaskIds": [
     "S3-F2-T4",
@@ -110,6 +110,6 @@
   ],
   "freeze": {
     "algorithm": "sha256",
-    "digest": "sha256.c3ed1c3a2a91f93c27b4a47c34f65f8fe287b3a1b804513d8ce1f1a46edaffe4"
+    "digest": "sha256.d0bd024b922b930ed67d575b8f604b74cc92969051bcca832f5f4f493162f027"
   }
 }

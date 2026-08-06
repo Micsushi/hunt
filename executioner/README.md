@@ -552,7 +552,9 @@ The repository root has two current Workday test CSVs:
 These live URL catalogs are independent of the accepted offline `WD40` corpus.
 The historical bytes used to validate that frozen manifest are retained as the
 non-CSV `corpus/workday-40/source.snapshot`, so refreshing public jobs does not
-rewrite accepted Stage 3 evidence.
+rewrite accepted Stage 3 evidence. That snapshot is lineage from ancestor
+`16c48bd1470addc9d9480d785ae84e412edd55ef`, not a copy of the current public
+catalog.
 
 # Frozen corpus acceptance
 
@@ -571,7 +573,7 @@ npm run package:build
 
 The checked-in corpus is the accepted S3 F1/F2 impact-bound source. The exact
 impact SHA is
-`sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd`,
+`sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4`,
 and F4 depends on `S3-F2-T13`. All twelve S3-F3 tasks remain dormant with zero
 variant, fixture, and slot evidence. Freeze and audit reject dormant semantic
 commands, catalogs, modules, or synthetic fixtures.

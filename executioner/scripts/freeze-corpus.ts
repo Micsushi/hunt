@@ -32,6 +32,7 @@ const bundle = await createFrozenBundle({
   declarationsPath: resolve(corpus, "variant-declarations.json"),
   impactPath: resolve(corpus, "contract-impact.json"),
   baselinePath: resolve(corpus, "source-reconciliation.json"),
+  sourceSnapshotPath: resolve(corpus, "source.snapshot"),
   configPath: resolve(corpus, "acceptance.json"),
   fixtureRoot,
 }, bundlePath);

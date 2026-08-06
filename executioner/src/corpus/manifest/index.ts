@@ -40,7 +40,7 @@ export function corpusManifestFromCsv(source: CorpusManifestSource): CorpusManif
     return {
       slotId: `WD40-${String(slotNumber).padStart(3, "0")}`,
       jobRef: sha256(target.toString()),
-      sourceRef: `wd_test_jobs.csv#row-${index + 2}`,
+      sourceRef: `corpus/workday-40/source.snapshot#row-${index + 2}`,
       tenantRef: `tenant.${sha256(target.hostname).slice(7, 23)}`,
       tenantClass: `wd${tenantClass}`,
       variantIntent: ["workday-posting", "account-or-direct-entry"],
@@ -63,7 +63,7 @@ export function corpusManifestFromCsv(source: CorpusManifestSource): CorpusManif
     corpusId: "workday-40",
     source: {
       kind: "committed_csv",
-      reference: "wd_test_jobs.csv#rows-2-41",
+      reference: "corpus/workday-40/source.snapshot#rows-2-41",
       revision: source.sourceRevision,
       evidenceDigests: [...source.evidenceDigests],
     },
@@ -120,7 +120,7 @@ export function validateCorpusManifest(input: unknown): string[] {
     } else {
       unique(slot.jobRef, "jobRef", index, jobRefs, errors);
     }
-    if (slot.sourceRef !== `wd_test_jobs.csv#row-${index + 2}`) {
+    if (slot.sourceRef !== `corpus/workday-40/source.snapshot#row-${index + 2}`) {
       errors.push(`slots[${index}].sourceRef does not match its frozen row`);
     }
     if (typeof slot.tenantRef !== "string" || !/^tenant\.[a-f0-9]{16}$/u.test(slot.tenantRef)) {
@@ -151,7 +151,7 @@ function validateSource(source: Record<string, unknown> | null, errors: string[]
   if (source !== null) rejectExtra(source, ["kind", "reference", "revision", "evidenceDigests"], "source", errors);
   if (
     source?.kind !== "committed_csv" ||
-    source.reference !== "wd_test_jobs.csv#rows-2-41" ||
+    source.reference !== "corpus/workday-40/source.snapshot#rows-2-41" ||
     typeof source.revision !== "string" ||
     !/^[a-f0-9]{40}$/u.test(source.revision) ||
     !Array.isArray(source.evidenceDigests) ||

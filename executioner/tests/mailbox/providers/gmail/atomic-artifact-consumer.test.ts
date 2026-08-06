@@ -30,6 +30,30 @@ class MemoryReplayGuard implements DurableVerificationReplayGuard {
   }
 }
 
+class BarrierReplayGuard implements DurableVerificationReplayGuard {
+  readonly entered: Promise<void>;
+  #enter = () => {};
+  #release = () => {};
+
+  constructor() {
+    this.entered = new Promise<void>((resolve) => {
+      this.#enter = resolve;
+    });
+  }
+
+  release(): void {
+    this.#release();
+  }
+
+  async claim(): Promise<"claimed"> {
+    this.#enter();
+    await new Promise<void>((resolve) => {
+      this.#release = resolve;
+    });
+    return "claimed";
+  }
+}
+
 function request() {
   return {
     operationId: liveFixtures.operationIds.verificationNavigation,
@@ -132,7 +156,38 @@ test("durable replay storage unavailability stops before browser navigation", as
     error: { code: "recovery_checkpoint_unavailable", retryable: true },
   });
   assert.equal(calls, 0);
+  assert.equal(current.rawVault.committedCount, 1);
+  replayGuard.unavailable = false;
+  assert.deepEqual(
+    await current.consumer.consume(request(), signal(), async () => {
+      calls += 1;
+      return { ok: true, value: { kind: "navigated" } } as const;
+    }),
+    { ok: true, value: { kind: "navigated" } },
+  );
+  assert.equal(calls, 1);
+  assert.equal(current.rawVault.committedCount, 0);
   assert.doesNotMatch(JSON.stringify(result), /synthetic-private/u);
+});
+
+test("concurrent duplicate consumes share one durable claim and navigation", async () => {
+  const replayGuard = new BarrierReplayGuard();
+  const current = harness({ replayGuard });
+  let calls = 0;
+  const navigate = async () => {
+    calls += 1;
+    return { ok: true, value: { kind: "navigated" } } as const;
+  };
+  const first = current.consumer.consume(request(), signal(), navigate);
+  const second = current.consumer.consume(request(), signal(), navigate);
+  await replayGuard.entered;
+  replayGuard.release();
+  assert.deepEqual(await Promise.all([first, second]), [
+    { ok: true, value: { kind: "navigated" } },
+    { ok: true, value: { kind: "navigated" } },
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(current.rawVault.committedCount, 0);
 });
 
 test("atomic consume removes safe and raw state, clears bytes, and replays one exact receipt", async () => {

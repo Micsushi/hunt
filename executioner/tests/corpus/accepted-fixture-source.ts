@@ -25,6 +25,7 @@ export async function frozenAcceptedBundle(): Promise<{
     declarationsPath: resolve(executionerRoot, "corpus/workday-40/variant-declarations.json"),
     impactPath: resolve(executionerRoot, "corpus/workday-40/contract-impact.json"),
     baselinePath: resolve(executionerRoot, "corpus/workday-40/source-reconciliation.json"),
+    sourceSnapshotPath: resolve(executionerRoot, "corpus/workday-40/source.snapshot"),
     configPath: resolve(executionerRoot, "corpus/workday-40/acceptance.json"),
     fixtureRoot: resolve(executionerRoot, "fixtures/workday/corpus"),
   }, bundlePath);

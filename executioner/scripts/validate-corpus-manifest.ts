@@ -6,7 +6,11 @@ import {
   corpusManifestFromCsv,
   validateCorpusManifest,
 } from "../src/corpus/manifest/index.ts";
-import { canonicalJson, sha256 } from "../src/corpus/shared.ts";
+import {
+  canonicalJson,
+  normalizeTextLineEndings,
+  sha256,
+} from "../src/corpus/shared.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const manifest = JSON.parse(readFileSync(resolve(root, "corpus/workday-40/manifest.json"), "utf8"));
@@ -20,7 +24,11 @@ const reconciliation = JSON.parse(
   unavailableSlots: Record<string, "maintenance" | "removed" | "closed" | "not_found" | "access_control">;
 };
 const csv = readFileSync(resolve(root, "corpus/workday-40/source.snapshot"), "utf8");
-assert.equal(sha256(csv), reconciliation.sourceDigest, "frozen source CSV digest changed");
+assert.equal(
+  sha256(normalizeTextLineEndings(csv)),
+  reconciliation.sourceDigest,
+  "frozen source CSV digest changed",
+);
 const reconciled = corpusManifestFromCsv({
   csv,
   sourceRevision: reconciliation.sourceRevision,

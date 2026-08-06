@@ -17,13 +17,16 @@ import {
   validateImpactMap,
   type VariantDeclaration,
 } from "../impact-map/index.ts";
-import { validateCorpusManifest } from "../manifest/index.ts";
-import { canonicalJson } from "../shared.ts";
+import {
+  corpusManifestFromCsv,
+  validateCorpusManifest,
+} from "../manifest/index.ts";
+import { canonicalJson, normalizeTextLineEndings } from "../shared.ts";
 import { validateCorpusFixtures } from "../capture/index.ts";
 import { createCorpusBaseline } from "../runner/index.ts";
 
 export const acceptedImpactSha =
-  "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd" as const;
+  "sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4" as const;
 export const acceptedPrerequisiteTask = "S3-F2-T13" as const;
 
 const dormantF3Paths = [
@@ -54,6 +57,7 @@ export interface FreezeSource {
   readonly declarationsPath: string;
   readonly impactPath: string;
   readonly baselinePath: string;
+  readonly sourceSnapshotPath: string;
   readonly configPath: string;
   readonly fixtureRoot: string;
 }
@@ -67,6 +71,7 @@ export interface FrozenInput {
     | "variant_declarations"
     | "contract_impact"
     | "baseline"
+    | "corpus_source"
     | "runtime_config"
     | "fixture";
   readonly path: string;
@@ -114,6 +119,7 @@ interface AcceptedInputPaths {
   readonly declarationsPath: string;
   readonly impactPath: string;
   readonly baselinePath: string;
+  readonly sourceSnapshotPath: string;
   readonly configPath: string;
   readonly fixtureRoot: string;
 }
@@ -136,6 +142,7 @@ export async function createFrozenBundle(
     ["variant_declarations", source.declarationsPath],
     ["contract_impact", source.impactPath],
     ["baseline", source.baselinePath],
+    ["corpus_source", source.sourceSnapshotPath],
     ["runtime_config", source.configPath],
   ] as const;
   const fixturePaths = (await files(source.fixtureRoot))
@@ -176,8 +183,9 @@ export async function createFrozenBundle(
     ...identityCore,
     runId: `corpus-${digestHex(identity).slice(0, 20)}`,
     identity,
-    rootRelativeFromBundle:
-      relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || ".",
+    rootRelativeFromBundle: (
+      relative(dirname(resolve(bundlePath)), resolve(source.repositoryRoot)) || "."
+    ).replaceAll(sep, "/"),
   };
   const bundle: FrozenCorpusBundle = Object.freeze({
     ...unsealed,
@@ -234,6 +242,9 @@ export async function verifyFrozenBundle(
     bundle.maxAttemptsPerFixture < 1 ||
     bundle.maxAttemptsPerFixture > 3 ||
     !validFrozenInputs(bundle.inputs) ||
+    typeof bundle.rootRelativeFromBundle !== "string" ||
+    bundle.rootRelativeFromBundle === "" ||
+    bundle.rootRelativeFromBundle.includes("\\") ||
     !/^sha256\.[0-9a-f]{64}$/u.test(bundle.identity) ||
     !/^sha256\.[0-9a-f]{64}$/u.test(bundle.seal) ||
     seal !== hash(canonicalJson(unsealed)) ||
@@ -283,10 +294,26 @@ async function validateAcceptedInputs(
   const variants = await json(source.variantMapPath);
   const declarations = object(await json(source.declarationsPath));
   const sourceReconciliation = object(await json(source.baselinePath));
+  const sourceSnapshot = await readFile(source.sourceSnapshotPath, "utf8");
   const impact = await json(source.impactPath);
   const config = object(await json(source.configPath));
 
   assertNoErrors("corpus manifest", validateCorpusManifest(manifest));
+  if (
+    typeof sourceReconciliation.sourceDigest !== "string" ||
+    hash(normalizeTextLineEndings(sourceSnapshot)) !== sourceReconciliation.sourceDigest
+  ) {
+    throw new Error("corpus source digest mismatch");
+  }
+  const reconciledManifest = corpusManifestFromCsv({
+    csv: sourceSnapshot,
+    sourceRevision: reconciliationRevision(sourceReconciliation),
+    evidenceDigests: strings(sourceReconciliation.evidenceDigests),
+    unavailableSlots: unavailableSlots(sourceReconciliation.unavailableSlots),
+  });
+  if (canonicalJson(manifest) !== canonicalJson(reconciledManifest)) {
+    throw new Error("corpus manifest does not match retained source");
+  }
   assertNoErrors(
     "corpus fixtures",
     validateCorpusFixtures(source.fixtureRoot, fixtureManifest, manifest),
@@ -364,6 +391,7 @@ async function acceptedPathsFromBundle(
     declarationsPath: path("variant_declarations"),
     impactPath: path("contract_impact"),
     baselinePath: path("baseline"),
+    sourceSnapshotPath: path("corpus_source"),
     configPath: path("runtime_config"),
     fixtureRoot,
   };
@@ -465,6 +493,32 @@ function reconciliationRevision(value: JsonObject): string {
   return value.sourceRevision;
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? [...value]
+    : invalid("source reconciliation evidence digests");
+}
+
+function unavailableSlots(value: unknown): ReadonlyMap<
+  number,
+  "maintenance" | "removed" | "closed" | "not_found" | "access_control"
+> {
+  const record = object(value);
+  const allowed = new Set(["maintenance", "removed", "closed", "not_found", "access_control"]);
+  const entries = Object.entries(record).map(([slot, reason]) => {
+    const number = Number(slot);
+    if (!Number.isInteger(number) || number < 1 || number > 40 ||
+      typeof reason !== "string" || !allowed.has(reason)) {
+      invalid("source reconciliation unavailable slots");
+    }
+    return [number, reason] as const;
+  });
+  return new Map(entries) as ReadonlyMap<
+    number,
+    "maintenance" | "removed" | "closed" | "not_found" | "access_control"
+  >;
+}
+
 export async function findDormantF3Artifacts(
   executionerRoot: string,
 ): Promise<readonly string[]> {
@@ -512,7 +566,7 @@ function validF3(value: unknown): value is F3DormancySummary {
 }
 
 function validFrozenInputs(value: unknown): value is readonly FrozenInput[] {
-  if (!Array.isArray(value) || value.length !== 12) return false;
+  if (!Array.isArray(value) || value.length !== 13) return false;
   const allowed = new Set([
     "package_lock",
     "corpus_manifest",
@@ -521,6 +575,7 @@ function validFrozenInputs(value: unknown): value is readonly FrozenInput[] {
     "variant_declarations",
     "contract_impact",
     "baseline",
+    "corpus_source",
     "runtime_config",
     "fixture",
   ]);
@@ -583,7 +638,7 @@ async function hashFile(path: string): Promise<string> {
   if (!(await stat(path)).isFile()) {
     throw new Error(`frozen input unavailable: ${path}`);
   }
-  return hash(await readFile(path));
+  return hash(normalizeTextLineEndings(await readFile(path, "utf8")));
 }
 
 function hash(value: string | Uint8Array): string {

@@ -17,6 +17,10 @@ export function sha256(value: string | Uint8Array): string {
   return `sha256.${createHash("sha256").update(value).digest("hex")}`;
 }
 
+export function normalizeTextLineEndings(value: string): string {
+  return value.replaceAll("\r\n", "\n");
+}
+
 export function frozenDigest<T extends { freeze?: unknown }>(value: T): string {
   const { freeze: _freeze, ...content } = value;
   return sha256(canonicalJson(content));

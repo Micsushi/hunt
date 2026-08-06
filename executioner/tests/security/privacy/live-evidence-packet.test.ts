@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import {
+  scanForbiddenTokens,
   writeLiveEvidencePacket,
   type LiveEvidencePacketRequestV1,
   type UnknownCandidateEvidenceV1,
@@ -98,6 +99,15 @@ test("rejects the caller's forbidden-token corpus before retaining files", () =>
     /live evidence denied/u,
   );
   assert.deepEqual(readdirSync(root), []);
+});
+
+test("rejects JSON-escaped Windows paths, quotes, and control characters", () => {
+  const token = "C:\\private\\owner\"value\nline";
+  const serialized = Buffer.from(JSON.stringify({ value: token }), "utf8");
+  assert.throws(
+    () => scanForbiddenTokens([{ bytes: serialized }], [token]),
+    /live evidence denied/u,
+  );
 });
 
 test("rejects every forbidden unknown-candidate evidence field", () => {

@@ -41,7 +41,7 @@ export function scanCorpusPrivacyFiles(
   executionerRoot: string,
 ): readonly FilePrivacyViolation[] {
   const violations: FilePrivacyViolation[] = [];
-  for (const scope of ["src", "tests", "fixtures"]) {
+  for (const scope of ["src", "tests", "fixtures", "scripts"]) {
     const root = join(executionerRoot, scope);
     if (existsSync(root)) scan(root);
   }

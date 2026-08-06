@@ -22,6 +22,10 @@ export interface AtomicArtifactConsumeRequest {
 }
 
 interface AtomicSafeArtifactStore {
+  inspectForAtomicConsume(
+    request: VerificationArtifactInspectRequest,
+    signal: AbortSignal,
+  ): Promise<AvailableVerificationArtifact | null>;
   takeForAtomicConsume(
     request: VerificationArtifactInspectRequest,
     signal: AbortSignal,
@@ -60,6 +64,7 @@ export class GmailAtomicArtifactConsumer {
     OperationId,
     { readonly fingerprint: string; readonly result: VerificationNavigationResult }
   >();
+  readonly #handleLanes = new Map<VerificationHandleId, Promise<void>>();
 
   constructor(options: GmailAtomicArtifactConsumerOptions) {
     this.#rawVault = options.rawVault;
@@ -68,6 +73,34 @@ export class GmailAtomicArtifactConsumer {
   }
 
   async consume<
+    Result extends VerificationNavigationResult,
+    Code extends DownstreamNavigationErrorCode,
+  >(
+    request: AtomicArtifactConsumeRequest,
+    signal: AbortSignal,
+    operation: (
+      values: readonly Readonly<Uint8Array>[],
+    ) => Promise<LivePortResult<Result, Code>>,
+  ): Promise<ConsumeResult<Code>> {
+    const previous = this.#handleLanes.get(request.handleId) ?? Promise.resolve();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lane = previous.then(() => gate);
+    this.#handleLanes.set(request.handleId, lane);
+    await previous;
+    try {
+      return await this.#consumeExclusive(request, signal, operation);
+    } finally {
+      release();
+      if (this.#handleLanes.get(request.handleId) === lane) {
+        this.#handleLanes.delete(request.handleId);
+      }
+    }
+  }
+
+  async #consumeExclusive<
     Result extends VerificationNavigationResult,
     Code extends DownstreamNavigationErrorCode,
   >(
@@ -94,14 +127,44 @@ export class GmailAtomicArtifactConsumer {
       this.#clearRequest(request);
       return replayed();
     }
+    const inspectRequest = {
+      schemaVersion: 1 as const,
+      journeyId: request.journeyId,
+      handleId: request.handleId,
+      expectedRecipientBindingId: request.recipientBindingId,
+      expectedTarget: request.target,
+    };
+    const inspected = await this.#artifacts.inspectForAtomicConsume(
+      inspectRequest,
+      signal,
+    );
+    if (inspected === null) {
+      this.#clearRequest(request);
+      return replayed();
+    }
+    const claimCoordinate = this.#rawVault.replayCoordinateForClaim(
+      request.operationId,
+      inspected,
+      request.now,
+    );
+    if (claimCoordinate === null) {
+      this.#clearRequest(request);
+      return replayed();
+    }
+    let claim: "claimed" | "replayed";
+    try {
+      claim = await this.#replayGuard.claim(claimCoordinate, signal);
+    } catch {
+      return checkpointUnavailable();
+    } finally {
+      claimCoordinate.fill(0);
+    }
+    if (claim !== "claimed") {
+      this.#clearRequest(request);
+      return replayed();
+    }
     const artifact = await this.#artifacts.takeForAtomicConsume(
-      {
-        schemaVersion: 1,
-        journeyId: request.journeyId,
-        handleId: request.handleId,
-        expectedRecipientBindingId: request.recipientBindingId,
-        expectedTarget: request.target,
-      },
+      inspectRequest,
       signal,
     );
     if (artifact === null) {
@@ -116,13 +179,6 @@ export class GmailAtomicArtifactConsumer {
     if (raw === null) return replayed();
     const { values, replayCoordinate } = raw;
     try {
-      let claim: "claimed" | "replayed";
-      try {
-        claim = await this.#replayGuard.claim(replayCoordinate, signal);
-      } catch {
-        return checkpointUnavailable();
-      }
-      if (claim !== "claimed") return replayed();
       const result = await operation(values);
       if (!result.ok) return result;
       const safeResult = exactResult(result.value);

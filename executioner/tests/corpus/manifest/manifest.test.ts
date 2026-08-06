@@ -15,7 +15,7 @@ function candidate(): Record<string, unknown> {
     corpusId: "workday-40",
     source: {
       kind: "committed_csv",
-      reference: "wd_test_jobs.csv#rows-2-41",
+      reference: "corpus/workday-40/source.snapshot#rows-2-41",
       revision: "16c48bd1470addc9d9480d785ae84e412edd55ef",
       evidenceDigests: ["sha256." + "a".repeat(64)],
     },
@@ -32,7 +32,7 @@ function candidate(): Record<string, unknown> {
     slots: Array.from({ length: 40 }, (_, index) => ({
       slotId: `WD40-${String(index + 1).padStart(3, "0")}`,
       jobRef: `sha256.${String(index + 1).padStart(64, "0")}`,
-      sourceRef: `wd_test_jobs.csv#row-${index + 2}`,
+      sourceRef: `corpus/workday-40/source.snapshot#row-${index + 2}`,
       tenantRef: `tenant.${String(index + 1).padStart(16, "0")}`,
       tenantClass: "wd5",
       variantIntent: ["workday-posting", "account-or-direct-entry"],

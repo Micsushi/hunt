@@ -36,6 +36,15 @@ export class GmailRawArtifactVault {
     clear(entry);
   }
 
+  replayCoordinateForClaim(
+    operationId: OperationId,
+    admission: AvailableVerificationArtifact,
+    now: string,
+  ): Uint8Array | null {
+    const entry = this.#admitted(operationId, admission, now);
+    return entry?.replayCoordinate.slice() ?? null;
+  }
+
   takeForAtomicConsume(
     operationId: OperationId,
     admission: AvailableVerificationArtifact,
@@ -44,6 +53,20 @@ export class GmailRawArtifactVault {
     readonly values: readonly [Uint8Array, Uint8Array, Uint8Array];
     readonly replayCoordinate: Uint8Array;
   } | null {
+    const entry = this.#admitted(operationId, admission, now);
+    if (entry === null) return null;
+    this.#targets.delete(admission.handleId);
+    return {
+      values: [entry.target, entry.policy.host, entry.policy.tenant],
+      replayCoordinate: entry.replayCoordinate,
+    };
+  }
+
+  #admitted(
+    operationId: OperationId,
+    admission: AvailableVerificationArtifact,
+    now: string,
+  ): CommittedRawArtifact | null {
     const entry = this.#targets.get(admission.handleId);
     if (entry === undefined) return null;
     if (
@@ -56,11 +79,7 @@ export class GmailRawArtifactVault {
       this.invalidate(admission.handleId);
       return null;
     }
-    this.#targets.delete(admission.handleId);
-    return {
-      values: [entry.target, entry.policy.host, entry.policy.tenant],
-      replayCoordinate: entry.replayCoordinate,
-    };
+    return entry;
   }
 }
 

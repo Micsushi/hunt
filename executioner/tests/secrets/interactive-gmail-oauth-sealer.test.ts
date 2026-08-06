@@ -354,6 +354,8 @@ test("production helper pins PKCE loopback Gmail readonly profile equality and D
   assert.match(source, /GetValues\("state"\).*Length != 1/u);
   assert.match(source, /code_challenge_method[^\n]*S256/u);
   assert.match(source, /AllowAutoRedirect = false/u);
+  assert.match(source, /SecurityProtocol = SecurityProtocolType\.Tls12/u);
+  assert.doesNotMatch(source, /SecurityProtocol \|= SecurityProtocolType\.Tls12/u);
   assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly/u);
   assert.match(source, /https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/u);
   assert.match(source, /DataProtectionScope\.CurrentUser/u);

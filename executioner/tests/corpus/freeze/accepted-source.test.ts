@@ -19,7 +19,7 @@ import {
 import { canonicalJson } from "../../../src/corpus/shared.ts";
 
 const impactSha =
-  "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd";
+  "sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4";
 
 async function copiedSource(): Promise<FreezeSource> {
   const sourceRoot = resolve(".");
@@ -41,6 +41,7 @@ async function copiedSource(): Promise<FreezeSource> {
     "corpus/workday-40/variant-declarations.json",
     "corpus/workday-40/contract-impact.json",
     "corpus/workday-40/source-reconciliation.json",
+    "corpus/workday-40/source.snapshot",
     "corpus/workday-40/acceptance.json",
     "src/account/entry/adapter.ts",
     "src/ats/workday/live/account-state.ts",
@@ -64,6 +65,7 @@ async function copiedSource(): Promise<FreezeSource> {
     declarationsPath: join(corpusRoot, "variant-declarations.json"),
     impactPath: join(corpusRoot, "contract-impact.json"),
     baselinePath: join(corpusRoot, "source-reconciliation.json"),
+    sourceSnapshotPath: join(corpusRoot, "source.snapshot"),
     configPath: join(corpusRoot, "acceptance.json"),
     fixtureRoot,
   };
@@ -86,6 +88,7 @@ test("freeze accepts only the impact-bound S3-F2 source with dormant F3", async 
     declarationsPath: resolve(executionerRoot, "corpus/workday-40/variant-declarations.json"),
     impactPath: resolve(executionerRoot, "corpus/workday-40/contract-impact.json"),
     baselinePath: resolve(executionerRoot, "corpus/workday-40/source-reconciliation.json"),
+    sourceSnapshotPath: resolve(executionerRoot, "corpus/workday-40/source.snapshot"),
     configPath: resolve(executionerRoot, "corpus/workday-40/acceptance.json"),
     fixtureRoot: resolve(executionerRoot, "fixtures/workday/corpus"),
   } as never, join(runtimeRoot, "bundle.json"));
@@ -101,6 +104,8 @@ test("freeze accepts only the impact-bound S3-F2 source with dormant F3", async 
     slotEvidenceCount: 0,
   });
   assert.equal(bundle.mode, "deterministic_fixture");
+  assert.equal(bundle.rootRelativeFromBundle.includes("\\"), false);
+  assert.equal(bundle.inputs.some((input) => input.kind === "corpus_source"), true);
   assert.deepEqual(await verifyFrozenBundle(
     join(runtimeRoot, "bundle.json"),
   ), bundle);
@@ -114,7 +119,31 @@ test("freeze accepts only the impact-bound S3-F2 source with dormant F3", async 
   );
 });
 
+test("freeze hashes text identically across CRLF and LF checkouts", async () => {
+  const crlf = await copiedSource();
+  const lf = await copiedSource();
+  for (const path of [lf.sourceSnapshotPath, lf.packageLockPath]) {
+    await writeFile(path, (await readFile(path, "utf8")).replaceAll("\r\n", "\n"));
+  }
+  const first = await createFrozenBundle(crlf, join(crlf.repositoryRoot, "bundle.json"));
+  const second = await createFrozenBundle(lf, join(lf.repositoryRoot, "bundle.json"));
+  const digestByKind = (bundle: typeof first, kind: "corpus_source" | "package_lock") =>
+    bundle.inputs.find((input) => input.kind === kind)?.sha256;
+  assert.equal(digestByKind(first, "corpus_source"), digestByKind(second, "corpus_source"));
+  assert.equal(digestByKind(first, "package_lock"), digestByKind(second, "package_lock"));
+});
+
 test("freeze rejects impact, prerequisite, F3 evidence, and dormant path drift", async () => {
+  const sourceDrift = await copiedSource();
+  await writeFile(sourceDrift.sourceSnapshotPath, "changed source\n");
+  await assert.rejects(
+    () => createFrozenBundle(
+      sourceDrift,
+      join(sourceDrift.repositoryRoot, "source-drift-bundle.json"),
+    ),
+    /corpus source digest mismatch/,
+  );
+
   const impactDrift = await copiedSource();
   const impact = JSON.parse(
     await readFile(impactDrift.impactPath, "utf8"),

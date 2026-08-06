@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import { runStaticCorpusAudit, validateIssueDispositions } from "../../src/corpus/audit/index.ts";
+import { scanCorpusPrivacyFiles } from "../../src/corpus/audit/privacy.ts";
 
 const impactSha =
-  "sha256.4777dffa0f9c0e73aeb452cd52527696f3d34e4b557c220badd73b38eb741efd";
+  "sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4";
 
 test("corpus audit preserves privacy, MCP capability, and module-size gates", async () => {
   const report = await runStaticCorpusAudit(resolve("."));
@@ -36,4 +39,21 @@ test("issue gate blocks P0/P1 and undispositioned P2 findings", () => {
   assert.deepEqual(validateIssueDispositions([
     { id: "issue-3", severity: "P2", disposition: "accepted", regressionImpact: "no_behavior_change" },
   ]), []);
+});
+
+test("corpus privacy scan includes operator scripts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hunt-corpus-privacy-"));
+  try {
+    await mkdir(join(root, "scripts"));
+    await writeFile(
+      join(root, "scripts", "operator.ts"),
+      `const owner = 'person@${"example.com"}';\n`,
+    );
+    assert.deepEqual(scanCorpusPrivacyFiles(root), [{
+      file: "scripts/operator.ts",
+      code: "real_email",
+    }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
