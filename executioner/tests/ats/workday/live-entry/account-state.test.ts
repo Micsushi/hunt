@@ -54,6 +54,37 @@ test("conflicting account or challenge structures are factual ambiguity", () => 
   ]).kind, "account_state_ambiguous");
 });
 
+test("an exact email-provider choice is existing-account evidence only on account entry", () => {
+  const emailChoice = "structural_trait_navigation_email_sign_in_choice_v1";
+
+  assert.equal(
+    classifyLiveAccountState("account_entry", [emailChoice]).kind,
+    "existing_account",
+  );
+  assert.equal(
+    classifyLiveAccountState("account_entry", [emailChoice, LIVE_ENTRY_TRAITS.account.create]).kind,
+    "account_state_ambiguous",
+  );
+  assert.equal(
+    classifyLiveAccountState("job_posting", [emailChoice]).kind,
+    "account_state_unknown",
+  );
+  assert.equal(
+    classifyLiveAccountState("email_verification", [emailChoice]).kind,
+    "verification_required",
+  );
+  const challenge = classifyLiveAccountState("account_entry", [
+    emailChoice,
+    LIVE_ENTRY_TRAITS.challenge.captcha,
+  ]);
+  assert.deepEqual(
+    challenge.kind === "manual_intervention"
+      ? { kind: challenge.kind, reason: challenge.reason }
+      : challenge,
+    { kind: "manual_intervention", reason: "captcha" },
+  );
+});
+
 test("exact account facts are retained without treating the page default as evidence", () => {
   const absent = classifyLiveAccountState("account_entry", [
     LIVE_ENTRY_TRAITS.account.signIn,

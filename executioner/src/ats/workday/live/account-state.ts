@@ -5,6 +5,9 @@ import type {
 } from "../../../contracts/live/index.ts";
 import { LIVE_ENTRY_CLASSIFICATION_REVISION_ID, LIVE_ENTRY_TRAITS } from "./traits.ts";
 
+const EMAIL_SIGN_IN_CHOICE_TRAIT =
+  "structural_trait_navigation_email_sign_in_choice_v1";
+
 type LiveAccountStateMetadata = {
   readonly classificationId: ClassificationId;
   readonly sourceRevisionId: ClassificationRevisionId;
@@ -76,7 +79,8 @@ export function classifyLiveAccountState(
     });
   }
   if (pageType === "account_entry") {
-    const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn);
+    const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn) ||
+      traits.has(EMAIL_SIGN_IN_CHOICE_TRAIT);
     const create = traits.has(LIVE_ENTRY_TRAITS.account.create);
     const absent = traits.has(LIVE_ENTRY_TRAITS.accountFact.absent);
     const exists = traits.has(LIVE_ENTRY_TRAITS.accountFact.exists);

@@ -15,6 +15,8 @@ const ACCOUNT_CREATED_VERIFICATION_SELECTOR =
   ':text-is("An email has been sent to you. Please verify your account.")';
 const PASSWORD_RESET_REQUIRED_SELECTOR =
   '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))';
+const EMAIL_SIGN_IN_CHOICE_SELECTOR =
+  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
 
 test("an inline verification gate outranks retained sign-in controls", async () => {
   const messages = [
@@ -268,11 +270,9 @@ test("visible email sign-in text alone cannot create a navigation trait", async 
 });
 
 test("a live-shaped standalone email provider choice uses its exact visible owner", async () => {
-  const choiceOwner =
-    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
   const page: WorkdayStructuralPage = {
     locator: (selector) => ({
-      count: async () => selector === choiceOwner ? 1 : 0,
+      count: async () => selector === EMAIL_SIGN_IN_CHOICE_SELECTOR ? 1 : 0,
       isVisible: async () => true,
     }),
   };
@@ -285,6 +285,79 @@ test("a live-shaped standalone email provider choice uses its exact visible owne
       classifyWorkdayAccountNavigation(result.snapshot).kind,
     "email_sign_in_choice",
   );
+});
+
+test("an exact Workday provider-choice page is an existing-account entry boundary", async () => {
+  const visibleSelectors = new Set([
+    '[data-automation-id="authPage"]',
+    EMAIL_SIGN_IN_CHOICE_SELECTOR,
+  ]);
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => visibleSelectors.has(selector) ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const traits = result.kind === "snapshot" ? result.snapshot.traitIds : [];
+  assert.deepEqual(traits, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_navigation_email_sign_in_choice_v1",
+  ]);
+  assert.equal(
+    result.kind === "snapshot" && classifyWorkdayAccountNavigation(result.snapshot).kind,
+    "email_sign_in_choice",
+  );
+  assert.equal(classifyLiveAccountState("account_entry", traits).kind, "existing_account");
+});
+
+test("blank, hidden, or duplicate provider-choice structure stays unresolved", async () => {
+  for (const [choiceCount, choiceVisible] of [[0, false], [1, false], [2, true]] as const) {
+    const page: WorkdayStructuralPage = {
+      locator: (selector) => ({
+        count: async () => selector === '[data-automation-id="authPage"]'
+          ? 1
+          : selector === EMAIL_SIGN_IN_CHOICE_SELECTOR
+            ? choiceCount
+            : 0,
+        isVisible: async () => selector === '[data-automation-id="authPage"]' || choiceVisible,
+      }),
+    };
+
+    const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+    assert.equal(result.kind, "snapshot");
+    const traits = result.kind === "snapshot" ? result.snapshot.traitIds : [];
+    assert.deepEqual(traits, [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_account_entry_v1",
+    ]);
+    assert.equal(classifyLiveAccountState("account_entry", traits).kind, "account_state_unknown");
+  }
+});
+
+test("a provider choice conflicting with create-account structure stays ambiguous", async () => {
+  const visibleSelectors = new Set([
+    '[data-automation-id="authPage"]',
+    EMAIL_SIGN_IN_CHOICE_SELECTOR,
+    '[data-automation-id="createAccountSubmitButton"]',
+  ]);
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => visibleSelectors.has(selector) ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const traits = result.kind === "snapshot" ? result.snapshot.traitIds : [];
+  assert.equal(classifyLiveAccountState("account_entry", traits).kind, "account_state_ambiguous");
 });
 
 test("hidden provider and application markers cannot classify navigation or readiness", async () => {

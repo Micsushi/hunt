@@ -36,6 +36,9 @@ interface UnavailableRule {
   readonly selector: string;
 }
 
+const EMAIL_SIGN_IN_CHOICE_SELECTOR =
+  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+
 const pageRules = Object.freeze([
   rule("structural_trait_navigation_apply_choice_v1", '[data-automation-id="applyManually"]'),
   rule("structural_trait_navigation_apply_choice_v1", '[data-automation-id="applyManuallyButton"]'),
@@ -45,7 +48,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
-    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
+    EMAIL_SIGN_IN_CHOICE_SELECTOR,
   ),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="emailVerificationPage"]'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="verifyEmailPage"]'),
