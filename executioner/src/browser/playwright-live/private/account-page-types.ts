@@ -23,6 +23,7 @@ export const accountActionIntents = [
   "submit_sign_in",
   "submit_create_account",
   "accept_terms",
+  "request_verification_email",
 ] as const;
 export type AccountActionIntent = (typeof accountActionIntents)[number];
 

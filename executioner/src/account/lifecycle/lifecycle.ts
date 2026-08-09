@@ -66,6 +66,7 @@ export class AccountVerificationLifecycle {
     }
     if (
       input.schemaVersion !== 1 ||
+      !/^approval_[A-Za-z0-9_-]{16,64}$/u.test(input.approvalId) ||
       !validInstant(input.now) ||
       (input.accountIntent !== "sign_in" && input.accountIntent !== "fresh_create")
     ) {
@@ -367,6 +368,21 @@ export class AccountVerificationLifecycle {
     input: AccountLifecycleInput,
     signal: AbortSignal,
   ): Promise<AccountLifecycleResult> {
+    if (this.#dependencies.verificationEmail === undefined) return denied();
+    const requested = await this.#dependencies.verificationEmail.request({
+      schemaVersion: 1,
+      approvalId: input.approvalId,
+      journeyId: input.journeyId,
+      operationId: input.operations.requestVerificationEmail,
+      sessionId: input.session.sessionId,
+      target: input.target,
+      now: input.now,
+    }, signal);
+    if (!requested.ok) return requested;
+    if (!exactVerificationEmailRequestResult(requested.value)) return denied();
+    if (requested.value.kind === "sent") {
+      this.#emit("lifecycle_action_verification_email_request");
+    }
     const polled = await this.#dependencies.mailbox.poll(input.mailboxRequest, signal);
     if (!polled.ok) return polled;
     let mailbox;
@@ -539,6 +555,22 @@ export class AccountVerificationLifecycle {
     }
     return failure;
   }
+}
+
+function exactVerificationEmailRequestResult(
+  value: unknown,
+): value is
+  | { readonly kind: "not_required" }
+  | { readonly kind: "sent"; readonly independentlyObserved: true } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  return (
+    keys.length === 1 && keys[0] === "kind" && record.kind === "not_required"
+  ) || (
+    keys.length === 2 && keys[0] === "kind" && keys[1] === "independentlyObserved" &&
+    record.kind === "sent" && record.independentlyObserved === true
+  );
 }
 
 function accountPageTrace(

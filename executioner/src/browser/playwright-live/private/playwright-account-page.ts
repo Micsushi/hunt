@@ -67,7 +67,12 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_rejection_password_wait_failed"
   | "submit_rejection_password_confirmation_wait_failed"
   | "submit_stabilization_failed"
-  | "submit_stabilization_deferred";
+  | "submit_stabilization_deferred"
+  | "verification_email_request_click_started"
+  | "verification_email_request_click_succeeded"
+  | "verification_email_request_click_failed"
+  | "verification_email_request_confirmed"
+  | "verification_email_request_confirmation_failed";
 
 interface AccountSubmitFailureDiagnosticV1 {
   readonly schemaVersion: 1;
@@ -90,6 +95,10 @@ export interface PlaywrightAccountPageAdapterOptions {
 }
 
 const WORKDAY_VISIBLE_ALERT_SELECTOR = '[role="alert"]';
+const WORKDAY_VERIFICATION_EMAIL_REQUEST_REQUIRED_SELECTOR =
+  ':text-is("Verify your account before you sign in or request a verification email.")';
+const WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR =
+  ':text-is("An email has been sent to you. Please verify your account.")';
 const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
@@ -128,6 +137,9 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     page: PersistentPage,
     control: AccountFieldName | AccountActionIntent,
   ): Promise<SemanticControlFact> {
+    if (control === "request_verification_email") {
+      return inspectVerificationEmailRequest(page);
+    }
     const { locator, field } = semanticLocator(page, control);
     const cardinality = await locator.count();
     const actionable = cardinality === 1 &&
@@ -177,7 +189,31 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
 
   async activate(page: PersistentPage, action: AccountActionIntent): Promise<void> {
     const locator = semanticLocator(page, action).locator;
-    if (action === "accept_terms") await locator.check();
+    if (action === "request_verification_email") {
+      const admitted = await inspectVerificationEmailRequest(page);
+      if (admitted.cardinality !== 1 || !admitted.actionable) {
+        throw new TypeError("verification email request is not exact");
+      }
+      const sent = playwrightPage(page).locator(WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR);
+      if (await exactVisible(sent)) {
+        throw new TypeError("verification email request was already confirmed");
+      }
+      this.#emit("verification_email_request_click_started");
+      try {
+        await locator.click();
+        this.#emit("verification_email_request_click_succeeded");
+      } catch (error) {
+        this.#emit("verification_email_request_click_failed");
+        throw error;
+      }
+      try {
+        await waitForExactVisible(sent);
+        this.#emit("verification_email_request_confirmed");
+      } catch (error) {
+        this.#emit("verification_email_request_confirmation_failed");
+        throw error;
+      }
+    } else if (action === "accept_terms") await locator.check();
     else {
       const submit = action === "submit_sign_in" || action === "submit_create_account";
       let postClickExactFactLocators: readonly Locator[] = [];
@@ -616,8 +652,35 @@ function waitForExactFact(
   )).then(() => "exact_fact" as const);
 }
 
-function playwrightPage(page: PersistentPage): Pick<Page, "locator"> {
-  return page as unknown as Pick<Page, "locator">;
+function playwrightPage(page: PersistentPage): Pick<Page, "locator" | "getByRole"> {
+  return page as unknown as Pick<Page, "locator" | "getByRole">;
+}
+
+async function inspectVerificationEmailRequest(
+  page: PersistentPage,
+): Promise<SemanticControlFact> {
+  const source = playwrightPage(page);
+  const alert = source.locator(WORKDAY_VERIFICATION_EMAIL_REQUEST_REQUIRED_SELECTOR);
+  const control = source.getByRole("button", {
+    name: "Resend Account Verification",
+    exact: true,
+  });
+  const [alertCount, controlCount] = await Promise.all([
+    alert.count(),
+    control.count(),
+  ]);
+  if (alertCount === 0 && controlCount === 0) {
+    return {
+      cardinality: 0,
+      actionable: await exactVisible(
+        source.locator(WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR),
+      ),
+    };
+  }
+  const cardinality = Math.max(alertCount, controlCount);
+  const actionable = alertCount === 1 && controlCount === 1 &&
+    await alert.isVisible() && await control.isVisible() && await control.isEnabled();
+  return { cardinality, actionable };
 }
 
 function semanticLocator(
@@ -664,6 +727,14 @@ function semanticLocator(
     case "accept_terms":
       return {
         locator: semanticPage.locator('[data-automation-id="createAccountCheckbox"]'),
+        field: false,
+      };
+    case "request_verification_email":
+      return {
+        locator: semanticPage.getByRole("button", {
+          name: "Resend Account Verification",
+          exact: true,
+        }),
         field: false,
       };
   }

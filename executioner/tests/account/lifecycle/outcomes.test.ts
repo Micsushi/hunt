@@ -9,7 +9,11 @@ import {
   createVerificationArtifactFake,
   liveFixtures,
 } from "../../../src/testing/live/index.ts";
-import { accountObserver, lifecycleInput } from "./support.ts";
+import {
+  accountObserver,
+  lifecycleInput,
+  verificationEmailRequester,
+} from "./support.ts";
 
 test("target observations remain exact factual outcomes with zero effects", async () => {
   const cases = [
@@ -34,6 +38,7 @@ test("target observations remain exact factual outcomes with zero effects", asyn
     const accountState = accountObserver(observation as never);
     const lifecycle = new AccountVerificationLifecycle({
       credentialMutation: credential.port,
+      verificationEmail: verificationEmailRequester().port,
       mailbox: mailbox.port,
       artifacts: artifacts.port,
       navigator: navigator.port,
@@ -93,6 +98,7 @@ test("mailbox none, ambiguity, expiry, and consumed facts stop before artifact u
     const accountState = accountObserver("verification_required");
     const lifecycle = new AccountVerificationLifecycle({
       credentialMutation: credential.port,
+      verificationEmail: verificationEmailRequester().port,
       mailbox: mailbox.port,
       artifacts: artifacts.port,
       navigator: navigator.port,

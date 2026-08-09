@@ -13,7 +13,11 @@ import {
   type AccountLifecycleCredentialMutationAdapter,
   type AccountLifecycleCredentialMutationResult,
 } from "../../../src/account/lifecycle/index.ts";
-import { accountObserver as observer, lifecycleInput as input } from "./support.ts";
+import {
+  accountObserver as observer,
+  lifecycleInput as input,
+  verificationEmailRequester,
+} from "./support.ts";
 
 test("independently observed application-ready state skips every effect", async () => {
   const credential = createCredentialMutationAdapterFake();
@@ -168,6 +172,7 @@ test("verification consumes through one navigator call and never invalidates sep
   const accountState = observer("verification_required", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,
@@ -193,6 +198,74 @@ test("verification consumes through one navigator call and never invalidates sep
   assert.equal(accountState.calls.length, 2);
 });
 
+test("an independently confirmed verification-email request occurs once before mailbox polling", async () => {
+  const order: string[] = [];
+  const requester = verificationEmailRequester({
+    order,
+    result: {
+      ok: true,
+      value: { kind: "sent", independentlyObserved: true },
+    },
+  });
+  const mailboxBase = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const mailbox = {
+    poll(request: Parameters<typeof mailboxBase.port.poll>[0], signal: AbortSignal) {
+      order.push("poll_mailbox");
+      return mailboxBase.port.poll(request, signal);
+    },
+  };
+  const events: string[] = [];
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: createCredentialMutationAdapterFake().port,
+    verificationEmail: requester.port,
+    mailbox,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer("verification_required", "application_ready").port,
+    trace: (event) => events.push(event),
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(order, ["request_verification_email", "poll_mailbox"]);
+  assert.equal(requester.calls.length, 1);
+  assert.deepEqual(requester.calls[0], {
+    schemaVersion: 1,
+    approvalId: input().approvalId,
+    journeyId: input().journeyId,
+    operationId: input().operations.requestVerificationEmail,
+    sessionId: input().session.sessionId,
+    target: input().target,
+    now: input().now,
+  });
+  assert.equal(events.filter((event) =>
+    event === "lifecycle_action_verification_email_request"
+  ).length, 1);
+  assert.doesNotMatch(JSON.stringify(events), /submit|https?:|email@|password|token/iu);
+});
+
+test("failed, cancelled, or malformed verification-email requests never poll Gmail", async () => {
+  for (const result of [
+    { ok: false, error: { code: "browser_effect_uncertain", retryable: false } },
+    { ok: false, error: { code: "operation_cancelled", retryable: false } },
+    { ok: true, value: { kind: "sent", independentlyObserved: false } },
+  ] as const) {
+    const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+    const lifecycle = new AccountVerificationLifecycle({
+      credentialMutation: createCredentialMutationAdapterFake().port,
+      verificationEmail: verificationEmailRequester({ result: result as never }).port,
+      mailbox: mailbox.port,
+      artifacts: createVerificationArtifactFake().port,
+      navigator: createPrivilegedVerificationNavigatorFake().port,
+      accountState: observer("verification_required").port,
+    });
+
+    assert.equal((await lifecycle.run(input(), new AbortController().signal)).ok, false);
+    assert.equal(mailbox.calls.length, 0);
+  }
+});
+
 test("fresh-create submits create first even when Workday initially shows sign-in", async () => {
   const credential = privateCredential(
     { kind: "verification_required", attemptedFields: ["email", "password"] },
@@ -203,6 +276,7 @@ test("fresh-create submits create first even when Workday initially shows sign-i
   const accountState = observer("existing_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,
@@ -257,6 +331,7 @@ test("fresh-create never uses an ambiguous sign-in rejection as an existence pro
   });
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: createMailboxProviderFake().port,
     artifacts: createVerificationArtifactFake().port,
     navigator: createPrivilegedVerificationNavigatorFake().port,
@@ -449,6 +524,7 @@ test("post-navigation existing-account state signs in and is reclassified", asyn
   );
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,
@@ -501,6 +577,7 @@ test("post-navigation create-account state switches to sign-in and is reclassifi
   const events: string[] = [];
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,
@@ -547,6 +624,7 @@ test("a reused account may require mailbox verification after sign-in", async ()
   const accountState = observer("existing_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: mailbox.port,
     artifacts: artifacts.port,
     navigator: navigator.port,

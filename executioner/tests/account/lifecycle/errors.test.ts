@@ -8,7 +8,11 @@ import {
   createPrivilegedVerificationNavigatorFake,
   createVerificationArtifactFake,
 } from "../../../src/testing/live/index.ts";
-import { accountObserver, lifecycleInput } from "./support.ts";
+import {
+  accountObserver,
+  lifecycleInput,
+  verificationEmailRequester,
+} from "./support.ts";
 
 test("credential, mailbox, artifact, and navigation errors keep exact code and retryability", async () => {
   const cases = [
@@ -69,6 +73,7 @@ test("credential, mailbox, artifact, and navigation errors keep exact code and r
   for (const item of cases) {
     const lifecycle = new AccountVerificationLifecycle({
       credentialMutation: item.credential.port,
+      verificationEmail: verificationEmailRequester().port,
       mailbox: item.mailbox.port,
       artifacts: item.artifacts.port,
       navigator: item.navigator.port,
@@ -85,6 +90,7 @@ test("malformed successful values never complete the lifecycle", async () => {
   const accountState = accountObserver("verification_required");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: createCredentialMutationAdapterFake().port,
+    verificationEmail: verificationEmailRequester().port,
     mailbox: createMailboxProviderFake().port,
     artifacts: createVerificationArtifactFake().port,
     navigator: createPrivilegedVerificationNavigatorFake({

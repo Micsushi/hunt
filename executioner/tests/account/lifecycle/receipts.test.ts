@@ -32,6 +32,17 @@ test("same operation replays one frozen receipt and a changed fingerprint confli
     { ...request, accountIntent: "fresh_create" },
     new AbortController().signal,
   );
+  const approvalConflict = await lifecycle.run(
+    { ...request, approvalId: "approval_otherabcdefghijkl" },
+    new AbortController().signal,
+  );
+  const requestOperationConflict = await lifecycle.run({
+    ...request,
+    operations: {
+      ...request.operations,
+      requestVerificationEmail: "operation_other_request_abc" as never,
+    },
+  }, new AbortController().signal);
 
   assert.deepEqual(replay, first);
   assert.equal(Object.isFrozen(first), true);
@@ -40,6 +51,8 @@ test("same operation replays one frozen receipt and a changed fingerprint confli
     ok: false,
     error: { code: "journey_request_conflict", retryable: false },
   });
+  assert.deepEqual(approvalConflict, conflict);
+  assert.deepEqual(requestOperationConflict, conflict);
   assert.equal(accountState.calls.length, 1);
   assert.equal(credential.calls.length, 0);
   assert.equal(mailbox.calls.length, 0);

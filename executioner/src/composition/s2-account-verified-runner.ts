@@ -32,6 +32,7 @@ import type {
   VerificationHandleId,
 } from "../contracts/index.ts";
 import { stage2StorageRootForOwnerBinding } from "./private/s2-owner-storage-binding.ts";
+import { createVerificationEmailRequestAdapter } from "./private/s2-verification-email-request.ts";
 import { Stage2VerificationReplayLedger } from "./private/s2-verification-replay-ledger.ts";
 import type {
   ActiveAccountSecretHandle,
@@ -104,6 +105,7 @@ export interface AccountVerifiedOperationIds {
   readonly initialCredentialMutation: OperationId;
   readonly createCredentialMutation: OperationId;
   readonly accountExistsSignIn: OperationId;
+  readonly requestVerificationEmail: OperationId;
   readonly navigateVerification: OperationId;
   readonly postVerificationSignIn: OperationId;
   readonly browserClose: OperationId;
@@ -148,6 +150,7 @@ export function createAccountVerifiedBindings(
   const lifecycle = Object.freeze({
     schemaVersion: 1 as const,
     operationId: operations.lifecycle,
+    approvalId: owner.approval.approvalId,
     journeyId: owner.journeyId as never,
     target,
     mailboxRequest,
@@ -156,6 +159,7 @@ export function createAccountVerifiedBindings(
       initialCredentialMutation: operations.initialCredentialMutation,
       createCredentialMutation: operations.createCredentialMutation,
       accountExistsSignIn: operations.accountExistsSignIn,
+      requestVerificationEmail: operations.requestVerificationEmail,
       navigateVerification: operations.navigateVerification,
       postVerificationSignIn: operations.postVerificationSignIn,
     }),
@@ -511,6 +515,16 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         const lifecycle = new AccountVerificationLifecycle(
           createAuthorizationBoundLifecycleDependencies({
             credentialMutation: credentialMutation.lifecycle,
+            verificationEmail: createVerificationEmailRequestAdapter({
+              accountPage: browser,
+              binding: {
+                approvalId: owner.approval.approvalId,
+                journeyId: bindings.lifecycle.journeyId,
+                operationId: operations.requestVerificationEmail,
+                sessionId: session.sessionId,
+                target: bindings.target,
+              },
+            }),
             mailbox,
             artifacts: artifacts.port,
             navigator,
@@ -688,6 +702,19 @@ export function createAuthorizationBoundLifecycleDependencies(
         : dependencies.mailbox.poll(request, signal);
     },
   });
+  const verificationEmail = dependencies.verificationEmail === undefined
+    ? undefined
+    : Object.freeze({
+      request(
+        request: Parameters<NonNullable<AccountLifecycleDependencies["verificationEmail"]>["request"]>[0],
+        signal: AbortSignal,
+      ) {
+        const current = admit(signal);
+        return current === null
+          ? Promise.resolve(cancelledPortResult())
+          : dependencies.verificationEmail!.request({ ...request, now: current }, signal);
+      },
+    });
   const artifacts: AccountLifecycleDependencies["artifacts"] = Object.freeze({
     inspect(
       request: Parameters<AccountLifecycleDependencies["artifacts"]["inspect"]>[0],
@@ -729,6 +756,7 @@ export function createAuthorizationBoundLifecycleDependencies(
   });
   const bounded: AccountLifecycleDependencies = {
     credentialMutation,
+    ...(verificationEmail === undefined ? {} : { verificationEmail }),
     mailbox,
     artifacts,
     navigator,
@@ -961,6 +989,7 @@ function operationIds(): AccountVerifiedOperationIds {
     initialCredentialMutation: next(),
     createCredentialMutation: next(),
     accountExistsSignIn: next(),
+    requestVerificationEmail: next(),
     navigateVerification: next(),
     postVerificationSignIn: next(),
     browserClose: next(),

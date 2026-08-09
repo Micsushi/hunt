@@ -70,6 +70,27 @@ export interface AccountLifecycleAccountStateObserver {
   ): Promise<LivePortResult<AccountLifecycleObservation, PersistentBrowserErrorCode>>;
 }
 
+export interface VerificationEmailRequest {
+  readonly schemaVersion: 1;
+  readonly approvalId: string;
+  readonly journeyId: JourneyId;
+  readonly operationId: OperationId;
+  readonly sessionId: LiveSessionId;
+  readonly target: TargetIdentityV1;
+  readonly now: string;
+}
+
+export interface AccountLifecycleVerificationEmailRequester {
+  request(
+    request: VerificationEmailRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<
+    | { readonly kind: "not_required" }
+    | { readonly kind: "sent"; readonly independentlyObserved: true },
+    PersistentBrowserErrorCode
+  >>;
+}
+
 export type AccountLifecycleCredentialMutationResult =
   | CredentialMutationResult
   | {
@@ -85,6 +106,7 @@ export type AccountLifecycleTraceEvent =
   | "lifecycle_page_manual_intervention"
   | "lifecycle_action_sign_in"
   | "lifecycle_action_create_account"
+  | "lifecycle_action_verification_email_request"
   | "lifecycle_action_verification_link"
   | "lifecycle_cycle_stopped";
 
@@ -100,6 +122,7 @@ export interface AccountLifecycleCredentialMutationAdapter {
 
 export interface AccountLifecycleDependencies {
   readonly credentialMutation: AccountLifecycleCredentialMutationAdapter;
+  readonly verificationEmail?: AccountLifecycleVerificationEmailRequester;
   readonly mailbox: MailboxProvider;
   readonly artifacts: VerificationArtifact;
   readonly navigator: PrivilegedVerificationNavigator;
@@ -110,6 +133,7 @@ export interface AccountLifecycleDependencies {
 export interface AccountLifecycleInput {
   readonly schemaVersion: 1;
   readonly operationId: OperationId;
+  readonly approvalId: string;
   readonly journeyId: JourneyId;
   readonly session: LiveBrowserSessionV1;
   readonly target: TargetIdentityV1;
@@ -121,6 +145,7 @@ export interface AccountLifecycleInput {
     readonly initialCredentialMutation: OperationId;
     readonly createCredentialMutation: OperationId;
     readonly accountExistsSignIn: OperationId;
+    readonly requestVerificationEmail: OperationId;
     readonly navigateVerification: OperationId;
     readonly postVerificationSignIn: OperationId;
   };

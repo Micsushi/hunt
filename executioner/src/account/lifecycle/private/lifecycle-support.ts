@@ -140,6 +140,7 @@ export function requestFingerprint(input: AccountLifecycleInput): string {
   return JSON.stringify([
     input.schemaVersion,
     input.operationId,
+    input.approvalId,
     input.journeyId,
     input.session.schemaVersion,
     input.session.sessionId,
@@ -164,6 +165,7 @@ export function requestFingerprint(input: AccountLifecycleInput): string {
     input.operations.initialCredentialMutation,
     input.operations.createCredentialMutation,
     input.operations.accountExistsSignIn,
+    input.operations.requestVerificationEmail,
     input.operations.navigateVerification,
     input.operations.postVerificationSignIn,
   ]);

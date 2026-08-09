@@ -16,6 +16,8 @@ const SIGN_IN_EXACT_FACT_SELECTORS = [
 ] as const;
 const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
+const LIVE_VERIFICATION_SENT_SELECTOR =
+  ':text-is("An email has been sent to you. Please verify your account.")';
 const SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS = [
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
@@ -75,6 +77,162 @@ test("maps every closed control to its exact Workday semantic locator", async ()
       actionable: true,
     });
     assert.deepEqual(page.calls, [expectedCall]);
+  }
+});
+
+test("requests the exact Xcel verification email once and observes the sent confirmation", async () => {
+  const request = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const alert = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: false,
+    editable: false,
+  });
+  const sent = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false, true],
+    enabled: false,
+    editable: false,
+  });
+  const page = new FakePage(request, request, new Map([
+    [LIVE_VERIFICATION_REQUIRED_SELECTOR, alert],
+    [LIVE_VERIFICATION_SENT_SELECTOR, sent],
+  ]));
+  const adapter = new PlaywrightAccountPageAdapter();
+
+  assert.deepEqual(
+    await adapter.inspect(page, "request_verification_email"),
+    { cardinality: 1, actionable: true },
+  );
+  await adapter.activate(page, "request_verification_email");
+  await assert.rejects(() =>
+    adapter.activate(page, "request_verification_email")
+  );
+
+  assert.equal(request.clickCalls, 1);
+  assert.deepEqual(page.calls.filter((call) =>
+    (call as { readonly method?: string }).method === "getByRole"
+  ), [
+    {
+      method: "getByRole",
+      role: "button",
+      name: "Resend Account Verification",
+      exact: true,
+    },
+    {
+      method: "getByRole",
+      role: "button",
+      name: "Resend Account Verification",
+      exact: true,
+    },
+    {
+      method: "getByRole",
+      role: "button",
+      name: "Resend Account Verification",
+      exact: true,
+    },
+    {
+      method: "getByRole",
+      role: "button",
+      name: "Resend Account Verification",
+      exact: true,
+    },
+    {
+      method: "getByRole",
+      role: "button",
+      name: "Resend Account Verification",
+      exact: true,
+    },
+  ]);
+});
+
+test("verification-email request admission rejects absent, ambiguous, and non-actionable controls", async () => {
+  const absent = new FakeLocator({ count: 0, visible: false, enabled: false, editable: false });
+  const visibleAlert = new FakeLocator({ count: 1, visible: true, enabled: false, editable: false });
+  for (const [alert, control, expected] of [
+    [absent, absent, { cardinality: 0, actionable: false }],
+    [visibleAlert, absent, { cardinality: 1, actionable: false }],
+    [visibleAlert, new FakeLocator({ count: 2, visible: true, enabled: true, editable: false }), { cardinality: 2, actionable: false }],
+    [visibleAlert, new FakeLocator({ count: 1, visible: true, enabled: false, editable: false }), { cardinality: 1, actionable: false }],
+  ] as const) {
+    const page = new FakePage(control, control, new Map([
+      [LIVE_VERIFICATION_REQUIRED_SELECTOR, alert],
+    ]));
+    const adapter = new PlaywrightAccountPageAdapter();
+    assert.deepEqual(
+      await adapter.inspect(page, "request_verification_email"),
+      expected,
+    );
+    await assert.rejects(() =>
+      adapter.activate(page, "request_verification_email")
+    );
+    assert.equal(control.clickCalls, 0);
+  }
+});
+
+test("an exact already-sent marker is the only control-absent state that permits polling", async () => {
+  const absent = new FakeLocator({ count: 0, visible: false, enabled: false, editable: false });
+  const sent = new FakeLocator({ count: 1, visible: true, enabled: false, editable: false });
+  const page = new FakePage(absent, absent, new Map([
+    [LIVE_VERIFICATION_REQUIRED_SELECTOR, absent],
+    [LIVE_VERIFICATION_SENT_SELECTOR, sent],
+  ]));
+  assert.deepEqual(
+    await new PlaywrightAccountPageAdapter().inspect(
+      page,
+      "request_verification_email",
+    ),
+    { cardinality: 0, actionable: true },
+  );
+  assert.equal(absent.clickCalls, 0);
+});
+
+test("a failed verification-email click or missing sent confirmation never claims success", async () => {
+  for (const clickFails of [true, false]) {
+    const events: string[] = [];
+    const request = new FakeLocator({
+      count: 1,
+      visible: true,
+      enabled: true,
+      editable: false,
+      clickFails,
+    });
+    const page = new FakePage(request, request, new Map([
+      [LIVE_VERIFICATION_REQUIRED_SELECTOR, new FakeLocator({
+        count: 1,
+        visible: true,
+        enabled: false,
+        editable: false,
+      })],
+      [LIVE_VERIFICATION_SENT_SELECTOR, new FakeLocator({
+        count: 1,
+        visible: false,
+        enabled: false,
+        editable: false,
+        visibleWaitFails: true,
+      })],
+    ]));
+    await assert.rejects(() =>
+      new PlaywrightAccountPageAdapter({ trace: (event) => events.push(event) })
+        .activate(page, "request_verification_email")
+    );
+    assert.equal(request.clickCalls, 1);
+    assert.deepEqual(events, clickFails
+      ? [
+          "verification_email_request_click_started",
+          "verification_email_request_click_failed",
+        ]
+      : [
+          "verification_email_request_click_started",
+          "verification_email_request_click_succeeded",
+          "verification_email_request_confirmation_failed",
+        ]);
   }
 });
 

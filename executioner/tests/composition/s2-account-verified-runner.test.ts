@@ -42,6 +42,11 @@ test("account-verified bindings share the one navigation operation with Gmail", 
     value.lifecycle.operations.accountExistsSignIn,
     operations.accountExistsSignIn,
   );
+  assert.equal(
+    value.lifecycle.operations.requestVerificationEmail,
+    operations.requestVerificationEmail,
+  );
+  assert.equal(value.lifecycle.approvalId, ownerInputs().approval.approvalId);
   assert.notEqual(
     value.lifecycle.operations.initialCredentialMutation,
     value.lifecycle.operations.createCredentialMutation,
@@ -49,6 +54,10 @@ test("account-verified bindings share the one navigation operation with Gmail", 
   assert.notEqual(
     value.lifecycle.operations.createCredentialMutation,
     value.lifecycle.operations.accountExistsSignIn,
+  );
+  assert.notEqual(
+    value.lifecycle.operations.requestVerificationEmail,
+    value.lifecycle.operations.navigateVerification,
   );
   assert.equal(value.lifecycle.mailboxRequest, value.mailboxRequest);
   assert.equal(value.lifecycle.target, value.target);
@@ -336,6 +345,7 @@ test("production assembly shares raw vault and artifact registry without owner m
   assert.match(source, /new GmailAtomicArtifactConsumer\(\{[\s\S]*?replayGuard: new Stage2VerificationReplayLedger/u);
   assert.match(source, /createGmailPrivilegedVerificationNavigator\(\{[\s\S]*?consumer,/u);
   assert.match(source, /createAccountEntryCredentialMutationAdapter\(\{/u);
+  assert.match(source, /createVerificationEmailRequestAdapter\(\{[\s\S]*?approvalId: owner\.approval\.approvalId,[\s\S]*?operationId: operations\.requestVerificationEmail,[\s\S]*?sessionId: session\.sessionId,/u);
   assert.equal(source.includes("createStage2AccountEntryCredentialMutationAdapter"), false);
   assert.equal(source.includes("verificationTarget.toString"), false);
   assert.equal(source.includes("credential.email.toString"), false);
@@ -447,6 +457,7 @@ function operationIds() {
     initialCredentialMutation: "operation_initial_abcdefgh" as OperationId,
     createCredentialMutation: "operation_create_abcdefgh" as OperationId,
     accountExistsSignIn: "operation_exists_abcdefgh" as OperationId,
+    requestVerificationEmail: "operation_request_abcdefg" as OperationId,
     navigateVerification: "operation_navigateabcdefg" as OperationId,
     postVerificationSignIn: "operation_signin_abcdefgh" as OperationId,
     browserClose: "operation_close_abcdefghijkl" as OperationId,

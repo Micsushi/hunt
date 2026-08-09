@@ -4,6 +4,7 @@ import type {
 } from "../../../src/ats/workday/live/index.ts";
 import type {
   AccountLifecycleAccountStateObserver,
+  AccountLifecycleVerificationEmailRequester,
 } from "../../../src/account/lifecycle/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 
@@ -14,6 +15,7 @@ export function lifecycleInput() {
   return {
     schemaVersion: 1 as const,
     operationId: operation("lifecycle"),
+    approvalId: "approval_abcdefghijklmnop",
     journeyId: liveFixtures.journeyId,
     session: liveFixtures.session,
     target: liveFixtures.target,
@@ -25,6 +27,7 @@ export function lifecycleInput() {
       initialCredentialMutation: operation("initial"),
       createCredentialMutation: operation("create"),
       accountExistsSignIn: operation("exists-sign-in"),
+      requestVerificationEmail: operation("request-email"),
       navigateVerification: operation("navigate"),
       postVerificationSignIn: operation("sign-in"),
     },
@@ -77,6 +80,24 @@ export function accountObserver(
           documentGenerationId: "live_entry_document_test_v1",
         } as never,
       };
+    },
+  };
+  return { calls, port };
+}
+
+export function verificationEmailRequester(options: {
+  readonly result?: Awaited<ReturnType<AccountLifecycleVerificationEmailRequester["request"]>>;
+  readonly order?: string[];
+} = {}) {
+  const calls: unknown[] = [];
+  const port: AccountLifecycleVerificationEmailRequester = {
+    async request(request, signal) {
+      calls.push(request);
+      options.order?.push("request_verification_email");
+      if (signal.aborted) {
+        return { ok: false, error: { code: "operation_cancelled", retryable: false } };
+      }
+      return options.result ?? { ok: true, value: { kind: "not_required" } };
     },
   };
   return { calls, port };

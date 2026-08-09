@@ -15,6 +15,10 @@ test("outer session, secret, and mailbox bindings fail before observation or eff
   const base = lifecycleInput();
   const cases = [
     [
+      { ...base, approvalId: "approval_invalid" },
+      "mcp_request_invalid",
+    ],
+    [
       { ...base, accountIntent: "create_from_page_default" as never },
       "mcp_request_invalid",
     ],

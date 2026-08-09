@@ -20,7 +20,8 @@ export type AccountActionIntent =
   | "show_create_account"
   | "submit_sign_in"
   | "submit_create_account"
-  | "accept_terms";
+  | "accept_terms"
+  | "request_verification_email";
 
 export type AccountEntryTraceEvent =
   | "initial_state_existing_account"
