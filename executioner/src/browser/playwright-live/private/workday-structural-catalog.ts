@@ -59,9 +59,14 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_review_step_v1", '[data-automation-id="applyFlowReviewPage"]'),
 ] satisfies readonly TraitRule[]);
 
+export const WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS = Object.freeze([
+  ':text-is("An email has been sent to you. Please verify your account.")',
+  ':text-is("An email has been sent to you.")',
+]);
+
 export const WORKDAY_INLINE_VERIFICATION_SELECTORS = Object.freeze([
   '[data-automation-id="signInPage"]:has-text("An email has been sent to you. Please verify your account.")',
-  ':text-is("An email has been sent to you. Please verify your account.")',
+  ...WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS,
   '[data-automation-id="signInPage"]:has-text("verify your account before you sign in")',
   '[data-automation-id="signInPage"]:has-text("request a verification email")',
   ':text-is("Verify your account before you sign in or request a verification email.")',

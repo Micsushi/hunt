@@ -12,6 +12,7 @@ import {
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
   WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS,
   WORKDAY_SIGN_IN_REJECTION_SELECTORS,
+  WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS,
 } from "./workday-structural-catalog.ts";
 
 export type PlaywrightAccountPageTraceEvent =
@@ -97,8 +98,6 @@ export interface PlaywrightAccountPageAdapterOptions {
 const WORKDAY_VISIBLE_ALERT_SELECTOR = '[role="alert"]';
 const WORKDAY_VERIFICATION_EMAIL_REQUEST_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
-const WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR =
-  ':text-is("An email has been sent to you. Please verify your account.")';
 const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
@@ -194,9 +193,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
       if (admitted.cardinality !== 1 || !admitted.actionable) {
         throw new TypeError("verification email request is not exact");
       }
-      const sent = playwrightPage(page).locator(WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR);
-      if (await exactVisible(sent)) {
+      const sentState = await verificationEmailSentState(page);
+      if (sentState === "exact") {
         throw new TypeError("verification email request was already confirmed");
+      }
+      if (sentState === "ambiguous") {
+        throw new TypeError("verification email confirmation is ambiguous");
       }
       this.#emit("verification_email_request_click_started");
       try {
@@ -207,7 +209,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         throw error;
       }
       try {
-        await waitForExactVisible(sent);
+        await waitForExactVerificationEmailSent(page);
         this.#emit("verification_email_request_confirmed");
       } catch (error) {
         this.#emit("verification_email_request_confirmation_failed");
@@ -672,15 +674,38 @@ async function inspectVerificationEmailRequest(
   if (alertCount === 0 && controlCount === 0) {
     return {
       cardinality: 0,
-      actionable: await exactVisible(
-        source.locator(WORKDAY_VERIFICATION_EMAIL_SENT_SELECTOR),
-      ),
+      actionable: await verificationEmailSentState(page) === "exact",
     };
   }
   const cardinality = Math.max(alertCount, controlCount);
   const actionable = alertCount === 1 && controlCount === 1 &&
     await alert.isVisible() && await control.isVisible() && await control.isEnabled();
   return { cardinality, actionable };
+}
+
+async function verificationEmailSentState(
+  page: PersistentPage,
+): Promise<"absent" | "exact" | "ambiguous"> {
+  let visible = 0;
+  for (const selector of WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS) {
+    const locator = playwrightPage(page).locator(selector);
+    const count = await locator.count();
+    if (count > 1) return "ambiguous";
+    if (count === 1 && await locator.isVisible()) visible += 1;
+  }
+  return visible === 0 ? "absent" : visible === 1 ? "exact" : "ambiguous";
+}
+
+async function waitForExactVerificationEmailSent(page: PersistentPage): Promise<void> {
+  const locators = WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS.map((selector) =>
+    playwrightPage(page).locator(selector)
+  );
+  await Promise.any(locators.map((locator) =>
+    locator.waitFor({ state: "visible", timeout: 10_000 })
+  ));
+  if (await verificationEmailSentState(page) !== "exact") {
+    throw new Error("verification email confirmation remained ambiguous");
+  }
 }
 
 function semanticLocator(

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   inspectWorkdayStructure,
+  WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS,
   type WorkdaySemanticAccountInspector,
   type WorkdayStructuralPage,
 } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
@@ -13,6 +14,8 @@ const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
 const ACCOUNT_CREATED_VERIFICATION_SELECTOR =
   ':text-is("An email has been sent to you. Please verify your account.")';
+const SHORT_ACCOUNT_CREATED_VERIFICATION_SELECTOR =
+  ':text-is("An email has been sent to you.")';
 const PASSWORD_RESET_REQUIRED_SELECTOR =
   '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))';
 const EMAIL_SIGN_IN_CHOICE_SELECTOR =
@@ -21,6 +24,7 @@ const EMAIL_SIGN_IN_CHOICE_SELECTOR =
 test("an inline verification gate outranks retained sign-in controls", async () => {
   const messages = [
     "An email has been sent to you. Please verify your account.",
+    "An email has been sent to you.",
     "verify your account before you sign in",
     "request a verification email",
   ];
@@ -52,6 +56,19 @@ test("an inline verification gate outranks retained sign-in controls", async () 
   }
 });
 
+test("verification sent selectors admit only the two exact observed variants", () => {
+  assert.deepEqual(WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS, [
+    ACCOUNT_CREATED_VERIFICATION_SELECTOR,
+    SHORT_ACCOUNT_CREATED_VERIFICATION_SELECTOR,
+  ]);
+  assert.equal(
+    WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS.some((selector) =>
+      selector.includes("has-text") || !selector.startsWith(':text-is("')
+    ),
+    false,
+  );
+});
+
 test("the live verification-required alert does not depend on stale sign-in-page ownership", async () => {
   const page: WorkdayStructuralPage = {
     locator: (selector) => ({
@@ -77,6 +94,23 @@ test("an account-created verification notice outside the retained sign-in root w
           selector === ACCOUNT_CREATED_VERIFICATION_SELECTOR
           ? 1
           : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, signInInspector());
+
+  assert.equal(result.kind, "snapshot");
+  assert.deepEqual(result.kind === "snapshot" ? result.snapshot.traitIds : [], [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_email_verification_v1",
+  ]);
+});
+
+test("the short account-created verification notice outside the sign-in root wins", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === SHORT_ACCOUNT_CREATED_VERIFICATION_SELECTOR ? 1 : 0,
       isVisible: async () => true,
     }),
   };

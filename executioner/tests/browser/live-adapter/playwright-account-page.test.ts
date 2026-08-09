@@ -18,6 +18,8 @@ const LIVE_VERIFICATION_REQUIRED_SELECTOR =
   ':text-is("Verify your account before you sign in or request a verification email.")';
 const LIVE_VERIFICATION_SENT_SELECTOR =
   ':text-is("An email has been sent to you. Please verify your account.")';
+const LIVE_VERIFICATION_SENT_SHORT_SELECTOR =
+  ':text-is("An email has been sent to you.")';
 const SIGN_IN_FAILURE_DIAGNOSTIC_SELECTORS = [
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
@@ -149,6 +151,113 @@ test("requests the exact Xcel verification email once and observes the sent conf
       name: "Resend Account Verification",
       exact: true,
     },
+  ]);
+});
+
+test("accepts the exact short Xcel sent confirmation after one request", async () => {
+  const events: string[] = [];
+  const request = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const alert = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: false,
+    editable: false,
+  });
+  const sent = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false, true],
+    enabled: false,
+    editable: false,
+  });
+  const page = new FakePage(request, request, new Map([
+    [LIVE_VERIFICATION_REQUIRED_SELECTOR, alert],
+    [LIVE_VERIFICATION_SENT_SHORT_SELECTOR, sent],
+  ]));
+
+  await new PlaywrightAccountPageAdapter({ trace: (event) => events.push(event) })
+    .activate(page, "request_verification_email");
+
+  assert.equal(request.clickCalls, 1);
+  assert.deepEqual(events, [
+    "verification_email_request_click_started",
+    "verification_email_request_click_succeeded",
+    "verification_email_request_confirmed",
+  ]);
+});
+
+test("verification-email sent confirmation rejects duplicates and both exact variants", async () => {
+  const absent = new FakeLocator({ count: 0, visible: false, enabled: false, editable: false });
+  for (const sentLocators of [
+    new Map([[LIVE_VERIFICATION_SENT_SELECTOR, new FakeLocator({
+      count: 2,
+      visible: true,
+      enabled: false,
+      editable: false,
+    })]]),
+    new Map([
+      [LIVE_VERIFICATION_SENT_SELECTOR, new FakeLocator({ count: 1, visible: true, enabled: false, editable: false })],
+      [LIVE_VERIFICATION_SENT_SHORT_SELECTOR, new FakeLocator({ count: 1, visible: true, enabled: false, editable: false })],
+    ]),
+  ]) {
+    const request = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+    const selectors = new Map(sentLocators);
+    selectors.set(LIVE_VERIFICATION_REQUIRED_SELECTOR, new FakeLocator({
+      count: 1,
+      visible: true,
+      enabled: false,
+      editable: false,
+    }));
+    const adapter = new PlaywrightAccountPageAdapter();
+    await assert.rejects(() =>
+      adapter.activate(new FakePage(request, request, selectors), "request_verification_email")
+    );
+    assert.equal(request.clickCalls, 0);
+    assert.deepEqual(
+      await adapter.inspect(new FakePage(absent, absent, sentLocators), "request_verification_email"),
+      { cardinality: 0, actionable: false },
+    );
+  }
+});
+
+test("both sent variants appearing after the request fail confirmation after one click", async () => {
+  const events: string[] = [];
+  const request = new FakeLocator({ count: 1, visible: true, enabled: true, editable: false });
+  const sentLong = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false, true],
+    enabled: false,
+    editable: false,
+  });
+  const sentShort = new FakeLocator({
+    count: 1,
+    visible: true,
+    visibleResults: [false, true],
+    enabled: false,
+    editable: false,
+  });
+  const page = new FakePage(request, request, new Map([
+    [LIVE_VERIFICATION_REQUIRED_SELECTOR, new FakeLocator({ count: 1, visible: true, enabled: false, editable: false })],
+    [LIVE_VERIFICATION_SENT_SELECTOR, sentLong],
+    [LIVE_VERIFICATION_SENT_SHORT_SELECTOR, sentShort],
+  ]));
+
+  await assert.rejects(() =>
+    new PlaywrightAccountPageAdapter({ trace: (event) => events.push(event) })
+      .activate(page, "request_verification_email")
+  );
+
+  assert.equal(request.clickCalls, 1);
+  assert.deepEqual(events, [
+    "verification_email_request_click_started",
+    "verification_email_request_click_succeeded",
+    "verification_email_request_confirmation_failed",
   ]);
 });
 
