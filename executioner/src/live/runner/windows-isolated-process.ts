@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 
 const MAX_ARGUMENT_BYTES = 32 * 1024;
 
+export function supportsWindowsIsolatedNodeRuntime(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version);
+  return match !== null && Number(match[1]) === 22 && Number(match[2]) >= 18;
+}
+
 export interface WindowsIsolatedRunnerOptions {
   readonly executable?: string;
   readonly runnerPath?: string;

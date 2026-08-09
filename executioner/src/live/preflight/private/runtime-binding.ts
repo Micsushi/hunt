@@ -40,15 +40,9 @@ export class RealRunRuntimeBinding {
     input: RealRunOwnerInputsV1,
     context: PreflightContext,
   ): RealRunRuntimeBinding {
-    const runtimeRoot = realpathSync.native(input.roots.runtime.path);
     return new RealRunRuntimeBinding({
       targetUrl: input.target.url,
-      profilePath: join(
-        runtimeRoot,
-        "browser-profiles",
-        input.journeyId,
-        input.target.handleId,
-      ),
+      profilePath: browserProfilePath(input),
       admittedAt: context.now,
       leaseExpiresAt: new Date(
         Date.parse(context.now) + 24 * 60 * 60 * 1_000,
@@ -89,6 +83,19 @@ export function createPrivateRealRunAdmission(
   if (!result.ok) return result;
 
   const input = value as RealRunOwnerInputsV1;
+  const profilePath = browserProfilePath(input);
+  if (
+    process.platform === "win32" &&
+    join(profilePath, "SingletonLock").length >= 260
+  ) {
+    return Object.freeze({
+      ok: false,
+      error: Object.freeze({
+        code: "runtime_root_invalid",
+        dimension: "profile_path_length",
+      }),
+    });
+  }
   const accountRecord = secretRecordPath(input, input.accountSecret.handleId);
   const gmailRecord = secretRecordPath(input, input.gmailAuthorization.handleId);
   const acl = (context.aclAdmission ?? new WindowsCurrentUserAclAdmission()).admit({
@@ -109,6 +116,15 @@ export function createPrivateRealRunAdmission(
       context,
     ),
   };
+}
+
+function browserProfilePath(input: RealRunOwnerInputsV1): string {
+  return join(
+    realpathSync.native(input.roots.runtime.path),
+    "browser-profiles",
+    input.journeyId,
+    input.target.handleId,
+  );
 }
 
 function secretRecordPath(input: RealRunOwnerInputsV1, handleId: string): string {

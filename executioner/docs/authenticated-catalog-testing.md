@@ -5,9 +5,35 @@ without changing the source catalog. It identifies an account realm by the
 lowercase Workday hostname plus the first non-locale path segment. A prior URL
 under the same realm counts as previously tested even when the posting differs.
 
-The current catalog has 100 unique realms. Compared with the pinned historical
-catalog at `16c48bd1470addc9d9480d785ae84e412edd55ef:wd_test_jobs.csv`, 64 realms
-are historical and catalog rows 65–100 are the 36 fresh candidates.
+The current catalog preserves the same 100 companies but uses 100 replacement
+posting identities discovered from each company's public Workday feed. The
+refresh run must verify HTTP 200, exact Workday target identity, and the visible
+job title before its candidate CSV can replace the source catalog. Those public
+checks do not prove that the application entry point works, so refreshed rows
+remain `unverified_candidate` in the source CSV. Authenticated results are
+stored in their immutable external cohort rather than rewriting the public
+catalog's status fields. The first ten refreshed rows have completed that
+stronger check; the remaining ninety have not.
+
+## Refresh the public catalog
+
+Run the refresh from `executioner` with Node 22.18 or newer. Use a fresh
+protected output root outside the repository:
+
+```powershell
+node scripts/refresh-public-catalog.ts `
+  --csv ..\wd_test_jobs.csv `
+  --output-root C:\absolute\protected\public-catalog-refresh `
+  --concurrency 3 `
+  --verify
+```
+
+The command never overwrites `wd_test_jobs.csv`. It publishes a unique,
+immutable run directory containing `candidates.csv`, `verification.jsonl`, and
+a manifest that binds both files and the source catalog by SHA-256. Promote the
+candidate only after all 100 verifier records match and the manifest digests
+recompute exactly. Keep the source CSV at `unverified_candidate`; record
+authenticated application-entry outcomes only in the external cohort.
 
 ## One-time setup
 
@@ -15,11 +41,15 @@ are historical and catalog rows 65–100 are the 36 fresh candidates.
 
 - Windows under the same user that will run C3. DPAPI records and the Gmail
   refresh grant in Windows Credential Manager are bound to that Windows user.
-- Node.js 22.18 or newer and the Executioner dependencies installed.
+- Node.js 22.18 or newer within the Node 22 major line, with the Executioner
+  dependencies installed. The isolated Windows browser runner rejects other
+  major versions because those runtime combinations are not certified.
 - A rightmost secondary monitor for headed live runs. The Stage 2 runner fails
   closed when its independent monitor and desktop checks cannot be satisfied.
 - A protected storage root outside every repository for live run state and a
-  separate protected root for catalog results.
+  separate protected root for catalog results. Keep the storage path short
+  enough that the derived browser profile plus `SingletonLock` remains below
+  the Windows 260-character path boundary; preflight rejects longer paths.
 - One Gmail-enabled Google account. Its normalized profile email must exactly
   match `HUNT_C3_TEST_ACCOUNT_EMAIL`, because C3 binds Gmail authorization to
   the email sealed into the Workday account bundle. A Gmail password or app
@@ -180,21 +210,22 @@ outside the repository. The command creates one immutable run directory with
 `manifest.json`, `jobs.csv`, five shard CSVs, and an empty `results` directory.
 URLs are normalized by removing the reviewed `source=LinkedIn` query parameter.
 
-For the current run, begin with row 65 (Concentrix) and continue through row
-100. The prepared run contains 36 jobs. Five logical shards exist, but actual
-parallelism must stay within the active agent and machine headroom limits.
+The retained refreshed-catalog cohort selected rows 1–10 by supplying an
+explicit history CSV containing the header and rows 11–100. It contains ten
+jobs in one logical shard. For later cohorts, build the history CSV from every
+row already tested; actual parallelism must stay within the active agent and
+machine headroom limits.
 
 ```powershell
 node scripts/prepare-authenticated-catalog.ts `
   --catalog C:\absolute\path\to\hunt\wd_test_jobs.csv `
-  --history-ref 16c48bd1470addc9d9480d785ae84e412edd55ef:wd_test_jobs.csv `
-  --repo-root C:\absolute\path\to\hunt `
+  --history-csv C:\absolute\protected\tested-history.csv `
   --output-root C:\absolute\protected\catalog-runs `
-  --shards 5
+  --shards 1
 ```
 
-For a future catalog comparison, replace `--history-ref` and `--repo-root` with
-`--history-csv C:\absolute\path\to\prior-wd_test_jobs.csv`.
+For each future cohort, update `--history-csv` to contain every catalog row
+whose authenticated result has already been recorded.
 
 ## Execute and observe
 

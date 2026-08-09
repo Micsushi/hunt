@@ -1,8 +1,14 @@
-import { runWindowsIsolatedStage2Acceptance } from "../src/live/runner/windows-isolated-process.ts";
+import {
+  runWindowsIsolatedStage2Acceptance,
+  supportsWindowsIsolatedNodeRuntime,
+} from "../src/live/runner/windows-isolated-process.ts";
 import { resolve } from "node:path";
 
 if (process.platform !== "win32") {
   await import("./run-s2-real.ts");
+} else if (!supportsWindowsIsolatedNodeRuntime(process.versions.node)) {
+  process.stdout.write('{"status":"failed","code":"runner_admission_failed"}\n');
+  process.exitCode = 2;
 } else {
   const controller = new AbortController();
   const cancel = () => controller.abort();

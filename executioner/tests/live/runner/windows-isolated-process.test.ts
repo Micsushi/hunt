@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,10 +6,20 @@ import test from "node:test";
 
 import {
   runWindowsIsolatedStage2Acceptance,
+  supportsWindowsIsolatedNodeRuntime,
   windowsIsolatedRunnerScript,
 } from "../../../src/live/runner/windows-isolated-process.ts";
 
 const fixture = resolve("tests", "fixtures", "windows-isolated-runner-probe.ts");
+
+test("Windows isolated live runs admit only the proven Node 22 runtime", () => {
+  for (const version of ["22.18.0", "22.23.2"]) {
+    assert.equal(supportsWindowsIsolatedNodeRuntime(version), true, version);
+  }
+  for (const version of ["22.17.9", "23.0.0", "24.14.0", "25.6.1", "v22.23.2", "22.23"]) {
+    assert.equal(supportsWindowsIsolatedNodeRuntime(version), false, version);
+  }
+});
 
 test("Windows live runner owns an unswitched desktop and kill-on-close process job", () => {
   const source = windowsIsolatedRunnerScript();
@@ -105,11 +114,10 @@ test("cancellation waits for the isolated runner and its descendant to exit", {
       runnerPath: fixture,
       signal: controller.signal,
     });
-    await waitFor(() => existsSync(output));
-    const pids = JSON.parse(await readFile(output, "utf8")) as {
+    const pids = await readJsonWhenReady<{
       readonly runnerPid: number;
       readonly descendantPid: number;
-    };
+    }>(output);
     controller.abort();
     assert.equal(await running, 130);
     assert.equal(isProcessAlive(pids.runnerPid), false);
@@ -147,18 +155,33 @@ test("live:s2 enters through the same-revision gate and its real slice remains i
   assert.match(local, /taskkill\.exe/u);
   assert.match(local, /"\/PID"[\s\S]*"\/T"[\s\S]*"\/F"/u);
   assert.doesNotMatch(local, /"\/IM"/u);
+  assert.match(local, /supportsWindowsIsolatedNodeRuntime\(process\.versions\.node\)/u);
   const wrapper = await readFile("scripts/run-s2-isolated.ts", "utf8");
   assert.match(wrapper, /runWindowsIsolatedStage2Acceptance/u);
+  assert.match(wrapper, /supportsWindowsIsolatedNodeRuntime\(process\.versions\.node\)/u);
   assert.match(wrapper, /run-s2-real/u);
   assert.doesNotMatch(wrapper, /connectOverCDP/u);
 });
 
-async function waitFor(predicate: () => boolean): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 8_000;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error("probe timed out");
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
+}
+
+async function readJsonWhenReady<Value>(path: string): Promise<Value> {
+  let value: Value | undefined;
+  await waitFor(async () => {
+    try {
+      value = JSON.parse(await readFile(path, "utf8")) as Value;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return value!;
 }
 
 function isProcessAlive(pid: number): boolean {

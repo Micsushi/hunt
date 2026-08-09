@@ -14,7 +14,10 @@ import {
   type FinalizeStage2RunStorageRequest,
 } from "../composition/private/s2-run-storage.ts";
 import { writeAtomicJsonEvidence } from "../live/evidence/private/atomic-json-evidence.ts";
-import { runWindowsIsolatedStage2Acceptance } from "../live/runner/windows-isolated-process.ts";
+import {
+  runWindowsIsolatedStage2Acceptance,
+  supportsWindowsIsolatedNodeRuntime,
+} from "../live/runner/windows-isolated-process.ts";
 import type {
   Stage2AcceptanceGatePorts,
   Stage2AcceptanceManifest,
@@ -71,6 +74,7 @@ export function createLocalStage2AcceptancePorts(
         "run-s2-review.ts",
       );
       if (process.platform === "win32") {
+        if (!supportsWindowsIsolatedNodeRuntime(process.versions.node)) return 2;
         return runWindowsIsolatedStage2Acceptance(args, { signal, runnerPath });
       }
       return command.run(

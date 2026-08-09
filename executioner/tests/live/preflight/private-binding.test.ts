@@ -114,6 +114,36 @@ test("the private admission maps ACL denial before constructing a browser bindin
   }
 });
 
+test("the private admission rejects a Windows browser profile path too long for Chromium", {
+  skip: process.platform !== "win32",
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-binding-length-"));
+  try {
+    const forbidden = join(root, "repository");
+    const runtime = join(root, "r".repeat(140));
+    const secrets = join(root, "secrets");
+    const evidence = join(root, "evidence");
+    for (const path of [forbidden, runtime, secrets, evidence]) mkdirSync(path);
+    const input = ownerInputs(runtime, secrets, evidence);
+    const ownerConfigPath = join(root, "owner-inputs.json");
+    writeFileSync(ownerConfigPath, "{}");
+
+    const admitted = createPrivateRealRunAdmission(input, {
+      now: "2026-08-01T12:00:00.000Z",
+      forbiddenRoots: [forbidden],
+      ownerConfigPath,
+      aclAdmission: new RecordingAclAdmission(),
+    });
+
+    assert.deepEqual(admitted, {
+      ok: false,
+      error: { code: "runtime_root_invalid", dimension: "profile_path_length" },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the public preflight barrel does not export the private constructor", () => {
   assert.equal("createPrivateRealRunAdmission" in publicPreflight, false);
   assert.equal("RealRunRuntimeBinding" in publicPreflight, false);
