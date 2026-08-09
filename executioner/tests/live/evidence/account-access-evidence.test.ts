@@ -9,6 +9,7 @@ import {
   writeAccountAccessEvidence,
   type AccountAccessAcceptanceV1,
 } from "../../../src/live/evidence/account-access-evidence.ts";
+import { writeAtomicJsonEvidence } from "../../../src/live/evidence/private/atomic-json-evidence.ts";
 
 function packet(): AccountAccessAcceptanceV1 {
   return {
@@ -98,6 +99,59 @@ test("privacy denial removes only the current unsealed partial", async () => {
         sensitiveValues: ["tenantname"],
       }),
       /account-access evidence denied/u,
+    );
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a tenant named target does not collide with value-free schema vocabulary", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-evidence-"));
+  try {
+    await writeAccountAccessEvidence({
+      root,
+      acceptance: packet(),
+      sensitiveValues: ["target"],
+    });
+    assert.deepEqual(readAccountAccessEvidence(root), packet());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete opaque prefix remains a sensitive value", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-evidence-"));
+  try {
+    await assert.rejects(
+      writeAccountAccessEvidence({
+        root,
+        acceptance: {
+          ...packet(),
+          approvalId: "approval_target_ref_abcdefghijklmnop",
+        },
+        sensitiveValues: ["target_ref_"],
+      }),
+      /account-access evidence denied/u,
+    );
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("atomic evidence rejects JSON-escaped path, quote, and control characters", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-evidence-"));
+  const sensitive = "C:\\private\\owner\"value\nline";
+  try {
+    assert.throws(
+      () => writeAtomicJsonEvidence({
+        root,
+        value: { note: `prefix ${sensitive} suffix` },
+        sensitiveValues: [sensitive],
+        label: "atomic-test",
+      }),
+      /atomic-test evidence denied/u,
     );
     assert.deepEqual(readdirSync(root), []);
   } finally {
