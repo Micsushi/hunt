@@ -108,6 +108,183 @@ test("search-select refuses an unrelated visible listbox without an ownership li
   }
 });
 
+test("unknown visible required controls block before a reviewed control is mutated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required data-automation-id="unreviewedRequiredControl">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        pageType: "profile",
+        fields: [field("identity.given_name", "identity", "text", "Ada")],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      { kind: "blocked", code: "answer_type_unknown" },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("required controls outside the admitted profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <aside><input required data-automation-id="workdayChromeRequiredControl"></aside>
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="workdayChromeRequiredControl"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("disabled required controls inside the profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required disabled data-automation-id="nativeDisabledRequired">
+          <input required aria-disabled="true" data-automation-id="ariaDisabledRequired">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native readonly required controls inside the profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required readonly value="Ada" data-automation-id="preferredNameSection_preferredName">
+          <input required readonly value="owner@example.invalid" data-automation-id="prepopulatedEmail">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="preferredNameSection_preferredName"]').inputValue(),
+      "Ada",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a required control enabled after an earlier commit blocks the next mutation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required data-automation-id="legalNameSection_lastName">
+          <input required disabled data-automation-id="conditionalRequired">
+        </main>
+        <script>
+          document.querySelector('[data-automation-id="legalNameSection_firstName"]')
+            .addEventListener("input", () => {
+              document.querySelector('[data-automation-id="conditionalRequired"]')
+                .removeAttribute("disabled");
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        pageType: "profile",
+        fields: [
+          field("identity.given_name", "identity", "text", "Ada"),
+          field("identity.family_name", "identity", "text", "Lovelace"),
+        ],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      { kind: "blocked", code: "answer_type_unknown" },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_lastName"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("real adapter and handler reconcile every profile section without owned duplicates", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

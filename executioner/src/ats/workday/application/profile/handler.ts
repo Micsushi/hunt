@@ -1,3 +1,7 @@
+import {
+  profileRepeatableCatalog,
+  profileScalarControlCatalog,
+} from "./catalog.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -60,19 +64,14 @@ export async function completeWorkdayProfilePage(
   if (preflight !== undefined) return preflight;
   if (signal.aborted) return blocked("operation_cancelled");
 
-  let snapshot = await inspect(page, signal);
-  if (snapshot === undefined) return portFailure(signal);
-  if (snapshot.pageType !== plan.pageType) return blocked("profile_page_mismatch");
-  const plannedScalarFields = new Set(plan.fields.map(({ fieldId }) => fieldId));
-  const unplannedRequired = snapshot.controls.find(({ fieldId, required }) =>
-    required && !plannedScalarFields.has(fieldId)
-  );
-  if (unplannedRequired !== undefined) {
-    return blocked("profile_answer_missing", { fieldId: unplannedRequired.fieldId });
-  }
+  const initial = await inspectAndPreflight(plan, page, signal);
+  if (initial.kind === "blocked") return initial;
+  let snapshot = initial.snapshot;
 
   const cleaned = await cleanOwnedRows(snapshot, page, signal);
   if (cleaned === undefined) return portFailure(signal);
+  const cleanedPreflight = preflightSnapshot(plan, cleaned);
+  if (cleanedPreflight !== undefined) return cleanedPreflight;
   snapshot = cleaned;
 
   const verified: VerifiedProfileField[] = [];
@@ -86,13 +85,14 @@ export async function completeWorkdayProfilePage(
     );
     if (result.kind === "blocked") return result;
     verified.push(result.field);
-    const refreshed = await inspect(page, signal);
-    if (refreshed === undefined) return portFailure(signal);
-    snapshot = refreshed;
+    const refreshed = await inspectAndPreflight(plan, page, signal);
+    if (refreshed.kind === "blocked") return refreshed;
+    snapshot = refreshed.snapshot;
   }
 
   for (const repeatable of plan.repeatables) {
     const result = await reconcileSection(
+      plan,
       repeatable.section,
       repeatable.rows,
       snapshot,
@@ -104,9 +104,9 @@ export async function completeWorkdayProfilePage(
     snapshot = result.snapshot;
   }
 
-  const finalSnapshot = await inspect(page, signal);
-  if (finalSnapshot === undefined) return portFailure(signal);
-  if (ownedDuplicateCount(finalSnapshot.rows) !== 0) {
+  const final = await inspectAndPreflight(plan, page, signal);
+  if (final.kind === "blocked") return final;
+  if (ownedDuplicateCount(final.snapshot.rows) !== 0) {
     return blocked("profile_row_unverified");
   }
   return {
@@ -115,6 +115,87 @@ export async function completeWorkdayProfilePage(
     verifiedFields: verified,
     ownedDuplicateRows: 0,
   };
+}
+
+function preflightRequiredControls(
+  plan: ProfilePagePlan,
+  snapshot: ProfilePageSnapshot,
+): BlockedResult | undefined {
+  const admittedScalarIds = new Set([
+    ...profileScalarControlCatalog.map(({ fieldId }) => fieldId),
+    ...profileRepeatableCatalog.flatMap(({ fields }) =>
+      fields.map(({ fieldId }) => fieldId)
+    ),
+  ]);
+  if (snapshot.controls.some(({ fieldId, required }) =>
+    required && !admittedScalarIds.has(fieldId)
+  )) return blocked("answer_type_unknown");
+
+  const plannedScalarIds = new Set(plan.fields.map(({ fieldId }) => fieldId));
+  const unplannedScalar = snapshot.controls.find(({ fieldId, required }) =>
+    required && !plannedScalarIds.has(fieldId)
+  );
+  if (unplannedScalar !== undefined) {
+    return blocked("profile_answer_missing", { fieldId: unplannedScalar.fieldId });
+  }
+
+  for (const catalog of profileRepeatableCatalog) {
+    const visibleRows = snapshot.rows.filter(({ section }) =>
+      section === catalog.section
+    );
+    const admittedIds = new Set(catalog.fields.map(({ fieldId }) => fieldId));
+    if (visibleRows.some(({ controls }) => controls.some(({ fieldId, required }) =>
+      required && !admittedIds.has(fieldId)
+    ))) return blocked("answer_type_unknown");
+
+    const repeatable = plan.repeatables.find(({ section }) =>
+      section === catalog.section
+    );
+    if (repeatable === undefined) continue;
+    const removed = ownedRowsToRemove(snapshot.rows);
+    const candidates = visibleRows.filter(({ rowId }) => !removed.has(rowId));
+    const used = new Set<string>();
+    for (const desired of repeatable.rows) {
+      const current = selectRepeatableRow(
+        candidates,
+        catalog.section,
+        used,
+        desired.fields,
+      );
+      if (current === undefined) continue;
+      used.add(current.rowId);
+      const planned = new Set(desired.fields.map(({ fieldId }) => fieldId));
+      const missing = current.controls.find(({ fieldId, required }) =>
+        required && !planned.has(fieldId)
+      );
+      if (missing !== undefined) {
+        return blocked("profile_answer_missing", { fieldId: missing.fieldId });
+      }
+    }
+  }
+  return undefined;
+}
+
+function preflightSnapshot(
+  plan: ProfilePagePlan,
+  snapshot: ProfilePageSnapshot,
+): BlockedResult | undefined {
+  if (snapshot.pageType !== plan.pageType) return blocked("profile_page_mismatch");
+  return preflightRequiredControls(plan, snapshot);
+}
+
+async function inspectAndPreflight(
+  plan: ProfilePagePlan,
+  page: WorkdayProfilePagePort,
+  signal: AbortSignal,
+): Promise<
+  | { readonly kind: "inspected"; readonly snapshot: ProfilePageSnapshot }
+  | BlockedResult
+> {
+  const snapshot = await inspect(page, signal);
+  if (snapshot === undefined) return portFailure(signal);
+  const preflight = preflightSnapshot(plan, snapshot);
+  return preflight ?? { kind: "inspected", snapshot };
 }
 
 function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | undefined {
@@ -184,9 +265,25 @@ async function cleanOwnedRows(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
 ): Promise<ProfilePageSnapshot | undefined> {
+  const remove = ownedRowsToRemove(initial.rows);
+  try {
+    for (const row of initial.rows) {
+      if (!remove.has(row.rowId)) continue;
+      if (signal.aborted) return undefined;
+      await page.removeOwnedRow(row.section, row.rowId, signal);
+    }
+    return remove.size === 0 ? initial : await page.inspect(signal);
+  } catch {
+    return undefined;
+  }
+}
+
+function ownedRowsToRemove(
+  rows: readonly ProfileRowSnapshot[],
+): ReadonlySet<string> {
   const remove = new Set<string>();
   const groups = new Map<string, ProfileRowSnapshot[]>();
-  for (const row of initial.rows) {
+  for (const row of rows) {
     const fingerprint = actualFingerprint(row.controls);
     if (fingerprint === "") {
       if (row.ownedByC3) remove.add(row.rowId);
@@ -206,19 +303,11 @@ async function cleanOwnedRows(
       else keptOwned = true;
     }
   }
-  try {
-    for (const row of initial.rows) {
-      if (!remove.has(row.rowId)) continue;
-      if (signal.aborted) return undefined;
-      await page.removeOwnedRow(row.section, row.rowId, signal);
-    }
-    return remove.size === 0 ? initial : await page.inspect(signal);
-  } catch {
-    return undefined;
-  }
+  return remove;
 }
 
 async function reconcileSection(
+  plan: ProfilePagePlan,
   section: ProfileRepeatableSection,
   rows: readonly {
     readonly rowKey: string;
@@ -235,24 +324,17 @@ async function reconcileSection(
   const used = new Set<string>();
   const verified: VerifiedProfileField[] = [];
   for (const desired of rows) {
-    let current = snapshot.rows.find((row) =>
-      row.section === section &&
-      !used.has(row.rowId) &&
-      rowMatches(row, desired.fields)
-    );
-    if (current === undefined) {
-      current = snapshot.rows.find((row) =>
-        row.section === section && row.ownedByC3 && !used.has(row.rowId)
-      );
-    }
+    let current = selectRepeatableRow(snapshot.rows, section, used, desired.fields);
     if (current === undefined) {
       let rowId: string;
       try {
         rowId = await page.addOwnedRow(section, signal);
-        snapshot = await page.inspect(signal);
       } catch {
         return portFailure(signal);
       }
+      const refreshed = await inspectAndPreflight(plan, page, signal);
+      if (refreshed.kind === "blocked") return refreshed;
+      snapshot = refreshed.snapshot;
       current = snapshot.rows.find((row) =>
         row.section === section && row.rowId === rowId && row.ownedByC3
       );
@@ -282,9 +364,9 @@ async function reconcileSection(
       );
       if (result.kind === "blocked") return result;
       verified.push({ ...result.field, rowKey: desired.rowKey });
-      const refreshed = await inspect(page, signal);
-      if (refreshed === undefined) return portFailure(signal);
-      snapshot = refreshed;
+      const refreshed = await inspectAndPreflight(plan, page, signal);
+      if (refreshed.kind === "blocked") return refreshed;
+      snapshot = refreshed.snapshot;
       current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
     }
   }
@@ -293,11 +375,28 @@ async function reconcileSection(
       if (row.section !== section || !row.ownedByC3 || used.has(row.rowId)) continue;
       await page.removeOwnedRow(section, row.rowId, signal);
     }
-    snapshot = await page.inspect(signal);
   } catch {
     return portFailure(signal);
   }
+  const refreshed = await inspectAndPreflight(plan, page, signal);
+  if (refreshed.kind === "blocked") return refreshed;
+  snapshot = refreshed.snapshot;
   return { kind: "verified", fields: verified, snapshot };
+}
+
+function selectRepeatableRow(
+  rows: readonly ProfileRowSnapshot[],
+  section: ProfileRepeatableSection,
+  used: ReadonlySet<string>,
+  desired: readonly ProfileFieldPlan[],
+): ProfileRowSnapshot | undefined {
+  return rows.find((row) =>
+    row.section === section &&
+    !used.has(row.rowId) &&
+    rowMatches(row, desired)
+  ) ?? rows.find((row) =>
+    row.section === section && row.ownedByC3 && !used.has(row.rowId)
+  );
 }
 
 async function reconcileField(

@@ -116,6 +116,154 @@ test("admits an omitted narrative fact as unresolved owner input", async () => {
   }
 });
 
+test("admits Unicode plain text and an exact normal email address", async () => {
+  const fixture = ownerFixture();
+  try {
+    const validEmail = ["ada.lovelace+work", "example.com"].join("@");
+    const bytes = Buffer.from("%PDF-1.7\nowner resume with Unicode profile\n", "utf8");
+    writeSources(fixture.runtimeRoot, bytes);
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profile.facts[0].value = "Zoë 李";
+    manifest.profile.facts.push({
+      factId: "email_address",
+      value: validEmail,
+      provenance: "owner_provided",
+    });
+    manifest.profilePlan.fields[0].answer.value = "Zoë 李";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+
+    const resolved = await resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+
+    assert.deepEqual(await resolved.profileQuery.query({
+      profileId: resolved.profileId,
+      profileRevision: resolved.profileRevision,
+      factId: "email_address",
+    }, AbortSignal.any([])), {
+      ok: true,
+      value: {
+        kind: "answered",
+        value: validEmail,
+        provenance: "owner_provided",
+      },
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("denies TeX markup and control characters in textual profile facts", async () => {
+  const fixture = ownerFixture();
+  try {
+    const bytes = Buffer.from("%PDF-1.7\nowner resume\n", "utf8");
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+    for (const value of ["Ada\\textbf", "Ada {Lovelace}", "Ada\nLovelace", "Ada\tLovelace"]) {
+      writeSources(fixture.runtimeRoot, bytes);
+      const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.profile.facts.find(
+        ({ factId }: { readonly factId: string }) => factId === "configured_narrative",
+      ).value = value;
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      await assert.rejects(
+        resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+        exactDenial,
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("denies TeX markup and control characters in profile-plan browser answers", async () => {
+  const fixture = ownerFixture();
+  try {
+    const bytes = Buffer.from("%PDF-1.7\nowner resume\n", "utf8");
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+    for (const value of ["Ada\\textbf", "Ada {Lovelace}", "Ada\u0000Lovelace"]) {
+      writeSources(fixture.runtimeRoot, bytes);
+      const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.profilePlan.fields[0].answer = {
+        kind: "answered",
+        value,
+        provenance: "resume_verified",
+      };
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      await assert.rejects(
+        resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+        exactDenial,
+      );
+    }
+
+    writeSources(fixture.runtimeRoot, bytes);
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profilePlan.fields[0].answerType = "option";
+    manifest.profilePlan.fields[0].answer = {
+      kind: "answered",
+      value: "Canada",
+      provenance: "resume_verified",
+    };
+    manifest.profilePlan.fields[0].optionMapping = {
+      canonicalValue: "Canada",
+      visibleOption: "Canada\\textbf",
+      provenance: "visible_option",
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("denies malformed email profile facts", async () => {
+  const fixture = ownerFixture();
+  try {
+    const bytes = Buffer.from("%PDF-1.7\nowner resume\n", "utf8");
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+    for (const value of [
+      ["ada", "example"].join("@"),
+      ["ada@", "example.com"].join("@"),
+      ["ada..lovelace", "example.com"].join("@"),
+      ["ada", "example..com"].join("@"),
+      `Ada Lovelace <${["ada", "example.com"].join("@")}>`,
+      ` ${["ada", "example.com"].join("@")}`,
+    ]) {
+      writeSources(fixture.runtimeRoot, bytes);
+      const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.profile.facts.push({
+        factId: "email_address",
+        value,
+        provenance: "owner_provided",
+      });
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      await assert.rejects(
+        resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+        exactDenial,
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("denies wrong references, bindings, changed bytes, oversized files, and repository scope", async () => {
   const fixture = ownerFixture();
   try {

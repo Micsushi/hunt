@@ -41,6 +41,8 @@ const BINDING_FILE = "application-source-binding.json";
 const MAX_PROFILE_BYTES = 512 * 1024;
 const MAX_RESUME_BYTES = 5 * 1024 * 1024;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const browserPlainText = /^[^\\{}\p{Cc}]+$/u;
+const emailAddress = /^[A-Za-z0-9!#$%&'*+/=?^_`~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/u;
 
 export interface Stage2ApplicationOwnerSourceRequest {
   readonly runtimeRoot: string;
@@ -131,6 +133,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
       });
       if (!intent.ok) denied();
       const profile = immutableApplicantProfile(manifest.profile);
+      validateProfileText(profile.facts);
       const profilePlan = validateProfileAuthority(
         manifest.profilePlan,
         profile.facts,
@@ -352,7 +355,8 @@ function validateProfileAuthority(
         .has(field.answerType as string) ||
       answer.kind !== "answered" ||
       typeof answer.value !== "string" ||
-      answer.value.trim() === ""
+      answer.value.trim() === "" ||
+      !browserPlainText.test(answer.value)
     ) denied();
     if (field.answerType === "option") {
       const mapping = exact(field.optionMapping, [
@@ -362,6 +366,7 @@ function validateProfileAuthority(
         mapping.canonicalValue !== answer.value ||
         typeof mapping.visibleOption !== "string" ||
         mapping.visibleOption.trim() === "" ||
+        !browserPlainText.test(mapping.visibleOption) ||
         mapping.provenance !== "visible_option"
       ) denied();
     } else if (field.optionMapping !== undefined) denied();
@@ -374,6 +379,20 @@ function validateProfileAuthority(
     } else if (answer.provenance !== "resume_verified") denied();
   }
   return deepFreeze(structuredClone(plan)) as unknown as ProfilePagePlan;
+}
+
+function validateProfileText(
+  facts: readonly { readonly factId: string; readonly value: unknown }[],
+): void {
+  for (const fact of facts) {
+    if (typeof fact.value !== "string") continue;
+    if (!browserPlainText.test(fact.value)) denied();
+    if (
+      fact.factId === "email_address" &&
+      (fact.value.length > 254 || fact.value.slice(0, fact.value.indexOf("@")).length > 64 ||
+        !emailAddress.test(fact.value))
+    ) denied();
+  }
 }
 
 function validRequest(request: Stage2ApplicationOwnerSourceRequest): boolean {

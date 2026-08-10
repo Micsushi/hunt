@@ -337,6 +337,69 @@ test("stops before mutation when an observed required field has no authoritative
   assert.equal(port.commits.length, 0);
 });
 
+test("classifies an unknown required profile control without exposing its identity", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+    ],
+    rows: [],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      pageType: "contact",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, port, AbortSignal.any([])),
+    { kind: "blocked", code: "answer_type_unknown" },
+  );
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("rechecks required controls revealed after a scalar commit before the next mutation", async () => {
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("identity.family_name", "text"),
+    ],
+    rows: [],
+  }, {
+    afterCommit: () => {
+      if (port.commits.length !== 1) return;
+      port.snapshot = {
+        ...port.snapshot,
+        controls: [
+          ...port.snapshot.controls,
+          control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      pageType: "contact",
+      fields: [
+        field("identity.given_name", "identity", "text", "Ada"),
+        field("identity.family_name", "identity", "text", "Lovelace"),
+      ],
+      repeatables: [],
+    }, port, AbortSignal.any([])),
+    { kind: "blocked", code: "answer_type_unknown" },
+  );
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-identity.given_name",
+  ]);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
 test("rejects invalid runtime classifications and non-opaque repeatable keys", async () => {
   const cases = [
     {
@@ -425,6 +488,133 @@ test("stops when a repeatable row exposes an unplanned required subfield", async
   assert.equal(port.commits.length, 0);
 });
 
+test("preflights required repeatable fields before cleaning any owned row", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [
+      {
+        section: "experience",
+        rowId: "foreign-experience",
+        ownedByC3: false,
+        controls: [
+          control("experience.company", "text", "Analytical Engines"),
+          control("experience.start_date", "date"),
+        ],
+      },
+      row("education", "owned-empty", true, [
+        field("education.school", "education", "text", "Example", "resume_verified"),
+      ], true),
+    ],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "experience",
+        rows: [{ rowKey: "experience-1", fields: desired }],
+      }],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: "experience.start_date",
+    },
+  );
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("binds heterogeneous repeatable requirements only to each selected row", async () => {
+  const past = [
+    field("experience.company", "experience", "text", "Past Company", "resume_verified"),
+    field("experience.title", "experience", "text", "Engineer", "resume_verified"),
+    field("experience.end_date", "experience", "date", "2024-01-31", "resume_verified"),
+  ];
+  const current = [
+    field("experience.company", "experience", "text", "Current Company", "resume_verified"),
+    field("experience.title", "experience", "text", "Senior Engineer", "resume_verified"),
+  ];
+  const unrelated = [
+    field("experience.company", "experience", "text", "Preserved Company", "resume_verified"),
+    field("experience.start_date", "experience", "date", "2018-01-01", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [
+      row("experience", "foreign-past", false, past),
+      row("experience", "foreign-current", false, current),
+      row("experience", "foreign-unrelated", false, unrelated),
+    ],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [
+        { rowKey: "experience-past", fields: past },
+        { rowKey: "experience-current", fields: current },
+      ],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+  assert.equal(
+    port.snapshot.rows.some(({ rowId }) => rowId === "foreign-unrelated"),
+    true,
+  );
+});
+
+test("rechecks required controls revealed by a repeatable add before filling the row", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+  }, {
+    rowTemplates: { experience: desired },
+    afterAdd: () => {
+      port.snapshot = {
+        ...port.snapshot,
+        controls: [
+          ...port.snapshot.controls,
+          control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "experience",
+        rows: [{ rowKey: "experience-1", fields: desired }],
+      }],
+    }, port, AbortSignal.any([])),
+    { kind: "blocked", code: "answer_type_unknown" },
+  );
+  assert.deepEqual(port.added, ["experience"]);
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
 function row(
   section: ProfileRepeatableSection,
   rowId: string,
@@ -465,6 +655,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
   readonly #ignoreCommits: boolean;
   readonly #templates: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
   readonly #afterCommit: (() => void) | undefined;
+  readonly #afterAdd: (() => void) | undefined;
 
   constructor(
     snapshot: ProfilePageSnapshot,
@@ -472,12 +663,14 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
       readonly ignoreCommits?: boolean;
       readonly rowTemplates?: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
       readonly afterCommit?: () => void;
+      readonly afterAdd?: () => void;
     } = {},
   ) {
     this.snapshot = structuredClone(snapshot);
     this.#ignoreCommits = options.ignoreCommits ?? false;
     this.#templates = options.rowTemplates ?? {};
     this.#afterCommit = options.afterCommit;
+    this.#afterAdd = options.afterAdd;
   }
 
   async inspect(): Promise<ProfilePageSnapshot> {
@@ -522,6 +715,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
       ...this.snapshot,
       rows: [...this.snapshot.rows, row(section, rowId, true, template, true)],
     };
+    this.#afterAdd?.();
     return rowId;
   }
 

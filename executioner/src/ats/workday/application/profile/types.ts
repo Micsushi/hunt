@@ -121,6 +121,7 @@ export type ProfilePageCompletionResult =
   | {
       readonly kind: "blocked";
       readonly code:
+        | "answer_type_unknown"
         | "operation_cancelled"
         | "profile_answer_missing"
         | "profile_commit_unverified"

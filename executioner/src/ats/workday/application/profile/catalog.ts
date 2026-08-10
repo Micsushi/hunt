@@ -10,6 +10,17 @@ export interface ProfileControlCatalogEntry {
   readonly uiVariant: string;
 }
 
+export const profileRequiredControlSelector = [
+  "input[required]",
+  'input[aria-required="true"]',
+  "textarea[required]",
+  'textarea[aria-required="true"]',
+  "select[required]",
+  'select[aria-required="true"]',
+  '[role][aria-required="true"]',
+  '[contenteditable="true"][aria-required="true"]',
+].join(", ");
+
 const text = (fieldId: string, automationId: string): ProfileControlCatalogEntry => ({
   fieldId,
   selector: `[data-automation-id="${automationId}"]`,

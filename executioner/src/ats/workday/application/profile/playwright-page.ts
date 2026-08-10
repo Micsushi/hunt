@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 
 import {
+  profileRequiredControlSelector,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
   type ProfileControlCatalogEntry,
@@ -40,21 +41,22 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
 
   async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
     abort(signal);
-    await this.#assertPageType();
+    const profile = await this.#assertPageType();
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
     for (const entry of profileScalarControlCatalog) {
-      controls.push(...await this.#inspectControls(entry, this.#page.locator(entry.selector)));
+      controls.push(...await this.#inspectControls(entry, profile.locator(entry.selector)));
     }
     const rows: ProfileRowSnapshot[] = [];
     for (const entry of profileRepeatableCatalog) {
-      const section = this.#page.locator(entry.sectionSelector);
+      const section = profile.locator(entry.sectionSelector);
       const sections = await visibleLocators(section);
       if (sections.length > 1) throw new TypeError("ambiguous Workday repeatable section");
       if (sections.length === 0) continue;
       const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
       for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
     }
+    controls.push(...await this.#inspectUnknownRequiredControls(profile));
     abort(signal);
     return { pageType: this.#pageType, controls, rows };
   }
@@ -109,14 +111,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     abort(signal);
   }
 
-  async #assertPageType(): Promise<void> {
-    await exactVisible(this.#page.locator('[data-automation-id="applyFlowMyInfoPage"]'));
+  async #assertPageType(): Promise<Locator> {
+    const profile = await exactVisible(
+      this.#page.locator('[data-automation-id="applyFlowMyInfoPage"]'),
+    );
     const declared = await this.#page.locator("body").getAttribute(
       "data-hunt-profile-page-type",
     );
     if (declared !== null && declared !== this.#pageType) {
       throw new TypeError("Workday profile page type does not match the admitted handler");
     }
+    return profile;
   }
 
   async #inspectControls(
@@ -162,6 +167,50 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ownedByC3: await row.getAttribute("data-hunt-c3-owned") === "true",
       controls,
     };
+  }
+
+  async #inspectUnknownRequiredControls(
+    profile: Locator,
+  ): Promise<ProfileControlSnapshot[]> {
+    const candidates = await visibleLocators(
+      profile.locator(profileRequiredControlSelector),
+    );
+    const catalog = {
+      scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector),
+      repeatables: profileRepeatableCatalog.map((entry) => ({
+        sectionSelector: entry.sectionSelector,
+        rowSelector: entry.rowSelector,
+        suffixes: entry.fields.map(({ suffix }) => suffix),
+      })),
+    };
+    const unknown: ProfileControlSnapshot[] = [];
+    for (const candidate of candidates) {
+      if (!await required(candidate)) continue;
+      const admitted = await candidate.evaluate((element, reviewed) => {
+        if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
+          return true;
+        }
+        return reviewed.repeatables.some((entry) => {
+          const section = element.closest(entry.sectionSelector);
+          const row = element.closest(entry.rowSelector);
+          return section !== null && row !== null && section.contains(row) &&
+            entry.suffixes.some((suffix) =>
+              element.matches(`[data-automation-id$="--${suffix}"]`)
+            );
+        });
+      }, catalog);
+      if (admitted) continue;
+      const index = unknown.length + 1;
+      unknown.push({
+        controlId: `unknown-required:${index}`,
+        fieldId: `unknown.required.${index}`,
+        required: true,
+        uiBehavior: "text",
+        uiVariant: "workday_unknown_required_v1",
+        readback: null,
+      });
+    }
+    return unknown;
   }
 
   async #selectSearchOption(control: Locator, value: string): Promise<void> {
@@ -240,6 +289,14 @@ async function readback(
 }
 
 async function required(locator: Locator): Promise<boolean> {
+  if (
+    await locator.isDisabled() ||
+    await locator.getAttribute("aria-disabled") === "true" ||
+    await locator.evaluate((element) =>
+      (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+      element.readOnly
+    )
+  ) return false;
   return await locator.getAttribute("required") !== null ||
     await locator.getAttribute("aria-required") === "true";
 }
