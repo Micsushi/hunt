@@ -253,6 +253,56 @@ test("Review completion rejects an external monitor ACK crossed from another jou
   }
 });
 
+test("Review completion rejects a reviewed structure bound to the wrong page", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewmonwrongpg",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    const path = join(
+      layout.evidenceRoot,
+      "monitor",
+      "0013-review-review_readback.ack.json",
+    );
+    const ack = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({
+      ...ack,
+      structuralDescriptionIds: ["monitor_structure_profile_v1"],
+    }));
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion rejects a monitor ACK that claims Submit activation", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewmonsubmitx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    const path = join(
+      layout.evidenceRoot,
+      "monitor",
+      "0013-review-review_readback.ack.json",
+    );
+    const ack = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({
+      ...ack,
+      submitActivated: true,
+    }));
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Review completion accepts a bounded monitored recovery and retry sequence", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-"));
   try {

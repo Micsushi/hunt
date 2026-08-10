@@ -13,6 +13,7 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
 import { validateStage2MonitorPng } from "./review-monitor-chain.ts";
+import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
 export {
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
@@ -60,6 +61,7 @@ export interface Stage2MonitorTaxonomy {
 export interface Stage2MonitorPage {
   screenshot(options?: { readonly type?: "png" }): Promise<Buffer>;
   title(): Promise<string>;
+  url(): string | Promise<string>;
 }
 
 export interface Stage2MonitorLifecycleEvent {
@@ -200,11 +202,16 @@ export class Stage2ExternalMonitorRuntime {
       const taxonomyFile = `${prefix}.taxonomy.json`;
       const requestFile = `${prefix}.request.json`;
       const ackFile = `${prefix}.ack.json`;
+      const urlBefore = await page.url();
       const screenshot = await page.screenshot({ type: "png" });
       validateStage2MonitorPng(screenshot);
-      writeBytes(join(root, screenshotFile), screenshot);
       const title = boundedTitle(await page.title());
-      const capturedIdentityDigests = identityDigests(this.#options, title);
+      const urlAfter = await page.url();
+      const capturedIdentityDigests = identityDigests(
+        observedIdentity(urlBefore, urlAfter, this.#options),
+        title,
+      );
+      writeBytes(join(root, screenshotFile), screenshot);
       const taxonomy = exactTaxonomy({
         schemaVersion: 1,
         evidenceRevision: "s2-monitor-taxonomy-v1",
@@ -448,7 +455,10 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       identityReconciliation: "matched",
       identityDimensions: ["host", "posting", "title"],
       observedIdentityDigests,
-      structuralDescriptionIds: exactStructuralIds(request.structuralDescriptionIds),
+      structuralDescriptionIds: exactStructuralIds(
+        request.structuralDescriptionIds,
+        page,
+      ),
       privacyScan: "pass",
       submitPresent: page === "review",
       submitActivated: false,
@@ -472,9 +482,9 @@ export function readStage2ExternalMonitorObservation(
   try {
     const runtimeRoot = directory(runtimeRootValue, "external monitor observation denied");
     const path = stablePath(observationPathValue, 16 * 1024, 2);
-    if (dirname(path) !== runtimeRoot || !/^[0-9]{4}-[a-z_]+-[a-z_]+\.observation\.json$/u.test(
-      path.slice(runtimeRoot.length + 1),
-    )) throw new Error();
+    const filename = path.slice(runtimeRoot.length + 1);
+    const filenameMatch = /^[0-9]{4}-([a-z_]+)-[a-z_]+\.observation\.json$/u.exec(filename);
+    if (dirname(path) !== runtimeRoot || filenameMatch === null) throw new Error();
     const value = JSON.parse(readStable(path, 16 * 1024, 2).toString("utf8")) as Record<string, unknown>;
     const keys = [
       "schemaVersion", "evidenceRevision", "observer", "observedIdentityDigests",
@@ -491,6 +501,7 @@ export function readStage2ExternalMonitorObservation(
       ),
       structuralDescriptionIds: exactStructuralIds(
         value.structuralDescriptionIds as readonly string[],
+        filenameMatch[1],
       ),
       observedAt: canonicalTimestamp(value.observedAt as string),
     });
@@ -544,6 +555,7 @@ function validateAck(
     ack.identityReconciliation !== "matched" || ack.privacyScan !== "pass" ||
     ack.submitPresent !== (request.page === "review") || ack.submitActivated !== false ||
     JSON.stringify(ack.observedIdentityDigests) !== JSON.stringify(request.capturedIdentityDigests) ||
+    !isReviewedMonitorStructuralIds(ack.structuralDescriptionIds, request.page as string) ||
     !Array.isArray(ack.identityDimensions) ||
     ack.identityDimensions.join("\0") !== ["host", "posting", "title"].join("\0") ||
     !canonicalTimestamp(ack.observedAt as string) ||
@@ -569,14 +581,39 @@ function exactDigests(value: Stage2MonitorIdentityDigests): Stage2MonitorIdentit
   return Object.freeze({ ...value });
 }
 
+function observedIdentity(
+  beforeValue: string,
+  afterValue: string,
+  expected: Stage2ExternalMonitorRuntimeOptions,
+): { readonly host: string; readonly tenant: string; readonly posting: string } {
+  try {
+    if (beforeValue !== afterValue) denied();
+    const parsed = new URL(afterValue);
+    const host = parsed.hostname.toLowerCase();
+    const tenant = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,3}\.myworkdayjobs\.com$/u
+      .exec(host)?.[1];
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    const postings = [...decodedPath.matchAll(/_([A-Za-z0-9-]{2,64})(?=\/|$)/gu)]
+      .map((match) => match[1]);
+    if (
+      parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
+      parsed.port !== "" || tenant === undefined || postings.length !== 1 ||
+      host !== expected.host || tenant !== expected.tenant || postings[0] !== expected.posting
+    ) denied();
+    return Object.freeze({ host, tenant, posting: postings[0] });
+  } catch {
+    return denied();
+  }
+}
+
 function identityDigests(
-  options: Stage2ExternalMonitorRuntimeOptions,
+  observed: { readonly host: string; readonly tenant: string; readonly posting: string },
   title: string,
 ): Stage2MonitorIdentityDigests {
   return Object.freeze({
-    hostSha256: digest(Buffer.from(options.host, "utf8")),
-    tenantSha256: digest(Buffer.from(options.tenant, "utf8")),
-    postingSha256: digest(Buffer.from(options.posting, "utf8")),
+    hostSha256: digest(Buffer.from(observed.host, "utf8")),
+    tenantSha256: digest(Buffer.from(observed.tenant, "utf8")),
+    postingSha256: digest(Buffer.from(observed.posting, "utf8")),
     titleSha256: digest(Buffer.from(title, "utf8")),
   });
 }
@@ -685,10 +722,8 @@ function processStartTime(pid: number): string {
   return canonicalTimestamp(output);
 }
 
-function exactStructuralIds(value: readonly string[]): readonly string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 16 ||
-      new Set(value).size !== value.length ||
-      value.some((item) => !/^monitor_structure_[a-z0-9_]{3,64}$/u.test(item))) ackDenied();
+function exactStructuralIds(value: readonly string[], page?: string): readonly string[] {
+  if (!isReviewedMonitorStructuralIds(value, page)) ackDenied();
   return Object.freeze([...value]);
 }
 

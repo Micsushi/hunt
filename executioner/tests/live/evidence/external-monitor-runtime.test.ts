@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -23,7 +23,7 @@ const binding = {
   targetHandleId: "target_ref_monitor_runtime_01",
   sourceRevision: "0123456789abcdef0123456789abcdef01234567",
   configSha256: "a".repeat(64),
-  host: "bank.wd5.myworkdayjobs.invalid",
+  host: "bank.wd5.myworkdayjobs.com",
   tenant: "bank",
   posting: "26016513",
   processLiveNonceSha256: digest(Buffer.from("live-monitor-process-nonce")),
@@ -56,7 +56,7 @@ test("external monitor blocks each auth effect until the exact independent ACK",
           requestPath: request.path,
           classification: request.ordinal === 3 ? "account_verified" : "safe_to_continue",
           observedIdentityDigests: identityDigests(),
-          structuralDescriptionIds: ["monitor_structure_account_v1"],
+          structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: `2026-08-10T12:00:00.00${request.ordinal * 2}Z`,
         });
       },
@@ -102,11 +102,128 @@ test("external monitor blocks each auth effect until the exact independent ACK",
     assert.equal(read.files.length, 12);
     assert.equal(page.screenshotCalls, 3);
     assert.equal(page.titleCalls, 3);
+    assert.equal(page.urlCalls, 6);
     assert.doesNotMatch(readFileSync(join(root, "auth-monitor", "0001-account_entry-before_mutation.request.json"), "utf8"), /Business Manager|bank\.wd|26016513/u);
   } finally {
     if (process.env.HUNT_KEEP_MONITOR_FIXTURE !== "1") {
       rmSync(root, { recursive: true, force: true });
     } else process.stderr.write(`${root}\n`);
+  }
+});
+
+test("external monitor derives exact identity from the observed page URL", async () => {
+  for (const url of [
+    "https://other.wd5.myworkdayjobs.com/en-US/Careers/job/Business-Manager_26016513",
+    "https://bank.wd5.myworkdayjobs.com/en-US/Careers/job/Business-Manager_99999999",
+  ]) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-identity-"));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        now: ordinalClock(),
+        waitForAcknowledgement: async () => assert.fail("identity mismatch reached ACK"),
+      });
+      await assert.rejects(
+        () => runtime.auth(fixturePage(url), "account_entry", "before_mutation", taxonomy(), {
+          operationId: "operation_observed_identity_01",
+          attempt: 1,
+        }, new AbortController().signal),
+        /external monitor runtime denied/u,
+      );
+      assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-url-drift-"));
+  let reads = 0;
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async () => assert.fail("URL drift reached ACK"),
+    });
+    const page = fixturePage();
+    page.url = async () => ++reads === 1
+      ? `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}`
+      : `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}/apply/applyManually`;
+    await assert.rejects(
+      () => runtime.auth(page, "account_entry", "before_mutation", taxonomy(), {
+        operationId: "operation_observed_url_drift_1",
+        attempt: 1,
+      }, new AbortController().signal),
+      /external monitor runtime denied/u,
+    );
+    assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor accepts only the reviewed structure for the observed page", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-structure-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: ["monitor_structure_profile_v1"],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await assert.rejects(
+      () => runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
+        operationId: "operation_wrong_structure_001",
+        attempt: 1,
+      }, new AbortController().signal),
+      /external monitor acknowledgement denied/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor never acknowledges an unsafe auth page", async () => {
+  for (const pageName of ["captcha", "mfa", "access_control", "unknown"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-unsafe-"));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        now: ordinalClock(),
+        waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+          runtimeRoot: root,
+          evidenceRoot: root,
+          requestPath: request.path,
+          classification: "safe_to_continue",
+          observedIdentityDigests: identityDigests(),
+          structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
+          observedAt: "2026-08-10T12:00:00.002Z",
+        }),
+      });
+      await assert.rejects(
+        () => runtime.auth(fixturePage(), pageName, "state_observed", taxonomy(), {
+          operationId: `operation_unsafe_${pageName}_01`,
+          attempt: 1,
+        }, new AbortController().signal),
+        /external monitor (?:runtime|acknowledgement) denied/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -171,7 +288,7 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
           requestPath: request.path,
           classification: "safe_to_continue",
           observedIdentityDigests: identityDigests(),
-          structuralDescriptionIds: ["monitor_structure_account_v1"],
+          structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         });
       },
@@ -197,7 +314,7 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
           requestPath: request.path,
           classification: "safe_to_continue",
           observedIdentityDigests: identityDigests(),
-          structuralDescriptionIds: ["monitor_structure_account_v1"],
+          structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         }),
       });
@@ -224,6 +341,7 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
       });
       await assert.rejects(
         () => malformed.auth({
+          async url() { return `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}`; },
           async screenshot() { return Buffer.concat([Buffer.from("\u0089PNG\r\n\u001a\n", "latin1"), Buffer.alloc(128)]); },
           async title() { return "Business Manager"; },
         }, "account_entry", "before_mutation", taxonomy(), {
@@ -271,7 +389,7 @@ test("application monitor retains the exact mutation, readback, navigation, tran
         requestPath: request.path,
         classification: request.ordinal === moments.length ? "review_verified" : "safe_to_continue",
         observedIdentityDigests: identityDigests(),
-        structuralDescriptionIds: ["monitor_structure_application_v1"],
+        structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
       }),
     });
@@ -323,12 +441,12 @@ test("ordinal CLI observation input is protected, digest-only, and exact", () =>
       evidenceRevision: "s2-external-monitor-observation-v1",
       observer: "independent_visual_monitor",
       observedIdentityDigests: identityDigests(),
-      structuralDescriptionIds: ["monitor_structure_account_v1"],
+      structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.002Z",
     })}\n`, { flag: "wx", mode: 0o600 });
     assert.deepEqual(readStage2ExternalMonitorObservation(root, path), {
       observedIdentityDigests: identityDigests(),
-      structuralDescriptionIds: ["monitor_structure_account_v1"],
+      structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.002Z",
     });
     const outside = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-outside-"));
@@ -386,10 +504,36 @@ test("external monitor rejects missing, crossed, replayed, late, and post-close 
       requestPath,
       classification: "safe_to_continue",
       observedIdentityDigests: identityDigests(),
-      structuralDescriptionIds: ["monitor_structure_account_v1"],
+      structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.001Z",
       journeyId: "journey_crossed_monitor_01",
     }), /external monitor acknowledgement denied/u);
+    const unknownPath = join(root, "0002-account_entry-before_mutation.observation.json");
+    writeFileSync(unknownPath, `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-external-monitor-observation-v1",
+      observer: "independent_visual_monitor",
+      observedIdentityDigests: identityDigests(),
+      structuralDescriptionIds: ["monitor_structure_unreviewed_v1"],
+      observedAt: "2026-08-10T12:00:00.003Z",
+    })}\n`, { flag: "wx", mode: 0o600 });
+    assert.throws(
+      () => readStage2ExternalMonitorObservation(root, unknownPath),
+      /external monitor observation denied/u,
+    );
+    const wrongPagePath = join(root, "0003-account_entry-before_mutation.observation.json");
+    writeFileSync(wrongPagePath, `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-external-monitor-observation-v1",
+      observer: "independent_visual_monitor",
+      observedIdentityDigests: identityDigests(),
+      structuralDescriptionIds: ["monitor_structure_profile_v1"],
+      observedAt: "2026-08-10T12:00:00.004Z",
+    })}\n`, { flag: "wx", mode: 0o600 });
+    assert.throws(
+      () => readStage2ExternalMonitorObservation(root, wrongPagePath),
+      /external monitor observation denied/u,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -411,7 +555,7 @@ test("external monitor rejects abrupt owner exit, stale liveness, and PID-start 
         requestPath: request.path,
         classification: "safe_to_continue",
         observedIdentityDigests: identityDigests(),
-        structuralDescriptionIds: ["monitor_structure_account_v1"],
+        structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
     });
@@ -450,7 +594,7 @@ test("external monitor rejects abrupt owner exit, stale liveness, and PID-start 
         requestPath: request.path,
         classification: "safe_to_continue",
         observedIdentityDigests: identityDigests(),
-        structuralDescriptionIds: ["monitor_structure_account_v1"],
+        structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
     });
@@ -483,7 +627,7 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
           requestPath: request.path,
           classification: "safe_to_continue",
           observedIdentityDigests: identityDigests(),
-          structuralDescriptionIds: ["monitor_structure_account_v1"],
+          structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         });
       },
@@ -525,10 +669,13 @@ function processInstanceSha256() {
   ));
 }
 
-function fixturePage() {
+function fixturePage(
+  url = `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}/apply/applyManually`,
+) {
   return {
     screenshotCalls: 0,
     titleCalls: 0,
+    urlCalls: 0,
     async screenshot() {
       this.screenshotCalls += 1;
       return png(320, 200);
@@ -537,7 +684,15 @@ function fixturePage() {
       this.titleCalls += 1;
       return "Business Manager";
     },
+    async url() {
+      this.urlCalls += 1;
+      return url;
+    },
   };
+}
+
+function structuralIdFor(page: string): string {
+  return `monitor_structure_${page}_v1`;
 }
 
 function ordinalClock() {

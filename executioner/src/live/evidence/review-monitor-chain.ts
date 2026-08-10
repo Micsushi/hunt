@@ -3,6 +3,8 @@ import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "no
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 
+import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
+
 const MAX_RECORDS = 128;
 const AUTH_PAGES = new Set([
   "job_posting", "apply_choice", "email_sign_in_choice", "account_entry",
@@ -160,7 +162,7 @@ function readMonitorChain(
         !identityDigests(ack.observedIdentityDigests, expected) ||
         JSON.stringify(ack.observedIdentityDigests) !==
           JSON.stringify(request.capturedIdentityDigests) ||
-        !structuralIds(ack.structuralDescriptionIds) ||
+        !structuralIds(ack.structuralDescriptionIds, page) ||
         ack.privacyScan !== "pass" || ack.submitPresent !== (page === "review") ||
         ack.submitActivated !== false || observedAt < issuedAt ||
         observedAt >= timestamp(expected.processExitObservedAt) ||
@@ -529,11 +531,8 @@ function opaque(value: unknown, prefix: string): value is string {
     new RegExp(`^${prefix}_[A-Za-z0-9_-]{16,64}$`, "u").test(value);
 }
 
-function structuralIds(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0 && value.length <= 16 &&
-    new Set(value).size === value.length && value.every((item) =>
-      typeof item === "string" && /^monitor_structure_[a-z0-9_]{3,64}$/u.test(item)
-    );
+function structuralIds(value: unknown, page?: string): boolean {
+  return isReviewedMonitorStructuralIds(value, page);
 }
 
 function exactArray(value: unknown, expected: readonly string[]): boolean {
