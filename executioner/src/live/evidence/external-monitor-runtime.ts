@@ -219,8 +219,6 @@ export class Stage2ExternalMonitorRuntime {
         title,
       );
       emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified");
-      writeBytes(join(root, screenshotFile), screenshot);
-      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_written");
       const taxonomy = exactTaxonomy({
         schemaVersion: 1,
         evidenceRevision: "s2-monitor-taxonomy-v1",
@@ -233,6 +231,8 @@ export class Stage2ExternalMonitorRuntime {
         privacyScan: "pass",
       });
       emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_admitted");
+      writeBytes(join(root, screenshotFile), screenshot);
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_written");
       const taxonomyBytes = jsonBytes(taxonomy);
       writeBytes(join(root, taxonomyFile), taxonomyBytes);
       emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_written");
@@ -580,10 +580,13 @@ function validateAck(
 }
 
 function exactTaxonomy(value: Record<string, unknown>): Record<string, unknown> {
+  const arrays = [value.controlTypes, value.questionTypes, value.answerTypes];
+  const exactZeroControlArrays = value.fieldCount === 0 &&
+    arrays.every((item) => Array.isArray(item) && item.length === 0);
+  const exactNonemptyArrays = arrays.every(stringArray);
   if (!count(value.fieldCount) || !count(value.requiredFieldCount) ||
       (value.requiredFieldCount as number) > (value.fieldCount as number) ||
-      !stringArray(value.controlTypes) || !stringArray(value.questionTypes) ||
-      !stringArray(value.answerTypes) || value.validationState !== "clear" ||
+      (!exactZeroControlArrays && !exactNonemptyArrays) || value.validationState !== "clear" ||
       typeof value.submitPresent !== "boolean" || value.submitActivated !== false) denied();
   return Object.freeze({ ...value });
 }

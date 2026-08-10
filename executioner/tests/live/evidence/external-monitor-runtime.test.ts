@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -222,6 +222,83 @@ test("external monitor ignores site underscores before the Workday job route", a
   }
 });
 
+test("external monitor admits an exact zero-control job-posting taxonomy", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-zero-controls-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await runtime.auth(fixturePage(), "job_posting", "before_navigation", {
+      fieldCount: 0,
+      requiredFieldCount: 0,
+      controlTypes: [],
+      questionTypes: [],
+      answerTypes: [],
+      validationState: "clear",
+      submitPresent: false,
+      submitActivated: false,
+    }, { operationId: "operation_zero_controls_0001", attempt: 1 },
+    new AbortController().signal);
+    const taxonomyFile = readdirSync(join(root, "auth-monitor"))
+      .find((name) => name.endsWith(".taxonomy.json"));
+    assert.notEqual(taxonomyFile, undefined);
+    const taxonomy = JSON.parse(readFileSync(
+      join(root, "auth-monitor", taxonomyFile!), "utf8",
+    )) as Record<string, unknown>;
+    assert.deepEqual(taxonomy.controlTypes, []);
+    assert.deepEqual(taxonomy.questionTypes, []);
+    assert.deepEqual(taxonomy.answerTypes, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor rejects incomplete or malformed taxonomy arrays before evidence", async () => {
+  const base = taxonomy();
+  const cases: unknown[] = [
+    { ...base, fieldCount: 1, requiredFieldCount: 0, controlTypes: [], questionTypes: [], answerTypes: [] },
+    { ...base, fieldCount: 0, requiredFieldCount: 0, controlTypes: ["text"], questionTypes: [], answerTypes: [] },
+    { ...base, controlTypes: ["text", "text"] },
+    { ...base, controlTypes: Array.from({ length: 17 }, (_, index) => `type_${index}`) },
+    { ...base, controlTypes: ["text", 1] },
+  ];
+  for (const [index, malformed] of cases.entries()) {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-external-monitor-taxonomy-${index}-`));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        waitForAcknowledgement: async () => assert.fail("malformed taxonomy reached ACK"),
+      });
+      await assert.rejects(() => runtime.auth(
+        fixturePage(),
+        "job_posting",
+        "before_navigation",
+        malformed as ReturnType<typeof taxonomy>,
+        { operationId: `operation_bad_taxonomy_${index}`, attempt: 1 },
+        new AbortController().signal,
+      ));
+      const monitorRoot = join(root, "auth-monitor");
+      assert.deepEqual(existsSync(monitorRoot) ? readdirSync(monitorRoot) : [], []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("external monitor rejects fabricated, missing, duplicate, and unsafe job routes", async () => {
   const validPath = `/Careers/job/Location/Business-Manager_${binding.posting}`;
   const cases = [
@@ -287,8 +364,8 @@ test("external monitor traces the exact capture boundary without changing behavi
       "external_monitor_title_captured",
       "external_monitor_url_after_read",
       "external_monitor_identity_verified",
-      "external_monitor_screenshot_written",
       "external_monitor_taxonomy_admitted",
+      "external_monitor_screenshot_written",
       "external_monitor_taxonomy_written",
       "external_monitor_request_written",
       "external_monitor_evidence_published",
