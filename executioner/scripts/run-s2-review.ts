@@ -10,6 +10,7 @@ import { runStage2RealJourney } from "../src/acceptance/s2-journey.ts";
 import {
   stage2RealJourneyRuntimeBinding,
 } from "../src/acceptance/s2-production-binding.ts";
+import { formatStage2ReviewJourneyTerminal } from "../src/live/runner/terminal.ts";
 
 const controller = new AbortController();
 const cancel = () => controller.abort();
@@ -34,9 +35,7 @@ try {
     },
     controller.signal,
   );
-  process.stdout.write(`${JSON.stringify(result.ok
-    ? { status: "passed", checkpoint: "review", submitActivated: false }
-    : { status: "failed", code: result.code })}\n`);
+  process.stdout.write(formatStage2ReviewJourneyTerminal(result));
   process.exitCode = result.ok
     ? 0
     : result.code === "operation_cancelled"

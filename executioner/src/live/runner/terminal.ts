@@ -1,6 +1,17 @@
 import type { AccountAccessTargetFact } from "./account-access.ts";
 import type { AccountVerifiedFact } from "./account-verified.ts";
 
+type Stage2ReviewJourneyResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: string;
+      readonly terminal: {
+        readonly status: "review_reached" | "failed" | "blocked" | "cancelled";
+        readonly errorCode?: string;
+      };
+    };
+
 export type Stage2TerminalResult =
   | {
       readonly ok: true;
@@ -41,4 +52,23 @@ export function formatStage2TerminalResult(result: Stage2TerminalResult): string
     return '{"status":"failed","code":"terminal_output_denied"}\n';
   }
   return serialized;
+}
+
+export function formatStage2ReviewJourneyTerminal(
+  result: Stage2ReviewJourneyResult,
+): string {
+  const value = result.ok
+    ? { status: "passed", checkpoint: "review", submitActivated: false }
+    : {
+        status: "failed",
+        code: result.code,
+        terminalStatus: result.terminal.status,
+        ...(result.terminal.status === "failed"
+          ? { errorCode: result.terminal.errorCode }
+          : {}),
+      };
+  const serialized = `${JSON.stringify(value)}\n`;
+  return Buffer.byteLength(serialized, "utf8") <= 512
+    ? serialized
+    : '{"status":"failed","code":"terminal_output_denied"}\n';
 }
