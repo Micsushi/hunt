@@ -125,9 +125,9 @@ function intentFor(
 
 export function createAnswerResolver(
   profileQuery: ProfileQuery,
-  narrativeTemplate: string,
+  narrativeTemplate: string | undefined,
 ): AnswerResolver {
-  if (narrativeTemplate.trim() === "") {
+  if (narrativeTemplate !== undefined && narrativeTemplate.trim() === "") {
     throw new TypeError("narrative template must not be empty");
   }
 
@@ -164,6 +164,12 @@ export function createAnswerResolver(
         });
       }
       if (question.source.kind === "narrative") {
+        if (narrativeTemplate === undefined) {
+          return success({
+            kind: "profile_answer_missing",
+            questionId: questionId(canonicalQuestionId),
+          });
+        }
         return resolved({
           kind: "text",
           behavior: "textarea",

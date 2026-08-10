@@ -148,12 +148,9 @@ export function createQuestionnairePageHandler(
     throw new TypeError("driver and verifier must be independent ports");
   }
   const configuredNarrative = dependencies.narrative.resolve(narrativeQuestionId);
-  if (configuredNarrative === undefined) {
-    throw new TypeError("configured narrative provider must serve the eligible prompt");
-  }
   const resolver = dependencies.answerResolver ?? createAnswerResolver(
     dependencies.profileQuery,
-    configuredNarrative.text,
+    configuredNarrative?.text,
   );
 
   return Object.freeze({
@@ -176,6 +173,13 @@ export function createQuestionnairePageHandler(
         if (!field.required || field.state === "hidden") continue;
         const category = protectedCategory(field.label);
         const question = resolveQuestion(field.label);
+        if (
+          question.kind === "resolved" &&
+          question.id === narrativeQuestionId &&
+          configuredNarrative === undefined
+        ) {
+          return blocked("profile_answer_missing", field.fieldId, category);
+        }
         const answer = await resolver.resolve({
           field,
           profileId: request.profileId,

@@ -219,6 +219,33 @@ test("configured narrative and selected resume artifact bypass ProfileQuery", as
   assert.deepEqual(profile.calls, []);
 });
 
+test("an unresolved narrative blocks only its exact question", async () => {
+  const profile = createProfileQueryFake({
+    query: {
+      ok: true,
+      value: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+    },
+  });
+  const resolver = createAnswerResolver(profile.port, undefined);
+
+  assert.deepEqual(await resolver.resolve(
+    request(field("Brief interest statement", "textarea")),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "profile_answer_missing",
+      questionId: "s1-question-configured-narrative",
+    },
+  });
+  const name = await resolver.resolve(
+    request(field("Given name")),
+    new AbortController().signal,
+  );
+  assert.equal(name.ok && name.value.kind, "resolved");
+  assert.equal(profile.calls.length, 1);
+});
+
 test("every ProfileQuery failure is returned unchanged and never thrown", async () => {
   for (const code of [
     "profile_query_invalid",

@@ -138,11 +138,14 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
       const narrativeFact = profile.facts.find(({ factId }) =>
         factId === "configured_narrative"
       );
-      if (
-        narrativeFact === undefined ||
-        typeof narrativeFact.value !== "string" ||
-        narrativeFact.provenance !== "configured_template"
-      ) denied();
+      let narrativeTemplate: string | undefined;
+      if (narrativeFact !== undefined) {
+        if (
+          typeof narrativeFact.value !== "string" ||
+          narrativeFact.provenance !== "configured_template"
+        ) denied();
+        narrativeTemplate = narrativeFact.value;
+      }
       return Object.freeze({
         resumeIntent: intent.value,
         profilePlan,
@@ -151,7 +154,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         profileQuery: createProfileQuery(profile),
         narrative: createConfiguredNarrativeProvider({
           revision: manifest.narrative.revision,
-          template: narrativeFact.value,
+          template: narrativeTemplate,
         }),
         sensitiveValues: applicationSourceSensitiveValues(
           profile.facts,

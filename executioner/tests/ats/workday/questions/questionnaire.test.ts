@@ -30,6 +30,7 @@ import {
   createQuestionnairePageHandler,
   resolveActiveListbox,
   type ActiveListboxEvidence,
+  type ConfiguredNarrativeProvider,
 } from "../../../../src/ats/workday/application/questions/index.ts";
 import { createResumeArtifactFixture } from "../../../../src/testing/contracts/index.ts";
 
@@ -112,6 +113,7 @@ function dependencies(options: {
   readonly driver?: FieldDriver;
   readonly verifier?: FieldVerifier;
   readonly observation?: SanitizedStructuralObservationV1;
+  readonly narrative?: ConfiguredNarrativeProvider;
 } = {}) {
   const calls = { resolved: 0, driven: 0, verified: 0 };
   let operation = 0;
@@ -157,7 +159,7 @@ function dependencies(options: {
       answerResolver: options.resolver,
       driver,
       verifier,
-      narrative: createConfiguredNarrativeProvider({
+      narrative: options.narrative ?? createConfiguredNarrativeProvider({
         revision: "narrative-questionnaire-v1",
         template: "Exact configured interest statement.",
       }),
@@ -268,6 +270,47 @@ test("missing protected facts retain their stable missing code and never mutate"
   });
   assert.equal(calls.driven, 0);
   assert.equal(calls.verified, 0);
+});
+
+test("an unresolved narrative is admitted and blocks only when encountered", async () => {
+  const unresolved = createConfiguredNarrativeProvider({
+    revision: "narrative-questionnaire-v1",
+    template: undefined,
+  });
+  const { handler, calls } = dependencies({ narrative: unresolved });
+
+  assert.deepEqual(await handler.complete(
+    request([countryField]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "verified",
+      answers: [{
+        fieldId: countryField.fieldId,
+        questionId: "s1-question-country",
+        provenance: "owner_provided",
+        protectedCategory: null,
+        templateRevision: null,
+        verification: "independent",
+      }],
+      protectedPlaceholderCount: 0,
+    },
+  });
+  assert.deepEqual(await handler.complete(
+    request([narrativeField]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: narrativeField.fieldId,
+      protectedCategory: null,
+    },
+  });
+  assert.equal(calls.driven, 1);
+  assert.equal(calls.verified, 1);
 });
 
 test("unknown consent prompts stop with sanitized candidate evidence", async () => {
@@ -395,6 +438,52 @@ test("configured provenance cannot smuggle a different narrative", async () => {
       protectedCategory: null,
     },
   });
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
+});
+
+test("an injected resolver cannot smuggle a narrative when owner input is unresolved", async () => {
+  let resolved = 0;
+  const resolver: AnswerResolver = {
+    async resolve(input) {
+      resolved += 1;
+      return {
+        ok: true,
+        value: {
+          kind: "resolved",
+          intent: {
+            kind: "text",
+            behavior: "textarea",
+            fieldId: input.field.fieldId,
+            target: input.field.target,
+            value: "Invented personal claim.",
+            provenance: "owner_provided",
+          },
+        },
+      };
+    },
+  };
+  const { handler, calls } = dependencies({
+    resolver,
+    narrative: createConfiguredNarrativeProvider({
+      revision: "narrative-questionnaire-v1",
+      template: undefined,
+    }),
+  });
+
+  assert.deepEqual(await handler.complete(
+    request([narrativeField]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: narrativeField.fieldId,
+      protectedCategory: null,
+    },
+  });
+  assert.equal(resolved, 0);
   assert.equal(calls.driven, 0);
   assert.equal(calls.verified, 0);
 });

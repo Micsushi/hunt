@@ -15,10 +15,13 @@ export interface ConfiguredNarrativeProvider {
 
 export function createConfiguredNarrativeProvider(config: {
   readonly revision: string;
-  readonly template: string;
+  readonly template: string | undefined;
 }): ConfiguredNarrativeProvider {
   if (!opaqueIdentifier.test(config.revision)) {
     throw new TypeError("narrative revision must be an opaque identifier");
+  }
+  if (config.template === undefined) {
+    return Object.freeze({ resolve: () => undefined });
   }
   const length = [...config.template].length;
   if (

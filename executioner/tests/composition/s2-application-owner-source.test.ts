@@ -82,6 +82,40 @@ test("resolves one immutable resume snapshot and authoritative profile/question 
   }
 });
 
+test("admits an omitted narrative fact as unresolved owner input", async () => {
+  const fixture = ownerFixture();
+  try {
+    const bytes = Buffer.from("%PDF-1.7\nowner resume without narrative\n", "utf8");
+    writeSources(fixture.runtimeRoot, bytes);
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profile.facts = manifest.profile.facts.filter(
+      ({ factId }: { readonly factId: string }) => factId !== "configured_narrative",
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+
+    const resolved = await resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+
+    assert.equal(
+      resolved.narrative.resolve("s1-question-configured-narrative"),
+      undefined,
+    );
+    assert.deepEqual(await resolved.profileQuery.query({
+      profileId: resolved.profileId,
+      profileRevision: resolved.profileRevision,
+      factId: "configured_narrative",
+    }, AbortSignal.any([])), {
+      ok: true,
+      value: { kind: "profile_answer_missing" },
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("denies wrong references, bindings, changed bytes, oversized files, and repository scope", async () => {
   const fixture = ownerFixture();
   try {
