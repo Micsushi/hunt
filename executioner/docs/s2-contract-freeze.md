@@ -5,8 +5,8 @@ Status: frozen
 The accepted Stage 1 base is
 `87c77e538d8bba378ec93516dbea3f4747beb822`. The machine-readable Stage 2
 contract source is
-`16c48bd1470addc9d9480d785ae84e412edd55ef`, with exact tree
-`d9643fcac18a79d9506e68cbeebb1ba200809e64`. The machine-readable Stage 2
+`b98ebad34b74b3a318edfca4532a954bf07e1051`, with exact tree
+`94521b4c6468f88505c6cb55da608618002e2d61`. The machine-readable Stage 2
 record is `docs/s2-contract-revision.json`. It freezes the Git tree object IDs
 for the complete contract surface, live contract subset, F9 live coordinator,
 deterministic live test kit, live contract tests, and offline walking
@@ -40,9 +40,11 @@ The manifest contains no live URL, account, mailbox, secret, profile, target
 token, or provider payload. It does not authorize provider access, deployment,
 publication, or final application submission.
 
-This replacement freeze accepts the preserved integration at
-`16c48bd1470addc9d9480d785ae84e412edd55ef`. The compatible contract delta adds
-the `maintenance` and `runtime_error` posting-unavailability reasons without a
-wire-version change. The integration manifest also pins the protected replay
-ledger and storage lifecycle repairs in the current F2 composition. Exact tree
-object IDs replace the prior freeze; the clean-root gate remains mandatory.
+This replacement freeze accepts the monitored live Review integration at
+`b98ebad34b74b3a318edfca4532a954bf07e1051`. The compatible contract delta
+keeps every serialized version and the exact four-method MCP request surface,
+while the authority matrix now governs phase-specific acceptance files and the
+private external-monitor screenshot/ACK lane. The integration also pins
+same-session authentication, exact Review completion, protected source
+preparation, process-instance liveness, and storage lifecycle repairs. Exact
+tree object IDs replace the prior freeze; the clean-root gate remains mandatory.
