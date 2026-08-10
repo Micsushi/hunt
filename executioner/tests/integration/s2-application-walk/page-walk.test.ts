@@ -11,15 +11,35 @@ import { runApplicationPageWalk } from "../../../src/ats/workday/application/pag
 import { dependenciesFor, truth } from "./fakes.ts";
 import { walkFixture } from "./fixtures.ts";
 
-const pageOrder = ["resume", "profile", "questionnaire"] as const;
+const pageOrder = ["profile", "resume", "questionnaire"] as const;
+
+test("walks the observed Workday My Information to Experience page order", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("resume"), truth("resume"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["profile", "resume", "questionnaire"],
+  );
+});
 
 test("walks every application page only after browser-truth verification and stops before Review", async () => {
   const calls: string[] = [];
   const truths = [
-    truth("resume"),
-    truth("resume"),
     truth("profile"),
     truth("profile"),
+    truth("resume"),
+    truth("resume"),
     truth("questionnaire"),
     truth("questionnaire"),
     truth("pre_review"),
@@ -38,8 +58,8 @@ test("walks every application page only after browser-truth verification and sto
       checkpoint: "pre_review",
       completedPages: 3,
       pageChecks: [
-        { page: "resume", checkpoint: "resume_verified", independentlyVerified: true, requiredFields: 1, verifiedFields: 1, duplicateRows: 0 },
         { page: "profile", checkpoint: "profile_verified", independentlyVerified: true, requiredFields: 1, verifiedFields: 1, duplicateRows: 0 },
+        { page: "resume", checkpoint: "resume_verified", independentlyVerified: true, requiredFields: 1, verifiedFields: 1, duplicateRows: 0 },
         { page: "questionnaire", checkpoint: "questionnaire_verified", independentlyVerified: true, requiredFields: 1, verifiedFields: 1, duplicateRows: 0 },
       ],
       submitActivated: false,
@@ -47,16 +67,16 @@ test("walks every application page only after browser-truth verification and sto
     },
   });
   assert.deepEqual(calls, [
-    "observe:resume",
-    "reconcile:resume:1",
-    "observe:resume",
-    "progress:resume_verified:1",
-    "next:resume:profile",
     "observe:profile",
     "reconcile:profile:1",
     "observe:profile",
-    "progress:profile_verified:2",
-    "next:profile:questionnaire",
+    "progress:profile_verified:1",
+    "next:profile:resume",
+    "observe:resume",
+    "reconcile:resume:1",
+    "observe:resume",
+    "progress:resume_verified:2",
+    "next:resume:questionnaire",
     "observe:questionnaire",
     "reconcile:questionnaire:1",
     "observe:questionnaire",
@@ -68,14 +88,14 @@ test("walks every application page only after browser-truth verification and sto
 });
 
 for (const scenario of [
-  { name: "Resume checkpoint", currentPage: "resume" as const, count: 1,
-    truths: [truth("resume"), truth("profile"), truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
-    reconciled: ["profile", "questionnaire"] },
-  { name: "browser-advanced Profile", currentPage: "profile" as const, count: 1,
-    truths: [truth("profile"), truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
-    reconciled: ["profile", "questionnaire"] },
-  { name: "Profile checkpoint", currentPage: "profile" as const, count: 2,
-    truths: [truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
+  { name: "Profile checkpoint", currentPage: "profile" as const, count: 1,
+    truths: [truth("profile"), truth("resume"), truth("resume"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
+    reconciled: ["resume", "questionnaire"] },
+  { name: "browser-advanced Resume", currentPage: "resume" as const, count: 1,
+    truths: [truth("resume"), truth("resume"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
+    reconciled: ["resume", "questionnaire"] },
+  { name: "Resume checkpoint", currentPage: "resume" as const, count: 2,
+    truths: [truth("resume"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
     reconciled: ["questionnaire"] },
   { name: "browser-advanced Questionnaire", currentPage: "questionnaire" as const, count: 2,
     truths: [truth("questionnaire"), truth("questionnaire"), truth("pre_review")],
@@ -117,7 +137,7 @@ for (const scenario of [
 }
 
 for (const scenario of [
-  { page: "profile" as const, prefixCount: 1, stopAfter: "profile_verified" as const },
+  { page: "resume" as const, prefixCount: 1, stopAfter: "resume_verified" as const },
   { page: "questionnaire" as const, prefixCount: 2, stopAfter: "questionnaire_verified" as const },
 ]) {
   test(`reconciles an incomplete browser-advanced ${scenario.page} and persists a restartable checkpoint`, async () => {
@@ -135,8 +155,8 @@ for (const scenario of [
     assert.equal(first.value.pageChecks.length, scenario.prefixCount + 1);
 
     const restartCalls: string[] = [];
-    const restartTruths = scenario.page === "profile"
-      ? [truth("profile"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")]
+    const restartTruths = scenario.page === "resume"
+      ? [truth("resume"), truth("questionnaire"), truth("questionnaire"), truth("pre_review")]
       : [truth("questionnaire"), truth("pre_review")];
     const second = await runApplicationPageWalk(
       dependenciesFor(restartTruths, restartCalls),
@@ -150,10 +170,10 @@ for (const scenario of [
 
 test("recovery denies incomplete persisted fields, corrupted prefixes, skipped destinations, and regressions", async () => {
   for (const resume of [
-    { currentPage: "profile" as const, pageChecks: verifiedChecks(2) },
-    { currentPage: "profile" as const, pageChecks: [{ ...verifiedChecks(1)[0]!, verifiedFields: 0 }] },
+    { currentPage: "resume" as const, pageChecks: verifiedChecks(2) },
+    { currentPage: "resume" as const, pageChecks: [{ ...verifiedChecks(1)[0]!, verifiedFields: 0 }] },
     { currentPage: "questionnaire" as const, pageChecks: verifiedChecks(1) },
-    { currentPage: "profile" as const, pageChecks: verifiedChecks(3) },
+    { currentPage: "resume" as const, pageChecks: verifiedChecks(3) },
   ]) {
     const calls: string[] = [];
     const result = await runApplicationPageWalk(
@@ -170,10 +190,10 @@ test("recovery denies incomplete persisted fields, corrupted prefixes, skipped d
 test("reruns only the affected page after a bounded retryable handler failure", async () => {
   const calls: string[] = [];
   const truths = [
-    truth("resume"),
-    truth("resume"),
     truth("profile"),
     truth("profile"),
+    truth("resume"),
+    truth("resume"),
     truth("questionnaire"),
     truth("questionnaire"),
     truth("pre_review"),
@@ -212,19 +232,19 @@ test("reruns only the affected page after a bounded retryable handler failure", 
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual(calls.slice(0, 5), [
+  assert.deepEqual(calls.slice(5, 10), [
     "observe:resume",
     "reconcile:resume:1",
     "reconcile:resume:2",
     "observe:resume",
-    "progress:resume_verified:1",
+    "progress:resume_verified:2",
   ]);
 });
 
 test("stops when a page handler causes an unapproved transition", async () => {
   const calls: string[] = [];
   const dependencies = dependenciesFor(
-    [truth("resume"), truth("profile")],
+    [truth("profile"), truth("resume")],
     calls,
   );
 
@@ -238,7 +258,7 @@ test("stops when a page handler causes an unapproved transition", async () => {
   assert.deepEqual(result, {
     ok: false,
     error: {
-      checkpoint: "profile",
+      checkpoint: "resume",
       completedPages: 0,
       failure: {
         code: "navigation_uncertain",
@@ -247,7 +267,7 @@ test("stops when a page handler causes an unapproved transition", async () => {
         classifier: "workday_page",
         primitive: "page_observation",
         unknownLayer: "navigation",
-        page: "profile",
+        page: "resume",
         attempt: 1,
       },
       submitActivated: false,
@@ -255,16 +275,16 @@ test("stops when a page handler causes an unapproved transition", async () => {
     },
   });
   assert.deepEqual(calls, [
-    "observe:resume",
-    "reconcile:resume:1",
     "observe:profile",
+    "reconcile:profile:1",
+    "observe:resume",
   ]);
 });
 
 test("stops immediately if browser truth reports Submit activation", async () => {
   const calls: string[] = [];
   const dependencies = dependenciesFor(
-    [truth("resume"), { ...truth("resume"), submitActivated: true }],
+    [truth("profile"), { ...truth("profile"), submitActivated: true }],
     calls,
   );
 
@@ -283,20 +303,20 @@ test("stops immediately if browser truth reports Submit activation", async () =>
     classifier: "workday_page",
     primitive: "page_observation",
     unknownLayer: "navigation",
-    page: "resume",
+    page: "profile",
     attempt: 1,
   });
   assert.deepEqual(calls, [
-    "observe:resume",
-    "reconcile:resume:1",
-    "observe:resume",
+    "observe:profile",
+    "reconcile:profile:1",
+    "observe:profile",
   ]);
 });
 
 test("reobserves browser truth without replaying a verified page effect", async () => {
   const calls: string[] = [];
   const observations: ApplicationPortResult<ApplicationPageTruth>[] = [
-    { ok: true, value: truth("resume") },
+    { ok: true, value: truth("profile") },
     {
       ok: false,
       error: {
@@ -306,9 +326,9 @@ test("reobserves browser truth without replaying a verified page effect", async 
         unknownLayer: "ui_behavior",
       },
     },
+    { ok: true, value: truth("profile") },
     { ok: true, value: truth("resume") },
-    { ok: true, value: truth("profile") },
-    { ok: true, value: truth("profile") },
+    { ok: true, value: truth("resume") },
     { ok: true, value: truth("questionnaire") },
     { ok: true, value: truth("questionnaire") },
     { ok: true, value: truth("pre_review") },
@@ -336,12 +356,12 @@ test("reobserves browser truth without replaying a verified page effect", async 
 
   assert.equal(result.ok, true);
   assert.deepEqual(calls.slice(0, 6), [
-    "observe:resume",
-    "reconcile:resume:1",
+    "observe:profile",
+    "reconcile:profile:1",
     "observe:error",
-    "observe:resume",
-    "progress:resume_verified:1",
-    "next:resume:profile",
+    "observe:profile",
+    "progress:profile_verified:1",
+    "next:profile:resume",
   ]);
 });
 
@@ -349,10 +369,10 @@ for (const scenario of [
   {
     name: "unverified required field",
     truth: {
-      ...truth("resume"),
+      ...truth("profile"),
       requiredFields: [
         {
-          fieldId: walkFixture.fields.resume,
+          fieldId: walkFixture.fields.profile,
           verification: "unverified" as const,
         },
       ],
@@ -363,7 +383,7 @@ for (const scenario of [
   },
   {
     name: "C3-owned duplicate row",
-    truth: { ...truth("resume"), c3OwnedDuplicateRows: 1 },
+    truth: { ...truth("profile"), c3OwnedDuplicateRows: 1 },
     classifier: "repeatable_row_gate" as const,
     primitive: "repeatable_row_reconciliation" as const,
     unknownLayer: "repeatable_row" as const,
@@ -373,7 +393,7 @@ for (const scenario of [
     const calls: string[] = [];
     const result = await runApplicationPageWalk(
       dependenciesFor(
-        [truth("resume"), scenario.truth, scenario.truth],
+        [truth("profile"), scenario.truth, scenario.truth],
         calls,
       ),
       { journeyId: walkFixture.journeyId },
@@ -386,11 +406,11 @@ for (const scenario of [
     assert.deepEqual(result.error.failure, {
       code: "page_incomplete",
       retryable: false,
-      owner: "resume",
+      owner: "profile",
       classifier: scenario.classifier,
       primitive: scenario.primitive,
       unknownLayer: scenario.unknownLayer,
-      page: "resume",
+      page: "profile",
       attempt: 2,
     });
     assert.equal(calls.some((call) => call.startsWith("next:")), false);
@@ -419,7 +439,7 @@ test("an already-cancelled walk performs no browser or page effects", async () =
     classifier: "workday_page",
     primitive: "page_observation",
     unknownLayer: "none",
-    page: "resume",
+    page: "profile",
     attempt: 1,
   });
   assert.deepEqual(calls, []);
@@ -441,7 +461,7 @@ test("failure projection drops non-contract adapter detail", async () => {
     readonly pageId: ApplicationPageTruth["pageId"];
   }>;
   const result = await runApplicationPageWalk(
-    dependenciesFor([truth("resume")], calls, () => leakedFailure),
+    dependenciesFor([truth("profile")], calls, () => leakedFailure),
     { journeyId: walkFixture.journeyId },
     new AbortController().signal,
   );
@@ -475,7 +495,7 @@ test("failure projection replaces malformed enum values with safe metadata", asy
     readonly pageId: ApplicationPageTruth["pageId"];
   }>;
   const result = await runApplicationPageWalk(
-    dependenciesFor([truth("resume")], [], () => malformedFailure),
+    dependenciesFor([truth("profile")], [], () => malformedFailure),
     { journeyId: walkFixture.journeyId },
     new AbortController().signal,
   );
@@ -485,11 +505,11 @@ test("failure projection replaces malformed enum values with safe metadata", asy
   assert.deepEqual(result.error.failure, {
     code: "failure_context_invalid",
     retryable: false,
-    owner: "resume",
+    owner: "profile",
     classifier: "workday_page",
     primitive: "page_observation",
     unknownLayer: "none",
-    page: "resume",
+    page: "profile",
     attempt: 1,
   });
   assert.doesNotMatch(JSON.stringify(result), /sensitive-value/u);
@@ -498,12 +518,12 @@ test("failure projection replaces malformed enum values with safe metadata", asy
 test("does not navigate when a lane reports the wrong independent checkpoint", async () => {
   const calls: string[] = [];
   const result = await runApplicationPageWalk(
-    dependenciesFor([truth("resume")], calls, (page, _attempt, pageId) => ({
+    dependenciesFor([truth("profile")], calls, (page, _attempt, pageId) => ({
       ok: true,
       value: {
         page,
         pageId,
-        checkpoint: "profile_verified",
+        checkpoint: "resume_verified",
         independentlyVerified: true,
       },
     })),
@@ -514,7 +534,7 @@ test("does not navigate when a lane reports the wrong independent checkpoint", a
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(result.error.failure.code, "failure_context_invalid");
-  assert.equal(result.error.failure.owner, "resume");
+  assert.equal(result.error.failure.owner, "profile");
   assert.equal(calls.some((call) => call.startsWith("next:")), false);
   assert.equal(calls.some((call) => call.startsWith("progress:")), false);
 });
@@ -533,10 +553,10 @@ test("does not claim pre-Review while final browser truth is incomplete", async 
   const result = await runApplicationPageWalk(
     dependenciesFor(
       [
-        truth("resume"),
-        truth("resume"),
         truth("profile"),
         truth("profile"),
+        truth("resume"),
+        truth("resume"),
         truth("questionnaire"),
         truth("questionnaire"),
         incompletePreReview,
@@ -566,23 +586,23 @@ test("does not claim pre-Review while final browser truth is incomplete", async 
 test("honors verification checkpoint stops without advancing beyond browser truth", async () => {
   const calls: string[] = [];
   const result = await runApplicationPageWalk(
-    dependenciesFor([truth("resume"), truth("resume")], calls),
+    dependenciesFor([truth("profile"), truth("profile")], calls),
     {
       journeyId: walkFixture.journeyId,
-      stopAfter: "resume_verified",
+      stopAfter: "profile_verified",
     },
     new AbortController().signal,
   );
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.value.checkpoint, "resume_verified");
+  assert.equal(result.value.checkpoint, "profile_verified");
   assert.equal(result.value.completedPages, 1);
   assert.deepEqual(result.value.pageChecks.map(({ checkpoint }) => checkpoint), [
-    "resume_verified",
+    "profile_verified",
   ]);
   assert.equal(calls.some((call) => call.startsWith("next:")), false);
-  assert.equal(calls.at(-1), "progress:resume_verified:1");
+  assert.equal(calls.at(-1), "progress:profile_verified:1");
 });
 
 function verifiedChecks(count: number) {
@@ -598,7 +618,7 @@ function verifiedChecks(count: number) {
   }));
 }
 
-function incompleteTruth(page: "profile" | "questionnaire"): ApplicationPageTruth {
+function incompleteTruth(page: "resume" | "questionnaire"): ApplicationPageTruth {
   return {
     ...truth(page),
     requiredFields: [{

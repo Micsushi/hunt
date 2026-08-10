@@ -14,7 +14,8 @@ const AUTH_PAGES = new Set([
 const AUTH_MOMENTS = new Set([
   "state_observed", "before_mutation", "after_readback", "before_navigation", "transition",
 ]);
-const APPLICATION_PAGES = new Set(["resume", "profile", "questionnaire", "review"]);
+export const applicationMonitorPages = ["profile", "resume", "questionnaire"] as const;
+const APPLICATION_PAGES = new Set([...applicationMonitorPages, "review"]);
 const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
   "recovery_observed", "review_readback",
@@ -318,7 +319,7 @@ function validateAttempts(groups: readonly OperationGroup[]): void {
 
 function validateApplicationSequence(groups: readonly OperationGroup[]): void {
   const coverage = new Set<string>();
-  let currentPage = "resume";
+  let currentPage: string = applicationMonitorPages[0];
   for (const [index, group] of groups.entries()) {
     if (group.fromPage !== currentPage) denied();
     if (group.kind === "review") {
@@ -332,9 +333,12 @@ function validateApplicationSequence(groups: readonly OperationGroup[]): void {
       if (group.toPage !== group.fromPage) denied();
       coverage.add(`${group.fromPage}:mutation`);
     } else if (group.kind === "navigation") {
-      const expected = group.fromPage === "resume" ? "profile"
-        : group.fromPage === "profile" ? "questionnaire"
-          : group.fromPage === "questionnaire" ? "review" : undefined;
+      const fromIndex = applicationMonitorPages.indexOf(
+        group.fromPage as typeof applicationMonitorPages[number],
+      );
+      const expected = fromIndex < 0
+        ? undefined
+        : applicationMonitorPages[fromIndex + 1] ?? "review";
       if (group.toPage !== group.fromPage && group.toPage !== expected) denied();
       if (group.toPage === expected) coverage.add(`${group.fromPage}:navigation`);
     } else if (group.kind === "recovery" && group.toPage !== group.fromPage) {
@@ -343,7 +347,7 @@ function validateApplicationSequence(groups: readonly OperationGroup[]): void {
     currentPage = group.toPage;
   }
   if (groups.at(-1)?.kind !== "review") denied();
-  for (const page of ["resume", "profile", "questionnaire"]) {
+  for (const page of applicationMonitorPages) {
     if (!coverage.has(`${page}:mutation`) || !coverage.has(`${page}:navigation`)) denied();
   }
 }

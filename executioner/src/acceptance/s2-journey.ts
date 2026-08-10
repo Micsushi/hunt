@@ -1,6 +1,8 @@
-import type {
-  ApplicationWalkResult,
-  ApplicationWalkResume,
+import {
+  applicationCheckpoints,
+  applicationPages,
+  type ApplicationWalkResult,
+  type ApplicationWalkResume,
 } from "../ats/workday/application/page-walk.ts";
 import {
   s2StableErrorPolicy,
@@ -469,14 +471,9 @@ function verifiedPreReview(
     value.value.completedPages !== 3 || value.value.submitActivated !== false ||
     value.value.privacyScan !== "pass" || value.value.pageChecks.length !== 3
   ) return false;
-  const pages = ["resume", "profile", "questionnaire"] as const;
-  const checkpoints = [
-    "resume_verified",
-    "profile_verified",
-    "questionnaire_verified",
-  ] as const;
   return value.value.pageChecks.every((check, index) =>
-    check.page === pages[index] && check.checkpoint === checkpoints[index] &&
+    check.page === applicationPages[index] &&
+    check.checkpoint === applicationCheckpoints[index] &&
     check.independentlyVerified === true &&
     Number.isSafeInteger(check.requiredFields) && check.requiredFields >= 0 &&
     check.verifiedFields === check.requiredFields && check.duplicateRows === 0

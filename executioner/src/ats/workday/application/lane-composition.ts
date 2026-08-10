@@ -16,11 +16,12 @@ import {
   type WorkdayResumeFileIntent,
   type WorkdayResumeUploadHandler,
 } from "./resume/index.ts";
-import type {
-  ApplicationCheckpoint,
-  ApplicationPageHandlerPort,
-  ApplicationPortFailure,
-  ApplicationWalkDependencies,
+import {
+  applicationCheckpoints,
+  type ApplicationCheckpoint,
+  type ApplicationPageHandlerPort,
+  type ApplicationPortFailure,
+  type ApplicationWalkDependencies,
 } from "./page-walk-contract.ts";
 
 export interface ImmutableApplicationLaneSources {
@@ -120,12 +121,7 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
   >();
   return Object.freeze({
     record(acceptance: ApplicationLaneAcceptance): void {
-      const expected = [
-        "resume_verified",
-        "profile_verified",
-        "questionnaire_verified",
-      ] as const;
-      const index = expected.indexOf(acceptance.checkpoint);
+      const index = applicationCheckpoints.indexOf(acceptance.checkpoint);
       if (index < 0 || records.has(acceptance.checkpoint) || records.size !== index) {
         throw new TypeError("application lane acceptance order is invalid");
       }
@@ -135,16 +131,10 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
       );
     },
     snapshot(checkpoint: ApplicationCheckpoint): readonly ApplicationLaneAcceptance[] {
-      const count = checkpoint === "resume_verified"
-        ? 1
-        : checkpoint === "profile_verified"
-          ? 2
-          : 3;
-      const ordered = [
-        records.get("resume_verified"),
-        records.get("profile_verified"),
-        records.get("questionnaire_verified"),
-      ].slice(0, count);
+      const count = checkpoint === "pre_review"
+        ? applicationCheckpoints.length
+        : applicationCheckpoints.indexOf(checkpoint) + 1;
+      const ordered = applicationCheckpoints.map((item) => records.get(item)).slice(0, count);
       if (ordered.some((record) => record === undefined)) {
         throw new TypeError("application lane acceptance is incomplete");
       }

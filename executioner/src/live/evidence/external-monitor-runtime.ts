@@ -12,7 +12,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
-import { validateStage2MonitorPng } from "./review-monitor-chain.ts";
+import {
+  applicationMonitorPages,
+  validateStage2MonitorPng,
+} from "./review-monitor-chain.ts";
 import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
 export {
   readStage2AuthMonitorChain,
@@ -27,7 +30,7 @@ const AUTH_PAGES = new Set([
 const AUTH_MOMENTS = new Set([
   "state_observed", "before_mutation", "after_readback", "before_navigation", "transition",
 ]);
-const APPLICATION_PAGES = new Set(["resume", "profile", "questionnaire", "review"]);
+const APPLICATION_PAGES = new Set([...applicationMonitorPages, "review"]);
 const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
   "recovery_observed", "review_readback",
@@ -336,7 +339,7 @@ export class Stage2ExternalMonitorRuntime {
       const current = chain === "auth" ? this.#currentAuthPage : this.#currentApplicationPage;
       return pending === undefined && page !== "review" &&
         (chain !== "auth" || safeAuthEffectPage(page)) &&
-        (current === undefined ? chain === "auth" || page === "resume" : current === page) &&
+        (current === undefined ? chain === "auth" || page === applicationMonitorPages[0] : current === page) &&
         !used.has(event.operationId) &&
         (kind === "navigation" ||
           event.attempt === (this.#attempts.get(attemptKey) ?? 0) + 1);
@@ -678,9 +681,8 @@ function legalPair(
 ): boolean {
   if (chain === "application") {
     if (kind === "mutation") return from === to;
-    return to === from || to === (from === "resume" ? "profile"
-      : from === "profile" ? "questionnaire"
-        : from === "questionnaire" ? "review" : undefined);
+    const index = applicationMonitorPages.findIndex((page) => page === from);
+    return to === from || index >= 0 && to === (applicationMonitorPages[index + 1] ?? "review");
   }
   if (!safeAuthEffectPage(from) || !safeAuthEffectPage(to)) return false;
   return kind === "mutation" && from === to || legalAuthTransition(from, to);

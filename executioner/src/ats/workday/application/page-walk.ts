@@ -4,6 +4,7 @@ import {
 } from "../../../contracts/s2-common-wire.ts";
 import {
   applicationClassifiers,
+  applicationCheckpoints,
   applicationPages,
   applicationPrimitives,
   applicationUnknownLayers,
@@ -60,13 +61,13 @@ export async function runApplicationPageWalk(
         "page_observation",
         "none",
       ),
-      "resume",
+      applicationPages[0],
       1,
     );
   }
   let current = await dependencies.observer.observe(signal);
   if (!current.ok) {
-    return failure("browser_truth", current.error, "resume", 1);
+    return failure("browser_truth", current.error, applicationPages[0], 1);
   }
   if (current.value.submitActivated) {
     return failure(
@@ -445,11 +446,7 @@ function pageCheck(
 }
 
 function checkpointFor(page: ApplicationHandlerPage): ApplicationVerifiedCheckpoint {
-  return page === "resume"
-    ? "resume_verified"
-    : page === "profile"
-      ? "profile_verified"
-      : "questionnaire_verified";
+  return applicationCheckpoints[applicationPages.indexOf(page)]!;
 }
 
 function internalFailure(

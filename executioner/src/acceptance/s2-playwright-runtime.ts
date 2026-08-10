@@ -15,14 +15,16 @@ import { basename, dirname, join, normalize, resolve } from "node:path";
 import { createApplicationLaneAcceptanceCollector } from
   "../ats/workday/application/lane-composition.ts";
 import { PlaywrightWorkdayApplicationPage } from "../ats/workday/application/playwright-page.ts";
-import type {
-  ApplicationPage,
-  ApplicationPageCheck,
-  ApplicationPageHandlerPort,
-  ApplicationPortFailure,
-  ApplicationWalkDependencies,
+import {
+  applicationCheckpoints,
+  applicationPages,
+  type ApplicationPage,
+  type ApplicationPageCheck,
+  type ApplicationPageHandlerPort,
+  type ApplicationPortFailure,
+  type ApplicationWalkDependencies,
+  type ApplicationWalkResume,
 } from "../ats/workday/application/page-walk.ts";
-import type { ApplicationWalkResume } from "../ats/workday/application/page-walk.ts";
 import { createPlaywrightPersistentBrowserSession } from "../browser/playwright-live/index.ts";
 import type { PlaywrightPersistentBrowserSession } from
   "../browser/playwright-live/session.ts";
@@ -1151,15 +1153,17 @@ function isRecoveryArtifact(value: unknown): value is RecoveryArtifactV1 {
     : artifact.checkpoint.page.kind === "questionnaire" ? "questionnaire"
     : artifact.checkpoint.page.kind === "review" ? "pre_review" : undefined;
   if (expectedPage === undefined) return false;
-  const bounds = expectedPage === "resume" ? [1, 1] as const
-    : expectedPage === "profile" ? [1, 2] as const
-    : expectedPage === "questionnaire" ? [2, 3] as const
-    : [3, 3] as const;
+  const pageIndex = expectedPage === "pre_review"
+    ? applicationPages.length
+    : applicationPages.indexOf(expectedPage);
+  const bounds = expectedPage === "pre_review"
+    ? [applicationPages.length, applicationPages.length] as const
+    : [Math.max(1, pageIndex), pageIndex + 1] as const;
   if (artifact.pageChecks.length < bounds[0] || artifact.pageChecks.length > bounds[1]) return false;
   return artifact.pageChecks.every((check, index) => {
     if (typeof check !== "object" || check === null) return false;
-    const page = ["resume", "profile", "questionnaire"][index];
-    const checkpoint = ["resume_verified", "profile_verified", "questionnaire_verified"][index];
+    const page = applicationPages[index];
+    const checkpoint = applicationCheckpoints[index];
     const item = check as Partial<ApplicationPageCheck>;
     return hasExactKeys(check, [
       "page", "checkpoint", "independentlyVerified", "requiredFields",

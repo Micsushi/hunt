@@ -59,7 +59,7 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
   const page = await browser.newPage();
   try {
     await page.goto(`http://127.0.0.1:${address.port}/`);
-    await page.setContent('<body data-hunt-application-page="resume" data-hunt-page-id="s2-resume"></body>');
+    await page.setContent('<body data-hunt-application-page="profile" data-hunt-page-id="s2-profile"></body>');
     await page.evaluate((pages) => {
       const render = (name: keyof typeof pages) => {
         document.body.removeAttribute("data-hunt-application-page");
@@ -82,13 +82,13 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
         ) !== null ? "resume" : document.querySelector(
           '[data-automation-id="applyFlowApplicationQuestionsPage"]',
         ) !== null ? "questionnaire" : "profile";
-        render(current === "resume"
-          ? "profile"
-          : current === "profile"
+        render(current === "profile"
+          ? "resume"
+          : current === "resume"
             ? "questionnaire"
             : "pre_review");
       });
-      render("resume");
+      render("profile");
     }, fixturePages());
 
     const sources = applicationSources();
@@ -135,8 +135,8 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
     if (!result.ok) return;
     assert.equal(result.value.checkpoint, "pre_review");
     assert.deepEqual(progress, [
-      "resume_verified",
       "profile_verified",
+      "resume_verified",
       "questionnaire_verified",
       "pre_review",
     ]);

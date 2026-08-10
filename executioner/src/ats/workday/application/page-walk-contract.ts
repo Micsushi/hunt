@@ -7,9 +7,14 @@ import type {
 import type { S2StableErrorCode } from "../../../contracts/s2-common-wire.ts";
 
 export const applicationPages = [
-  "resume",
   "profile",
+  "resume",
   "questionnaire",
+] as const;
+export const applicationCheckpoints = [
+  "profile_verified",
+  "resume_verified",
+  "questionnaire_verified",
 ] as const;
 export const applicationClassifiers = [
   "workday_page",
@@ -45,9 +50,7 @@ export const applicationUnknownLayers = [
 export type ApplicationHandlerPage = (typeof applicationPages)[number];
 export type ApplicationPage = ApplicationHandlerPage | "pre_review";
 export type ApplicationVerifiedCheckpoint =
-  | "resume_verified"
-  | "profile_verified"
-  | "questionnaire_verified";
+  (typeof applicationCheckpoints)[number];
 export type ApplicationCheckpoint = ApplicationVerifiedCheckpoint | "pre_review";
 export type ApplicationUnknownLayer =
   (typeof applicationUnknownLayers)[number];

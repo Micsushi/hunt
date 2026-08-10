@@ -147,7 +147,7 @@ test("acceptance write failure retains recovery and exact evidence is retryable"
   }
 });
 
-for (const checkpoint of ["profile", "questionnaire", "review"] as const) {
+for (const checkpoint of ["resume", "questionnaire", "review"] as const) {
   test(`recovery at ${checkpoint} passes the exact durable walk cursor`, async () => {
     const root = mkdtempSync(join(tmpdir(), `hunt-s2-recover-${checkpoint}-`));
     const evidenceRoot = resolve(root, "evidence");
@@ -607,8 +607,8 @@ function preReview() {
     checkpoint: "pre_review" as const,
     completedPages: 3,
     pageChecks: Object.freeze([
-      check("resume", "resume_verified", 1),
       check("profile", "profile_verified", 3),
+      check("resume", "resume_verified", 1),
       check("questionnaire", "questionnaire_verified", 2),
     ]),
     submitActivated: false as const,
@@ -666,7 +666,7 @@ function reviewCapture() {
 
 function recoveryPlan(
   calls: string[],
-  recoveredPage: "profile" | "questionnaire" | "review" = "profile",
+  recoveredPage: "resume" | "questionnaire" | "review" = "resume",
 ): {
   input: RecoverBrowserInterruptionInput;
   dependencies: RecoveryDependencies;
@@ -710,9 +710,9 @@ function recoveryPlan(
       currentPage: state.page.kind === "review" ? "pre_review" : state.page.kind as
         "resume" | "profile" | "questionnaire",
       pageChecks: [
-        check("resume", "resume_verified", 1),
         check("profile", "profile_verified", 3),
-        ...(recoveredPage === "profile" ? [] : [
+        check("resume", "resume_verified", 1),
+        ...(recoveredPage === "resume" ? [] : [
           check("questionnaire", "questionnaire_verified", 2),
         ]),
       ],

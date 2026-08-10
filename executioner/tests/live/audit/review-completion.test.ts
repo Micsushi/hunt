@@ -314,7 +314,7 @@ test("Review completion accepts a bounded monitored recovery and retry sequence"
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     rmSync(join(layout.evidenceRoot, "monitor"), { recursive: true });
     const moments = [...applicationMoments()];
-    moments.splice(6, 0,
+    moments.splice(2, 0,
       ["profile", "recovery_observed", "operation_profile_recovery_01", 1],
       ["profile", "before_mutation", "operation_profile_mutation_02", 2],
       ["profile", "after_readback", "operation_profile_mutation_02", 2],
@@ -371,7 +371,7 @@ test("Review completion rejects an illegal same-page navigation transition", asy
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     rmSync(join(layout.evidenceRoot, "monitor"), { recursive: true });
     const moments = applicationMoments();
-    moments[3] = ["resume", "transition", "operation_resume_navigation_01", 1];
+    moments[3] = ["profile", "transition", "operation_profile_navigation_01", 1];
     writeExternalMonitorChain(
       layout.evidenceRoot, "monitor", moments, "review_verified", false, configSha256,
     );
@@ -682,14 +682,14 @@ function writeMonitorChain(root: string, signatureOnly: boolean, configSha256: s
 
 function applicationMoments(): Array<readonly [string, string, string, number]> {
   return [
-    ["resume", "before_mutation", "operation_resume_mutation_01", 1],
-    ["resume", "after_readback", "operation_resume_mutation_01", 1],
-    ["resume", "before_navigation", "operation_resume_navigation_01", 1],
-    ["profile", "transition", "operation_resume_navigation_01", 1],
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],
-    ["questionnaire", "transition", "operation_profile_navigation_01", 1],
+    ["resume", "transition", "operation_profile_navigation_01", 1],
+    ["resume", "before_mutation", "operation_resume_mutation_01", 1],
+    ["resume", "after_readback", "operation_resume_mutation_01", 1],
+    ["resume", "before_navigation", "operation_resume_navigation_01", 1],
+    ["questionnaire", "transition", "operation_resume_navigation_01", 1],
     ["questionnaire", "before_mutation", "operation_question_mutation_01", 1],
     ["questionnaire", "after_readback", "operation_question_mutation_01", 1],
     ["questionnaire", "before_navigation", "operation_question_navigation_01", 1],
@@ -906,8 +906,8 @@ function reviewAcceptance(configSha256: string) {
 
 function applicationWalk() {
   const pageChecks = [
-    pageCheck("resume", "resume_verified"),
     pageCheck("profile", "profile_verified"),
+    pageCheck("resume", "resume_verified"),
     pageCheck("questionnaire", "questionnaire_verified"),
   ];
   return {
@@ -925,6 +925,23 @@ function applicationWalk() {
     laneAcceptances: [
       {
         schemaVersion: 1 as const,
+        checkpoint: "profile_verified" as const,
+        pageType: "profile" as const,
+        verifiedFields: [{
+          fieldId: "identity.given_name",
+          questionType: "identity" as const,
+          answerType: "text" as const,
+          uiBehavior: "text" as const,
+          uiVariant: "workday_text_v1",
+          provenance: "owner_provided" as const,
+        }],
+        ownedDuplicateRows: 0 as const,
+        independentlyVerified: true as const,
+        submitActivated: false as const,
+        privacyScan: "pass" as const,
+      },
+      {
+        schemaVersion: 1 as const,
         checkpoint: "resume_verified" as const,
         artifactId: upstreamResumeId("resume_abcdefghijklmnop"),
         sizeBytes: 1024,
@@ -940,23 +957,6 @@ function applicationWalk() {
         independentlyVerified: true as const,
         duplicateUploadAvoided: false,
         replacedExisting: false,
-        submitActivated: false as const,
-        privacyScan: "pass" as const,
-      },
-      {
-        schemaVersion: 1 as const,
-        checkpoint: "profile_verified" as const,
-        pageType: "profile" as const,
-        verifiedFields: [{
-          fieldId: "identity.given_name",
-          questionType: "identity" as const,
-          answerType: "text" as const,
-          uiBehavior: "text" as const,
-          uiVariant: "workday_text_v1",
-          provenance: "owner_provided" as const,
-        }],
-        ownedDuplicateRows: 0 as const,
-        independentlyVerified: true as const,
         submitActivated: false as const,
         privacyScan: "pass" as const,
       },

@@ -92,14 +92,14 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
   });
   const signal = new AbortController().signal;
 
-  const resumeResult = await handlers.resume.reconcile({
-    journeyId: walkFixture.journeyId,
-    pageId: walkFixture.pages.resume,
-    attempt: 1,
-  }, signal);
   const profileResult = await handlers.profile.reconcile({
     journeyId: walkFixture.journeyId,
     pageId: walkFixture.pages.profile,
+    attempt: 1,
+  }, signal);
+  const resumeResult = await handlers.resume.reconcile({
+    journeyId: walkFixture.journeyId,
+    pageId: walkFixture.pages.resume,
     attempt: 1,
   }, signal);
   const questionResult = await handlers.questionnaire.reconcile({
@@ -130,7 +130,7 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
     acceptances.snapshot("questionnaire_verified").map(({ checkpoint }) =>
       checkpoint
     ),
-    ["resume_verified", "profile_verified", "questionnaire_verified"],
+    ["profile_verified", "resume_verified", "questionnaire_verified"],
   );
   assert.doesNotMatch(JSON.stringify(acceptances.snapshot("questionnaire_verified")), /Ada/u);
 });

@@ -19,8 +19,8 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
   };
   const result = await runStage2ApplicationWalk(input(), {
     walk: dependenciesFor([
-      truth("resume"), truth("resume"),
       truth("profile"), truth("profile"),
+      truth("resume"), truth("resume"),
       truth("questionnaire"), truth("questionnaire"),
       truth("pre_review"),
     ], calls),
@@ -28,8 +28,8 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
       snapshot() {
         calls.push("snapshot");
         return [
-          { checkpoint: "resume_verified" },
           { checkpoint: "profile_verified" },
+          { checkpoint: "resume_verified" },
           { checkpoint: "questionnaire_verified" },
         ] as never;
       },
@@ -56,16 +56,16 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
 test("returns only the sanitized page failure after guaranteed cleanup", async () => {
   const calls: string[] = [];
   const result = await runStage2ApplicationWalk(input(), {
-    walk: dependenciesFor([truth("resume"), {
-      ...truth("resume"),
+    walk: dependenciesFor([truth("profile"), {
+      ...truth("profile"),
       requiredFields: [{
-        ...truth("resume").requiredFields[0]!,
+        ...truth("profile").requiredFields[0]!,
         verification: "unverified",
       }],
     }, {
-      ...truth("resume"),
+      ...truth("profile"),
       requiredFields: [{
-        ...truth("resume").requiredFields[0]!,
+        ...truth("profile").requiredFields[0]!,
         verification: "unverified",
       }],
     }], calls),

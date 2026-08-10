@@ -45,6 +45,16 @@ test("production binding resolves opaque owner sources without value leakage", a
         assert.equal(request.ownerSources.profileId, "profile-owner-approved");
         collector.record({
           schemaVersion: 1,
+          checkpoint: "profile_verified",
+          pageType: "profile",
+          verifiedFields: [],
+          ownedDuplicateRows: 0,
+          independentlyVerified: true,
+          submitActivated: false,
+          privacyScan: "pass",
+        });
+        collector.record({
+          schemaVersion: 1,
           checkpoint: "resume_verified",
           artifactId: upstreamResumeId("resume-owner-approved"),
           sizeBytes: fixture.resumeBytes.byteLength,
@@ -63,15 +73,17 @@ test("production binding resolves opaque owner sources without value leakage", a
           submitActivated: false,
           privacyScan: "pass",
         });
+        let pageIndex = 0;
         return {
           walk: {
             observer: {
               async observe() {
+                const page = ["profile", "profile", "resume", "resume"] as const;
                 return {
                   ok: true as const,
                   value: {
-                    page: "resume" as const,
-                    pageId: browserPageId("s2-resume"),
+                    page: page[pageIndex++]!,
+                    pageId: browserPageId("s2-page"),
                     requiredFields: [{
                       fieldId: fieldId("resume.required"),
                       verification: "verified" as const,
@@ -96,10 +108,10 @@ test("production binding resolves opaque owner sources without value leakage", a
                   };
                 },
               },
-              profile: neverHandler("profile", "profile_verified"),
+              profile: verifiedHandler("profile", "profile_verified"),
               questionnaire: neverHandler("questionnaire", "questionnaire_verified"),
             },
-            navigation: { async next() { throw new Error("unexpected navigation"); } },
+            navigation: { async next() { return { ok: true as const, value: { advanced: true as const } }; } },
             progress: { async record() { return { ok: true as const, value: undefined }; } },
           },
           laneAcceptances: collector,
@@ -241,10 +253,10 @@ test("outer Review binding resolves owner sources and retains only live browser 
   const calls: string[] = [];
   try {
     const pages = [
-      truth("resume", "s2-resume"),
-      truth("resume", "s2-resume"),
       truth("profile", "s2-profile"),
       truth("profile", "s2-profile"),
+      truth("resume", "s2-resume"),
+      truth("resume", "s2-resume"),
       truth("questionnaire", "s2-questionnaire"),
       truth("questionnaire", "s2-questionnaire"),
       truth("pre_review", "s2-review"),

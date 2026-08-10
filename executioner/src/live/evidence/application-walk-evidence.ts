@@ -1,9 +1,11 @@
 import type {
   ApplicationLaneAcceptance,
 } from "../../ats/workday/application/lane-composition.ts";
-import type {
-  ApplicationCheckpoint,
-  ApplicationPageCheck,
+import {
+  applicationCheckpoints,
+  applicationPages,
+  type ApplicationCheckpoint,
+  type ApplicationPageCheck,
 } from "../../ats/workday/application/page-walk-contract.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
@@ -83,17 +85,13 @@ export function admitApplicationWalkAcceptance(
 }
 
 function validPageChecks(values: readonly ApplicationPageCheck[]): boolean {
-  const pages = ["resume", "profile", "questionnaire"] as const;
-  const checkpoints = [
-    "resume_verified", "profile_verified", "questionnaire_verified",
-  ] as const;
   return values.every((value, index) =>
     exactKeys(value, [
       "page", "checkpoint", "independentlyVerified", "requiredFields",
       "verifiedFields", "duplicateRows",
     ]) &&
-    value.page === pages[index] &&
-    value.checkpoint === checkpoints[index] &&
+    value.page === applicationPages[index] &&
+    value.checkpoint === applicationCheckpoints[index] &&
     value.independentlyVerified === true &&
     Number.isSafeInteger(value.requiredFields) && value.requiredFields >= 0 &&
     value.verifiedFields === value.requiredFields &&
@@ -104,11 +102,8 @@ function validPageChecks(values: readonly ApplicationPageCheck[]): boolean {
 function validLaneAcceptances(
   values: readonly ApplicationLaneAcceptance[],
 ): boolean {
-  const checkpoints = [
-    "resume_verified", "profile_verified", "questionnaire_verified",
-  ] as const;
   return values.every((value, index) =>
-    value.checkpoint === checkpoints[index] &&
+    value.checkpoint === applicationCheckpoints[index] &&
     (value.checkpoint === "resume_verified"
       ? validResume(value)
       : value.checkpoint === "profile_verified"
@@ -214,13 +209,9 @@ function validQuestionnaire(
 }
 
 function checkpointCount(checkpoint: ApplicationCheckpoint): number | undefined {
-  return checkpoint === "resume_verified"
-    ? 1
-    : checkpoint === "profile_verified"
-      ? 2
-      : checkpoint === "questionnaire_verified" || checkpoint === "pre_review"
-        ? 3
-        : undefined;
+  if (checkpoint === "pre_review") return applicationCheckpoints.length;
+  const index = applicationCheckpoints.indexOf(checkpoint);
+  return index < 0 ? undefined : index + 1;
 }
 
 function exactKeys(value: object, expected: readonly string[]): boolean {

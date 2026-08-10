@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { deflateSync } from "node:zlib";
 
+import { applicationPages } from "../../../src/ats/workday/application/page-walk-contract.ts";
 import {
   createStage2ExternalMonitorRuntime,
   currentProcessStartedAt,
@@ -17,6 +18,7 @@ import {
   readStage2ReviewMonitorChain,
   writeStage2ExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
+import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
 
 const binding = {
   journeyId: "journey_monitor_runtime_01",
@@ -37,6 +39,10 @@ const authMoments = [
   ["application_ready", "after_readback"],
   ["application_ready", "state_observed"],
 ] as const;
+
+test("application monitor order matches the page-walk contract", () => {
+  assert.deepEqual(applicationMonitorPages, applicationPages);
+});
 
 test("external monitor blocks each auth effect until the exact independent ACK", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-"));
@@ -692,16 +698,16 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
 test("application monitor retains the exact mutation, readback, navigation, transition, and Review sequence", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-application-"));
   const moments = [
-    ["resume", "before_mutation", "operation_resume_mutation_0001", 1],
-    ["resume", "after_readback", "operation_resume_mutation_0001", 1],
-    ["resume", "before_navigation", "operation_resume_reload_000001", 1],
-    ["resume", "transition", "operation_resume_reload_000001", 1],
-    ["resume", "before_navigation", "operation_resume_navigation_01", 1],
-    ["profile", "transition", "operation_resume_navigation_01", 1],
     ["profile", "before_mutation", "operation_profile_mutation_001", 1],
     ["profile", "after_readback", "operation_profile_mutation_001", 1],
+    ["profile", "before_navigation", "operation_profile_reload_00001", 1],
+    ["profile", "transition", "operation_profile_reload_00001", 1],
     ["profile", "before_navigation", "operation_profile_navigation_1", 1],
-    ["questionnaire", "transition", "operation_profile_navigation_1", 1],
+    ["resume", "transition", "operation_profile_navigation_1", 1],
+    ["resume", "before_mutation", "operation_resume_mutation_0001", 1],
+    ["resume", "after_readback", "operation_resume_mutation_0001", 1],
+    ["resume", "before_navigation", "operation_resume_navigation_01", 1],
+    ["questionnaire", "transition", "operation_resume_navigation_01", 1],
     ["questionnaire", "before_mutation", "operation_question_mutation_01", 1],
     ["questionnaire", "after_readback", "operation_question_mutation_01", 1],
     ["questionnaire", "before_navigation", "operation_question_navigation1", 1],
@@ -758,6 +764,33 @@ test("application monitor retains the exact mutation, readback, navigation, tran
     for (const file of read.files.filter((value) => value.endsWith(".ack.json"))) {
       assert.equal(JSON.parse(readFileSync(join(root, file), "utf8")).submitActivated, false);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("application monitor rejects the legacy resume-first order", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-old-order-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      waitForAcknowledgement: async () => undefined,
+    });
+    await assert.rejects(
+      () => runtime.application(
+        fixturePage(),
+        "resume",
+        "before_mutation",
+        taxonomy(),
+        { operationId: "operation_resume_mutation_legacy", attempt: 1 },
+        new AbortController().signal,
+      ),
+      /external monitor runtime denied/u,
+    );
+    runtime.close();
+    assert.equal(existsSync(join(root, "monitor")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

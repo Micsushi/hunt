@@ -347,8 +347,8 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     assert.equal(walked.ok, true, JSON.stringify(walked));
     assert.equal(walked.ok && walked.value.checkpoint, "pre_review");
     assert.deepEqual(runtime.laneAcceptances.snapshot("pre_review").map(({ checkpoint }) => checkpoint), [
-      "resume_verified",
       "profile_verified",
+      "resume_verified",
       "questionnaire_verified",
     ]);
     const page = context.pages()[0];
@@ -900,10 +900,10 @@ test("Review expected-field grammar matches every accepted field identifier shap
 });
 
 for (const scenario of [
-  { name: "Resume matched", stored: "resume", observed: "resume", checks: 1 },
-  { name: "Resume advanced to Profile", stored: "resume", observed: "profile", checks: 1 },
-  { name: "Profile matched", stored: "profile", observed: "profile", checks: 2 },
-  { name: "Profile advanced to Questionnaire", stored: "profile", observed: "questionnaire", checks: 2 },
+  { name: "Profile matched", stored: "profile", observed: "profile", checks: 1 },
+  { name: "Profile advanced to Resume", stored: "profile", observed: "resume", checks: 1 },
+  { name: "Resume matched", stored: "resume", observed: "resume", checks: 2 },
+  { name: "Resume advanced to Questionnaire", stored: "resume", observed: "questionnaire", checks: 2 },
   { name: "Questionnaire matched", stored: "questionnaire", observed: "questionnaire", checks: 3 },
   { name: "Questionnaire advanced to pre-Review", stored: "questionnaire", observed: "pre_review", checks: 3 },
   { name: "pre-Review matched", stored: "pre_review", observed: "pre_review", checks: 3 },
@@ -951,7 +951,7 @@ for (const scenario of [
         assert.equal(cursor.pageChecks.length, scenario.checks);
         assert.deepEqual(
           cursor.pageChecks.map(({ page }) => page),
-          ["resume", "profile", "questionnaire"].slice(0, scenario.checks),
+          ["profile", "resume", "questionnaire"].slice(0, scenario.checks),
         );
         assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
       }
@@ -1222,7 +1222,7 @@ const approvedFixtureTargetUrl =
   "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345";
 
 function validRecoveryArtifact(
-  page: "resume" | "profile" | "questionnaire" | "pre_review" = "resume",
+  page: "resume" | "profile" | "questionnaire" | "pre_review" = "profile",
   checkCount = 1,
 ) {
   const target = {
@@ -1256,7 +1256,7 @@ function validRecoveryArtifact(
       verification: "verified",
       terminal: null,
     },
-    pageChecks: ["resume", "profile", "questionnaire"].slice(0, checkCount).map((checked) => ({
+    pageChecks: ["profile", "resume", "questionnaire"].slice(0, checkCount).map((checked) => ({
       page: checked,
       checkpoint: `${checked}_verified`,
       independentlyVerified: true,
@@ -1531,8 +1531,8 @@ function resumeArtifact() {
 
 function fixtureDocument(): string {
   return `<!doctype html>
-  <html data-hunt-page-id="page-resume" data-hunt-submit-activated="false">
-    <body data-hunt-application-page="resume">
+  <html data-hunt-page-id="page-profile" data-hunt-submit-activated="false">
+    <body data-hunt-application-page="profile">
       <script>
         window.submitActivations = 0;
         const render = (kind) => {
@@ -1556,9 +1556,9 @@ function fixtureDocument(): string {
             document.querySelector('#final-submit').addEventListener('click', () => { window.submitActivations += 1; document.documentElement.setAttribute('data-hunt-submit-activated', 'true'); });
           }
           const next = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Next');
-          next?.addEventListener('click', () => render(kind === 'resume' ? 'profile' : kind === 'profile' ? 'questionnaire' : 'pre_review'));
+          next?.addEventListener('click', () => render(kind === 'profile' ? 'resume' : kind === 'resume' ? 'questionnaire' : 'pre_review'));
         };
-        render('resume');
+        render('profile');
       </script>
     </body>
   </html>`;
