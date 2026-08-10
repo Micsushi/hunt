@@ -393,6 +393,7 @@ export function validateStage2MonitorPng(bytes: Buffer): void {
   let offset = 8;
   let width = 0;
   let height = 0;
+  let channels = 0;
   let sawHeader = false;
   let sawImage = false;
   let sawEnd = false;
@@ -413,8 +414,10 @@ export function validateStage2MonitorPng(bytes: Buffer): void {
       height = data.readUInt32BE(4);
       if (
         width < 320 || width > 8192 || height < 200 || height > 8192 ||
-        data[8] !== 8 || data[9] !== 6 || data[10] !== 0 || data[11] !== 0 || data[12] !== 0
+        data[8] !== 8 || data[9] !== 2 && data[9] !== 6 ||
+        data[10] !== 0 || data[11] !== 0 || data[12] !== 0
       ) denied();
+      channels = data[9] === 2 ? 3 : 4;
       sawHeader = true;
     } else if (type === "IDAT") {
       if (!sawHeader || sawEnd || length < 1) denied();
@@ -431,11 +434,11 @@ export function validateStage2MonitorPng(bytes: Buffer): void {
   if (!sawHeader || !sawImage || !sawEnd || offset !== bytes.byteLength) denied();
   let inflated: Buffer | undefined;
   try {
-    const expectedBytes = (width * 4 + 1) * height;
+    const expectedBytes = (width * channels + 1) * height;
     if (expectedBytes > 64 * 1024 * 1024) denied();
     inflated = inflateSync(Buffer.concat(compressed), { maxOutputLength: expectedBytes });
     if (inflated.byteLength !== expectedBytes) denied();
-    const rowBytes = width * 4 + 1;
+    const rowBytes = width * channels + 1;
     for (let row = 0; row < height; row += 1) {
       const filter = inflated[row * rowBytes];
       if (filter === undefined || filter > 4) denied();

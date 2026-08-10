@@ -246,6 +246,57 @@ test("external monitor trace observer failure cannot change capture behavior", a
   }
 });
 
+test("external monitor accepts the standard RGB PNG emitted by Playwright", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-rgb-png-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await runtime.auth(fixturePage(undefined, 2), "account_entry", "before_mutation", taxonomy(), {
+      operationId: "operation_rgb_png_capture_01",
+      attempt: 1,
+    }, new AbortController().signal);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor rejects otherwise valid unsupported PNG color types", async () => {
+  for (const colorType of [0, 3, 4] as const) {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-external-monitor-png-type-${colorType}-`));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        waitForAcknowledgement: async () => assert.fail("unsupported PNG reached ACK"),
+      });
+      await assert.rejects(
+        () => runtime.auth(fixturePage(undefined, colorType), "account_entry", "before_mutation", taxonomy(), {
+          operationId: `operation_unsupported_png_${colorType}`,
+          attempt: 1,
+        }, new AbortController().signal),
+        /review monitor chain denied/u,
+      );
+      assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("external monitor accepts only the reviewed structure for the observed page", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-structure-"));
   try {
@@ -793,6 +844,7 @@ function processInstanceSha256() {
 
 function fixturePage(
   url = `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}/apply/applyManually`,
+  colorType: PngColorType = 6,
 ) {
   return {
     screenshotCalls: 0,
@@ -800,7 +852,7 @@ function fixturePage(
     urlCalls: 0,
     async screenshot() {
       this.screenshotCalls += 1;
-      return png(320, 200);
+      return png(320, 200, colorType);
     },
     async title() {
       this.titleCalls += 1;
@@ -822,15 +874,20 @@ function ordinalClock() {
   return () => `2026-08-10T12:00:00.${String(++millisecond * 2 - 1).padStart(3, "0")}Z`;
 }
 
-function png(width: number, height: number): Buffer {
-  const scanlines = Buffer.alloc((width * 4 + 1) * height, 0xff);
-  for (let row = 0; row < height; row += 1) scanlines[row * (width * 4 + 1)] = 0;
-  return Buffer.concat([
+type PngColorType = 0 | 2 | 3 | 4 | 6;
+
+function png(width: number, height: number, colorType: PngColorType = 6): Buffer {
+  const channels = colorType === 0 || colorType === 3 ? 1 : colorType === 4 ? 2 : colorType === 2 ? 3 : 4;
+  const scanlines = Buffer.alloc((width * channels + 1) * height, colorType === 3 ? 0 : 0xff);
+  for (let row = 0; row < height; row += 1) scanlines[row * (width * channels + 1)] = 0;
+  const chunks = [
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", Buffer.concat([u32(width), u32(height), Buffer.from([8, 6, 0, 0, 0])])),
+    chunk("IHDR", Buffer.concat([u32(width), u32(height), Buffer.from([8, colorType, 0, 0, 0])])),
+    ...(colorType === 3 ? [chunk("PLTE", Buffer.from([0, 0, 0]))] : []),
     chunk("IDAT", deflateSync(scanlines)),
     chunk("IEND", Buffer.alloc(0)),
-  ]);
+  ];
+  return Buffer.concat(chunks);
 }
 
 function chunk(type: string, data: Buffer): Buffer {
