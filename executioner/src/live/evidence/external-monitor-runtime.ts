@@ -97,6 +97,7 @@ export interface Stage2ExternalMonitorRuntimeOptions {
   readonly now?: () => string;
   readonly acknowledgementTimeoutMs?: number;
   readonly acknowledgementPollMs?: number;
+  readonly trace?: (event: string) => void;
   readonly waitForAcknowledgement?: (
     request: Stage2ExternalMonitorRequestBinding,
   ) => Promise<void>;
@@ -196,6 +197,7 @@ export class Stage2ExternalMonitorRuntime {
         !this.#legalMoment(chain, pageName, moment, event)) denied();
     this.#active = true;
     try {
+      emitMonitorTrace(this.#options.trace, "external_monitor_capture_started");
       const root = this.#chainRoot(chain);
       const prefix = `${String(ordinal).padStart(4, "0")}-${pageName}-${moment}`;
       const screenshotFile = `${prefix}.png`;
@@ -203,14 +205,19 @@ export class Stage2ExternalMonitorRuntime {
       const requestFile = `${prefix}.request.json`;
       const ackFile = `${prefix}.ack.json`;
       const urlBefore = await page.url();
+      emitMonitorTrace(this.#options.trace, "external_monitor_url_before_read");
       const screenshot = await page.screenshot({ type: "png" });
       validateStage2MonitorPng(screenshot);
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_captured");
       const title = boundedTitle(await page.title());
+      emitMonitorTrace(this.#options.trace, "external_monitor_title_captured");
       const urlAfter = await page.url();
+      emitMonitorTrace(this.#options.trace, "external_monitor_url_after_read");
       const capturedIdentityDigests = identityDigests(
         observedIdentity(urlBefore, urlAfter, this.#options),
         title,
       );
+      emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified");
       writeBytes(join(root, screenshotFile), screenshot);
       const taxonomy = exactTaxonomy({
         schemaVersion: 1,
@@ -267,6 +274,7 @@ export class Stage2ExternalMonitorRuntime {
         attempt: event.attempt,
         sha256: digest(requestBytes),
       });
+      emitMonitorTrace(this.#options.trace, "external_monitor_evidence_published");
       if (this.#options.waitForAcknowledgement !== undefined) {
         await this.#options.waitForAcknowledgement(binding);
       } else {
@@ -286,6 +294,7 @@ export class Stage2ExternalMonitorRuntime {
         this.#options.processOwnerStartedAt,
       )) denied();
       const ackSha256 = validateAck(root, ackFile, request, binding.sha256);
+      emitMonitorTrace(this.#options.trace, "external_monitor_acknowledged");
       if (chain === "auth") {
         this.#authOrdinal = ordinal;
         this.#previousAuthAck = ackSha256;
@@ -295,6 +304,7 @@ export class Stage2ExternalMonitorRuntime {
       }
       this.#commitMoment(chain, pageName, moment, event);
     } catch (error) {
+      emitMonitorTrace(this.#options.trace, "external_monitor_capture_failed");
       this.close();
       throw error;
     } finally {
@@ -627,10 +637,18 @@ function validateOptions(options: Stage2ExternalMonitorRuntimeOptions): Stage2Ex
       !canonicalTimestamp(options.processIssuedAt) ||
       !Number.isSafeInteger(options.processOwnerPid) || options.processOwnerPid < 1 ||
       !canonicalTimestamp(options.processOwnerStartedAt) ||
+      options.trace !== undefined && typeof options.trace !== "function" ||
       !/^[a-z0-9.-]{4,253}$/u.test(options.host) ||
       !/^[a-z0-9-]{2,64}$/u.test(options.tenant) ||
       !/^[A-Za-z0-9-]{2,64}$/u.test(options.posting)) denied();
   return Object.freeze({ ...options });
+}
+
+function emitMonitorTrace(
+  trace: ((event: string) => void) | undefined,
+  event: string,
+): void {
+  try { trace?.(event); } catch { /* diagnostics never change monitor behavior */ }
 }
 
 function validEvent(value: Stage2MonitorLifecycleEvent): boolean {

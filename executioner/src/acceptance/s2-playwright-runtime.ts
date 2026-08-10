@@ -167,8 +167,11 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         accountProofScopeFor(request),
       );
       const acceptances = createApplicationLaneAcceptanceCollector();
+      const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+        : undefined;
       const externalMonitor = options.externalMonitor?.(request) ??
-        (options.browser === undefined ? productionExternalMonitor(request) : undefined);
+        (options.browser === undefined ? productionExternalMonitor(request, valueFreeTrace) : undefined);
       const applicationRuntime: OwnedWorkdayApplicationRuntimeOptions = Object.freeze({
         request,
         acceptances,
@@ -180,9 +183,6 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         now,
       });
       let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
-      const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
-        : undefined;
       const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
         ? createOperatorMonitorInspectionHold({
           runtimeRoot: request.owner.roots.runtime.path,
@@ -727,6 +727,7 @@ function forbiddenCorpus(
 
 function productionExternalMonitor(
   request: Stage2ApplicationWalkRuntimeBindingRequest,
+  trace?: (event: string) => void,
 ): Stage2ExternalMonitorRuntime {
   const encoded = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
   const issuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;
@@ -753,6 +754,7 @@ function productionExternalMonitor(
       processIssuedAt: issuedAt,
       processOwnerPid: process.pid,
       processOwnerStartedAt: currentProcessStartedAt(),
+      trace,
     });
   } finally {
     nonce.fill(0);

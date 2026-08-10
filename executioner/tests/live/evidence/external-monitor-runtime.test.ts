@@ -140,12 +140,14 @@ test("external monitor derives exact identity from the observed page URL", async
 
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-url-drift-"));
   let reads = 0;
+  const trace: string[] = [];
   try {
     const runtime = createStage2ExternalMonitorRuntime({
       ...binding,
       evidenceRoot: root,
       runtimeRoot: root,
       now: ordinalClock(),
+      trace: (event) => trace.push(event),
       waitForAcknowledgement: async () => assert.fail("URL drift reached ACK"),
     });
     const page = fixturePage();
@@ -160,6 +162,83 @@ test("external monitor derives exact identity from the observed page URL", async
       /external monitor runtime denied/u,
     );
     assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+    assert.deepEqual(trace, [
+      "external_monitor_capture_started",
+      "external_monitor_url_before_read",
+      "external_monitor_screenshot_captured",
+      "external_monitor_title_captured",
+      "external_monitor_url_after_read",
+      "external_monitor_capture_failed",
+    ]);
+    assert.equal(trace.includes("external_monitor_identity_verified"), false);
+    assert.equal(trace.includes("external_monitor_evidence_published"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor traces the exact capture boundary without changing behavior", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-trace-"));
+  const trace: string[] = [];
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      trace: (event) => trace.push(event),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
+      operationId: "operation_capture_trace_0001",
+      attempt: 1,
+    }, new AbortController().signal);
+    assert.deepEqual(trace, [
+      "external_monitor_capture_started",
+      "external_monitor_url_before_read",
+      "external_monitor_screenshot_captured",
+      "external_monitor_title_captured",
+      "external_monitor_url_after_read",
+      "external_monitor_identity_verified",
+      "external_monitor_evidence_published",
+      "external_monitor_acknowledged",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor trace observer failure cannot change capture behavior", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-trace-throw-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      trace: () => { throw new Error("observer failure"); },
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
+      operationId: "operation_capture_trace_throw1",
+      attempt: 1,
+    }, new AbortController().signal);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
