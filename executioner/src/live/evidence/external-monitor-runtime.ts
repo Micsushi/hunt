@@ -207,6 +207,7 @@ export class Stage2ExternalMonitorRuntime {
       const urlBefore = await page.url();
       emitMonitorTrace(this.#options.trace, "external_monitor_url_before_read");
       const screenshot = await page.screenshot({ type: "png" });
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_received");
       validateStage2MonitorPng(screenshot);
       emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_captured");
       const title = boundedTitle(await page.title());

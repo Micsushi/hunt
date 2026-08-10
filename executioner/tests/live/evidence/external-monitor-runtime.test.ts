@@ -165,6 +165,7 @@ test("external monitor derives exact identity from the observed page URL", async
     assert.deepEqual(trace, [
       "external_monitor_capture_started",
       "external_monitor_url_before_read",
+      "external_monitor_screenshot_received",
       "external_monitor_screenshot_captured",
       "external_monitor_title_captured",
       "external_monitor_url_after_read",
@@ -204,6 +205,7 @@ test("external monitor traces the exact capture boundary without changing behavi
     assert.deepEqual(trace, [
       "external_monitor_capture_started",
       "external_monitor_url_before_read",
+      "external_monitor_screenshot_received",
       "external_monitor_screenshot_captured",
       "external_monitor_title_captured",
       "external_monitor_url_after_read",
@@ -345,6 +347,39 @@ test("external monitor rechecks exact liveness after a pending independent ACK",
   }
 });
 
+test("external monitor distinguishes a screenshot call failure from PNG rejection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-screenshot-failure-"));
+  const trace: string[] = [];
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      trace: (event) => trace.push(event),
+      waitForAcknowledgement: async () => assert.fail("screenshot failure reached ACK"),
+    });
+    await assert.rejects(
+      () => runtime.auth({
+        async url() { return `https://${binding.host}/en-US/Careers/job/Business-Manager_${binding.posting}`; },
+        async screenshot(): Promise<Buffer> { throw new Error("screenshot failed"); },
+        async title() { return assert.fail("screenshot failure reached title"); },
+      }, "account_entry", "before_mutation", taxonomy(), {
+        operationId: "operation_screenshot_failure_01",
+        attempt: 1,
+      }, new AbortController().signal),
+      /screenshot failed/u,
+    );
+    assert.deepEqual(trace, [
+      "external_monitor_capture_started",
+      "external_monitor_url_before_read",
+      "external_monitor_capture_failed",
+    ]);
+    assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("external monitor denies crossed live roots, illegal page graphs, and malformed PNGs", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-graph-"));
   const crossed = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-crossed-"));
@@ -411,11 +446,13 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
     }
 
     const malformedRoot = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-png-"));
+    const malformedTrace: string[] = [];
     try {
       const malformed = createStage2ExternalMonitorRuntime({
         ...binding,
         evidenceRoot: malformedRoot,
         runtimeRoot: malformedRoot,
+        trace: (event) => malformedTrace.push(event),
         waitForAcknowledgement: async () => undefined,
       });
       await assert.rejects(
@@ -428,6 +465,12 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
         }, new AbortController().signal),
         /review monitor chain denied/u,
       );
+      assert.deepEqual(malformedTrace, [
+        "external_monitor_capture_started",
+        "external_monitor_url_before_read",
+        "external_monitor_screenshot_received",
+        "external_monitor_capture_failed",
+      ]);
     } finally {
       rmSync(malformedRoot, { recursive: true, force: true });
     }
