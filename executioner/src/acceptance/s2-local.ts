@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
   lstatSync,
   readFileSync,
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
 import { inspectCleanSourceRevision } from "../composition/private/s2-clean-source-revision.ts";
 import {
@@ -92,11 +92,20 @@ export function createLocalStage2AcceptancePorts(
     source: { capture: async () => sourceCapture() },
     config: { capture: async (path) => configCapture(path) },
     quality: {
-      run: (signal) => command.run(
-        process.platform === "win32" ? "npm.cmd" : "npm",
-        ["run", "quality"],
-        { cwd, signal },
-      ),
+      run: (signal) => {
+        if (process.platform !== "win32") {
+          return command.run("npm", ["run", "quality"], { cwd, signal });
+        }
+        try {
+          return command.run(
+            process.execPath,
+            [admittedNpmCliPath(), "run", "quality"],
+            { cwd, signal },
+          );
+        } catch {
+          return Promise.resolve(1);
+        }
+      },
     },
     journey: {
       run: (args, signal) => live.run(realArguments(args), signal),
@@ -124,19 +133,26 @@ function realArguments(args: Stage2RealAcceptanceArgs): readonly string[] {
   ]);
 }
 
-class LocalStage2Command implements Stage2CommandPort {
+export class LocalStage2Command implements Stage2CommandPort {
   run(
     executable: string,
     args: readonly string[],
     options: { readonly cwd: string; readonly signal?: AbortSignal },
   ): Promise<number> {
+    if (options.signal?.aborted) return Promise.resolve(130);
     return new Promise((resolveResult) => {
-      const child = spawn(executable, [...args], {
-        cwd: options.cwd,
-        shell: false,
-        windowsHide: true,
-        stdio: "inherit",
-      });
+      let child: ChildProcess;
+      try {
+        child = spawn(executable, [...args], {
+          cwd: options.cwd,
+          shell: false,
+          windowsHide: true,
+          stdio: "inherit",
+        });
+      } catch {
+        resolveResult(1);
+        return;
+      }
       let cancelled = false;
       const cancel = () => {
         cancelled = true;
@@ -356,6 +372,27 @@ function admittedFile(value: string, maximumBytes: number, message: string): str
   } catch {
     return denied(message);
   }
+}
+
+export function admittedNpmCliPath(
+  value: string | undefined = process.env.npm_execpath,
+  nodeExecutable: string = process.execPath,
+): string {
+  if (
+    value === undefined || value.startsWith("\\\\") ||
+    !isAbsolute(nodeExecutable) || normalize(nodeExecutable) !== nodeExecutable ||
+    nodeExecutable.startsWith("\\\\") || basename(value).toLowerCase() !== "npm-cli.js"
+  ) {
+    return denied("npm executable denied");
+  }
+  const expected = join(dirname(nodeExecutable), "node_modules", "npm", "bin", "npm-cli.js");
+  if (comparable(value) !== comparable(expected)) return denied("npm executable denied");
+  const admitted = admittedFile(value, 1024 * 1024, "npm executable denied");
+  if (
+    comparable(admitted) !== comparable(expected) ||
+    statSync(admitted).nlink !== 1
+  ) return denied("npm executable denied");
+  return admitted;
 }
 
 function object(value: unknown, message: string): Record<string, unknown> {
