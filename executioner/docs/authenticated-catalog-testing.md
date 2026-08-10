@@ -5,15 +5,17 @@ without changing the source catalog. It identifies an account realm by the
 lowercase Workday hostname plus the first non-locale path segment. A prior URL
 under the same realm counts as previously tested even when the posting differs.
 
-The current catalog preserves the same 100 companies but uses 100 replacement
-posting identities discovered from each company's public Workday feed. The
-refresh run must verify HTTP 200, exact Workday target identity, and the visible
-job title before its candidate CSV can replace the source catalog. Those public
-checks do not prove that the application entry point works, so refreshed rows
-remain `unverified_candidate` in the source CSV. Authenticated results are
-stored in their immutable external cohort rather than rewriting the public
-catalog's status fields. The first ten refreshed rows have completed that
-stronger check; the remaining ninety have not.
+The current catalog contains 100 unique companies and one current posting per
+company. After the first full authenticated pass, rows 43, 76, and 82 were
+replaced with different companies because the predecessor realms were blocked
+by external account or provider state. The predecessor attempts remain in
+immutable external evidence for later special-case investigation.
+
+Every replacement must verify HTTP 200, exact Workday target identity, and the
+visible job title before its candidate row can replace the source catalog.
+Those public checks do not prove that the application entry point works, so
+catalog rows remain `unverified_candidate`. Authenticated outcomes stay in
+their immutable external cohorts rather than rewriting the public catalog.
 
 ## Refresh the public catalog
 

@@ -15,7 +15,7 @@ import {
 const root = resolve(import.meta.dirname, "../../../..");
 const historyRef = "16c48bd1470addc9d9480d785ae84e412edd55ef:wd_test_jobs.csv";
 
-test("current catalog selects exactly the 36 account realms absent from the historical 64", () => {
+test("current catalog selects exactly the 37 account realms absent from the historical 63", () => {
   const catalogCsv = readFileSync(resolve(root, "wd_test_jobs.csv"), "utf8");
   const historyCsv = execFileSync("git", ["show", historyRef], {
     cwd: root,
@@ -31,18 +31,20 @@ test("current catalog selects exactly the 36 account realms absent from the hist
   });
 
   assert.equal(plan.catalogCount, 100);
-  assert.equal(plan.historicalRealmCount, 64);
-  assert.equal(plan.freshCandidateCount, 36);
-  assert.deepEqual(plan.jobs.map((job) => job.catalogRow),
-    Array.from({ length: 36 }, (_, index) => index + 65));
+  assert.equal(plan.historicalRealmCount, 63);
+  assert.equal(plan.freshCandidateCount, 37);
+  assert.deepEqual(plan.jobs.map((job) => job.catalogRow), [
+    43,
+    ...Array.from({ length: 36 }, (_, index) => index + 65),
+  ]);
   assert.deepEqual(
     plan.jobs.reduce<number[]>((counts, job) => {
       counts[job.shard - 1] = (counts[job.shard - 1] ?? 0) + 1;
       return counts;
     }, []),
-    [8, 7, 7, 7, 7],
+    [8, 8, 7, 7, 7],
   );
-  assert.equal(plan.jobs[0]?.accountRealm, "cnx.wd1.myworkdayjobs.com|external_global");
+  assert.equal(plan.jobs[0]?.accountRealm, "ghr.wd1.myworkdayjobs.com|lateral-us");
   assert.equal(plan.jobs[0]?.targetUrl.includes("?"), false);
 });
 

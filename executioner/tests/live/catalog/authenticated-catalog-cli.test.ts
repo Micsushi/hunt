@@ -50,9 +50,9 @@ test("prepare CLI accepts either a bounded history file or a pinned git object",
       "--shards", "5",
     ], { now: () => new Date("2026-08-05T18:00:01.000Z"), randomHex: () => "2".repeat(32) });
 
-    assert.equal(fileRun.jobs, 36);
-    assert.equal(gitRun.jobs, 36);
-    assert.equal(fileRun.firstCatalogRow, 65);
+    assert.equal(fileRun.jobs, 37);
+    assert.equal(gitRun.jobs, 37);
+    assert.equal(fileRun.firstCatalogRow, 43);
     assert.equal(fileRun.lastCatalogRow, 100);
     assert.equal(fileRun.shards, 5);
     assert.throws(() => prepareAuthenticatedCatalogFromArgs([
