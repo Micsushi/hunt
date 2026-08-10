@@ -603,9 +603,15 @@ function observedIdentity(
     const host = parsed.hostname.toLowerCase();
     const tenant = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.wd\d{1,3}\.myworkdayjobs\.com$/u
       .exec(host)?.[1];
-    const decodedPath = decodeURIComponent(parsed.pathname);
-    const postings = [...decodedPath.matchAll(/_([A-Za-z0-9-]{2,64})(?=\/|$)/gu)]
-      .map((match) => match[1]);
+    const rawSegments = parsed.pathname.split("/").filter(Boolean);
+    const jobBoundary = rawSegments.lastIndexOf("job");
+    const postings = (jobBoundary < 0 ? [] : rawSegments.slice(jobBoundary + 1))
+      .flatMap((rawSegment) => {
+        const segment = decodeURIComponent(rawSegment);
+        if (/[\\/]/u.test(segment)) denied();
+        const match = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
+        return match === null ? [] : [match[1]!];
+      });
     if (
       parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
       parsed.port !== "" || tenant === undefined || postings.length !== 1 ||

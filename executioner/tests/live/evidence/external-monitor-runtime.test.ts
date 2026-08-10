@@ -178,6 +178,83 @@ test("external monitor derives exact identity from the observed page URL", async
   }
 });
 
+test("external monitor ignores site underscores before the Workday job route", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-site-underscore-"));
+  const target = {
+    host: "manulife.wd3.myworkdayjobs.com",
+    tenant: "manulife",
+    posting: "JR26071419",
+    title: "Back-End Software Engineer",
+    url: "https://manulife.wd3.myworkdayjobs.com/MFCJH_Jobs/job/Toronto-Ontario/Back-End-Software-Engineer_JR26071419",
+  } as const;
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      host: target.host,
+      tenant: target.tenant,
+      posting: target.posting,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: {
+          hostSha256: digest(Buffer.from(target.host)),
+          tenantSha256: digest(Buffer.from(target.tenant)),
+          postingSha256: digest(Buffer.from(target.posting)),
+          titleSha256: digest(Buffer.from(target.title)),
+        },
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    const page = fixturePage(target.url);
+    page.title = async () => target.title;
+    await runtime.auth(page, "job_posting", "before_navigation", taxonomy(), {
+      operationId: "operation_site_underscore_0001",
+      attempt: 1,
+    }, new AbortController().signal);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor rejects fabricated, missing, duplicate, and unsafe job routes", async () => {
+  const validPath = `/Careers/job/Location/Business-Manager_${binding.posting}`;
+  const cases = [
+    `https://${binding.host}/Careers/Business-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location/Business-Manager`,
+    `https://${binding.host}${validPath}/Copy_${binding.posting}`,
+    `http://${binding.host}${validPath}`,
+    `https://user@${binding.host}${validPath}`,
+    `https://${binding.host}:444${validPath}`,
+    `https://${binding.host}/Careers%2Fjob%2FBusiness-Manager_${binding.posting}`,
+  ] as const;
+  for (const [index, url] of cases.entries()) {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-external-monitor-route-${index}-`));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        waitForAcknowledgement: async () => assert.fail("unsafe route reached ACK"),
+      });
+      await assert.rejects(
+        () => runtime.auth(fixturePage(url), "job_posting", "before_navigation", taxonomy(), {
+          operationId: `operation_unsafe_job_route_${index}`,
+          attempt: 1,
+        }, new AbortController().signal),
+      );
+      assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("external monitor traces the exact capture boundary without changing behavior", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-trace-"));
   const trace: string[] = [];
