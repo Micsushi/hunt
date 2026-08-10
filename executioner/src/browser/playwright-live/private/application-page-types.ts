@@ -25,7 +25,8 @@ export type OwnedApplicationOperation =
   | { readonly kind: "inspect_recovery" }
   | { readonly kind: "reload" }
   | { readonly kind: "review_expectations" }
-  | { readonly kind: "capture_review" };
+  | { readonly kind: "capture_review" }
+  | { readonly kind: "monitor_auth_state" };
 
 export interface OwnedApplicationPageCapability {
   [ownedApplicationPageAccess](
@@ -50,6 +51,7 @@ export function applicationOperationEffect(
 ): "read" | "mutation" {
   return operation.kind === "observe" || operation.kind === "inspect_recovery" ||
       operation.kind === "review_expectations" || operation.kind === "capture_review"
+      || operation.kind === "monitor_auth_state"
     ? "read"
     : "mutation";
 }
@@ -62,6 +64,6 @@ export function isOwnedApplicationOperation(
   return new Set([
     "observe", "next", "reconcile_resume", "reconcile_profile",
     "reconcile_questionnaire", "inspect_recovery", "reload", "review_expectations",
-    "capture_review",
+    "capture_review", "monitor_auth_state",
   ]).has(value.kind);
 }

@@ -46,7 +46,7 @@ retains only the T1-T3 safe acceptance projections. The cleanup-gated
 `writeApplicationWalkEvidence`; an acceptance cannot be written until browser
 cleanup passes.
 
-The successful result is shaped for `acceptance.json`: the requested
+The successful result is sealed as `application-walk-acceptance.json`: the requested
 checkpoint, all prior page-check counts reconciled, `submitActivated=false`,
 and `privacyScan=pass`. Failure packets contain only stable enums, counts, retry
 position, and the exact owning classifier/primitive. Extra adapter properties

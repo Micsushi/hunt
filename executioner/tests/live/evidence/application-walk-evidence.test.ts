@@ -19,9 +19,9 @@ test("writes one exact checkpoint packet with all prior independent lane checks"
       acceptance: packet(),
       sensitiveValues: ["Ada", "private@example.invalid"],
     });
-    assert.deepEqual(readdirSync(root), ["acceptance.json"]);
+    assert.deepEqual(readdirSync(root), ["application-walk-acceptance.json"]);
     assert.deepEqual(
-      JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")),
+      JSON.parse(readFileSync(join(root, "application-walk-acceptance.json"), "utf8")),
       packet(),
     );
   } finally {

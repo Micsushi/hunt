@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { generatedOperationId } from "../../../src/contracts/index.ts";
 import type { LiveSessionId } from "../../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
@@ -10,6 +11,53 @@ import type {
   PersistentPage,
 } from "../../../src/browser/playwright-live/private/types.ts";
 import type { SemanticVerificationNavigationAdapter } from "../../../src/browser/playwright-live/private/verification-navigation-types.ts";
+import type { Stage2ExternalMonitorRuntime } from
+  "../../../src/live/evidence/external-monitor-runtime.ts";
+
+test("external monitor ACK blocks verification navigation and binds its actual destination", async () => {
+  let release: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => { entered = resolve; });
+  const records: Parameters<Stage2ExternalMonitorRuntime["auth"]>[] = [];
+  const monitor = {
+    async auth(...args: Parameters<Stage2ExternalMonitorRuntime["auth"]>) {
+      records.push(args);
+      if (args[2] === "before_navigation") {
+        entered?.();
+        await new Promise<void>((resolve) => { release = resolve; });
+      }
+    },
+    async application(..._args: Parameters<Stage2ExternalMonitorRuntime["application"]>) {},
+  };
+  const harness = await openedHarness({
+    externalMonitor: monitor,
+    observation: (check) => ownedMatched(check <= 3
+      ? ["structural_trait_page_account_entry_v1", "structural_trait_account_create_v1"]
+      : ["structural_trait_page_candidate_home_v1"]),
+  });
+  const request = accessRequest(harness.sessionId);
+  const pending = harness.provider.withOwnedVerificationNavigationAccess(
+    request,
+    AbortSignal.any([]),
+    async (access) => {
+      assert.deepEqual(
+        await access.navigateVerificationTarget(validValues(), AbortSignal.any([])),
+        { ok: true, value: { kind: "navigated" } },
+      );
+    },
+  );
+  await waiting;
+  assert.equal(harness.page.gotoCount, harness.gotoCountAfterOpen);
+  release?.();
+  assert.deepEqual(await pending, { ok: true, value: { kind: "navigated" } });
+  assert.equal(harness.page.gotoCount, harness.gotoCountAfterOpen + 1);
+  assert.deepEqual(records.map((args) => [args[1], args[2], args[4]]), [
+    ["account_entry", "before_navigation", { operationId: request.operationId, attempt: 1 }],
+    ["application_ready", "transition", { operationId: request.operationId, attempt: 1 }],
+  ]);
+  assert.equal(records[0]?.[0], harness.page);
+  assert.equal(records[1]?.[0], harness.page);
+});
 
 test("owned verification navigation admits one byte-only Workday target", async () => {
   const harness = await openedHarness();
@@ -354,6 +402,7 @@ function accessRequest(sessionId: LiveSessionId) {
   return {
     schemaVersion: 1 as const,
     journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_verification_nav_01"),
     sessionId,
     target: liveFixtures.target,
     now: "2026-08-01T18:00:00.000Z",
@@ -368,6 +417,7 @@ interface HarnessOptions {
   ) => OwnedTargetObservation | Promise<OwnedTargetObservation>;
   readonly timeoutMs?: number;
   readonly navigation?: SemanticVerificationNavigationAdapter;
+  readonly externalMonitor?: Pick<Stage2ExternalMonitorRuntime, "auth" | "application">;
 }
 
 async function openedHarness(options: HarnessOptions = {}) {
@@ -395,6 +445,7 @@ async function openedHarness(options: HarnessOptions = {}) {
     },
     profiles: new MemoryProfiles(),
     verificationNavigation: options.navigation ?? new PlaywrightVerificationNavigationAdapter(),
+    externalMonitor: options.externalMonitor,
     ids: () => liveFixtures.session.sessionId as LiveSessionId,
     timeoutMs: options.timeoutMs ?? 100,
   });

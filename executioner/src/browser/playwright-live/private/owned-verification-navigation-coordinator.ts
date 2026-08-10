@@ -5,6 +5,7 @@ import type {
   VerificationNavigationResult,
 } from "../../../contracts/live/index.ts";
 import { OwnedVerificationNavigationAccessScope } from "./owned-verification-navigation-access.ts";
+import { authMonitorPhase, authMonitorTaxonomy } from "./owned-account-page-coordinator.ts";
 import { inspectPinnedTarget } from "./owned-page-inspection.ts";
 import { cancelled, failure } from "./port-results.ts";
 import { sameTarget } from "./target-binding.ts";
@@ -19,6 +20,7 @@ import type {
   OwnedVerificationNavigationAccessRequest,
   SemanticVerificationNavigationAdapter,
 } from "./verification-navigation-types.ts";
+import type { ExternalMonitorPort } from "./external-monitor-port.ts";
 import { isStablePostVerificationState } from "./workday-verification-navigation.ts";
 
 interface VerificationOwnershipState {
@@ -34,6 +36,7 @@ interface CoordinatorOptions {
   readonly timeoutMs: number;
   readonly state: () => VerificationOwnershipState;
   readonly invalidate: () => Promise<void>;
+  readonly externalMonitor?: Pick<ExternalMonitorPort, "auth">;
 }
 
 type NavigationPortResult = LivePortResult<
@@ -44,6 +47,8 @@ type NavigationPortResult = LivePortResult<
 export class OwnedVerificationNavigationCoordinator {
   readonly #options: CoordinatorOptions;
   #active = false;
+  readonly #monitorAttempts = new Map<string, number>();
+  #pendingMonitor: { readonly operationId: string; readonly attempt: number } | undefined;
 
   constructor(options: CoordinatorOptions) { this.#options = options; }
 
@@ -76,7 +81,11 @@ export class OwnedVerificationNavigationCoordinator {
       (effectSignal) => this.#observeAfterEffect(
         page, approvedTarget, request, effectSignal,
       ),
+      (effectSignal) => this.#monitorBeforeNavigation(
+        page, initial.value.snapshot, request, effectSignal,
+      ),
       this.#options.invalidate,
+      this.#options.externalMonitor !== undefined,
     );
     try {
       await use(scope.capability);
@@ -87,7 +96,26 @@ export class OwnedVerificationNavigationCoordinator {
       this.#active = false;
     }
     if (scope.terminalError === "operation_cancelled") return cancelled();
-    if (scope.terminalError !== undefined) return failure(scope.terminalError);
+    if (scope.terminalError !== undefined) {
+      if (scope.effectStarted && this.#pendingMonitor !== undefined) {
+        const uncertain = await this.#inspect(
+          page,
+          approvedTarget,
+          request,
+          new AbortController().signal,
+        );
+        if (uncertain.ok && uncertain.value.target.kind === "matched") {
+          await this.#monitorTransition(
+            page,
+            uncertain.value.snapshot,
+            request,
+            new AbortController().signal,
+          );
+        }
+        await this.#options.invalidate();
+      }
+      return failure(scope.terminalError);
+    }
     return scope.used && scope.result !== undefined
       ? { ok: true, value: scope.result }
       : failure("browser_target_invalid");
@@ -144,7 +172,64 @@ export class OwnedVerificationNavigationCoordinator {
       inspected.value.target.kind !== "matched" ||
       !isStablePostVerificationState(inspected.value.snapshot)
     ) return failure("browser_target_invalid");
+    if (!await this.#monitorTransition(page, inspected.value.snapshot, request, signal)) {
+      return failure("browser_effect_uncertain");
+    }
     return { ok: true, value: { kind: "navigated" } };
+  }
+
+  async #monitorBeforeNavigation(
+    page: PersistentPage,
+    snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot,
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    if (this.#options.externalMonitor === undefined) return { ok: true, value: undefined };
+    const phase = authMonitorPhase(snapshot);
+    if (phase === "unknown") return failure("browser_target_invalid");
+    const attempt = (this.#monitorAttempts.get(phase) ?? 0) + 1;
+    try {
+      await this.#options.externalMonitor.auth(
+        page as never,
+        phase,
+        "before_navigation",
+        authMonitorTaxonomy(snapshot),
+        { operationId: request.operationId, attempt },
+        signal,
+      );
+      this.#monitorAttempts.set(phase, attempt);
+      this.#pendingMonitor = Object.freeze({ operationId: request.operationId, attempt });
+      return { ok: true, value: undefined };
+    } catch {
+      return failure("browser_effect_uncertain");
+    }
+  }
+
+  async #monitorTransition(
+    page: PersistentPage,
+    snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot,
+    request: OwnedVerificationNavigationAccessRequest,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (this.#options.externalMonitor === undefined) return true;
+    const phase = authMonitorPhase(snapshot);
+    const pending = this.#pendingMonitor;
+    if (phase === "unknown" || pending === undefined ||
+        pending.operationId !== request.operationId) return false;
+    try {
+      await this.#options.externalMonitor.auth(
+        page as never,
+        phase,
+        "transition",
+        authMonitorTaxonomy(snapshot),
+        { operationId: request.operationId, attempt: pending.attempt },
+        signal,
+      );
+      this.#pendingMonitor = undefined;
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

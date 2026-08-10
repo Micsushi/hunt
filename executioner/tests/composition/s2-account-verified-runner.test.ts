@@ -14,6 +14,7 @@ import {
   createAccountVerifiedBindings,
   createBoundAccountStateObserver,
   createCleanupBoundAccountVerifiedLifecycle,
+  runSessionBoundAccountVerifiedLifecycle,
 } from "../../src/composition/s2-account-verified-runner.ts";
 import { runStage2AccountVerified } from "../../src/live/runner/account-verified.ts";
 
@@ -108,6 +109,64 @@ test("cleanup-bound lifecycle closes before returning success", async () => {
   ]);
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.cleanup, "pass");
+});
+
+test("session-bound lifecycle preserves factual account blocks without owning session cleanup", async () => {
+  const events: string[] = [];
+  const session = browserSession();
+  type SessionBrowser = Parameters<
+    typeof runSessionBoundAccountVerifiedLifecycle
+  >[0]["browser"];
+  const browser: SessionBrowser & {
+    open(): Promise<never>;
+    close(): Promise<never>;
+  } = {
+    async open() {
+      events.push("open");
+      throw new Error("session-bound helper must not open");
+    },
+    async close() {
+      events.push("close");
+      throw new Error("session-bound helper must not close");
+    },
+    async reconcile(request) {
+      assert.equal(request.session, session);
+      assert.equal(request.expectedTarget, session.target);
+      events.push("reconcile");
+      return { ok: true, value: { kind: "matched", session } };
+    },
+    async advanceToAccountEntry(request) {
+      assert.equal(request.sessionId, session.sessionId);
+      assert.equal(request.target, session.target);
+      events.push("advance");
+      return { ok: true, value: { kind: "account_boundary" } };
+    },
+  };
+  const factual = {
+    kind: "blocked" as const,
+    factualOutcome: {
+      source: "account_access" as const,
+      result: { kind: "manual_intervention" as const, reason: "mfa" as const },
+    },
+  };
+
+  const result = await runSessionBoundAccountVerifiedLifecycle({
+    browser,
+    session,
+    journeyId: session.journeyId,
+    expectedTarget: session.target,
+    reconcileOperationId: "operation_reconcile_session1" as OperationId,
+    advanceOperationId: "operation_advance_session123" as OperationId,
+    now,
+    runLifecycle: async (ownedSession) => {
+      assert.equal(ownedSession, session);
+      events.push("lifecycle");
+      return { ok: true, value: factual };
+    },
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, { ok: true, value: factual });
+  assert.deepEqual(events, ["reconcile", "advance", "lifecycle"]);
 });
 
 test("runner writes evidence only after cleanup has closed the browser", async () => {

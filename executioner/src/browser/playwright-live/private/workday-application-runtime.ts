@@ -57,6 +57,8 @@ import { createFieldVerifier } from
   "../../../interaction/verification/field-verifier.ts";
 import { createSafetyGuard } from "../../../safety/guards.ts";
 import type { OwnedApplicationOperation } from "./application-page-types.ts";
+import type { OwnedApplicationPageRequest } from "./application-page-types.ts";
+import type { ExternalMonitorPort } from "./external-monitor-port.ts";
 import type { PersistentPage } from "./types.ts";
 
 const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
@@ -74,6 +76,9 @@ export interface OwnedWorkdayApplicationRuntimeOptions {
   readonly nextOperationId: () => OperationId;
   readonly timeoutMs: number;
   readonly initialReviewExpected: readonly ReviewExpectedField[];
+  readonly externalMonitor?: ExternalMonitorPort;
+  readonly authorizationExpiresAt: string;
+  readonly now: () => string;
 }
 
 /** Fixed browser-owner implementation. Callers supply data, never executable page code. */
@@ -83,13 +88,20 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #acceptances: OwnedWorkdayApplicationRuntimeOptions["acceptances"];
   readonly #nextOperationId: () => OperationId;
   readonly #timeoutMs: number;
+  readonly #externalMonitor: ExternalMonitorPort | undefined;
+  readonly #authorizationExpiresAt: string;
+  readonly #now: () => string;
   readonly #reviewExpected = new Map<string, ReviewExpectedField>();
+  readonly #navigationMonitorAttempts = new Map<string, number>();
 
   constructor(options: OwnedWorkdayApplicationRuntimeOptions) {
     this.#request = options.request;
     this.#acceptances = options.acceptances;
     this.#nextOperationId = options.nextOperationId;
     this.#timeoutMs = options.timeoutMs;
+    this.#externalMonitor = options.externalMonitor;
+    this.#authorizationExpiresAt = options.authorizationExpiresAt;
+    this.#now = options.now;
     for (const value of options.initialReviewExpected) {
       if (!isReviewExpectedField(value) || this.#reviewExpected.has(value.fieldId) ||
           [...this.#reviewExpected.values()].some(({ rowIdentity }) => rowIdentity === value.rowIdentity)) {
@@ -114,6 +126,7 @@ export class OwnedWorkdayApplicationRuntime {
 
   async run(
     ownedPage: PersistentPage,
+    ownedRequest: OwnedApplicationPageRequest,
     operation: OwnedApplicationOperation,
     signal: AbortSignal,
   ): Promise<unknown> {
@@ -125,14 +138,55 @@ export class OwnedWorkdayApplicationRuntime {
     }
     switch (operation.kind) {
       case "observe":
-      case "inspect_recovery":
         return new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal);
-      case "next":
-        return new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).next(
+      case "inspect_recovery": {
+        const observed = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (observed.ok) await this.#monitor(
+          page,
+          monitorPage(observed.value.page),
+          "recovery_observed",
+          ownedRequest.operationId,
+          1,
+          signal,
+        );
+        return observed;
+      }
+      case "next": {
+        const input = operation.input as { readonly from: "resume" | "profile" | "questionnaire" };
+        const destination = monitorPage((operation.input as {
+          readonly expected: "resume" | "profile" | "questionnaire" | "pre_review";
+        }).expected);
+        const attempt = this.#nextNavigationMonitorAttempt(input.from, destination);
+        await this.#monitor(
+          page,
+          input.from,
+          "before_navigation",
+          ownedRequest.operationId,
+          attempt,
+          signal,
+        );
+        this.#assertAuthorized(signal);
+        const advanced = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).next(
           operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0], signal,
         );
+        if (advanced.ok) await this.#monitor(
+          page,
+          destination,
+          "transition",
+          ownedRequest.operationId,
+          attempt,
+          signal,
+        );
+        if (advanced.ok) this.#assertAuthorized(signal);
+        return advanced;
+      }
       case "reconcile_resume": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"resume">["reconcile"]>[0];
+        await this.#monitor(page, "resume", "before_mutation", ownedRequest.operationId, input.attempt, signal);
+        this.#assertAuthorized(signal);
         const resumePage = createPlaywrightWorkdayResumePage(page);
         const result = await createWorkdayResumeUploadHandler({
           driver: createWorkdayResumeUploadDriver(resumePage, { timeoutMs: this.#timeoutMs }),
@@ -142,10 +196,14 @@ export class OwnedWorkdayApplicationRuntime {
         if (!result.ok) throw new TypeError("resume reconciliation denied");
         this.#acceptances.record(result.value);
         this.#recordReviewExpectation("s1-field-resume", "resume_verified", "resume.pdf");
+        await this.#monitor(page, "resume", "after_readback", ownedRequest.operationId, input.attempt, signal);
+        this.#assertAuthorized(signal);
         return verified("resume", "resume_verified", input.pageId);
       }
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
+        await this.#monitor(page, "profile", "before_mutation", ownedRequest.operationId, input.attempt, signal);
+        this.#assertAuthorized(signal);
         const result = await completeWorkdayProfilePage(
           request.ownerSources.profilePlan,
           new PlaywrightWorkdayProfilePage(page, {
@@ -168,35 +226,165 @@ export class OwnedWorkdayApplicationRuntime {
           privacyScan: "pass",
         }));
         this.#recordProfileReviewExpectations(request, result.verifiedFields);
+        await this.#monitor(page, "profile", "after_readback", ownedRequest.operationId, input.attempt, signal);
+        this.#assertAuthorized(signal);
         return verified("profile", "profile_verified", input.pageId);
       }
-      case "reconcile_questionnaire":
-        return this.#reconcileQuestionnaire(
+      case "reconcile_questionnaire": {
+        const input = operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0];
+        await this.#monitor(
           page,
-          operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
+          "questionnaire",
+          "before_mutation",
+          ownedRequest.operationId,
+          input.attempt,
+          signal,
+        );
+        this.#assertAuthorized(signal);
+        const result = await this.#reconcileQuestionnaire(
+          page,
+          input,
           request,
           session,
           signal,
         );
-      case "reload":
+        await this.#monitor(
+          page,
+          "questionnaire",
+          "after_readback",
+          ownedRequest.operationId,
+          input.attempt,
+          signal,
+        );
+        this.#assertAuthorized(signal);
+        return result;
+      }
+      case "reload": {
+        const observed = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (!observed.ok) throw new TypeError("application reload monitor denied");
+        const fromPage = monitorPage(observed.value.page);
+        const attempt = this.#nextNavigationMonitorAttempt(fromPage, fromPage);
+        await this.#monitor(
+          page,
+          fromPage,
+          "before_navigation",
+          ownedRequest.operationId,
+          attempt,
+          signal,
+        );
+        this.#assertAuthorized(signal);
         await page.reload({ waitUntil: "domcontentloaded" });
+        const after = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (!after.ok) throw new TypeError("application reload readback denied");
+        await this.#monitor(
+          page,
+          monitorPage(after.value.page),
+          "transition",
+          ownedRequest.operationId,
+          attempt,
+          signal,
+        );
+        this.#assertAuthorized(signal);
         return undefined;
+      }
       case "review_expectations":
         return Object.freeze([...this.#reviewExpected.values()]);
+      case "monitor_auth_state": {
+        const observed = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (!observed.ok || observed.value.submitActivated || this.#externalMonitor === undefined) {
+          throw new TypeError("account monitor state denied");
+        }
+        await this.#externalMonitor.auth(
+          page,
+          "application_ready",
+          "state_observed",
+          await monitorTaxonomy(page, monitorPage(observed.value.page)),
+          { operationId: ownedRequest.operationId, attempt: 1 },
+          signal,
+        );
+        return undefined;
+      }
       case "capture_review": {
+        this.#assertAuthorized(signal);
         const application = await new PlaywrightWorkdayApplicationPage(
           page,
           { timeoutMs: this.#timeoutMs },
         ).observe(signal);
         if (!application.ok || application.value.page !== "pre_review" ||
             application.value.submitActivated) throw new TypeError("Review page is unavailable");
+        const beforeReview = await captureIndependentReviewFields(page, this.#reviewExpected);
+        const beforeStructure = await captureReviewStructure(page);
+        await this.#monitor(
+          page,
+          "review",
+          "review_readback",
+          ownedRequest.operationId,
+          1,
+          signal,
+        );
+        this.#assertAuthorized(signal);
+        const freshApplication = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (!freshApplication.ok || freshApplication.value.page !== "pre_review" ||
+            freshApplication.value.submitActivated) throw new TypeError("Review page drift denied");
         const review = await captureIndependentReviewFields(page, this.#reviewExpected);
+        const structure = await captureReviewStructure(page);
+        if (JSON.stringify(beforeReview) !== JSON.stringify(review) ||
+            JSON.stringify(beforeStructure) !== JSON.stringify(structure)) {
+          throw new TypeError("Review readback drift denied");
+        }
         return Object.freeze({
-          application: application.value,
-          structure: await captureReviewStructure(page),
+          application: freshApplication.value,
+          structure,
           review,
         });
       }
+    }
+  }
+
+  async #monitor(
+    page: Page,
+    pageName: "resume" | "profile" | "questionnaire" | "review",
+    moment: string,
+    operationId: OperationId,
+    attempt: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (this.#externalMonitor === undefined) return;
+    await this.#externalMonitor.application(
+      page,
+      pageName,
+      moment,
+      await monitorTaxonomy(page, pageName),
+      { operationId, attempt },
+      signal,
+    );
+  }
+
+  #nextNavigationMonitorAttempt(from: string, to: string): number {
+    const key = `${from}->${to}`;
+    const attempt = (this.#navigationMonitorAttempts.get(key) ?? 0) + 1;
+    this.#navigationMonitorAttempts.set(key, attempt);
+    return attempt;
+  }
+
+  #assertAuthorized(signal: AbortSignal): void {
+    const now = this.#now();
+    if (signal.aborted || !/^\d{4}-\d{2}-\d{2}T/u.test(now) ||
+        !Number.isFinite(Date.parse(now)) ||
+        Date.parse(now) >= Date.parse(this.#authorizationExpiresAt)) {
+      throw new TypeError("application authorization expired");
     }
   }
 
@@ -329,6 +517,54 @@ function normalizeReviewValue(value: string): string {
   return value.normalize("NFC").replace(/\s+/gu, " ").trim();
 }
 
+function monitorPage(
+  page: "resume" | "profile" | "questionnaire" | "pre_review",
+): "resume" | "profile" | "questionnaire" | "review" {
+  return page === "pre_review" ? "review" : page;
+}
+
+async function monitorTaxonomy(
+  page: Page,
+  pageName: "resume" | "profile" | "questionnaire" | "review",
+) {
+  const selectors = [
+    ["text", 'input:not([type]), input[type="text"], input[type="email"], input[type="tel"]'],
+    ["textarea", "textarea"],
+    ["select", "select, [role=combobox]"],
+    ["radio", 'input[type="radio"], [role=radio]'],
+    ["checkbox", 'input[type="checkbox"], [role=checkbox]'],
+    ["date", 'input[type="date"]'],
+    ["file_upload", 'input[type="file"]'],
+  ] as const;
+  const counts = await Promise.all(selectors.map(async ([type, selector]) =>
+    [type, await page.locator(selector).count()] as const
+  ));
+  const controlTypes = counts.filter(([, count]) => count > 0).map(([type]) => type);
+  const fieldCount = counts.reduce((sum, [, count]) => sum + count, 0);
+  const requiredFieldCount = await page.locator(
+    'input[required], textarea[required], select[required], [aria-required="true"]',
+  ).count();
+  const answerTypes = new Set<string>();
+  for (const [type, count] of counts) {
+    if (count === 0) continue;
+    if (type === "radio" || type === "select") answerTypes.add("single_select");
+    else if (type === "checkbox") answerTypes.add("boolean");
+    else if (type === "date") answerTypes.add("date");
+    else if (type === "file_upload") answerTypes.add("file");
+    else answerTypes.add("text");
+  }
+  return Object.freeze({
+    fieldCount,
+    requiredFieldCount: Math.min(requiredFieldCount, fieldCount),
+    controlTypes: Object.freeze(controlTypes.length === 0 ? ["text"] : controlTypes),
+    questionTypes: Object.freeze([pageName === "resume" ? "attachment" : "unknown"]),
+    answerTypes: Object.freeze(answerTypes.size === 0 ? ["text"] : [...answerTypes]),
+    validationState: "clear" as const,
+    submitPresent: pageName === "review",
+    submitActivated: false as const,
+  });
+}
+
 async function captureIndependentReviewFields(
   page: Page,
   expected: ReadonlyMap<string, ReviewExpectedField>,
@@ -344,6 +580,7 @@ async function captureIndependentReviewFields(
     if (count !== expected.size) throw new TypeError("Review fields incomplete or ambiguous");
     for (let index = 0; index < count; index += 1) {
       const row = rows.nth(index);
+      if (!await row.isVisible()) throw new TypeError("Review field hidden");
       const id = await row.getAttribute("data-hunt-review-field-id");
       if (id === null) throw new TypeError("Review field identity unavailable");
       const value = normalizeReviewValue(await row.textContent() ?? "");
@@ -359,6 +596,7 @@ async function captureIndependentReviewFields(
     if (byIdentity.size !== expected.size) throw new TypeError("Review identities ambiguous");
     for (let index = 0; index < realCount; index += 1) {
       const row = realRows.nth(index);
+      if (!await row.isVisible()) throw new TypeError("Review field hidden");
       const identity = await row.getAttribute("data-automation-id");
       if (identity === null || !isStableRowIdentity(identity)) {
         throw new TypeError("Review field identity unavailable");

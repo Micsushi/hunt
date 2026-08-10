@@ -337,6 +337,28 @@ test("storage finalizes a fully monitored account-verified checkpoint", async ()
   }
 });
 
+test("legacy account finalization rejects Review-only retained files", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-storage-"));
+  try {
+    const layout = await prepareStage2RunStorage(
+      { storageRoot, runKey: "run_20260810_legacyreviewfile" },
+      noProtection,
+    );
+    writeOwnerConfig(layout, "blackrock.wd1.myworkdayjobs.com", "blackrock", "R265422");
+    writeCompletedEvidence(layout.evidenceRoot, "2026-08-10T12:00:00.000Z");
+    writeFileSync(join(layout.evidenceRoot, "application-walk-acceptance.json"), "{}\n");
+
+    await assert.rejects(finalizeStage2RunStorage({
+      storageRoot,
+      ownerConfigPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    }), /storage finalization denied/u);
+    assert.equal(existsSync(layout.transientRoot), true);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 type Layout = Awaited<ReturnType<typeof prepareStage2RunStorage>>;
 
 function writeOwnerConfig(

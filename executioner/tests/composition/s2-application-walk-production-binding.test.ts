@@ -125,7 +125,7 @@ test("production binding resolves opaque owner sources without value leakage", a
 
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(runtimeCalls, 1);
-    const written = readFileSync(join(fixture.evidenceRoot, "acceptance.json"), "utf8");
+    const written = readFileSync(join(fixture.evidenceRoot, "application-walk-acceptance.json"), "utf8");
     assert.doesNotMatch(written, /Ada|dependable systems|application-profile|application-resume|sha256|[a-f0-9]{64}/u);
     const ownerConfig = readFileSync(fixture.configPath, "utf8");
     assert.doesNotMatch(ownerConfig, /Ada|dependable systems|application-profile|application-resume|\.pdf|[a-f0-9]{64}/u);
@@ -270,6 +270,11 @@ test("outer Review binding resolves owner sources and retains only live browser 
             progress: { async record() { return { ok: true as const, value: undefined }; } },
           },
           laneAcceptances: createApplicationLaneAcceptanceCollector(),
+          account: {
+            async verify() {
+              return { ok: false as const, code: "account_proof_invalid" };
+            },
+          },
           recovery: { async pending() { return null; } },
           review: { async capture() { throw new Error("not used by binding test"); } },
           privacy: { async forbiddenTokens() { return ["private-owner-value"]; } },

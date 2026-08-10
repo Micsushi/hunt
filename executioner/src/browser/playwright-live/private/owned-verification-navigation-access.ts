@@ -28,7 +28,11 @@ export class OwnedVerificationNavigationAccessScope {
   readonly #observeAfterEffect: (
     signal: AbortSignal,
   ) => Promise<NavigationPortResult>;
+  readonly #monitorBeforeNavigation: (
+    signal: AbortSignal,
+  ) => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
   readonly #invalidate: () => Promise<void>;
+  readonly #deferInvalidation: boolean;
   #terminalError: PersistentBrowserErrorCode | "operation_cancelled" | undefined;
   #active = true;
   #used = false;
@@ -46,7 +50,11 @@ export class OwnedVerificationNavigationAccessScope {
       signal: AbortSignal,
     ) => Promise<LivePortResult<void, PersistentBrowserErrorCode>>,
     observeAfterEffect: (signal: AbortSignal) => Promise<NavigationPortResult>,
+    monitorBeforeNavigation: (
+      signal: AbortSignal,
+    ) => Promise<LivePortResult<void, PersistentBrowserErrorCode>>,
     invalidate: () => Promise<void>,
+    deferInvalidation = false,
   ) {
     this.#page = page;
     this.#adapter = adapter;
@@ -55,7 +63,9 @@ export class OwnedVerificationNavigationAccessScope {
     this.#timeoutMs = timeoutMs;
     this.#revalidateBeforeEffect = revalidateBeforeEffect;
     this.#observeAfterEffect = observeAfterEffect;
+    this.#monitorBeforeNavigation = monitorBeforeNavigation;
     this.#invalidate = invalidate;
+    this.#deferInvalidation = deferInvalidation;
     this.capability = new VerificationNavigationCapability(this);
   }
 
@@ -82,6 +92,11 @@ export class OwnedVerificationNavigationAccessScope {
       admitted.fill(0);
       return this.#cancel();
     }
+    const monitored = await this.#monitorBeforeNavigation(combined);
+    if (!monitored.ok) {
+      admitted.fill(0);
+      return this.#beforeEffectFailure(monitored.error.code);
+    }
     this.#effectStarted = true;
     const navigated = await bounded(
       Promise.resolve().then(() => this.#adapter.navigate(this.#page, admitted)),
@@ -101,6 +116,7 @@ export class OwnedVerificationNavigationAccessScope {
   }
 
   get used(): boolean { return this.#used; }
+  get effectStarted(): boolean { return this.#effectStarted; }
   get result(): VerificationNavigationResult | undefined { return this.#result; }
 
   deactivate(): void { this.#active = false; }
@@ -119,7 +135,7 @@ export class OwnedVerificationNavigationAccessScope {
   async #uncertain(): Promise<NavigationPortResult> {
     this.#terminalError = "browser_effect_uncertain";
     this.#active = false;
-    await this.#invalidate();
+    if (!this.#deferInvalidation) await this.#invalidate();
     return failure("browser_effect_uncertain");
   }
 

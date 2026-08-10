@@ -16,7 +16,30 @@ export interface WindowsProcessAuditV1 {
   readonly checkedAt: string;
 }
 
-export function readWindowsProcessAudit(rootValue: string): WindowsProcessAuditV1 {
+export interface WindowsProcessAuditV2 {
+  readonly schemaVersion: 1;
+  readonly evidenceRevision: "s2-windows-process-audit-v2";
+  readonly status: "pass";
+  readonly runKey: string;
+  readonly journeyId: string;
+  readonly targetHandleId: string;
+  readonly configSha256: string;
+  readonly processLiveNonceSha256: string;
+  readonly processIssuedAt: string;
+  readonly processOwnerPid: number;
+  readonly processOwnerStartedAt: string;
+  readonly processExitObservedAt: string;
+  readonly jobCloseApplied: true;
+  readonly membersObservedBeforeClose: number;
+  readonly membersAliveAfterClose: 0;
+  readonly monitorFileCount: number;
+  readonly monitorChainSha256: string;
+  readonly checkedAt: string;
+}
+
+export function readWindowsProcessAudit(
+  rootValue: string,
+): WindowsProcessAuditV1 | WindowsProcessAuditV2 {
   const denied = (): never => {
     throw new Error("process audit denied");
   };
@@ -37,8 +60,9 @@ export function readWindowsProcessAudit(rootValue: string): WindowsProcessAuditV
       statSync(path).size > 16 * 1024 ||
       comparable(realpathSync.native(path)) !== comparable(resolve(path))
     ) denied();
-    const value = JSON.parse(readFileSync(path, "utf8")) as WindowsProcessAuditV1;
-    const expected = [
+    const value = JSON.parse(readFileSync(path, "utf8")) as
+      WindowsProcessAuditV1 | WindowsProcessAuditV2;
+    const legacyKeys = [
       "schemaVersion",
       "evidenceRevision",
       "status",
@@ -47,24 +71,55 @@ export function readWindowsProcessAudit(rootValue: string): WindowsProcessAuditV
       "membersAliveAfterClose",
       "checkedAt",
     ];
+    const boundKeys = [
+      "schemaVersion", "evidenceRevision", "status", "runKey", "journeyId",
+      "targetHandleId", "configSha256", "processLiveNonceSha256", "processIssuedAt",
+      "processOwnerPid", "processOwnerStartedAt", "processExitObservedAt",
+      "jobCloseApplied", "membersObservedBeforeClose", "membersAliveAfterClose",
+      "monitorFileCount", "monitorChainSha256", "checkedAt",
+    ];
     const keys = Object.keys(value);
+    const legacy = value.evidenceRevision === "s2-windows-process-audit-v1";
     if (
-      keys.length !== expected.length ||
-      expected.some((key, index) => keys[index] !== key) ||
+      (legacy
+        ? keys.length !== legacyKeys.length || legacyKeys.some((key, index) => keys[index] !== key)
+        : keys.length !== boundKeys.length || boundKeys.some((key, index) => keys[index] !== key)) ||
       value.schemaVersion !== 1 ||
-      value.evidenceRevision !== "s2-windows-process-audit-v1" ||
+      !["s2-windows-process-audit-v1", "s2-windows-process-audit-v2"].includes(
+        value.evidenceRevision,
+      ) ||
       value.status !== "pass" ||
       value.jobCloseApplied !== true ||
       !Number.isInteger(value.membersObservedBeforeClose) ||
       value.membersObservedBeforeClose < 0 ||
       value.membersObservedBeforeClose > 256 ||
       value.membersAliveAfterClose !== 0 ||
-      !canonicalTimestamp(value.checkedAt)
+      !canonicalTimestamp(value.checkedAt) ||
+      (!legacy && !validBoundAudit(value as WindowsProcessAuditV2))
     ) denied();
     return Object.freeze({ ...value });
   } catch {
     return denied();
   }
+}
+
+function validBoundAudit(value: WindowsProcessAuditV2): boolean {
+  return /^run_\d{8}_[a-z0-9]{16}$/u.test(value.runKey) &&
+    /^journey_[A-Za-z0-9_-]{16,64}$/u.test(value.journeyId) &&
+    /^target_ref_[A-Za-z0-9_-]{16,64}$/u.test(value.targetHandleId) &&
+    /^[0-9a-f]{64}$/u.test(value.configSha256) &&
+    /^[0-9a-f]{64}$/u.test(value.processLiveNonceSha256) &&
+    canonicalTimestamp(value.processIssuedAt) &&
+    Number.isSafeInteger(value.processOwnerPid) && value.processOwnerPid >= 1 &&
+    canonicalTimestamp(value.processOwnerStartedAt) &&
+    canonicalTimestamp(value.processExitObservedAt) &&
+    Date.parse(value.processIssuedAt) < Date.parse(value.checkedAt) &&
+    Date.parse(value.processOwnerStartedAt) >= Date.parse(value.processIssuedAt) &&
+    Date.parse(value.processOwnerStartedAt) <= Date.parse(value.processExitObservedAt) &&
+    Date.parse(value.processExitObservedAt) >= Date.parse(value.processIssuedAt) &&
+    Date.parse(value.processExitObservedAt) <= Date.parse(value.checkedAt) &&
+    Number.isInteger(value.monitorFileCount) && value.monitorFileCount >= 0 &&
+    value.monitorFileCount <= 1024 && /^[0-9a-f]{64}$/u.test(value.monitorChainSha256);
 }
 
 function canonicalTimestamp(value: string): boolean {

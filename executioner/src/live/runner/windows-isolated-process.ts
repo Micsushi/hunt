@@ -236,20 +236,100 @@ function Test-ProcessExited([int]$identifier) {
     finally { [HuntC3IsolatedRunner]::CloseHandle($handle) | Out-Null }
 }
 
-function Write-ProcessAudit([string]$root, [int[]]$members, [int]$alive) {
+function Get-Sha256Hex([byte[]]$bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-ProcessBinding([string]$configPath, [string]$evidenceRoot) {
+    if (-not [IO.Path]::IsPathRooted($configPath) -or -not [IO.File]::Exists($configPath)) { throw 'process binding invalid' }
+    $fullConfig = [IO.Path]::GetFullPath($configPath)
+    $configBytes = [IO.File]::ReadAllBytes($fullConfig)
+    try {
+        $owner = [Text.Encoding]::UTF8.GetString($configBytes) | ConvertFrom-Json
+        $runRoot = [IO.Directory]::GetParent($fullConfig).FullName
+        $runKey = [IO.Path]::GetFileName($runRoot)
+        $transient = [IO.Directory]::GetParent($runRoot).FullName
+        $storage = [IO.Directory]::GetParent($transient).FullName
+        $expectedEvidence = [IO.Path]::GetFullPath([IO.Path]::Combine($storage, 'retained', $runKey, 'evidence'))
+        if (
+            $runKey -notmatch '^run_\d{8}_[a-z0-9]{16}$' -or
+            [IO.Path]::GetFileName($transient) -ne 'transient' -or
+            -not $expectedEvidence.Equals([IO.Path]::GetFullPath($evidenceRoot), [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$owner.journeyId -notmatch '^journey_[A-Za-z0-9_-]{16,64}$' -or
+            [string]$owner.target.handleId -notmatch '^target_ref_[A-Za-z0-9_-]{16,64}$'
+        ) { throw 'process binding invalid' }
+        return [ordered]@{
+            runKey = $runKey
+            journeyId = [string]$owner.journeyId
+            targetHandleId = [string]$owner.target.handleId
+            configSha256 = Get-Sha256Hex $configBytes
+        }
+    } finally {
+        [Array]::Clear($configBytes, 0, $configBytes.Length)
+    }
+}
+
+function Get-MonitorLedger([string]$root) {
+    $entries = [Collections.Generic.List[object]]::new()
+    foreach ($directoryName in @('auth-monitor', 'monitor')) {
+        $directory = [IO.Path]::Combine($root, $directoryName)
+        if (-not [IO.Directory]::Exists($directory)) { continue }
+        foreach ($file in [IO.Directory]::GetFiles($directory) | Sort-Object) {
+            $relativeName = $directoryName + '/' + [IO.Path]::GetFileName($file)
+            $bytes = [IO.File]::ReadAllBytes($file)
+            try { [void]$entries.Add([pscustomobject]@{ Name = $relativeName; Sha = Get-Sha256Hex $bytes }) }
+            finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+        }
+    }
+    $builder = [Text.StringBuilder]::new()
+    foreach ($entry in $entries | Sort-Object Name) { [void]$builder.Append($entry.Name).Append(':').Append($entry.Sha).Append([char]10) }
+    return [ordered]@{
+        Count = $entries.Count
+        Sha256 = Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes($builder.ToString()))
+    }
+}
+
+function Write-ProcessAudit([string]$root, $binding, [string]$nonceSha256, [string]$issuedAt, [int]$ownerPid, [string]$ownerStartedAt, [string]$exitObservedAt, [int[]]$members, [int]$alive) {
     if (-not [IO.Path]::IsPathRooted($root) -or -not [IO.Directory]::Exists($root)) { throw 'process audit root invalid' }
     $target = [IO.Path]::Combine($root, 'process-audit.json')
     if ([IO.File]::Exists($target)) { throw 'process audit already exists' }
     $partial = [IO.Path]::Combine($root, '.process-audit-' + [guid]::NewGuid().ToString('N') + '.partial')
     try {
-        $audit = [ordered]@{
-            schemaVersion = 1
-            evidenceRevision = 's2-windows-process-audit-v1'
-            status = if ($alive -eq 0) { 'pass' } else { 'failed' }
-            jobCloseApplied = $true
-            membersObservedBeforeClose = $members.Count
-            membersAliveAfterClose = $alive
-            checkedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+        $checkedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+        if ($binding -eq $null) {
+            $audit = [ordered]@{
+                schemaVersion = 1
+                evidenceRevision = 's2-windows-process-audit-v1'
+                status = if ($alive -eq 0) { 'pass' } else { 'failed' }
+                jobCloseApplied = $true
+                membersObservedBeforeClose = $members.Count
+                membersAliveAfterClose = $alive
+                checkedAt = $checkedAt
+            }
+        } else {
+            $monitor = Get-MonitorLedger $root
+            $audit = [ordered]@{
+                schemaVersion = 1
+                evidenceRevision = 's2-windows-process-audit-v2'
+                status = if ($alive -eq 0) { 'pass' } else { 'failed' }
+                runKey = $binding.runKey
+                journeyId = $binding.journeyId
+                targetHandleId = $binding.targetHandleId
+                configSha256 = $binding.configSha256
+                processLiveNonceSha256 = $nonceSha256
+                processIssuedAt = $issuedAt
+                processOwnerPid = $ownerPid
+                processOwnerStartedAt = $ownerStartedAt
+                processExitObservedAt = $exitObservedAt
+                jobCloseApplied = $true
+                membersObservedBeforeClose = $members.Count
+                membersAliveAfterClose = $alive
+                monitorFileCount = $monitor.Count
+                monitorChainSha256 = $monitor.Sha256
+                checkedAt = $checkedAt
+            }
         }
         [IO.File]::WriteAllText($partial, (($audit | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
         [IO.File]::Move($partial, $target)
@@ -259,12 +339,24 @@ function Write-ProcessAudit([string]$root, [int[]]$members, [int]$alive) {
 }
 
 $evidenceRoot = $null
+$configPath = $null
 for ($index = 0; $index -lt ($runnerArguments.Count - 1); $index++) {
     if ($runnerArguments[$index] -eq '--evidence-root') {
         $evidenceRoot = [IO.Path]::GetFullPath($runnerArguments[$index + 1])
-        break
     }
+    if ($runnerArguments[$index] -eq '--config') { $configPath = [IO.Path]::GetFullPath($runnerArguments[$index + 1]) }
 }
+$processBinding = if ($configPath -ne $null -and $evidenceRoot -ne $null) { Get-ProcessBinding $configPath $evidenceRoot } else { $null }
+$nonceBytes = [byte[]]::new(32)
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($nonceBytes) } finally { $rng.Dispose() }
+$processLiveNonce = [Convert]::ToBase64String($nonceBytes)
+$processLiveNonceSha256 = Get-Sha256Hex $nonceBytes
+[Array]::Clear($nonceBytes, 0, $nonceBytes.Length)
+$processIssuedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+$processOwnerPid = 0
+$processOwnerStartedAt = $null
+$processExitObservedAt = $null
 
 $desktopName = 'HuntC3_' + [guid]::NewGuid().ToString('N')
 # DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS.
@@ -289,6 +381,8 @@ try {
     if (-not [HuntC3IsolatedRunner]::SetInformationJobObject($job, 9, [ref]$limits, $limitSize)) { exit 125 }
 
     $env:HUNT_C3_WINDOWS_DESKTOP_NAME = $desktopName
+    $env:HUNT_C3_PROCESS_LIVE_NONCE = $processLiveNonce
+    $env:HUNT_C3_PROCESS_ISSUED_AT = $processIssuedAt
     $attributeBytes = [IntPtr]::Zero
     [HuntC3IsolatedRunner]::InitializeProcThreadAttributeList([IntPtr]::Zero, 1, 0, [ref]$attributeBytes) | Out-Null
     if ($attributeBytes -eq [IntPtr]::Zero) { exit 131 }
@@ -319,14 +413,20 @@ try {
         [Console]::Error.WriteLine('isolated runner CreateProcess failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
         exit 134
     }
+    $processOwnerPid = [int]$processInfo.dwProcessId
+    $processOwnerStartedAt = (Get-Process -Id $processOwnerPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
     if ([HuntC3IsolatedRunner]::ResumeThread($processInfo.hThread) -eq [uint32]::MaxValue) {
         [HuntC3IsolatedRunner]::TerminateProcess($processInfo.hProcess, 128) | Out-Null
         exit 128
     }
     if ([HuntC3IsolatedRunner]::WaitForSingleObject($processInfo.hProcess, [uint32]::MaxValue) -ne 0) { exit 129 }
     if (-not [HuntC3IsolatedRunner]::GetExitCodeProcess($processInfo.hProcess, [ref]$childExit)) { exit 130 }
+    $processExitObservedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
 } finally {
     $env:HUNT_C3_WINDOWS_DESKTOP_NAME = $null
+    $env:HUNT_C3_PROCESS_LIVE_NONCE = $null
+    $env:HUNT_C3_PROCESS_ISSUED_AT = $null
+    $processLiveNonce = $null
     if ($attributeList -ne [IntPtr]::Zero) {
         [HuntC3IsolatedRunner]::DeleteProcThreadAttributeList($attributeList)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($attributeList)
@@ -345,7 +445,8 @@ try {
     if ($aliveAfterClose -ne 0) { $processAuditPassed = $false }
     [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
     if ($evidenceRoot -ne $null) {
-        try { Write-ProcessAudit $evidenceRoot $jobMembers $aliveAfterClose }
+        if ($processExitObservedAt -eq $null) { $processExitObservedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'") }
+        try { Write-ProcessAudit $evidenceRoot $processBinding $processLiveNonceSha256 $processIssuedAt $processOwnerPid $processOwnerStartedAt $processExitObservedAt $jobMembers $aliveAfterClose }
         catch { $processAuditPassed = $false }
     }
 }

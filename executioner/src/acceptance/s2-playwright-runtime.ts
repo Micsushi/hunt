@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, normalize, resolve } from "node:path";
 
 import { createApplicationLaneAcceptanceCollector } from
   "../ats/workday/application/lane-composition.ts";
@@ -24,6 +24,8 @@ import type {
 } from "../ats/workday/application/page-walk.ts";
 import type { ApplicationWalkResume } from "../ats/workday/application/page-walk.ts";
 import { createPlaywrightPersistentBrowserSession } from "../browser/playwright-live/index.ts";
+import type { PlaywrightPersistentBrowserSession } from
+  "../browser/playwright-live/session.ts";
 import {
   ownedApplicationPageAccess,
   suspendOwnedApplicationSession,
@@ -77,7 +79,24 @@ import type {
 import type {
   Stage2ApplicationWalkRuntimeBindingRequest,
 } from "../composition/s2-application-walk-runner.ts";
+import {
+  runStage2AccountVerifiedInSession,
+  type Stage2UnsealedAccountProofResult,
+  type Stage2UnsealedAccountProofV1,
+} from "../composition/s2-account-verified-runner.ts";
 import { readStablePrivateFile } from "../composition/private/s2-stable-private-file.ts";
+import { createOperatorMonitorInspectionHold } from
+  "../live/evidence/operator-monitor-ack.ts";
+import { writeAccountVerifiedEvidence } from
+  "../live/evidence/account-verified-evidence.ts";
+import type {
+  AccountVerifiedAcceptance,
+} from "../live/runner/account-verified.ts";
+import {
+  currentProcessStartedAt,
+  createStage2ExternalMonitorRuntime,
+  type Stage2ExternalMonitorRuntime,
+} from "../live/evidence/external-monitor-runtime.ts";
 import type {
   Stage2RealJourneyLiveRuntimeBinding,
 } from "./s2-production-binding.ts";
@@ -102,9 +121,24 @@ export interface Stage2PlaywrightRuntimeOptions {
     request: Stage2ApplicationWalkRuntimeBindingRequest,
     applicationRuntime: OwnedWorkdayApplicationRuntimeOptions,
   ) => OwnedApplicationBrowser;
+  readonly accountVerifier?: (
+    request: {
+      readonly owner: Stage2ApplicationWalkRuntimeBindingRequest["owner"];
+      readonly sourceRevision: string;
+      readonly configSha256: string;
+      readonly browser: OwnedApplicationBrowser;
+      readonly session: LiveBrowserSessionV1;
+      readonly target: TargetIdentityV1;
+      readonly sensitiveValues: readonly string[];
+    },
+    signal: AbortSignal,
+  ) => Promise<Stage2UnsealedAccountProofResult>;
   readonly now?: () => string;
   readonly nextOperationId?: () => OperationId;
   readonly timeoutMs?: number;
+  readonly externalMonitor?: (
+    request: Stage2ApplicationWalkRuntimeBindingRequest,
+  ) => Stage2ExternalMonitorRuntime;
 }
 
 export function createStage2PlaywrightLiveRuntimeBinding(
@@ -121,37 +155,78 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       if (signal.aborted) throw new TypeError("Playwright runtime binding denied");
       const target = targetFor(request);
       const revisionId = request.owner.revisionId;
+      const accountEvidenceRoot = request.owner.roots.evidence.path;
       const store = new RecoveryFileStore(
         request.owner.roots.runtime.path,
         `${revisionId}.recovery.json`,
         recoveryScopeFor(request, target),
       );
       const initialRecovery = store.load();
+      const accountProofStore = new AccountSessionProofStore(
+        request.owner.roots.runtime.path,
+        accountProofScopeFor(request),
+      );
       const acceptances = createApplicationLaneAcceptanceCollector();
+      const externalMonitor = options.externalMonitor?.(request) ??
+        (options.browser === undefined ? productionExternalMonitor(request) : undefined);
       const applicationRuntime: OwnedWorkdayApplicationRuntimeOptions = Object.freeze({
         request,
         acceptances,
         nextOperationId,
         timeoutMs,
         initialReviewExpected: initialRecovery?.reviewExpected ?? [],
+        externalMonitor,
+        authorizationExpiresAt: request.owner.approval.expiresAt,
+        now,
       });
       let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
-      const browser = options.browser?.(request, applicationRuntime) ??
-        createPlaywrightPersistentBrowserSession({
-          binding: request.ownerBinding,
-          timeoutMs,
-          applicationRuntime,
-        });
-      const opened = await browser.open({
-        schemaVersion: 1,
-        journeyId: request.owner.journeyId as never,
-        operationId: nextOperationId(),
-        profileLeaseId: profileLeaseFor(request.owner.profileRef),
-        target,
-      }, signal);
-      if (!opened.ok) throw new TypeError("Playwright runtime binding denied");
+      const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+        : undefined;
+      const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+        ? createOperatorMonitorInspectionHold({
+          runtimeRoot: request.owner.roots.runtime.path,
+          evidenceRoot: request.owner.roots.evidence.path,
+          journeyId: request.owner.journeyId,
+          targetHandleId: request.owner.target.handleId,
+          host: request.owner.target.host,
+          tenant: request.owner.target.tenant,
+          posting: request.owner.target.posting,
+        })
+        : undefined;
+      let productionBrowser: PlaywrightPersistentBrowserSession | undefined;
+      let browser: ReturnType<NonNullable<Stage2PlaywrightRuntimeOptions["browser"]>>;
+      let opened: Awaited<ReturnType<typeof browser.open>>;
+      try {
+        browser = options.browser?.(request, applicationRuntime) ??
+          (productionBrowser = createPlaywrightPersistentBrowserSession({
+            binding: request.ownerBinding,
+            timeoutMs,
+            applicationRuntime,
+            externalMonitor,
+            accountTrace: valueFreeTrace,
+            inspectionHold,
+          }));
+        opened = await browser.open({
+          schemaVersion: 1,
+          journeyId: request.owner.journeyId as never,
+          operationId: nextOperationId(),
+          profileLeaseId: profileLeaseFor(request.owner.profileRef),
+          target,
+        }, signal);
+      } catch (error) {
+        externalMonitor?.close();
+        throw error;
+      }
+      if (!opened.ok) {
+        externalMonitor?.close();
+        throw new TypeError("Playwright runtime binding denied");
+      }
 
       const session = opened.value.session;
+      let accountVerification: Promise<Stage2UnsealedAccountProofResult> | undefined;
+      let accountProof: Stage2UnsealedAccountProofV1 | undefined;
+      let accountSensitiveValues: readonly string[] | undefined;
       let checkpointRevision = initialRecovery?.checkpoint.revision ?? 0;
       let lastObservedPageId: BrowserPageId | undefined;
       const access = async <Value>(
@@ -238,6 +313,13 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       return Object.freeze({
         walk: Object.freeze({ observer, navigation, handlers, progress }),
         laneAcceptances: acceptances,
+        account: Object.freeze({
+          verify(activeSignal: AbortSignal) {
+            if (accountVerification !== undefined) return accountVerification;
+            accountVerification = verifyAccount(activeSignal);
+            return accountVerification;
+          },
+        }),
         recovery: Object.freeze({
           async pending(activeSignal: AbortSignal) {
             const artifact = store.load();
@@ -335,20 +417,296 @@ export function createStage2PlaywrightLiveRuntimeBinding(
               sessionId: session.sessionId,
             } as const;
             try {
+              const authorizationBeforeClose = currentOwnerAuthorization(
+                liveRequest?.owner,
+                activeSignal,
+                now,
+              );
               const closed = accepted === false
                 ? await browser[suspendOwnedApplicationSession](closeRequest, activeSignal)
                 : await browser.close(closeRequest, activeSignal);
               if (!closed.ok) return false;
+              if (accountProof !== undefined && accountSensitiveValues !== undefined) {
+                if (!authorizationBeforeClose || !currentOwnerAuthorization(
+                  liveRequest?.owner,
+                  activeSignal,
+                  now,
+                )) return false;
+                if (!await sealAccountEvidence(
+                  accountEvidenceRoot,
+                  accountProof,
+                  accountSensitiveValues,
+                )) return false;
+              }
               if (accepted === true) store.finalize();
               return true;
             } finally {
+              externalMonitor?.close();
+              accountProof = undefined;
+              accountSensitiveValues = undefined;
               liveRequest = undefined;
             }
           },
         }),
       });
+
+      async function verifyAccount(
+        activeSignal: AbortSignal,
+      ): Promise<Stage2UnsealedAccountProofResult> {
+            const activeRequest = liveRequest;
+            if (activeSignal.aborted || activeRequest === undefined) {
+              return Object.freeze({ ok: false as const, code: "operation_cancelled" });
+            }
+            if (!currentOwnerAuthorization(activeRequest.owner, activeSignal, now)) {
+              return Object.freeze({ ok: false as const, code: "operation_cancelled" });
+            }
+            const sensitiveValues = forbiddenCorpus([
+              activeRequest.owner.target.url,
+              activeRequest.owner.target.host,
+              activeRequest.owner.target.tenant,
+              activeRequest.owner.target.posting,
+              activeRequest.owner.roots.runtime.path,
+              activeRequest.owner.roots.secrets.path,
+              activeRequest.owner.roots.evidence.path,
+            ], activeRequest.ownerSources.sensitiveValues ?? []);
+            let retainedProof: Stage2UnsealedAccountProofV1 | null;
+            try {
+              retainedProof = accountProofStore.load();
+            } catch {
+              return Object.freeze({ ok: false as const, code: "account_proof_invalid" });
+            }
+            if (retainedProof !== null) {
+              accountProof = retainedProof;
+              accountSensitiveValues = sensitiveValues;
+              return { ok: true, proof: retainedProof };
+            }
+            if (initialRecovery !== null) {
+              return Object.freeze({ ok: false as const, code: "account_proof_invalid" });
+            }
+            let result: Stage2UnsealedAccountProofResult;
+            if (options.accountVerifier !== undefined) {
+              result = await options.accountVerifier({
+                owner: activeRequest.owner,
+                sourceRevision: activeRequest.sourceRevision,
+                configSha256: activeRequest.configSha256,
+                browser,
+                session,
+                target,
+                sensitiveValues,
+              }, activeSignal);
+            } else {
+              const storageRoot = accountStorageRoot(activeRequest);
+              if (productionBrowser === undefined || storageRoot === undefined) {
+                return Object.freeze({ ok: false as const, code: "owner_config_invalid" });
+              }
+              result = await runStage2AccountVerifiedInSession({
+                owner: activeRequest.owner,
+                sourceRevision: activeRequest.sourceRevision,
+                configSha256: activeRequest.configSha256,
+                storageRoot,
+                browser: productionBrowser,
+                session,
+                target,
+                clock: now,
+              }, activeSignal);
+            }
+            if (result.ok) {
+              if (externalMonitor !== undefined) {
+                const monitored = await access<void>({ kind: "monitor_auth_state" }, activeSignal);
+                if (!monitored.ok) {
+                  return Object.freeze({ ok: false as const, code: "account_proof_invalid" });
+                }
+              }
+              if (!accountProofStore.write(result.proof)) {
+                return Object.freeze({ ok: false as const, code: "account_proof_invalid" });
+              }
+              accountProof = result.proof;
+              accountSensitiveValues = sensitiveValues;
+            }
+            return result;
+      }
     },
   });
+}
+
+interface AccountProofScope {
+  readonly sourceRevision: string;
+  readonly configSha256: string;
+  readonly revisionId: string;
+  readonly approvalId: string;
+  readonly journeyId: string;
+  readonly targetHandleId: string;
+}
+
+class AccountSessionProofStore {
+  readonly #path: string;
+  readonly #scope: AccountProofScope;
+
+  constructor(runtimeRoot: string, scope: AccountProofScope) {
+    this.#path = join(resolve(runtimeRoot), "account-session-proof.json");
+    this.#scope = scope;
+  }
+
+  load(): Stage2UnsealedAccountProofV1 | null {
+    if (!existsSync(this.#path)) return null;
+    const stable = readStablePrivateFile(this.#path, 16 * 1024);
+    try {
+      const value: unknown = JSON.parse(stable.bytes.toString("utf8"));
+      if (!isAccountProof(value, this.#scope)) {
+        throw new TypeError("account proof scope denied");
+      }
+      return Object.freeze({ ...value });
+    } finally {
+      stable.bytes.fill(0);
+    }
+  }
+
+  write(value: Stage2UnsealedAccountProofV1): boolean {
+    if (!isAccountProof(value, this.#scope) || existsSync(this.#path)) return false;
+    try {
+      writeFileSync(this.#path, `${JSON.stringify(value)}\n`, { flag: "wx", mode: 0o600 });
+      return isAccountProof(this.load(), this.#scope);
+    } catch {
+      return false;
+    }
+  }
+}
+
+function accountProofScopeFor(
+  request: Stage2ApplicationWalkRuntimeBindingRequest,
+): AccountProofScope {
+  return Object.freeze({
+    sourceRevision: request.sourceRevision,
+    configSha256: request.configSha256,
+    revisionId: request.owner.revisionId,
+    approvalId: request.owner.approval.approvalId,
+    journeyId: request.owner.journeyId,
+    targetHandleId: request.owner.target.handleId,
+  });
+}
+
+function isAccountProof(
+  value: unknown,
+  scope: AccountProofScope,
+): value is Stage2UnsealedAccountProofV1 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proof = value as Record<string, unknown>;
+  const keys = Object.keys(proof);
+  const expected = [
+    "schemaVersion", "proofRevision", "status", "sourceRevision", "configSha256",
+    "revisionId", "approvalId", "journeyId", "targetHandleId", "accountState",
+    "independentlyObservedVerifiedState", "verificationProof", "provider",
+    "consumedCandidateCount", "messageBodyRetained", "submitActivated",
+  ];
+  if (keys.length !== expected.length || expected.some((key, index) => keys[index] !== key)) {
+    return false;
+  }
+  const proofPair = (
+    proof.verificationProof === "gmail_candidate_consumed" &&
+    proof.provider === "gmail-api-v1" && proof.consumedCandidateCount === 1
+  ) || (
+    proof.verificationProof === "credential_sign_in" &&
+    proof.provider === "workday-auth" && proof.consumedCandidateCount === 0
+  );
+  return proof.schemaVersion === 1 &&
+    proof.proofRevision === "s2-account-session-proof-v1" && proof.status === "unsealed" &&
+    proof.sourceRevision === scope.sourceRevision && proof.configSha256 === scope.configSha256 &&
+    proof.revisionId === scope.revisionId && proof.approvalId === scope.approvalId &&
+    proof.journeyId === scope.journeyId && proof.targetHandleId === scope.targetHandleId &&
+    proof.accountState === "application_ready" &&
+    proof.independentlyObservedVerifiedState === true && proofPair &&
+    proof.messageBodyRetained === false && proof.submitActivated === false;
+}
+
+function currentOwnerAuthorization(
+  owner: Stage2ApplicationWalkRuntimeBindingRequest["owner"] | undefined,
+  signal: AbortSignal,
+  clock: () => string,
+): boolean {
+  if (signal.aborted || owner === undefined) return false;
+  try {
+    const current = clock();
+    const currentMs = Date.parse(current);
+    const expiresMs = Date.parse(owner.approval.expiresAt);
+    return Number.isFinite(currentMs) && new Date(currentMs).toISOString() === current &&
+      Number.isFinite(expiresMs) && new Date(expiresMs).toISOString() === owner.approval.expiresAt &&
+      currentMs < expiresMs;
+  } catch {
+    return false;
+  }
+}
+
+async function sealAccountEvidence(
+  evidenceRoot: string,
+  proof: Stage2UnsealedAccountProofV1,
+  sensitiveValues: readonly string[],
+): Promise<boolean> {
+  const acceptance: AccountVerifiedAcceptance = Object.freeze({
+    schemaVersion: 1,
+    evidenceRevision: "s2-account-verified-acceptance-v2",
+    checkpoint: "account_verified",
+    status: "passed",
+    sourceRevision: proof.sourceRevision,
+    revisionId: proof.revisionId,
+    approvalId: proof.approvalId,
+    journeyId: proof.journeyId as never,
+    targetHandleId: proof.targetHandleId,
+    accountState: "application_ready",
+    independentlyObservedVerifiedState: true,
+    verificationProof: proof.verificationProof,
+    provider: proof.provider,
+    consumedCandidateCount: proof.consumedCandidateCount,
+    messageBodyRetained: false,
+    submitActivated: false,
+    privacyScan: "pass",
+    cleanup: "pass",
+  });
+  const path = join(evidenceRoot, "acceptance.json");
+  if (existsSync(path)) {
+    const stable = readStablePrivateFile(path, 16 * 1024);
+    try {
+      const current: unknown = JSON.parse(stable.bytes.toString("utf8"));
+      return JSON.stringify(current) === JSON.stringify(acceptance);
+    } catch {
+      return false;
+    } finally {
+      stable.bytes.fill(0);
+    }
+  }
+  try {
+    await writeAccountVerifiedEvidence({ root: evidenceRoot, acceptance, sensitiveValues });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function accountStorageRoot(
+  request: Stage2ApplicationWalkRuntimeBindingRequest,
+): string | undefined {
+  const runtimeRoot = resolve(request.owner.roots.runtime.path);
+  const runRoot = dirname(runtimeRoot);
+  const transientRoot = dirname(runRoot);
+  const storageRoot = dirname(transientRoot);
+  const runKey = basename(runRoot);
+  if (
+    basename(runtimeRoot) !== "runtime" ||
+    basename(transientRoot) !== "transient" ||
+    !/^run_\d{8}_[a-z0-9]{16}$/u.test(runKey) ||
+    !samePath(
+      request.owner.roots.evidence.path,
+      join(storageRoot, "retained", runKey, "evidence"),
+    )
+  ) return undefined;
+  return normalize(storageRoot);
+}
+
+function samePath(left: string, right: string): boolean {
+  const leftNormalized = normalize(resolve(left));
+  const rightNormalized = normalize(resolve(right));
+  return process.platform === "win32"
+    ? leftNormalized.toLowerCase() === rightNormalized.toLowerCase()
+    : leftNormalized === rightNormalized;
 }
 
 function forbiddenCorpus(
@@ -365,6 +723,40 @@ function forbiddenCorpus(
     .filter((value) => !binding.includes(value))
     .sort((left, right) => right.length - left.length || left.localeCompare(right));
   return Object.freeze([...binding, ...sources.slice(0, 32 - binding.length)]);
+}
+
+function productionExternalMonitor(
+  request: Stage2ApplicationWalkRuntimeBindingRequest,
+): Stage2ExternalMonitorRuntime {
+  const encoded = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
+  const issuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;
+  if (encoded === undefined || issuedAt === undefined ||
+      !/^[A-Za-z0-9+/]{43}=$/u.test(encoded)) {
+    throw new TypeError("external monitor process binding denied");
+  }
+  const nonce = Buffer.from(encoded, "base64");
+  try {
+    if (nonce.byteLength !== 32 || nonce.toString("base64") !== encoded) {
+      throw new TypeError("external monitor process binding denied");
+    }
+    return createStage2ExternalMonitorRuntime({
+      runtimeRoot: request.owner.roots.runtime.path,
+      evidenceRoot: request.owner.roots.evidence.path,
+      journeyId: request.owner.journeyId,
+      targetHandleId: request.owner.target.handleId,
+      sourceRevision: request.sourceRevision,
+      configSha256: request.configSha256,
+      host: request.owner.target.host,
+      tenant: request.owner.target.tenant,
+      posting: request.owner.target.posting,
+      processLiveNonceSha256: createHash("sha256").update(nonce).digest("hex"),
+      processIssuedAt: issuedAt,
+      processOwnerPid: process.pid,
+      processOwnerStartedAt: currentProcessStartedAt(),
+    });
+  } finally {
+    nonce.fill(0);
+  }
 }
 
 function applicationHandlers(options: {

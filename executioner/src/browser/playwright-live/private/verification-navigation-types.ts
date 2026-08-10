@@ -1,4 +1,4 @@
-import type { JourneyId } from "../../../contracts/index.ts";
+import type { JourneyId, OperationId } from "../../../contracts/index.ts";
 import type {
   LivePortResult,
   LiveSessionId,
@@ -11,6 +11,7 @@ import type { PersistentPage } from "./types.ts";
 export interface OwnedVerificationNavigationAccessRequest {
   readonly schemaVersion: 1;
   readonly journeyId: JourneyId;
+  readonly operationId: OperationId;
   readonly sessionId: LiveSessionId;
   readonly target: TargetIdentityV1;
   readonly now: string;

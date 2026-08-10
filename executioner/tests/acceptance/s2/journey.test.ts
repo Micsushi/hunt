@@ -44,7 +44,7 @@ test("the unavailable opaque runtime binding fails before any journey effect", a
     ports(),
     new AbortController().signal,
   );
-  assert.deepEqual(result, { ok: false, code: "runtime_binding_failed" });
+  assertFailureCode(result, "runtime_binding_failed");
 });
 
 test("one bound runtime recovers, proves pre-Review and Review, seals evidence, then cleans", async () => {
@@ -70,6 +70,7 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     assert.equal(result.ok, true);
     assert.deepEqual(calls, [
       "runtime.bind",
+      "account.verify",
       "recovery.pending",
       "recovery.state.load",
       "recovery.browser.inspect",
@@ -119,12 +120,12 @@ test("acceptance write failure retains recovery and exact evidence is retryable"
       cleanupModes.push(accepted);
       return true;
     };
-    assert.deepEqual(await runStage2RealJourney(
+    assertFailureCode(await runStage2RealJourney(
       invocation(evidenceRoot), binding(first), {
         now: () => "2026-08-05T12:00:00.000Z",
         writeAcceptance: async () => { throw new Error("injected acceptance write failure"); },
       }, new AbortController().signal,
-    ), { ok: false, code: "evidence_failed" });
+    ), "evidence_failed");
     assert.equal(existsSync(join(evidenceRoot, "real-evidence", "manifest.json")), true);
     assert.deepEqual(cleanupModes, [false]);
 
@@ -185,15 +186,180 @@ test("a recovery stop fails closed before application and still cleans the bound
     },
   });
   try {
-    assert.deepEqual(await runStage2RealJourney(
+    assertFailureCode(await runStage2RealJourney(
       invocation(evidenceRoot),
       binding(value),
       ports(),
       new AbortController().signal,
-    ), { ok: false, code: "recovery_failed" });
+    ), "recovery_failed");
     assert.equal(calls.includes("application.run"), false);
     assert.equal(calls.at(-1), "cleanup.close");
     assert.equal(existsSync(join(evidenceRoot, "real-evidence")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("account proof failure preserves CAPTCHA fact and stops before recovery or application", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-stop-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const calls: string[] = [];
+  const value = runtime(calls, evidenceRoot);
+  value.account.verify = async () => {
+    calls.push("account.verify");
+    return {
+      ok: false,
+      code: "manual_intervention",
+      fact: { kind: "manual_intervention", reason: "captcha" },
+    };
+  };
+  try {
+    assertFailureCode(await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    ), "captcha");
+    assert.deepEqual(calls, ["runtime.bind", "account.verify", "cleanup.close"]);
+    assert.equal(existsSync(join(evidenceRoot, "real-evidence")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("account posting fact becomes an exact value-free terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-fact-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.account.verify = async () => ({
+    ok: false,
+    code: "posting_unavailable",
+    fact: { kind: "posting_unavailable", reason: "closed" },
+  });
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.deepEqual(result.terminal, {
+      schemaVersion: 4,
+      journeyId: config.journeyId,
+      status: "blocked",
+      completedPages: 0,
+      factualOutcome: {
+        source: "target_identity",
+        result: { kind: "posting_unavailable", reason: "closed" },
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("provider cancellation remains a cancelled terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-provider-cancel-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.account.verify = async () => ({ ok: false, code: "operation_cancelled" });
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.terminal.status, "cancelled");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("application failure preserves its exact code and completed-page count", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-terminal-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.recovery.pending = async () => null;
+  value.application.run = async () => ({
+    ok: false,
+    error: {
+      checkpoint: "questionnaire",
+      completedPages: 2,
+      failure: {
+        code: "question_unknown",
+        retryable: false,
+        owner: "questionnaire",
+        classifier: "questionnaire_page",
+        primitive: "question_control",
+        unknownLayer: "question",
+        page: "questionnaire",
+        attempt: 1,
+      },
+      submitActivated: false,
+      privacyScan: "pass",
+    },
+  });
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.deepEqual(result.terminal, {
+      schemaVersion: 4,
+      journeyId: config.journeyId,
+      status: "failed",
+      completedPages: 2,
+      errorCode: "question_unknown",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("arbitrary stage exceptions use only the truthful internal terminal code", async () => {
+  for (const stage of ["bind", "account", "recovery", "application", "review", "evidence"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-internal-${stage}-`));
+    const evidenceRoot = resolve(root, "evidence");
+    mkdirSync(evidenceRoot);
+    const value = runtime([], evidenceRoot);
+    value.recovery.pending = async () => null;
+    if (stage === "account") value.account.verify = async () => { throw new Error("arbitrary"); };
+    if (stage === "recovery") value.recovery.pending = async () => { throw new Error("arbitrary"); };
+    if (stage === "application") value.application.run = async () => { throw new Error("arbitrary"); };
+    if (stage === "review") value.review.capture = async () => { throw new Error("arbitrary"); };
+    if (stage === "evidence") value.privacy.forbiddenTokens = async () => { throw new Error("arbitrary"); };
+    const selectedBinding = stage === "bind"
+      ? { bind: async () => { throw new Error("arbitrary"); } }
+      : binding(value);
+    try {
+      const result = await runStage2RealJourney(
+        invocation(evidenceRoot), selectedBinding, ports(), new AbortController().signal,
+      );
+      assert.equal(result.ok, false);
+      if (result.ok || result.terminal.status !== "failed") continue;
+      assert.equal(result.terminal.errorCode, "mcp_internal_error");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("wrongly bound account proof stops before recovery or application", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-binding-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const calls: string[] = [];
+  const value = runtime(calls, evidenceRoot);
+  value.account.verify = async () => ({
+    ok: true,
+    proof: { ...accountProof(), journeyId: "journey_wrongwrongwrong1" },
+  });
+  try {
+    assertFailureCode(await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    ), "account_verification_failed");
+    assert.equal(calls.includes("recovery.pending"), false);
+    assert.equal(calls.includes("application.run"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -225,12 +391,12 @@ test("a recovery plan for another journey revision is rejected before recovery p
     resume: plan.resume,
   });
   try {
-    assert.deepEqual(await runStage2RealJourney(
+    assertFailureCode(await runStage2RealJourney(
       invocation(evidenceRoot),
       binding(value),
       ports(),
       new AbortController().signal,
-    ), { ok: false, code: "recovery_failed" });
+    ), "recovery_failed");
     assert.equal(recoveryPortCalled, false);
     assert.equal(calls.includes("application.run"), false);
   } finally {
@@ -293,14 +459,14 @@ test("unverified pre-Review, denied Review, and evidence privacy failure never e
         },
         new AbortController().signal,
       );
-      assert.deepEqual(result, {
-        ok: false,
-        code: scenario === "application" || scenario === "application_accessor"
+      assertFailureCode(
+        result,
+        scenario === "application" || scenario === "application_accessor"
           ? "pre_review_failed"
           : scenario === "review"
             ? "review_failed"
             : "evidence_failed",
-      });
+      );
       assert.equal(writes, 0);
       assert.equal(calls.at(-1), "cleanup.close");
     } finally {
@@ -344,6 +510,12 @@ function binding(
 function runtime(calls: string[], evidenceRoot: string): Stage2RealJourneyRuntime & { calls: string[] } {
   return {
     calls,
+    account: {
+      verify: async () => {
+        calls.push("account.verify");
+        return { ok: true, proof: accountProof() };
+      },
+    },
     recovery: {
       pending: async () => {
         calls.push("recovery.pending");
@@ -375,6 +547,35 @@ function runtime(calls: string[], evidenceRoot: string): Stage2RealJourneyRuntim
       },
     },
   };
+}
+
+function assertFailureCode(
+  result: Awaited<ReturnType<typeof runStage2RealJourney>>,
+  code: string,
+): void {
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, code);
+}
+
+function accountProof() {
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    proofRevision: "s2-account-session-proof-v1" as const,
+    status: "unsealed" as const,
+    sourceRevision,
+    configSha256: config.configSha256,
+    revisionId: config.revisionId,
+    approvalId: config.approvalId,
+    journeyId: config.journeyId,
+    targetHandleId: config.targetHandleId,
+    accountState: "application_ready" as const,
+    independentlyObservedVerifiedState: true as const,
+    verificationProof: "credential_sign_in" as const,
+    provider: "workday-auth" as const,
+    consumedCandidateCount: 0 as const,
+    messageBodyRetained: false as const,
+    submitActivated: false as const,
+  });
 }
 
 function preReview() {

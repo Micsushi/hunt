@@ -1,20 +1,25 @@
-import { writeOperatorMonitorAcknowledgement } from "../src/live/evidence/operator-monitor-ack.ts";
-import { parseOperatorMonitorAckArgs } from "../src/live/runner/operator-monitor-ack.ts";
+import {
+  readStage2ExternalMonitorObservation,
+  writeStage2ExternalMonitorAcknowledgement,
+} from "../src/live/evidence/external-monitor-runtime.ts";
+import { parseExternalMonitorAckArgs } from "../src/live/runner/operator-monitor-ack.ts";
 
 try {
-  const args = parseOperatorMonitorAckArgs(process.argv.slice(2));
-  const acknowledgement = writeOperatorMonitorAcknowledgement({
-    root: args.evidenceRoot,
-    monitorRequestPath: args.monitorRequestPath,
+  const args = parseExternalMonitorAckArgs(process.argv.slice(2));
+  const observation = readStage2ExternalMonitorObservation(
+    args.runtimeRoot,
+    args.observationPath,
+  );
+  writeStage2ExternalMonitorAcknowledgement({
+    runtimeRoot: args.runtimeRoot,
+    evidenceRoot: args.evidenceRoot,
+    requestPath: args.monitorRequestPath,
     classification: args.classification,
+    ...observation,
   });
   process.stdout.write(`${JSON.stringify({
-    status: acknowledgement.status,
-    journeyId: acknowledgement.journeyId,
-    targetHandleId: acknowledgement.targetHandleId,
-    monitorRequestSha256: acknowledgement.monitorRequestSha256,
-    classification: acknowledgement.classification,
-    screenshotSha256: acknowledgement.screenshotSha256,
+    status: "acknowledged",
+    classification: args.classification,
   })}\n`);
 } catch {
   process.stdout.write('{"status":"failed","code":"monitor_acknowledgement_invalid"}\n');

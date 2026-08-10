@@ -11,6 +11,8 @@ if (mode === "argv") {
 } else if (mode === "attest") {
   await assertCurrentProcessIsOnIsolatedDesktop();
   await writeFile(outputPath, "ok", "utf8");
+} else if (mode === "identity") {
+  await writeFile(outputPath, JSON.stringify({ pid: process.pid }), "utf8");
 } else if (mode === "linger") {
   const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: "ignore",

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   realpathSync,
@@ -36,6 +37,7 @@ import { readStablePrivateFile } from "./s2-stable-private-file.ts";
 
 const PROFILE_FILE = "application-profile.json";
 const RESUME_FILE = "application-resume.pdf";
+const BINDING_FILE = "application-source-binding.json";
 const MAX_PROFILE_BYTES = 512 * 1024;
 const MAX_RESUME_BYTES = 5 * 1024 * 1024;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -92,15 +94,17 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         { notModifiedAfterMs: approvalTime },
       ).bytes;
       let value: unknown;
+      let profileSha256: string;
       try {
         if (profileBytes[0] === 0xef && profileBytes[1] === 0xbb && profileBytes[2] === 0xbf) {
           denied();
         }
+        profileSha256 = createHash("sha256").update(profileBytes).digest("hex");
         value = JSON.parse(profileBytes.toString("utf8"));
       } finally {
         profileBytes.fill(0);
       }
-      const manifest = parseManifest(value, request);
+      const manifest = parseManifest(value, request, runtimeRoot, profileSha256);
       const resumeBytes = readStablePrivateFile(
         join(runtimeRoot, RESUME_FILE),
         MAX_RESUME_BYTES,
@@ -176,7 +180,13 @@ interface ParsedManifest {
 function parseManifest(
   value: unknown,
   request: Stage2ApplicationOwnerSourceRequest,
+  runtimeRoot: string,
+  profileSha256: string,
 ): ParsedManifest {
+  if (
+    typeof value === "object" && value !== null && !Array.isArray(value) &&
+    (value as Record<string, unknown>).sourceRevision === "s2-application-owner-profile-v1"
+  ) return parsePreparedManifest(value, request, runtimeRoot, profileSha256);
   const manifest = exact(value, [
     "schemaVersion", "sourceRevision", "scope", "revisionId", "approvalId",
     "journeyId", "targetHandleId", "profileRef", "resumeRef", "approvedAt", "resume",
@@ -211,6 +221,67 @@ function parseManifest(
     resume: resume as unknown as ParsedManifest["resume"],
     profile: manifest.profile,
     profilePlan: manifest.profilePlan,
+    narrative: narrative as unknown as ParsedManifest["narrative"],
+  };
+}
+
+function parsePreparedManifest(
+  value: unknown,
+  request: Stage2ApplicationOwnerSourceRequest,
+  runtimeRoot: string,
+  profileSha256: string,
+): ParsedManifest {
+  const profile = exact(value, [
+    "schemaVersion", "sourceRevision", "profile", "profilePlan", "narrative",
+  ]);
+  if (
+    profile.schemaVersion !== 1 ||
+    profile.sourceRevision !== "s2-application-owner-profile-v1"
+  ) denied();
+  const bindingBytes = readStablePrivateFile(
+    join(runtimeRoot, BINDING_FILE),
+    64 * 1024,
+    { notModifiedAfterMs: Date.parse(request.approvedAt) },
+  ).bytes;
+  let binding: Record<string, unknown>;
+  try {
+    binding = exact(JSON.parse(bindingBytes.toString("utf8")), [
+      "schemaVersion", "bindingRevision", "scope", "revisionId", "approvalId",
+      "journeyId", "targetHandleId", "profileRef", "resumeRef",
+      "profileSha256", "resume",
+    ]);
+  } finally {
+    bindingBytes.fill(0);
+  }
+  if (
+    binding.schemaVersion !== 1 ||
+    binding.bindingRevision !== "s2-application-owner-source-binding-v1" ||
+    binding.scope !== "application_completion" ||
+    binding.revisionId !== request.revisionId ||
+    binding.approvalId !== request.approvalId ||
+    binding.journeyId !== request.journeyId ||
+    binding.targetHandleId !== request.targetHandleId ||
+    binding.profileRef !== request.profileRef ||
+    binding.resumeRef !== request.resumeRef ||
+    binding.profileSha256 !== profileSha256
+  ) denied();
+  const resume = exact(binding.resume, [
+    "resumeId", "sha256", "sizeBytes", "fileType",
+  ]);
+  if (
+    !stringMatches(resume.resumeId, opaque) ||
+    !stringMatches(resume.sha256, /^[a-f0-9]{64}$/u) ||
+    !Number.isSafeInteger(resume.sizeBytes) ||
+    (resume.sizeBytes as number) < 1 ||
+    (resume.sizeBytes as number) > MAX_RESUME_BYTES ||
+    resume.fileType !== "pdf"
+  ) denied();
+  const narrative = exact(profile.narrative, ["revision"]);
+  if (!stringMatches(narrative.revision, opaque)) denied();
+  return {
+    resume: resume as unknown as ParsedManifest["resume"],
+    profile: profile.profile,
+    profilePlan: profile.profilePlan,
     narrative: narrative as unknown as ParsedManifest["narrative"],
   };
 }

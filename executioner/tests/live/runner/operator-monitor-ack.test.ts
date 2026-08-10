@@ -1,7 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseOperatorMonitorAckArgs } from "../../../src/live/runner/operator-monitor-ack.ts";
+import {
+  parseExternalMonitorAckArgs,
+  parseOperatorMonitorAckArgs,
+} from "../../../src/live/runner/operator-monitor-ack.ts";
+
+test("ordinal monitor ACK parser accepts only five exact path/value pairs", () => {
+  assert.deepEqual(parseExternalMonitorAckArgs([
+    "--runtime-root", "C:\\private\\runtime",
+    "--evidence-root", "C:\\private\\evidence",
+    "--monitor-request", "C:\\private\\evidence\\monitor\\0001-resume-before_mutation.request.json",
+    "--classification", "safe_to_continue",
+    "--observation", "C:\\private\\runtime\\0001-resume-before_mutation.observation.json",
+  ]), {
+    runtimeRoot: "C:\\private\\runtime",
+    evidenceRoot: "C:\\private\\evidence",
+    monitorRequestPath: "C:\\private\\evidence\\monitor\\0001-resume-before_mutation.request.json",
+    classification: "safe_to_continue",
+    observationPath: "C:\\private\\runtime\\0001-resume-before_mutation.observation.json",
+  });
+  assert.throws(() => parseExternalMonitorAckArgs([
+    "--runtime-root", "C:\\private\\runtime",
+    "--evidence-root", "C:\\private\\evidence",
+    "--monitor-request", "C:\\private\\request.json",
+    "--classification", "application_ready",
+    "--observation", "C:\\private\\observation.json",
+  ]), /monitor acknowledgement arguments invalid/u);
+});
 
 test("operator monitor acknowledgement CLI accepts one canonical root and classification", () => {
   for (const classification of ["application_ready", "runtime_error"] as const) {

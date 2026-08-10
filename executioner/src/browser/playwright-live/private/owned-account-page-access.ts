@@ -21,6 +21,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   readonly #unverifiedFields = new Set<AccountFieldName>();
   #terminalError: PersistentBrowserErrorCode | "operation_cancelled" | undefined;
   #active = true;
+  #effectStarted = false;
 
   constructor(
     page: PersistentPage,
@@ -80,6 +81,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     }
     if (!admitted.value.actionable) return failure("browser_target_invalid");
     if (this.#signal.aborted) return this.#cancel();
+    this.#effectStarted = true;
     const applied = await bounded(
       this.#adapter.activate(this.#page, action),
       this.#signal,
@@ -98,6 +100,8 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   get hasUnverifiedEffect(): boolean {
     return this.#unverifiedFields.size > 0;
   }
+
+  get effectStarted(): boolean { return this.#effectStarted; }
 
   deactivate(): void {
     this.#active = false;
@@ -135,6 +139,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     }
     if (!admitted.value.actionable) return failure("browser_target_invalid");
     if (this.#signal.aborted) return this.#cancel();
+    this.#effectStarted = true;
     const transient = bytes?.slice();
     const action = kind === "fill"
       ? this.#adapter.fill(this.#page, field, transient!)
@@ -213,14 +218,12 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   async #uncertain() {
     this.#terminalError = "browser_effect_uncertain";
     this.#active = false;
-    await this.#invalidate();
     return failure("browser_effect_uncertain");
   }
 
   async #invalidated() {
     this.#terminalError = "browser_session_invalidated";
     this.#active = false;
-    await this.#invalidate();
     return failure("browser_session_invalidated");
   }
 

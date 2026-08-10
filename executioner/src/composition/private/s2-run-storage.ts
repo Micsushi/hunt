@@ -27,19 +27,34 @@ import {
 
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
+import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
 import { sweepExpiredVerificationReplayClaims } from "./s2-verification-replay-ledger.ts";
 
 const RUN_KEY = /^run_\d{8}_[a-z0-9]{16}$/u;
 const TARGET_HOST = /^[a-z0-9.-]{4,253}$/u;
 const TARGET_TENANT = /^[a-z0-9-]{2,64}$/u;
 const TARGET_POSTING = /^[A-Za-z0-9-]{2,64}$/u;
-const ALLOWED_RETAINED_FILES = new Set([
+const ACCOUNT_ACCESS_RETAINED_FILES = new Set([
   "acceptance.json",
   "completion-audit.json",
   "diagnostics.json",
   "monitor-ack.json",
   "monitor-visible.png",
   "process-audit.json",
+]);
+const ACCOUNT_VERIFIED_RETAINED_FILES = new Set([
+  "acceptance.json",
+  "completion-audit.json",
+  "monitor-ack.json",
+  "monitor-visible.png",
+  "process-audit.json",
+]);
+const REVIEW_RETAINED_FILES = new Set([
+  "acceptance.json",
+  "application-walk-acceptance.json",
+  "completion-audit.json",
+  "process-audit.json",
+  "review-acceptance.json",
   "s2-acceptance-manifest.json",
 ]);
 
@@ -50,6 +65,13 @@ export interface Stage2StoragePath {
 
 export interface Stage2StorageProtector {
   protect(paths: readonly Stage2StoragePath[]): Promise<void>;
+}
+
+export async function protectStage2StoragePaths(
+  paths: readonly Stage2StoragePath[],
+  protector: Stage2StorageProtector = localModeProtector,
+): Promise<void> {
+  await protector.protect(paths);
 }
 
 export interface Stage2RunStorageLayout {
@@ -226,7 +248,7 @@ export async function finalizeStage2RunStorage(
     const completedAt = processAudit.checkedAt;
     const retainUntil = new Date(Date.parse(completedAt) + owner.retentionDays * 86_400_000)
       .toISOString();
-    const retainedFiles = retainedFileDigests(layout.evidenceRoot);
+    const retainedFiles = retainedFileDigests(layout.evidenceRoot, completion);
     writeAtomicJsonEvidence({
       root: layout.evidenceRoot,
       value: {
@@ -717,6 +739,8 @@ function readCompletionAudit(root: string): {
   readonly sourceRevision: string;
   readonly runStatus: "passed" | "blocked" | "failed";
   readonly monitorClassification: string;
+  readonly allowedRootFiles: ReadonlySet<string>;
+  readonly nestedEvidenceFiles: readonly string[];
 } {
   const value = readBoundedJson(join(root, "completion-audit.json"), 16 * 1024) as Record<string, unknown>;
   const common =
@@ -724,16 +748,17 @@ function readCompletionAudit(root: string): {
     value.status === "pass" &&
     typeof value.sourceRevision === "string" &&
     /^[0-9a-f]{40}$/u.test(value.sourceRevision) &&
-    value.monitor === "acknowledged" &&
     typeof value.monitorClassification === "string" &&
     value.processCleanup === "pass" &&
     value.privacyScan === "pass" &&
     value.submitActivated === false;
   const accountAccess =
     value.evidenceRevision === "s2-account-access-completion-v1" &&
+    value.monitor === "acknowledged" &&
     ["passed", "blocked", "failed"].includes(value.runStatus as string);
   const accountVerified =
     value.evidenceRevision === "s2-account-verified-completion-v2" &&
+    value.monitor === "acknowledged" &&
     value.runStatus === "passed" &&
     value.monitorClassification === "application_ready" &&
     value.acceptance === "present" &&
@@ -742,29 +767,71 @@ function readCompletionAudit(root: string): {
     (value.verificationProof === "credential_sign_in" &&
       value.provider === "workday-auth" && value.consumedCandidateCount === 0)) &&
     value.messageBodyRetained === false;
-  if (
-    !common || (!accountAccess && !accountVerified)
-  ) denied("storage finalization denied");
+  let allowedRootFiles: ReadonlySet<string> = accountAccess
+    ? ACCOUNT_ACCESS_RETAINED_FILES
+    : ACCOUNT_VERIFIED_RETAINED_FILES;
+  let nestedEvidenceFiles: readonly string[] = Object.freeze([]);
+  let review = false;
+  if (value.evidenceRevision === "s2-review-completion-v1") {
+    const inspection = inspectStage2ReviewCompletion(root);
+    review = JSON.stringify(value) === JSON.stringify(inspection.audit);
+    allowedRootFiles = REVIEW_RETAINED_FILES;
+    nestedEvidenceFiles = Object.freeze([
+      ...inspection.realEvidenceFiles,
+      ...inspection.monitorFiles,
+    ].sort());
+  }
+  if (!common || (!accountAccess && !accountVerified && !review)) {
+    denied("storage finalization denied");
+  }
   return Object.freeze({
     sourceRevision: value.sourceRevision as string,
     runStatus: value.runStatus as "passed" | "blocked" | "failed",
     monitorClassification: value.monitorClassification as string,
+    allowedRootFiles,
+    nestedEvidenceFiles,
   });
 }
 
-function retainedFileDigests(root: string): readonly {
+function retainedFileDigests(
+  root: string,
+  completion: ReturnType<typeof readCompletionAudit>,
+): readonly {
   readonly file: string;
   readonly sha256: string;
   readonly bytes: number;
 }[] {
   const names = readdirSync(root).sort();
+  const nestedDirectories = new Set(
+    completion.nestedEvidenceFiles.map((file) => {
+      const separator = file.indexOf("/");
+      if (separator < 1) denied("storage finalization denied");
+      return file.slice(0, separator);
+    }),
+  );
   if (
-    names.length < 2 || names.length > ALLOWED_RETAINED_FILES.size ||
-    names.some((name) => !ALLOWED_RETAINED_FILES.has(name)) ||
+    names.length < 2 || names.length > completion.allowedRootFiles.size + nestedDirectories.size ||
+    names.some((name) => !completion.allowedRootFiles.has(name) && !nestedDirectories.has(name)) ||
+    [...nestedDirectories].some((name) => !names.includes(name)) ||
     !names.includes("completion-audit.json") ||
     !names.includes("process-audit.json")
   ) denied("storage finalization denied");
-  return Object.freeze(names.map((file) => {
+  for (const directoryName of nestedDirectories) {
+    const expectedNames = completion.nestedEvidenceFiles
+      .filter((file) => file.startsWith(`${directoryName}/`))
+      .map((file) => file.slice(directoryName.length + 1))
+      .sort();
+    if (
+      expectedNames.some((name) => name.length < 1 || name.includes("/")) ||
+      readdirSync(admittedDirectory(join(root, directoryName), false)).sort().join("\0") !==
+        expectedNames.join("\0")
+    ) denied("storage finalization denied");
+  }
+  const files = [
+    ...names.filter((name) => !nestedDirectories.has(name)),
+    ...completion.nestedEvidenceFiles,
+  ].sort();
+  return Object.freeze(files.map((file) => {
     const path = admittedFile(join(root, file), 12 * 1024 * 1024);
     const bytes = readFileSync(path);
     try {

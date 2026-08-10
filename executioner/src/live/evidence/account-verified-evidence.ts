@@ -1,3 +1,6 @@
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
+
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 export interface AccountVerifiedAcceptanceV2 {
@@ -32,13 +35,36 @@ export async function writeAccountVerifiedEvidence(
 ): Promise<void> {
   writeAtomicJsonEvidence({
     root: request.root,
-    value: exactAcceptance(request.acceptance),
+    value: admitAccountVerifiedEvidence(request.acceptance),
     sensitiveValues: request.sensitiveValues,
     label: "account-verified",
   });
 }
 
-function exactAcceptance(value: AccountVerifiedAcceptanceV2): AccountVerifiedAcceptanceV2 {
+export function readAccountVerifiedEvidence(rootValue: string): AccountVerifiedAcceptanceV2 {
+  try {
+    if (
+      !isAbsolute(rootValue) || normalize(rootValue) !== rootValue ||
+      lstatSync(rootValue).isSymbolicLink() || !statSync(rootValue).isDirectory() ||
+      comparable(realpathSync.native(rootValue)) !== comparable(resolve(rootValue))
+    ) denied();
+    const path = join(realpathSync.native(rootValue), "acceptance.json");
+    if (
+      lstatSync(path).isSymbolicLink() || !statSync(path).isFile() ||
+      statSync(path).size < 2 || statSync(path).size > 16 * 1024 ||
+      comparable(realpathSync.native(path)) !== comparable(resolve(path))
+    ) denied();
+    return admitAccountVerifiedEvidence(
+      JSON.parse(readFileSync(path, "utf8")) as AccountVerifiedAcceptanceV2,
+    );
+  } catch {
+    return denied();
+  }
+}
+
+export function admitAccountVerifiedEvidence(
+  value: AccountVerifiedAcceptanceV2,
+): AccountVerifiedAcceptanceV2 {
   const expected = [
     "schemaVersion", "evidenceRevision", "checkpoint", "status", "sourceRevision",
     "revisionId", "approvalId", "journeyId", "targetHandleId", "accountState",
@@ -81,4 +107,9 @@ function validProof(value: AccountVerifiedAcceptanceV2): boolean {
 
 function denied(): never {
   throw new Error("account-verified evidence denied");
+}
+
+function comparable(value: string): string {
+  const normalized = normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

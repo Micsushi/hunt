@@ -28,6 +28,8 @@ export interface AtomicJsonEvidenceRequest {
   readonly label: string;
   readonly fileName?:
     | "acceptance.json"
+    | "application-walk-acceptance.json"
+    | "review-acceptance.json"
     | "diagnostics.json"
     | "monitor-ack.json"
     | "process-audit.json"

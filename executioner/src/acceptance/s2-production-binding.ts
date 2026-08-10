@@ -23,7 +23,7 @@ export interface Stage2RealJourneyLiveRuntimeBinding {
     signal: AbortSignal,
   ): Promise<
     Omit<Stage2ApplicationWalkDependencies, "evidence"> &
-    Pick<Stage2RealJourneyRuntime, "recovery" | "review" | "privacy">
+    Pick<Stage2RealJourneyRuntime, "account" | "recovery" | "review" | "privacy">
   >;
 }
 
@@ -71,6 +71,7 @@ export function createStage2RealJourneyProductionBinding(
       }
       const bound = live;
       return Object.freeze({
+        account: bound.account,
         recovery: bound.recovery,
         application: Object.freeze({
           run: (applicationSignal: AbortSignal, resume?: ApplicationWalkResume) => runApplicationPageWalk(

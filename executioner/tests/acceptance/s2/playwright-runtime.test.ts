@@ -29,8 +29,128 @@ import {
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
-import { isReviewExpectedField } from
+import { isReviewExpectedField, OwnedWorkdayApplicationRuntime } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("Review monitor ACK is followed by a fresh exact visible field and structure readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-review" data-hunt-submit-activated="false"><body data-hunt-application-page="pre_review"><div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button id="final-submit">Submit application</button></main></body></html>`);
+  let monitorCalls = 0;
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_review_drift_next_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [{
+      fieldId: "s1-field-resume",
+      provenance: "resume_verified",
+      rowIdentity: "formField-s1-field-resume",
+      valueSha256: createHash("sha256").update("resume.pdf").digest("hex"),
+    }],
+    externalMonitor: {
+      async auth() {},
+      async application() {
+        monitorCalls += 1;
+        await page.locator('[data-hunt-review-field-id="s1-field-resume"]').evaluate(
+          (element) => { element.textContent = "drifted.pdf"; (element as HTMLElement).hidden = true; },
+        );
+      },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_review_drift_0001"),
+    sessionId: "live_session_review_drift_0001" as LiveSessionId,
+    profileLeaseId: "profile_lease_review_drift_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    await assert.rejects(
+      () => runtime.run(page as never, {
+        schemaVersion: 1,
+        journeyId: journeyId("journey_review_drift_0001"),
+        operationId: generatedOperationId("operation_review_drift_0001"),
+        sessionId: "live_session_review_drift_0001" as LiveSessionId,
+        target: {} as never,
+        now: "2026-08-05T12:00:00.000Z",
+      }, { kind: "capture_review" }, new AbortController().signal),
+      /Review field hidden|Review field mismatch|Review readback drift denied/u,
+    );
+    assert.equal(monitorCalls, 1);
+    assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("application authority expiring during ACK permits no reconcile, navigation, reload, or Review continuation", async (t) => {
+  const cases: readonly [string, OwnedApplicationOperation, string][] = [
+    ["resume reconcile", { kind: "reconcile_resume", input: { attempt: 1, pageId: "page-resume" } as never }, "resume"],
+    ["profile reconcile", { kind: "reconcile_profile", input: { attempt: 1, pageId: "page-profile" } as never }, "profile"],
+    ["questionnaire reconcile", { kind: "reconcile_questionnaire", input: { attempt: 1, pageId: "page-questionnaire" } as never }, "questionnaire"],
+    ["forward navigation", { kind: "next", input: { from: "resume", expected: "profile" } as never }, "resume"],
+    ["reload", { kind: "reload" }, "resume"],
+    ["Review readback", { kind: "capture_review" }, "pre_review"],
+  ];
+  for (const [name, operation, pageKind] of cases) await t.test(name, async () => {
+    const browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const review = pageKind === "pre_review"
+      ? '<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button>Submit application</button></main>'
+      : '<main data-automation-id="applyFlowMyInfoPage"><button id="effect">Next</button><input type="file" data-automation-id="file-upload-input-ref"><textarea></textarea></main>';
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-${pageKind}" data-hunt-submit-activated="false"><body data-hunt-application-page="${pageKind}">${review}<script>window.effectCount=0;document.querySelector('#effect')?.addEventListener('click',()=>window.effectCount++);window.addEventListener('beforeunload',()=>window.effectCount++);</script></body></html>`);
+    let current = "2026-08-05T12:00:00.000Z";
+    const runtime = new OwnedWorkdayApplicationRuntime({
+      request: {} as never,
+      acceptances: { record() {} },
+      nextOperationId: () => generatedOperationId("operation_expiry_next_000001"),
+      timeoutMs: 1_000,
+      initialReviewExpected: pageKind === "pre_review" ? [{
+        fieldId: "s1-field-resume",
+        provenance: "resume_verified",
+        rowIdentity: "formField-s1-field-resume",
+        valueSha256: createHash("sha256").update("resume.pdf").digest("hex"),
+      }] : [],
+      externalMonitor: {
+        async auth() {},
+        async application() { current = "2026-08-05T12:30:00.000Z"; },
+      },
+      authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+      now: () => current,
+    });
+    runtime.bindSession({
+      schemaVersion: 1,
+      journeyId: journeyId("journey_expiry_during_ack_01"),
+      sessionId: "live_session_expiry_ack_0001" as LiveSessionId,
+      profileLeaseId: "profile_lease_expiry_ack_01" as ProfileLeaseId,
+      target: {} as never,
+      leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+    });
+    try {
+      await assert.rejects(() => runtime.run(page as never, {
+        schemaVersion: 1,
+        journeyId: journeyId("journey_expiry_during_ack_01"),
+        operationId: generatedOperationId(`operation_expiry_${name.replace(/[^a-z]/gu, "_")}_01`),
+        sessionId: "live_session_expiry_ack_0001" as LiveSessionId,
+        target: {} as never,
+        now: "2026-08-05T12:00:00.000Z",
+      }, operation, new AbortController().signal), /application authorization expired/u);
+      assert.equal(await page.evaluate(() => (window as unknown as { effectCount: number }).effectCount), 0);
+    } finally {
+      runtime.dispose();
+      await context.close();
+      await browser.close();
+    }
+  });
+});
 
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { createConfiguredNarrativeProvider } from "../../../src/ats/workday/application/questions/index.ts";
@@ -341,6 +461,229 @@ test("unexpected auth UI fails closed before any application mutation", async ()
     disposeResumeArtifact(artifact);
     await context.close();
     await chromiumBrowser.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("account verification reuses the one opened session and leaves cleanup to the runtime", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-session-"));
+  const evidenceRoot = join(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const accountOwner = authorizedOwner(root);
+  const base = closedRecoveryBrowser("resume");
+  let openCalls = 0;
+  let closeCalls = 0;
+  let verifierCalls = 0;
+  const browser = {
+    ...base,
+    async open(...args: Parameters<typeof base.open>) {
+      openCalls += 1;
+      return base.open(...args);
+    },
+    async close(...args: Parameters<typeof base.close>) {
+      closeCalls += 1;
+      return base.close(...args);
+    },
+  };
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => browser,
+      accountVerifier: async (request) => {
+        verifierCalls += 1;
+        assert.equal(request.browser, browser);
+        assert.equal(request.session.sessionId, "live_session_runtime_fixture_01");
+        assert.deepEqual(request.session.target, request.target);
+        assert.equal(request.sourceRevision, "0123456789abcdef0123456789abcdef01234567");
+        assert.equal(request.configSha256, "a".repeat(64));
+        assert.equal(openCalls, 1);
+        assert.equal(closeCalls, 0);
+        return {
+          ok: true,
+          proof: {
+            schemaVersion: 1,
+            proofRevision: "s2-account-session-proof-v1",
+            status: "unsealed",
+            sourceRevision: request.sourceRevision,
+            configSha256: request.configSha256,
+            revisionId: "revision_0123456789abcdef",
+            approvalId: "approval_0123456789abcdef",
+            journeyId: request.session.journeyId,
+            targetHandleId: "target_ref_0123456789abcdef",
+            accountState: "application_ready",
+            independentlyObservedVerifiedState: true,
+            verificationProof: "credential_sign_in",
+            provider: "workday-auth",
+            consumedCandidateCount: 0,
+            messageBodyRetained: false,
+            submitActivated: false,
+          },
+        };
+      },
+      now: () => "2026-08-05T12:00:00.000Z",
+      nextOperationId: operationIds(850),
+    }).bind({
+      owner: accountOwner as never,
+      ownerBinding: {} as never,
+      ownerSources: {} as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+
+    const verified = runtime.account.verify(new AbortController().signal);
+    assert.equal(runtime.account.verify(new AbortController().signal), verified);
+    assert.equal((await verified).ok, true);
+    assert.equal(openCalls, 1);
+    assert.equal(closeCalls, 0);
+    assert.equal(verifierCalls, 1);
+    assert.equal(existsSync(join(evidenceRoot, "acceptance.json")), false);
+    assert.equal(existsSync(join(root, "account-session-proof.json")), true);
+    assert.equal(await runtime.cleanup.close(new AbortController().signal), true);
+    assert.equal(closeCalls, 1);
+    assert.equal(existsSync(join(evidenceRoot, "acceptance.json")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("suspended post-auth recovery reuses only its exact immutable account proof", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-restart-"));
+  mkdirSync(join(root, "evidence"));
+  const accountOwner = authorizedOwner(root);
+  let liveVerifierCalls = 0;
+  const request = {
+    owner: accountOwner,
+    ownerBinding: {} as never,
+    ownerSources: { sensitiveValues: [] } as never,
+    sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+    configSha256: "a".repeat(64),
+  };
+  try {
+    const first = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => closedRecoveryBrowser("profile"),
+      accountVerifier: async ({ sourceRevision, configSha256, session }) => {
+        liveVerifierCalls += 1;
+        return { ok: true, proof: accountSessionProof(sourceRevision, configSha256, session) };
+      },
+      now: () => "2026-08-05T12:00:00.000Z",
+      nextOperationId: operationIds(860),
+    }).bind(request, new AbortController().signal);
+    assert.equal((await first.account.verify(new AbortController().signal)).ok, true);
+    const recoveryDirectory = join(root, "stage2-acceptance");
+    writeFileSync(
+      join(recoveryDirectory, "revision_0123456789abcdef.recovery.json"),
+      `${JSON.stringify(validRecoveryArtifact("profile", 1))}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+    assert.equal(await first.cleanup.close(new AbortController().signal, false), true);
+
+    const second = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => closedRecoveryBrowser("profile"),
+      accountVerifier: async () => {
+        liveVerifierCalls += 1;
+        throw new Error("recovery must not repeat live authentication");
+      },
+      now: () => "2026-08-05T12:05:00.000Z",
+      nextOperationId: operationIds(870),
+    }).bind(request, new AbortController().signal);
+    assert.equal((await second.account.verify(new AbortController().signal)).ok, true);
+    assert.equal(liveVerifierCalls, 1);
+    assert.notEqual(await second.recovery.pending(new AbortController().signal), null);
+    assert.equal(await second.cleanup.close(new AbortController().signal, false), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const proofCase of ["missing", "crossed"] as const) {
+  test(`post-auth recovery denies ${proofCase} account proof without repeating authentication`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-account-${proofCase}-`));
+    mkdirSync(join(root, "evidence"));
+    const recoveryDirectory = join(root, "stage2-acceptance");
+    mkdirSync(recoveryDirectory);
+    writeFileSync(
+      join(recoveryDirectory, "revision_0123456789abcdef.recovery.json"),
+      `${JSON.stringify(validRecoveryArtifact("profile", 1))}\n`,
+      { mode: 0o600 },
+    );
+    if (proofCase === "crossed") {
+      const crossedSession = closedRecoveryBrowser("profile");
+      const opened = await crossedSession.open();
+      if (!opened.ok) throw new Error("fixture session unavailable");
+      writeFileSync(
+        join(root, "account-session-proof.json"),
+        `${JSON.stringify(accountSessionProof(
+          "0123456789abcdef0123456789abcdef01234567",
+          "b".repeat(64),
+          opened.value.session,
+        ))}\n`,
+        { mode: 0o600 },
+      );
+    }
+    let verifierCalls = 0;
+    try {
+      const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+        browser: () => closedRecoveryBrowser("profile"),
+        accountVerifier: async () => {
+          verifierCalls += 1;
+          throw new Error("crossed or missing proof must not trigger authentication");
+        },
+        now: () => "2026-08-05T12:05:00.000Z",
+        nextOperationId: operationIds(880),
+      }).bind({
+        owner: authorizedOwner(root),
+        ownerBinding: {} as never,
+        ownerSources: { sensitiveValues: [] } as never,
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+        configSha256: "a".repeat(64),
+      }, new AbortController().signal);
+      assert.deepEqual(await runtime.account.verify(new AbortController().signal), {
+        ok: false,
+        code: "account_proof_invalid",
+      });
+      assert.equal(verifierCalls, 0);
+      assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("authorization expiry after account proof closes but never seals acceptance", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-expiry-"));
+  const evidenceRoot = join(root, "evidence");
+  mkdirSync(evidenceRoot);
+  let current = "2026-08-05T12:00:00.000Z";
+  let suspended = 0;
+  const base = closedRecoveryBrowser("resume");
+  const browser = {
+    ...base,
+    async [suspendOwnedApplicationSession](...args: Parameters<typeof base[typeof suspendOwnedApplicationSession]>) {
+      suspended += 1;
+      return base[suspendOwnedApplicationSession](...args);
+    },
+  };
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => browser,
+      accountVerifier: async ({ sourceRevision, configSha256, session }) => ({
+        ok: true,
+        proof: accountSessionProof(sourceRevision, configSha256, session),
+      }),
+      now: () => current,
+      nextOperationId: operationIds(890),
+    }).bind({
+      owner: authorizedOwner(root),
+      ownerBinding: {} as never,
+      ownerSources: { sensitiveValues: [] } as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+    assert.equal((await runtime.account.verify(new AbortController().signal)).ok, true);
+    current = "2026-08-06T12:00:00.000Z";
+    assert.equal(await runtime.cleanup.close(new AbortController().signal, false), false);
+    assert.equal(suspended, 1);
+    assert.equal(existsSync(join(evidenceRoot, "acceptance.json")), false);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -1044,6 +1387,45 @@ function owner(root: string, url: string) {
       evidence: { path: join(root, "evidence") },
     },
   } as never;
+}
+
+function authorizedOwner(root: string) {
+  const value = owner(
+    root,
+    "https://fixture.invalid/application-questions",
+  ) as unknown as {
+    target: { tenant: string; posting: string };
+    approval: { expiresAt: string };
+  };
+  value.target.tenant = "private-tenant";
+  value.target.posting = "private-posting";
+  value.approval.expiresAt = "2026-08-06T12:00:00.000Z";
+  return value as never;
+}
+
+function accountSessionProof(
+  sourceRevision: string,
+  configSha256: string,
+  session: LiveBrowserSessionV1,
+) {
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    proofRevision: "s2-account-session-proof-v1" as const,
+    status: "unsealed" as const,
+    sourceRevision,
+    configSha256,
+    revisionId: "revision_0123456789abcdef",
+    approvalId: "approval_0123456789abcdef",
+    journeyId: session.journeyId,
+    targetHandleId: "target_ref_0123456789abcdef",
+    accountState: "application_ready" as const,
+    independentlyObservedVerifiedState: true as const,
+    verificationProof: "credential_sign_in" as const,
+    provider: "workday-auth" as const,
+    consumedCandidateCount: 0 as const,
+    messageBodyRetained: false as const,
+    submitActivated: false as const,
+  });
 }
 
 function resumeArtifact() {

@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { prepareStage2LiveRun } from "../../src/composition/s2-run-preparation.ts";
+import { FileBackedStage2ApplicationOwnerSourceResolver } from
+  "../../src/composition/private/s2-application-owner-source.ts";
 import { admitRealRunPreflight } from "../../src/live/preflight/admit.ts";
 
 const noProtection = { protect: async () => undefined };
@@ -78,6 +88,178 @@ test("sequential live runs keep recipient identity but rotate all run-scoped aut
     assert.notEqual(firstOwner.accountSecret.handleId, secondOwner.accountSecret.handleId);
     assert.notEqual(firstOwner.gmailAuthorization.handleId, secondOwner.gmailAuthorization.handleId);
   } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("atomic preparation seals current protected application sources before approval", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
+  const resumeBytes = Buffer.from("%PDF-1.7\nowner-approved resume\n");
+  const resumeSha256 = createHash("sha256").update(resumeBytes).digest("hex");
+  try {
+    const prepared = await prepareStage2LiveRun({
+      storageRoot,
+      targetUrl: "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422",
+      accountMode: "sign_in",
+      applicationSource: {
+        resume: {
+          resumeId: "resume-owner-approved",
+          sha256: resumeSha256,
+          sizeBytes: resumeBytes.byteLength,
+          fileType: "pdf",
+          bytes: resumeBytes,
+        },
+        profile: {
+          profileId: "profile-owner-approved",
+          revision: 1,
+          facts: [
+            { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
+            { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
+          ],
+        },
+        profilePlan: {
+          pageType: "profile",
+          fields: [{
+            fieldId: "identity.given_name",
+            questionType: "identity",
+            answerType: "text",
+            answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided" },
+          }],
+          repeatables: [],
+        },
+        narrative: { revision: "narrative-owner-approved" },
+      },
+    }, noProtection);
+    const owner = JSON.parse(readFileSync(prepared.ownerConfigPath, "utf8"));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [process.cwd()],
+    });
+
+    const resolved = await resolver.resolve({
+      runtimeRoot: prepared.runtimeRoot,
+      revisionId: owner.revisionId,
+      approvalId: owner.approval.approvalId,
+      journeyId: owner.journeyId,
+      targetHandleId: owner.target.handleId,
+      profileRef: owner.profileRef,
+      resumeRef: owner.resumeRef,
+      approvedAt: owner.approval.approvedAt,
+    }, AbortSignal.any([]));
+
+    assert.equal(resolved.profileId, "profile-owner-approved");
+    assert.equal(resolved.profilePlan.fields.length, 1);
+    assert.equal(existsSync(join(prepared.runtimeRoot, "application-source-binding.json")), true);
+
+    writeFileSync(
+      join(prepared.runtimeRoot, "application-profile.json"),
+      readFileSync(join(prepared.runtimeRoot, "application-profile.json")),
+    );
+    await assert.rejects(
+      resolver.resolve({
+        runtimeRoot: prepared.runtimeRoot,
+        revisionId: owner.revisionId,
+        approvalId: owner.approval.approvalId,
+        journeyId: owner.journeyId,
+        targetHandleId: owner.target.handleId,
+        profileRef: owner.profileRef,
+        resumeRef: owner.resumeRef,
+        approvedAt: owner.approval.approvedAt,
+      }, AbortSignal.any([])),
+      { name: "TypeError", message: "application owner source denied" },
+    );
+  } finally {
+    resumeBytes.fill(0);
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("post-write source protection failure leaves no admitted run", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
+  const resumeBytes = Buffer.from("%PDF-1.7\nowner-approved resume\n");
+  try {
+    await assert.rejects(
+      prepareStage2LiveRun({
+        storageRoot,
+        targetUrl: "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422",
+        accountMode: "sign_in",
+        applicationSource: {
+          resume: {
+            resumeId: "resume-owner-approved",
+            sha256: createHash("sha256").update(resumeBytes).digest("hex"),
+            sizeBytes: resumeBytes.byteLength,
+            fileType: "pdf",
+            bytes: resumeBytes,
+          },
+          profile: {},
+          profilePlan: {},
+          narrative: { revision: "narrative-owner-approved" },
+        },
+      }, {
+        protect: async (paths) => {
+          if (paths.some(({ path }) => path.endsWith("application-profile.json"))) {
+            throw new Error("injected source protection failure");
+          }
+        },
+      }),
+      { name: "Error", message: "run preparation denied" },
+    );
+    assert.deepEqual(readdirSync(join(storageRoot, "transient")), []);
+    assert.deepEqual(readdirSync(join(storageRoot, "retained")), []);
+  } finally {
+    resumeBytes.fill(0);
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("application source is snapshotted before storage awaits and rejects caller time", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
+  const resumeBytes = Buffer.from("%PDF-1.7\nsource before await\n");
+  const profile = { marker: "before" };
+  const profilePlan = { marker: "before" };
+  const source = {
+    resume: {
+      resumeId: "resume-owner-approved",
+      sha256: createHash("sha256").update(resumeBytes).digest("hex"),
+      sizeBytes: resumeBytes.byteLength,
+      fileType: "pdf" as const,
+      bytes: resumeBytes,
+    },
+    profile,
+    profilePlan,
+    narrative: { revision: "narrative-owner-approved" },
+  };
+  try {
+    await assert.rejects(prepareStage2LiveRun({
+      storageRoot,
+      targetUrl: "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422",
+      accountMode: "sign_in",
+      now: "2099-08-05T05:00:00.000Z",
+      applicationSource: source,
+    }, noProtection), { name: "Error", message: "run preparation denied" });
+
+    const pending = prepareStage2LiveRun({
+      storageRoot,
+      targetUrl: "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422",
+      accountMode: "sign_in",
+      applicationSource: source,
+    }, noProtection);
+    profile.marker = "after";
+    profilePlan.marker = "after";
+    resumeBytes.fill(0x78);
+    const prepared = await pending;
+    const captured = JSON.parse(readFileSync(
+      join(prepared.runtimeRoot, "application-profile.json"),
+      "utf8",
+    ));
+    assert.equal(captured.profile.marker, "before");
+    assert.equal(captured.profilePlan.marker, "before");
+    assert.equal(
+      readFileSync(join(prepared.runtimeRoot, "application-resume.pdf"), "ascii")
+        .startsWith("%PDF-"),
+      true,
+    );
+  } finally {
+    resumeBytes.fill(0);
     rmSync(storageRoot, { recursive: true, force: true });
   }
 });

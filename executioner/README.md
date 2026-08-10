@@ -264,6 +264,8 @@ both inputs, runs the real journey in the isolated process boundary, and
 recaptures both inputs again. It accepts only an exact sanitized Review packet
 with independent Review proof, structural Submit presence,
 `submitActivated: false`, and `privacyScan: pass`. A pass writes
+`application-walk-acceptance.json` for the page walk,
+`review-acceptance.json` for the Review gate, and
 `s2-acceptance-manifest.json`, finalizes only the bound run, removes only its
 transient tree, and records the disposal audit. Final job Submit remains
 forbidden and is not exposed by this command or the real runner.
@@ -321,6 +323,25 @@ with its new config and evidence paths.
 The lower checkpoints remain available as `live:s2:slice` for bounded F1/F2
 diagnostics. A slice is not the Stage 2 acceptance gate and cannot certify
 Review.
+
+For the production four-method MCP transport, bind stdio to one already
+prepared run with the same three out-of-band arguments:
+
+```text
+npm run mcp:s2 -- --config C:\private\hunt-c3-storage\transient\<run>\owner-input.json --stop-after review --evidence-root C:\private\hunt-c3-storage\retained\<run>\evidence
+```
+
+Only `start_journey`, `cancel_journey`, `journey_status`, and `journey_result`
+are admitted on stdin. `start_journey` accepts only the exact opaque target,
+resume, and profile references sealed by that owner config. Config paths,
+target URLs, applicant values, browser objects, selectors, and final Submit
+authority never enter the MCP wire. One journey runs in the background;
+cancellation and stdio shutdown abort it and await owned cleanup. Input lines
+are limited to 16 KiB. Replay state is capped at 256 requests, with the final
+three entries reserved for exact-journey cancellation, terminal status, and
+terminal result readback; invalid or wrong-journey requests cannot consume
+those entries. Further requests fail closed. Factual terminals and verified
+completed-page counts pass through unchanged from the journey.
 
 ### Gmail authorization bootstrap
 
@@ -514,21 +535,23 @@ emits `lifecycle_cycle_stopped` and fails closed. It never creates again from
 that fallback. An exact private `account_exists` fact may also switch once to
 Sign In, while an ordinary sign-in rejection never implies account absence.
 
-For monitored live runs, set `HUNT_C3_LIVE_INSPECTION_HOLD=1`. The runner writes
-`monitor-request.json` under its transient runtime root only when the one-shot
-inspection hold begins. Its presence proves the hold and acknowledgement window
-overlap. The runner will not complete browser cleanup until an independent
-monitor inspects the actual visible post-action page. The monitor waits for the
-request, saves `monitor-visible.png` in the retained evidence root, then
-acknowledges the exact request:
+The isolated production runner now requires an ordinal external monitor gate
+for every account or application mutation, readback, navigation, recovery, and
+Review observation. Each request binds the live process, source, config, target,
+operation, attempt, screenshot, sanitized taxonomy, and previous ACK. The
+runner blocks the corresponding browser effect until the independent monitor
+writes an exact ACK. The independent monitor supplies only a protected
+`NNNN-page-moment.observation.json` containing four identity digests, reviewed
+structural IDs, and its observation time. Raw host, title, applicant values,
+selectors, and DOM content never appear on the command line.
 
 ```text
-npm run ack:s2-monitor -- --evidence-root C:\private\hunt-c3-storage\retained\...\evidence --monitor-request C:\private\hunt-c3-storage\transient\...\runtime\monitor-request.json --classification application_ready
+npm run ack:s2-monitor -- --runtime-root C:\private\hunt-c3-storage\transient\...\runtime --evidence-root C:\private\hunt-c3-storage\retained\...\evidence --monitor-request C:\private\hunt-c3-storage\retained\...\evidence\monitor\0001-resume-before_mutation.request.json --classification safe_to_continue --observation C:\private\hunt-c3-storage\transient\...\runtime\0001-resume-before_mutation.observation.json
 ```
 
-The acknowledgement binds the request hash, journey, target, screenshot hash,
-classification, and observation time. A valid screenshot or acknowledgement
-from another run or target is rejected. After the isolated Windows Job writes a
+The final account-ready and Review-readback records use `account_verified` and
+`review_verified`; all earlier records use `safe_to_continue`. Crossed, replayed,
+late, malformed, missing, or post-close records are rejected. After the isolated Windows Job writes a
 passing process audit, run `npm run audit:s2 -- --evidence-root ...`. The audit
 now covers both `account_access` and `account_verified`. Account verification
 records either one exact Gmail candidate consumed or a credential sign-in that

@@ -39,14 +39,24 @@ test("config capture hashes exact bytes and returns only admitted opaque identif
 
 test("Review reader admits only the exact sanitized result contract", () => {
   withRun((paths) => {
-    writeFileSync(join(paths.evidenceRoot, "acceptance.json"), JSON.stringify(reviewPacket()), "utf8");
+    writeFileSync(join(paths.evidenceRoot, "review-acceptance.json"), JSON.stringify(reviewPacket()), "utf8");
     assert.deepEqual(readStage2ReviewAcceptance(paths.evidenceRoot), reviewPacket());
 
     writeFileSync(
-      join(paths.evidenceRoot, "acceptance.json"),
+      join(paths.evidenceRoot, "review-acceptance.json"),
       JSON.stringify({ ...reviewPacket(), rawUrl: targetUrl }),
       "utf8",
     );
+    assert.throws(
+      () => readStage2ReviewAcceptance(paths.evidenceRoot),
+      /review acceptance evidence denied/u,
+    );
+  });
+});
+
+test("Review reader rejects legacy acceptance when the phase-specific file is absent", () => {
+  withRun((paths) => {
+    writeFileSync(join(paths.evidenceRoot, "acceptance.json"), JSON.stringify(reviewPacket()), "utf8");
     assert.throws(
       () => readStage2ReviewAcceptance(paths.evidenceRoot),
       /review acceptance evidence denied/u,
@@ -58,7 +68,7 @@ test("Review writer seals one exact sanitized acceptance for outer reconciliatio
   withRun((paths) => {
     writeStage2ReviewAcceptance(paths.evidenceRoot, reviewPacket(), [secret, targetUrl]);
     assert.deepEqual(readStage2ReviewAcceptance(paths.evidenceRoot), reviewPacket());
-    const raw = readFileSync(join(paths.evidenceRoot, "acceptance.json"), "utf8");
+    const raw = readFileSync(join(paths.evidenceRoot, "review-acceptance.json"), "utf8");
     assert.equal(raw.includes(secret), false);
     assert.equal(raw.includes(targetUrl), false);
     assert.throws(
@@ -112,6 +122,7 @@ test("local ports bind quality, isolated Review, manifest, and exact finalizatio
     },
     resultRead: () => reviewPacket(),
     manifestWrite: (_root, manifest) => calls.push(["manifest", manifest.cleanup]),
+    completionAudit: async (root) => calls.push(["audit", root]),
     finalize: async (request) => calls.push(["finalize", request]),
   });
 
@@ -126,12 +137,26 @@ test("local ports bind quality, isolated Review, manifest, and exact finalizatio
       "--evidence-root", paths.evidenceRoot,
     ]],
     ["manifest", "pending_exact_finalization"],
+    ["audit", paths.evidenceRoot],
     ["finalize", {
       storageRoot: resolve("protected-storage"),
       ownerConfigPath: paths.configPath,
       evidenceRoot: paths.evidenceRoot,
     }],
   ]);
+});
+
+test("local ports fail closed before finalization when Review completion audit is denied", async () => {
+  let finalized = false;
+  const paths = layoutPaths(resolve("protected-storage"));
+  const ports = createLocalStage2AcceptancePorts(resolve("executioner"), {
+    manifestWrite: () => undefined,
+    completionAudit: async () => { throw new Error("injected audit denial"); },
+    finalize: async () => { finalized = true; },
+  });
+
+  await assert.rejects(ports.cleanup.finalize(paths, gateManifest()), /injected audit denial/u);
+  assert.equal(finalized, false);
 });
 
 function ownerConfig() {

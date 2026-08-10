@@ -101,3 +101,14 @@ test("the standalone F3 slice fails closed without an explicitly injected bindin
 
   assert.deepEqual(result, { ok: false, code: "owner_config_invalid" });
 });
+
+test("the production Stage 2 MCP entry binds stdio to one prepared run only", async () => {
+  const source = await readFile(
+    new URL("../../scripts/run-s2-mcp.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /parseStage2RealAcceptanceArgs/u);
+  assert.match(source, /createStage2McpFromPreparedRun/u);
+  assert.match(source, /serveStage2McpStdio/u);
+  assert.doesNotMatch(source, /(?:click|press|activate)[A-Za-z]*(?:Submit|submit)/u);
+});

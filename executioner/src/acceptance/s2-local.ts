@@ -50,6 +50,7 @@ export interface LocalStage2AcceptanceDependencies {
   };
   readonly resultRead?: (root: string) => Stage2ReviewAcceptance;
   readonly manifestWrite?: (root: string, value: Stage2AcceptanceManifest) => void;
+  readonly completionAudit?: (root: string) => Promise<unknown>;
   readonly finalize?: (request: FinalizeStage2RunStorageRequest) => Promise<unknown>;
 }
 
@@ -63,6 +64,9 @@ export function createLocalStage2AcceptancePorts(
   const configCapture = dependencies.configCapture ?? captureStage2Config;
   const resultRead = dependencies.resultRead ?? readStage2ReviewAcceptance;
   const manifestWrite = dependencies.manifestWrite ?? writeStage2AcceptanceManifest;
+  const completionAudit = dependencies.completionAudit ?? (async (root: string) =>
+    (await import("../composition/private/s2-any-completion-audit.ts"))
+      .auditStage2Completion(root));
   const finalize = dependencies.finalize ?? finalizeStage2RunStorage;
   const live = dependencies.live ?? {
     run: async (args: readonly string[], signal?: AbortSignal) => {
@@ -101,6 +105,7 @@ export function createLocalStage2AcceptancePorts(
     cleanup: {
       finalize: async (args, manifest) => {
         manifestWrite(args.evidenceRoot, manifest);
+        await completionAudit(args.evidenceRoot);
         await finalize({
           storageRoot: dirname(dirname(dirname(args.configPath))),
           ownerConfigPath: args.configPath,
@@ -188,7 +193,7 @@ export function readStage2ReviewAcceptance(rootValue: string): Stage2ReviewAccep
   try {
     const root = admittedDirectory(rootValue, "review acceptance evidence denied");
     const bytes = readFileSync(admittedFile(
-      join(root, "acceptance.json"),
+      join(root, "review-acceptance.json"),
       16 * 1024,
       "review acceptance evidence denied",
     ));
@@ -214,7 +219,7 @@ export function writeStage2ReviewAcceptance(
     value: accepted,
     sensitiveValues,
     label: "review acceptance",
-    fileName: "acceptance.json",
+    fileName: "review-acceptance.json",
   });
 }
 
@@ -230,6 +235,27 @@ export function writeStage2AcceptanceManifest(
     label: "acceptance-gate",
     fileName: "s2-acceptance-manifest.json",
   });
+}
+
+export function readStage2AcceptanceManifest(rootValue: string): Stage2AcceptanceManifest {
+  try {
+    const root = admittedDirectory(rootValue, "acceptance-gate evidence denied");
+    const bytes = readFileSync(admittedFile(
+      join(root, "s2-acceptance-manifest.json"),
+      16 * 1024,
+      "acceptance-gate evidence denied",
+    ));
+    try {
+      const value = object(JSON.parse(bytes.toString("utf8")), "acceptance-gate evidence denied") as
+        unknown as Stage2AcceptanceManifest;
+      exactManifest(value);
+      return Object.freeze({ ...value });
+    } finally {
+      bytes.fill(0);
+    }
+  } catch {
+    return denied("acceptance-gate evidence denied");
+  }
 }
 
 function exactManifest(value: Stage2AcceptanceManifest): void {

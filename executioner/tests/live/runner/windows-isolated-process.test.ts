@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -37,6 +37,9 @@ test("Windows live runner owns an unswitched desktop and kill-on-close process j
     "QueryInformationJobObject",
     "OpenProcess",
     "process-audit.json",
+    "s2-windows-process-audit-v2",
+    "processLiveNonceSha256",
+    "monitorChainSha256",
   ]) assert.match(source, new RegExp(required, "u"), required);
   assert.doesNotMatch(source, /AssignProcessToJobObject/u);
   for (const forbidden of ["SwitchDesktop", "SetForegroundWindow", "connectOverCDP"]) {
@@ -99,6 +102,44 @@ test("Windows isolated runner seals exact post-job descendant cleanup evidence",
     assert.equal(audit.membersAliveAfterClose, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Windows Review runner binds process cleanup to config, run, target, and live monitor ledger", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "hunt-c3-process-bound-"));
+  const runKey = "run_20260810_processbindingxx";
+  const configPath = join(storageRoot, "transient", runKey, "owner-input.json");
+  const evidenceRoot = join(storageRoot, "retained", runKey, "evidence");
+  try {
+    await mkdir(resolve(configPath, ".."), { recursive: true });
+    await mkdir(evidenceRoot, { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      journeyId: "journey_abcdefghijklmnop",
+      target: { handleId: "target_ref_abcdefghijklmnop" },
+    }));
+    const argvOutput = join(storageRoot, "argv.json");
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "identity", argvOutput,
+      "--evidence-root", evidenceRoot,
+      "--config", configPath,
+    ], { runnerPath: fixture }), 0);
+    const audit = JSON.parse(await readFile(join(evidenceRoot, "process-audit.json"), "utf8"));
+    const producer = JSON.parse(await readFile(argvOutput, "utf8"));
+    assert.equal(audit.evidenceRevision, "s2-windows-process-audit-v2");
+    assert.equal(audit.runKey, runKey);
+    assert.equal(audit.journeyId, "journey_abcdefghijklmnop");
+    assert.equal(audit.targetHandleId, "target_ref_abcdefghijklmnop");
+    assert.match(audit.configSha256, /^[0-9a-f]{64}$/u);
+    assert.match(audit.processLiveNonceSha256, /^[0-9a-f]{64}$/u);
+    assert.equal(audit.processOwnerPid, producer.pid);
+    assert.match(audit.processOwnerStartedAt, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.ok(Date.parse(audit.processExitObservedAt) <= Date.parse(audit.checkedAt));
+    assert.equal(audit.monitorFileCount, 0);
+    assert.match(audit.monitorChainSha256, /^[0-9a-f]{64}$/u);
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
   }
 });
 

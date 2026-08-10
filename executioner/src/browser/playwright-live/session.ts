@@ -28,7 +28,11 @@ import type {
   AccountEntryAdvanceResult,
   PostingNavigationAction,
 } from "./private/account-navigation-types.ts";
-import { OwnedAccountPageCoordinator } from "./private/owned-account-page-coordinator.ts";
+import {
+  authMonitorPhase,
+  authMonitorTaxonomy,
+  OwnedAccountPageCoordinator,
+} from "./private/owned-account-page-coordinator.ts";
 import { OwnedVerificationNavigationCoordinator } from "./private/owned-verification-navigation-coordinator.ts";
 import { bounded, cancelled, failure } from "./private/port-results.ts";
 import { isExactMarker, sessionFromMarker } from "./private/profile-marker.ts";
@@ -100,6 +104,7 @@ export class PlaywrightPersistentBrowserSession
   readonly #applicationPageOperations = new Set<string>();
   readonly #applicationSuspendOperations = new Map<string, Promise<ClosePortResult>>();
   #applicationPageActive = false;
+  readonly #authNavigationAttempts = new Map<string, number>();
 
   constructor(options: PlaywrightPersistentBrowserSessionOptions) {
     const { applicationRuntime: runtimeOptions, ...retainedOptions } = options;
@@ -109,6 +114,7 @@ export class PlaywrightPersistentBrowserSession
       adapter: options.accountPage,
       probe: options.probe,
       timeoutMs: options.timeoutMs,
+      externalMonitor: options.externalMonitor,
       state: () => ({
         page: this.#page,
         session: this.#session,
@@ -121,6 +127,7 @@ export class PlaywrightPersistentBrowserSession
       adapter: options.verificationNavigation,
       probe: options.probe,
       timeoutMs: options.timeoutMs,
+      externalMonitor: options.externalMonitor,
       state: () => ({
         page: this.#page,
         session: this.#session,
@@ -545,7 +552,7 @@ export class PlaywrightPersistentBrowserSession
     const effect = applicationOperationEffect(operation);
     try {
       const result = await bounded(
-        applicationRuntime.run(page, operation, signal),
+        applicationRuntime.run(page, request, operation, signal),
         signal,
         this.#options.timeoutMs,
       );
@@ -729,6 +736,27 @@ export class PlaywrightPersistentBrowserSession
         if (reclassified === "retry") continue;
         return reclassified ?? failure("browser_target_invalid");
       }
+      const monitorOperationId = generatedOperationId(`operation_${createHash("sha256").update(
+        `${request.operationId}\0${transitionCount}`,
+        "utf8",
+      ).digest("hex").slice(0, 24)}`);
+      const fromPhase = authMonitorPhase(inspected.value.snapshot);
+      const monitorAttempt = (this.#authNavigationAttempts.get(fromPhase) ?? 0) + 1;
+      if (this.#options.externalMonitor !== undefined) {
+        try {
+          await this.#options.externalMonitor.auth(
+            this.#page! as never,
+            fromPhase,
+            "before_navigation",
+            authMonitorTaxonomy(inspected.value.snapshot),
+            { operationId: monitorOperationId, attempt: monitorAttempt },
+            signal,
+          );
+          this.#authNavigationAttempts.set(fromPhase, monitorAttempt);
+        } catch {
+          return failure("browser_effect_uncertain");
+        }
+      }
       const activated = await bounded(
         this.#options.postingNavigation!.activate(this.#page!, action),
         signal,
@@ -736,12 +764,13 @@ export class PlaywrightPersistentBrowserSession
       );
       transitionCount += 1;
       if (activated.kind !== "value") {
+        const recovered = await this.#reconcileAfterUncertainActivation(
+          state.kind,
+          request,
+          new AbortController().signal,
+          { operationId: monitorOperationId, attempt: monitorAttempt },
+        );
         if (activated.kind !== "cancelled") {
-          const recovered = await this.#reconcileAfterUncertainActivation(
-            state.kind,
-            request,
-            signal,
-          );
           if (recovered === "retry") continue;
           if (recovered !== undefined) return recovered;
         }
@@ -760,6 +789,31 @@ export class PlaywrightPersistentBrowserSession
         return this.#stopAfterTargetFact(reconciled.value);
       }
       this.#page = reconciled.value.page;
+      if (this.#options.externalMonitor !== undefined) {
+        const transitioned = await inspectPinnedTarget(
+          this.#page,
+          this.#options.probe,
+          this.#approvedTarget!,
+          request.target,
+          signal,
+          this.#options.timeoutMs,
+        );
+        if (!transitioned.ok || transitioned.value.target.kind !== "matched") {
+          return failure("browser_effect_uncertain");
+        }
+        try {
+          await this.#options.externalMonitor.auth(
+            this.#page as never,
+            authMonitorPhase(transitioned.value.snapshot),
+            "transition",
+            authMonitorTaxonomy(transitioned.value.snapshot),
+            { operationId: monitorOperationId, attempt: monitorAttempt },
+            signal,
+          );
+        } catch {
+          return failure("browser_effect_uncertain");
+        }
+      }
     }
     const final = await inspectPinnedTarget(
       this.#page!,
@@ -839,6 +893,7 @@ export class PlaywrightPersistentBrowserSession
     previous: "job_posting" | "apply_choice" | "email_sign_in_choice",
     request: AccountEntryAdvanceRequest,
     signal: AbortSignal,
+    monitor: { readonly operationId: import("../../contracts/index.ts").OperationId; readonly attempt: number },
   ): Promise<AccountEntryAdvancePortResult | "retry" | undefined> {
     const reconciled = await reconcileOwnedPages(
       this.#context!,
@@ -864,6 +919,20 @@ export class PlaywrightPersistentBrowserSession
     if (!inspected.ok) return undefined;
     if (inspected.value.target.kind !== "matched") {
       return this.#stopAfterTargetFact(inspected.value.target);
+    }
+    if (this.#options.externalMonitor !== undefined) {
+      try {
+        await this.#options.externalMonitor.auth(
+          this.#page as never,
+          authMonitorPhase(inspected.value.snapshot),
+          "transition",
+          authMonitorTaxonomy(inspected.value.snapshot),
+          monitor,
+          signal,
+        );
+      } catch {
+        return undefined;
+      }
     }
     const settled = classifyWorkdayAccountNavigation(inspected.value.snapshot);
     if (settled.kind === "account_boundary") {
@@ -1085,3 +1154,5 @@ function copyAdvanceFact(
   }
   return Object.freeze({ kind: "target_ambiguous" });
 }
+import { createHash } from "node:crypto";
+import { generatedOperationId } from "../../contracts/index.ts";

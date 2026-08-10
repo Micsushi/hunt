@@ -20,6 +20,7 @@ import type { OwnedWorkdayApplicationRuntimeOptions } from
   "./private/workday-application-runtime.ts";
 import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
 import { PlaywrightPersistentBrowserSession } from "./session.ts";
+import type { ExternalMonitorPort } from "./private/external-monitor-port.ts";
 
 export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
@@ -30,6 +31,7 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
       PlaywrightVerificationNavigationTraceEvent,
   ) => void;
   readonly applicationRuntime?: OwnedWorkdayApplicationRuntimeOptions;
+  readonly externalMonitor?: ExternalMonitorPort;
 }
 
 export function createPlaywrightPersistentBrowserSession(
@@ -59,6 +61,7 @@ export function createPlaywrightPersistentBrowserSession(
       trace: options.accountTrace,
     }),
     applicationRuntime: options.applicationRuntime,
+    externalMonitor: options.externalMonitor,
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,

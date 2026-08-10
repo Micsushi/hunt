@@ -6,6 +6,60 @@ import type { LiveSessionId } from "../../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
+import type { Stage2ExternalMonitorRuntime } from
+  "../../../src/live/evidence/external-monitor-runtime.ts";
+
+test("external monitor ACK blocks account mutation and binds the same owned page through readback", async () => {
+  const context = new FakeContext();
+  const semantic = new FakeSemanticAccountPage();
+  let release: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => { entered = resolve; });
+  const records: Parameters<Stage2ExternalMonitorRuntime["auth"]>[] = [];
+  const monitor = {
+    async auth(...args: Parameters<Stage2ExternalMonitorRuntime["auth"]>) {
+      records.push(args);
+      if (args[2] === "before_mutation") {
+        entered?.();
+        await new Promise<void>((resolve) => { release = resolve; });
+      }
+    },
+    async application(..._args: Parameters<Stage2ExternalMonitorRuntime["application"]>) {},
+  };
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedAccountEntry(); } },
+    profiles: new MemoryProfiles(),
+    accountPage: semantic,
+    externalMonitor: monitor,
+    ids: () => liveFixtures.session.sessionId as LiveSessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), AbortSignal.any([]));
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const request = accessRequest(opened.value.session.sessionId);
+  const pending = provider.withOwnedAccountPageAccess(
+    request,
+    AbortSignal.any([]),
+    async (access) => {
+      assert.deepEqual(await access.fill("email", Uint8Array.of(1, 2)), { ok: true, value: undefined });
+      assert.deepEqual(await access.matches("email", Uint8Array.of(1, 2)), { ok: true, value: true });
+    },
+  );
+  await waiting;
+  assert.equal(semantic.fillCalls, 0);
+  release?.();
+  assert.deepEqual(await pending, { ok: true, value: undefined });
+  assert.equal(semantic.fillCalls, 1);
+  assert.deepEqual(records.map((args) => [args[1], args[2], args[4]]), [
+    ["account_entry", "before_mutation", { operationId: request.operationId, attempt: 1 }],
+    ["account_entry", "after_readback", { operationId: request.operationId, attempt: 1 }],
+  ]);
+  assert.equal(records[0]?.[0], context.page);
+  assert.equal(records[1]?.[0], context.page);
+});
 
 test("callback receives only closed semantic account controls after exact ownership admission", async () => {
   const context = new FakeContext();
@@ -760,6 +814,20 @@ function ownedMatched() {
       controlCount: 2,
       requiredControlCount: 2,
       optionCount: 0,
+    },
+  };
+}
+
+function ownedAccountEntry() {
+  const value = ownedMatched();
+  return {
+    ...value,
+    snapshot: {
+      ...value.snapshot,
+      traitIds: [
+        "structural_trait_page_account_entry_v1",
+        "structural_trait_account_create_v1",
+      ],
     },
   };
 }

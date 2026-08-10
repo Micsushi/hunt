@@ -36,13 +36,14 @@ export async function writeApplicationWalkEvidence(
 ): Promise<void> {
   writeAtomicJsonEvidence({
     root: request.root,
-    value: exactAcceptance(request.acceptance),
+    value: admitApplicationWalkAcceptance(request.acceptance),
     sensitiveValues: request.sensitiveValues,
     label: "application-walk",
+    fileName: "application-walk-acceptance.json",
   });
 }
 
-function exactAcceptance(
+export function admitApplicationWalkAcceptance(
   value: ApplicationWalkAcceptanceV1,
 ): ApplicationWalkAcceptanceV1 {
   const expected = [

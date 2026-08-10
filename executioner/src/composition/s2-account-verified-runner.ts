@@ -53,6 +53,7 @@ import type {
   TargetIdentityV1,
   VerificationNavigationResult,
 } from "../contracts/live/index.ts";
+import { s2StableErrorPolicy } from "../contracts/s2-common-wire.ts";
 import {
   createBoundedVerificationMailboxPolling,
 } from "../account/lifecycle/mailbox-polling.ts";
@@ -64,6 +65,7 @@ import { createPrivateRealRunAdmission } from "../live/preflight/private/runtime
 import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   runStage2AccountVerified,
+  type AccountVerifiedFact,
   type AccountVerifiedAcceptance,
   type AccountVerifiedEvidenceWriter,
   type AccountVerifiedLifecycleResult,
@@ -203,11 +205,7 @@ export function createAccountVerifiedBindings(
   });
 }
 
-interface CleanupBrowser {
-  open(
-    request: PersistentBrowserOpenRequest,
-    signal: AbortSignal,
-  ): Promise<LivePortResult<PersistentBrowserOpenResult, PersistentBrowserErrorCode>>;
+interface SessionBoundAccountBrowser {
   advanceToAccountEntry(
     request: {
       readonly schemaVersion: 1;
@@ -225,14 +223,86 @@ interface CleanupBrowser {
     | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" },
     PersistentBrowserErrorCode
   >>;
-  close(
-    request: PersistentBrowserCloseRequest,
-    signal: AbortSignal,
-  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
   reconcile(
     request: PersistentBrowserReconcileRequest,
     signal: AbortSignal,
   ): Promise<LivePortResult<PersistentBrowserReconcileResult, PersistentBrowserErrorCode>>;
+}
+
+interface CleanupBrowser extends SessionBoundAccountBrowser {
+  open(
+    request: PersistentBrowserOpenRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<PersistentBrowserOpenResult, PersistentBrowserErrorCode>>;
+  close(
+    request: PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
+}
+
+export type SessionBoundAccountVerificationResult =
+  | {
+      readonly ok: true;
+      readonly value: Extract<AccountLifecycleResult, { readonly ok: true }>["value"];
+    }
+  | { readonly ok: false; readonly error: { readonly code: string } };
+
+export async function runSessionBoundAccountVerifiedLifecycle(options: {
+  readonly browser: SessionBoundAccountBrowser;
+  readonly session: LiveBrowserSessionV1;
+  readonly journeyId: AccountLifecycleInput["journeyId"];
+  readonly expectedTarget: TargetIdentityV1;
+  readonly reconcileOperationId: OperationId;
+  readonly advanceOperationId: OperationId;
+  readonly now: string;
+  readonly clock?: () => string;
+  readonly authorizationExpiresAt?: string;
+  readonly runLifecycle: (
+    session: LiveBrowserSessionV1,
+    signal: AbortSignal,
+  ) => Promise<AccountLifecycleResult>;
+}, signal: AbortSignal): Promise<SessionBoundAccountVerificationResult> {
+  try {
+    if (authorizedEffectNow(options, signal) === null) {
+      return sessionFailure("operation_cancelled");
+    }
+    const reconciled = await options.browser.reconcile({
+      schemaVersion: 1,
+      journeyId: options.journeyId,
+      operationId: options.reconcileOperationId,
+      session: options.session,
+      expectedTarget: options.expectedTarget,
+    }, signal);
+    if (!reconciled.ok) return sessionFailure(reconciled.error.code);
+    if (reconciled.value.kind !== "matched") {
+      return factualSessionResult(reconciled.value);
+    }
+    const advanceNow = authorizedEffectNow(options, signal);
+    if (advanceNow === null) return sessionFailure("operation_cancelled");
+    const advanced = await options.browser.advanceToAccountEntry({
+      schemaVersion: 1,
+      journeyId: options.journeyId,
+      operationId: options.advanceOperationId,
+      sessionId: options.session.sessionId,
+      target: options.expectedTarget,
+      now: advanceNow,
+    }, signal);
+    if (!advanced.ok) return sessionFailure(advanced.error.code);
+    if (advanced.value.kind !== "account_boundary") {
+      return factualSessionResult(advanced.value);
+    }
+    if (authorizedEffectNow(options, signal) === null) {
+      return sessionFailure("operation_cancelled");
+    }
+    const lifecycle = await options.runLifecycle(options.session, signal);
+    return lifecycle.ok
+      ? { ok: true, value: lifecycle.value }
+      : sessionFailure(lifecycle.error.code);
+  } catch {
+    return sessionFailure(
+      signal.aborted ? "operation_cancelled" : "account_proof_invalid",
+    );
+  }
 }
 
 export function createCleanupBoundAccountVerifiedLifecycle(options: {
@@ -257,55 +327,18 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
       const opened = await options.browser.open(options.openRequest, signal);
       if (!opened.ok) return lifecycleFailure(opened.error.code);
       const session = opened.value.session;
-      let result: AccountVerifiedLifecycleResult;
-      try {
-        if (authorizedEffectNow(options, signal) === null) {
-          result = lifecycleFailure("operation_cancelled");
-        } else {
-          const reconciled = await options.browser.reconcile({
-            schemaVersion: 1,
-            journeyId: options.openRequest.journeyId,
-            operationId: options.reconcileOperationId,
-            session,
-            expectedTarget: options.openRequest.target,
-          }, signal);
-          if (!reconciled.ok) {
-            result = lifecycleFailure(reconciled.error.code);
-          } else if (reconciled.value.kind !== "matched") {
-            result = factualLifecycleResult(reconciled.value);
-          } else {
-            const advanceNow = authorizedEffectNow(options, signal);
-            if (advanceNow === null) {
-              result = lifecycleFailure("operation_cancelled");
-            } else {
-              const advanced = await options.browser.advanceToAccountEntry({
-                schemaVersion: 1,
-                journeyId: options.openRequest.journeyId,
-                operationId: options.advanceOperationId,
-                sessionId: session.sessionId,
-                target: options.openRequest.target,
-                now: advanceNow,
-              }, signal);
-              if (!advanced.ok) {
-                result = lifecycleFailure(advanced.error.code);
-              } else if (advanced.value.kind !== "account_boundary") {
-                result = factualLifecycleResult(advanced.value);
-              } else if (authorizedEffectNow(options, signal) === null) {
-                result = lifecycleFailure("operation_cancelled");
-              } else {
-                const lifecycle = await options.runLifecycle(session, signal);
-                result = lifecycle.ok
-                  ? { ok: true, cleanup: "pass", value: lifecycle.value }
-                  : lifecycleFailure(lifecycle.error.code);
-              }
-            }
-          }
-        }
-      } catch {
-        result = lifecycleFailure(
-          signal.aborted ? "operation_cancelled" : "account_proof_invalid",
-        );
-      }
+      const sessionResult = await runSessionBoundAccountVerifiedLifecycle({
+        browser: options.browser,
+        session,
+        journeyId: options.openRequest.journeyId,
+        expectedTarget: options.openRequest.target,
+        reconcileOperationId: options.reconcileOperationId,
+        advanceOperationId: options.advanceOperationId,
+        now: options.now,
+        clock: options.clock,
+        authorizationExpiresAt: options.authorizationExpiresAt,
+        runLifecycle: options.runLifecycle,
+      }, signal);
       try {
         const closed = await options.browser.close({
           schemaVersion: 1,
@@ -313,9 +346,13 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
           operationId: options.closeOperationId,
           sessionId: session.sessionId,
         }, new AbortController().signal);
-        if (closed.ok) return result;
-        if (!result.ok && closed.error.code === "browser_session_missing") {
-          return result;
+        if (closed.ok) {
+          return sessionResult.ok
+            ? { ok: true, cleanup: "pass", value: sessionResult.value }
+            : sessionResult;
+        }
+        if (!sessionResult.ok && closed.error.code === "browser_session_missing") {
+          return sessionResult;
         }
         return lifecycleFailure(closed.error.code);
       } catch {
@@ -323,6 +360,251 @@ export function createCleanupBoundAccountVerifiedLifecycle(options: {
       }
     },
   });
+}
+
+export interface Stage2AccountVerifiedSessionOptions {
+  readonly owner: RealRunOwnerInputsV1;
+  readonly sourceRevision: string;
+  readonly configSha256: string;
+  readonly storageRoot: string;
+  readonly browser: PlaywrightPersistentBrowserSession;
+  readonly session: LiveBrowserSessionV1;
+  readonly target: TargetIdentityV1;
+  readonly clock?: () => string;
+}
+
+export interface Stage2UnsealedAccountProofV1 {
+  readonly schemaVersion: 1;
+  readonly proofRevision: "s2-account-session-proof-v1";
+  readonly status: "unsealed";
+  readonly sourceRevision: string;
+  readonly configSha256: string;
+  readonly revisionId: string;
+  readonly approvalId: string;
+  readonly journeyId: string;
+  readonly targetHandleId: string;
+  readonly accountState: "application_ready";
+  readonly independentlyObservedVerifiedState: true;
+  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
+  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly consumedCandidateCount: 0 | 1;
+  readonly messageBodyRetained: false;
+  readonly submitActivated: false;
+}
+
+export type Stage2UnsealedAccountProofResult =
+  | { readonly ok: true; readonly proof: Stage2UnsealedAccountProofV1 }
+  | { readonly ok: false; readonly code: string; readonly fact?: AccountVerifiedFact };
+
+export async function runStage2AccountVerifiedInSession(
+  options: Stage2AccountVerifiedSessionOptions,
+  signal: AbortSignal,
+): Promise<Stage2UnsealedAccountProofResult> {
+  let authorizationSignal: AbortSignal | undefined;
+  try {
+    const liveClock = options.clock ?? systemClock;
+    const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const source = inspectCleanSourceRevision(executionerRoot);
+    if (
+      source.sourceRevision !== options.sourceRevision ||
+      !/^[0-9a-f]{64}$/u.test(options.configSha256) ||
+      options.owner.journeyId !== options.session.journeyId ||
+      !sameTarget(options.target, options.session.target) ||
+      !sameTarget(options.target, createAccountVerifiedBindings(
+        options.owner,
+        source.sourceRevision,
+        liveClock(),
+        operationIds(),
+      ).target)
+    ) return unsealedFailure("owner_config_invalid");
+    const admittedNow = liveClock();
+    const authorization = createAuthorizationRuntime(
+      options.owner.approval.expiresAt,
+      signal,
+      liveClock,
+    );
+    authorizationSignal = authorization.signal;
+    try {
+      if (authorization.current() === null) return unsealedFailure("operation_cancelled");
+      const secretStore = new WindowsDpapiSecretStore({
+        root: options.owner.roots.secrets.path,
+        forbiddenRoots: [source.repositoryRoot],
+        now: liveClock,
+      });
+      const [accountInspection, gmailInspection] = await Promise.all([
+        inspectAuthorizedSecret(secretStore, {
+          schemaVersion: 1,
+          journeyId: options.owner.journeyId as never,
+          handleId: options.owner.accountSecret.handleId as SecretHandleId,
+          expectedPurpose: "account_credentials",
+          expectedConsumer: "credential_mutation_adapter",
+        }, authorization),
+        inspectAuthorizedSecret(secretStore, {
+          schemaVersion: 1,
+          journeyId: options.owner.journeyId as never,
+          handleId: options.owner.gmailAuthorization.handleId as SecretHandleId,
+          expectedPurpose: "gmail_oauth",
+          expectedConsumer: "gmail_auth_executor",
+        }, authorization),
+      ]);
+      if (!accountInspection.ok) return unsealedFailure(accountInspection.error.code);
+      if (!gmailInspection.ok) return unsealedFailure(gmailInspection.error.code);
+      if (!exactAccountMetadata(accountInspection.value, options.owner) ||
+          !exactGmailMetadata(gmailInspection.value, options.owner)) {
+        return unsealedFailure("secret_handle_mismatched");
+      }
+      const account = accountInspection.value as ActiveAccountSecretHandle;
+      const gmailAuthorization = gmailInspection.value as ActiveGmailSecretHandle;
+      const operations = operationIds();
+      const bindings = createAccountVerifiedBindings(
+        options.owner,
+        source.sourceRevision,
+        admittedNow,
+        operations,
+      );
+      const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+        : undefined;
+      const structural = createPlaywrightLiveEntryStructuralSource(options.browser);
+      const classified = createClassifiedAccountObservationSource(
+        createLiveEntryVerifier(structural),
+      );
+      const resolver = new WindowsDpapiSecretResolver({
+        root: options.owner.roots.secrets.path,
+        forbiddenRoots: [source.repositoryRoot],
+        now: liveClock,
+      });
+      const credentialMutation = createAccountEntryCredentialMutationAdapter({
+        accountPage: options.browser,
+        classifiedAccount: classified,
+        credentials: resolver,
+        trace: valueFreeTrace,
+      });
+      const rawVault = new GmailRawArtifactVault();
+      const artifacts = new GmailSafeArtifactRegistry();
+      const mailbox = createBoundedVerificationMailboxPolling({
+        clock: liveClock,
+        authorizationExpiresAt: options.owner.approval.expiresAt,
+        maxDurationMs: 5 * 60_000,
+        baseDelayMs: 250,
+        maxDelayMs: 5_000,
+        createQueryId: () =>
+          `mailbox_query_${randomBytes(16).toString("hex")}` as LiveIdentifier<"mailbox_query">,
+        createAttemptProvider: (attemptRequest) => {
+          const attemptBinding = Object.freeze({
+            ...bindings.gmail,
+            notBefore: attemptRequest.notBefore,
+            notAfter: attemptRequest.notAfter,
+          });
+          const authExecutor = new GmailApiAuthExecutor({
+            binding: attemptBinding,
+            resolver,
+            httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
+            rawVault,
+            artifactRegistry: artifacts,
+            approvedPolicy: approvedPolicy(options.owner),
+            createHandle: () =>
+              `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,
+            policyFactory: {
+              create(candidateSource, current) {
+                return createBoundedMailboxPolicy({
+                  binding: attemptBinding,
+                  candidateSource,
+                  clock: () => current,
+                  timeoutMs: 60_000,
+                });
+              },
+            },
+          });
+          return new GmailMailboxProvider({
+            authorization: gmailAuthorization,
+            binding: attemptRequest,
+            now: liveClock,
+            secretStore,
+            authExecutor,
+            artifacts: artifacts.port,
+            timeoutMs: 60_000,
+          });
+        },
+        trace: valueFreeTrace,
+      });
+      const consumer = new GmailAtomicArtifactConsumer({
+        rawVault,
+        artifacts,
+        replayGuard: new Stage2VerificationReplayLedger({
+          root: join(options.storageRoot, "bindings", "verification-consumption"),
+          recipientBindingId: options.owner.recipientBindingId,
+          host: options.owner.target.host,
+          tenant: options.owner.target.tenant,
+          now: liveClock,
+        }),
+      });
+      const navigator = createGmailPrivilegedVerificationNavigator({
+        consumer,
+        approvedPolicy: verificationApprovedPolicy(options.owner),
+        browser: verificationBrowser(options.browser),
+      });
+      const sessionResult = await runSessionBoundAccountVerifiedLifecycle({
+          browser: options.browser,
+          session: options.session,
+          journeyId: bindings.lifecycle.journeyId,
+          expectedTarget: bindings.target,
+          reconcileOperationId: operations.browserReconcile,
+          advanceOperationId: operations.accountAdvance,
+          now: admittedNow,
+          clock: liveClock,
+          authorizationExpiresAt: options.owner.approval.expiresAt,
+          runLifecycle: (session, activeSignal) => {
+            const current = authorization.current();
+            if (current === null) {
+              return Promise.resolve({
+                ok: false,
+                error: { code: "operation_cancelled", retryable: false },
+              });
+            }
+            return new AccountVerificationLifecycle(
+              createAuthorizationBoundLifecycleDependencies({
+                credentialMutation: credentialMutation.lifecycle,
+                verificationEmail: createVerificationEmailRequestAdapter({
+                  accountPage: options.browser,
+                  binding: {
+                    approvalId: options.owner.approval.approvalId,
+                    journeyId: bindings.lifecycle.journeyId,
+                    operationId: operations.requestVerificationEmail,
+                    sessionId: session.sessionId,
+                    target: bindings.target,
+                  },
+                }),
+                mailbox,
+                artifacts: artifacts.port,
+                navigator,
+                accountState: createBoundAccountStateObserver(classified, {
+                  journeyId: bindings.lifecycle.journeyId,
+                  sessionId: session.sessionId,
+                  target: bindings.target,
+                }),
+                trace: valueFreeTrace,
+              }, authorization),
+            ).run({
+              ...bindings.lifecycle,
+              now: current,
+              accountIntent: options.owner.accountMode,
+              session,
+              credential: account,
+            }, activeSignal);
+          },
+        }, authorization.signal);
+      return unsealedAccountProof(options, bindings.runner, sessionResult);
+    } finally {
+      authorization.dispose();
+    }
+  } catch {
+    return unsealedFailure(
+      signal.aborted || authorizationSignal?.aborted
+        ? "operation_cancelled"
+        : "owner_config_invalid",
+    );
+  }
 }
 
 export async function runStage2AccountVerifiedFromOwnerConfig(
@@ -841,6 +1123,7 @@ function verificationBrowser(
       const scoped = await browser.withOwnedVerificationNavigationAccess({
         schemaVersion: 1,
         journeyId: request.journeyId,
+        operationId: request.operationId,
         sessionId: request.sessionId,
         target: request.expectedTarget,
         now: request.now,
@@ -1002,12 +1285,11 @@ type TargetFact =
   | { readonly kind: "target_ambiguous" }
   | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" };
 
-function factualLifecycleResult(
+function factualSessionResult(
   value: TargetFact,
-): AccountVerifiedLifecycleResult {
+): SessionBoundAccountVerificationResult {
   return {
     ok: true,
-    cleanup: "pass",
     value: {
       kind: "blocked",
       factualOutcome: {
@@ -1024,8 +1306,141 @@ function sameTarget(left: TargetIdentityV1, right: TargetIdentityV1): boolean {
     left.tenantId === right.tenantId && left.postingId === right.postingId;
 }
 
+function unsealedAccountProof(
+  options: Stage2AccountVerifiedSessionOptions,
+  input: Stage2AccountVerifiedInput,
+  result: SessionBoundAccountVerificationResult,
+): Stage2UnsealedAccountProofResult {
+  if (!result.ok) return unsealedFailure(stableAccountCode(result.error.code));
+  const factual = unsealedFactualResult(result.value);
+  if (factual !== null) return factual;
+  const verified = unsealedVerified(result.value);
+  if (verified === null) return unsealedFailure("account_proof_invalid");
+  return Object.freeze({
+    ok: true as const,
+    proof: Object.freeze({
+      schemaVersion: 1 as const,
+      proofRevision: "s2-account-session-proof-v1" as const,
+      status: "unsealed" as const,
+      sourceRevision: input.sourceRevision,
+      configSha256: options.configSha256,
+      revisionId: input.revisionId,
+      approvalId: input.approvalId,
+      journeyId: input.journeyId,
+      targetHandleId: input.targetHandleId,
+      accountState: "application_ready" as const,
+      independentlyObservedVerifiedState: true as const,
+      verificationProof: verified.verificationProof,
+      provider: verified.provider,
+      consumedCandidateCount: verified.consumedCandidateCount,
+      messageBodyRetained: false as const,
+      submitActivated: false as const,
+    }),
+  });
+}
+
+function unsealedVerified(value: unknown): Pick<
+  Stage2UnsealedAccountProofV1,
+  "verificationProof" | "provider" | "consumedCandidateCount"
+> | null {
+  if (!plainRecord(value) || !exactRecordKeys(value, [
+    "kind", "path", "independentlyObserved", "verificationCandidateCount",
+    "verificationConsumed",
+  ]) || value.kind !== "account_ready" || value.independentlyObserved !== true) return null;
+  if (value.path === "verified_account" && value.verificationCandidateCount === 1 &&
+      value.verificationConsumed === true) {
+    return {
+      verificationProof: "gmail_candidate_consumed",
+      provider: "gmail-api-v1",
+      consumedCandidateCount: 1,
+    };
+  }
+  if (value.path === "reused_account" && value.verificationCandidateCount === 0 &&
+      value.verificationConsumed === false) {
+    return {
+      verificationProof: "credential_sign_in",
+      provider: "workday-auth",
+      consumedCandidateCount: 0,
+    };
+  }
+  return null;
+}
+
+function unsealedFactualResult(
+  value: unknown,
+): Extract<Stage2UnsealedAccountProofResult, { readonly ok: false }> | null {
+  if (!plainRecord(value) || value.kind !== "blocked") return null;
+  if (!exactRecordKeys(value, ["kind", "factualOutcome"]) ||
+      !plainRecord(value.factualOutcome) ||
+      !exactRecordKeys(value.factualOutcome, ["source", "result"]) ||
+      !plainRecord(value.factualOutcome.result)) return unsealedFailure("account_proof_invalid");
+  const source = value.factualOutcome.source;
+  const fact = value.factualOutcome.result;
+  if (source === "account_access" && exactRecordKeys(fact, ["kind", "reason"]) &&
+      fact.kind === "manual_intervention" &&
+      (fact.reason === "captcha" || fact.reason === "mfa" || fact.reason === "access_control")) {
+    return { ok: false, code: "manual_intervention", fact: {
+      kind: "manual_intervention",
+      reason: fact.reason,
+    } };
+  }
+  if (source === "target_identity" && exactRecordKeys(fact, ["kind", "dimension"]) &&
+      fact.kind === "target_mismatch" &&
+      (fact.dimension === "host" || fact.dimension === "tenant" || fact.dimension === "posting")) {
+    return { ok: false, code: "target_mismatch", fact: {
+      kind: "target_mismatch",
+      dimension: fact.dimension,
+    } };
+  }
+  if (source === "target_identity" && exactRecordKeys(fact, ["kind"]) &&
+      fact.kind === "target_ambiguous") {
+    return { ok: false, code: "target_ambiguous", fact: { kind: "target_ambiguous" } };
+  }
+  if (source === "target_identity" && exactRecordKeys(fact, ["kind", "reason"]) &&
+      fact.kind === "posting_unavailable" &&
+      (fact.reason === "not_found" || fact.reason === "closed" || fact.reason === "removed" ||
+        fact.reason === "unavailable" || fact.reason === "maintenance" ||
+        fact.reason === "runtime_error")) {
+    return { ok: false, code: "posting_unavailable", fact: {
+      kind: "posting_unavailable",
+      reason: fact.reason,
+    } };
+  }
+  if (typeof fact.kind === "string" && [
+    "mailbox_none", "mailbox_ambiguous", "mailbox_expired", "mailbox_consumed",
+    "verification_target_unavailable", "ats_unsupported", "ats_unknown", "ats_ambiguous",
+    "workday_page_unknown", "workday_page_ambiguous",
+  ].includes(fact.kind)) return unsealedFailure(fact.kind);
+  return unsealedFailure("account_proof_invalid");
+}
+
+function stableAccountCode(code: unknown): string {
+  return typeof code === "string" && Object.hasOwn(s2StableErrorPolicy, code)
+    ? code
+    : "account_proof_invalid";
+}
+
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactRecordKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key, index) => keys[index] === key);
+}
+
 function lifecycleFailure(code: string): AccountVerifiedLifecycleResult {
   return Object.freeze({ ok: false, error: Object.freeze({ code }) });
+}
+
+function sessionFailure(code: string): SessionBoundAccountVerificationResult {
+  return Object.freeze({ ok: false, error: Object.freeze({ code }) });
+}
+
+function unsealedFailure(
+  code: string,
+): Extract<Stage2UnsealedAccountProofResult, { readonly ok: false }> {
+  return Object.freeze({ ok: false, code });
 }
 
 function failure(code: string): Stage2AccountVerifiedResult {
