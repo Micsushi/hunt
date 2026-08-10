@@ -26,7 +26,7 @@ import { validateCorpusFixtures } from "../capture/index.ts";
 import { createCorpusBaseline } from "../runner/index.ts";
 
 export const acceptedImpactSha =
-  "sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4" as const;
+  "sha256.2e361e746e723b662e5600f99109e0e9d9cb62bd3feff6f0235591fa8414bdc2" as const;
 export const acceptedPrerequisiteTask = "S3-F2-T13" as const;
 
 const dormantF3Paths = [

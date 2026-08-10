@@ -596,7 +596,7 @@ npm run package:build
 
 The checked-in corpus is the accepted S3 F1/F2 impact-bound source. The exact
 impact SHA is
-`sha256.0ef3d9b22e2813d3f459c2c8fab4c344f24f0ab886f23cf69de72ca97c3c62d4`,
+`sha256.2e361e746e723b662e5600f99109e0e9d9cb62bd3feff6f0235591fa8414bdc2`,
 and F4 depends on `S3-F2-T13`. All twelve S3-F3 tasks remain dormant with zero
 variant, fixture, and slot evidence. Freeze and audit reject dormant semantic
 commands, catalogs, modules, or synthetic fixtures.
