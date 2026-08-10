@@ -170,8 +170,19 @@ run from one protected storage root, the exact Workday URL, and the account
 intent:
 
 ```text
-npm run prepare:s2-run -- --storage-root C:\private\hunt-c3-storage --target-url https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345 --account-mode sign_in
+npm run prepare:s2-run -- \
+  --storage-root C:\private\hunt-c3-storage \
+  --target-url https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345 \
+  --account-mode sign_in \
+  --application-profile C:\private\hunt-c3-inputs\application-profile.json \
+  --application-resume C:\private\hunt-c3-inputs\application-resume.pdf
 ```
+
+The two application-source arguments are required for a full application and
+Review journey. They are read from protected absolute paths outside the
+repository, copied and hash-bound before approval, and never returned by the
+command. Omitting both retains the account-only preparation mode used by
+diagnostics and recovery tooling; it cannot authorize application filling.
 
 The command parses the target, generates every run-scoped ID, writes the owner
 configuration, applies a protected Windows ACL for only the current user and

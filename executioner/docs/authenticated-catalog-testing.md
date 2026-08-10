@@ -123,8 +123,15 @@ Prepare each job just in time because its approval and secret handles expire in
 npm run prepare:s2-run -- `
   --storage-root C:\absolute\protected\hunt-c3-storage `
   --target-url https://tenant.wd5.myworkdayjobs.com/Careers/job/Title_R12345 `
-  --account-mode fresh_create
+  --account-mode fresh_create `
+  --application-profile C:\absolute\protected\hunt-c3-inputs\application-profile.json `
+  --application-resume C:\absolute\protected\hunt-c3-inputs\application-resume.pdf
 ```
+
+For a full application and Review journey, both application-source arguments
+must be present together. Keep those files outside the repository and supply
+only their protected absolute paths; never put applicant values on the command
+line or in operator output.
 
 Pin the complete credential source before migrating it into the prepared
 journey. Do not print or copy either credential value:
