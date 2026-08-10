@@ -27,14 +27,26 @@ Earlier row 43 attempts remain immutable excluded evidence.
 
 ## Current blockers and next evidence
 
-- No protected current `application-profile.json` or `application-resume.pdf` is
-  available in the Hunt storage roots. No applicant field may be filled until the
-  owner supplies those exact sources through the protected preparation command.
+- Protected-source discovery found one suitable one-page final resume with
+  authoritative C2 provenance. The ignored C2 owner sources cover name, email,
+  city/region text, employment, education, and skills without exposing values.
+- No protected `application-profile.json` was created. The accepted production
+  resolver requires an exact configured role-interest narrative before browser
+  ownership, and no owner-authored source for that narrative was found. Matching
+  owner resume/profile artifacts also contain no phone number and provide no
+  explicit country, street-address, or postal-code fact. These categories remain
+  unresolved; they must not be inferred from a job, region, account, or resume
+  context.
+- No `application-resume.pdf` was provisioned because the paired authoritative
+  profile source is incomplete. Preparation must remain one atomic protected
+  profile-plus-resume custody operation.
 - The next row 43 attempt must add ordinal pre-mutation, post-readback, transition,
   and Review monitor records before any live field coverage is marked supported.
+- The coordinator-monitor protocol was not launched because source admission did
+  not reach the pre-live gate. C3 must never self-acknowledge a future monitor
+  request.
 - Any missing fact, ambiguous control, CAPTCHA, MFA, access-control reset, or
   uncertain browser effect remains an explicit blocked result, never an inferred
   answer.
 - Rows 76 and 82 are considered only after row 43 reaches independently verified
   Review. Later jobs are selected for new UI/question/answer coverage, not volume.
-
