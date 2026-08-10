@@ -287,6 +287,10 @@ test("external monitor traces the exact capture boundary without changing behavi
       "external_monitor_title_captured",
       "external_monitor_url_after_read",
       "external_monitor_identity_verified",
+      "external_monitor_screenshot_written",
+      "external_monitor_taxonomy_admitted",
+      "external_monitor_taxonomy_written",
+      "external_monitor_request_written",
       "external_monitor_evidence_published",
       "external_monitor_acknowledged",
     ]);

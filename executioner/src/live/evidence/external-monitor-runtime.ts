@@ -220,6 +220,7 @@ export class Stage2ExternalMonitorRuntime {
       );
       emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified");
       writeBytes(join(root, screenshotFile), screenshot);
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_written");
       const taxonomy = exactTaxonomy({
         schemaVersion: 1,
         evidenceRevision: "s2-monitor-taxonomy-v1",
@@ -231,8 +232,10 @@ export class Stage2ExternalMonitorRuntime {
         ...taxonomyInput,
         privacyScan: "pass",
       });
+      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_admitted");
       const taxonomyBytes = jsonBytes(taxonomy);
       writeBytes(join(root, taxonomyFile), taxonomyBytes);
+      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_written");
       const previousAckSha256 = chain === "auth"
         ? this.#previousAuthAck
         : this.#previousApplicationAck;
@@ -266,6 +269,7 @@ export class Stage2ExternalMonitorRuntime {
       const requestBytes = jsonBytes(request);
       const requestPath = join(root, requestFile);
       writeBytes(requestPath, requestBytes);
+      emitMonitorTrace(this.#options.trace, "external_monitor_request_written");
       const binding = Object.freeze({
         path: requestPath,
         ordinal,
