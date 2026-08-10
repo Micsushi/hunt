@@ -554,7 +554,7 @@ export class PlaywrightPersistentBrowserSession
       const result = await bounded(
         applicationRuntime.run(page, request, operation, signal),
         signal,
-        this.#options.timeoutMs,
+        this.#options.applicationOperationTimeoutMs ?? this.#options.timeoutMs,
       );
       if (result.kind !== "value") {
         if (effect === "mutation") {

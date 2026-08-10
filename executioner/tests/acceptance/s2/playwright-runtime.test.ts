@@ -173,6 +173,97 @@ import type {
 import { inspectWorkdayReview, stopAtVerifiedReview } from "../../../src/interaction/review/index.ts";
 import { recoverBrowserInterruption } from "../../../src/journey/recovery/index.ts";
 
+test("external monitor budget outlives the base application operation timeout", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const html = encodeURIComponent(
+    '<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"></main></body></html>',
+  );
+  const run = async (
+    applicationOperationTimeoutMs: number | undefined,
+    suffix: string,
+    abortAfterMs?: number,
+  ) => {
+    const context = await browser.newContext();
+    const monitor = {
+      async auth() { await new Promise((resolve) => setTimeout(resolve, 1_250)); },
+      async application() {},
+    };
+    const provider = new PlaywrightPersistentBrowserSession({
+      binding: {
+        forPersistentBrowser: () => ({
+          targetUrl: approvedFixtureTargetUrl,
+          profilePath: `C:\\outside\\runtime\\monitor-${suffix}`,
+          admittedAt: "2026-08-05T12:00:00.000Z",
+          leaseExpiresAt: "2026-08-06T12:00:00.000Z",
+        }),
+      },
+      launcher: {
+        async launchPersistentContext() {
+          return redirectingContext(context, `data:text/html,${html}`);
+        },
+      },
+      probe: { async inspect() { return ownedMatchedFixture(); } },
+      profiles: new FixtureProfiles(),
+      applicationRuntime: {
+        request: {} as never,
+        acceptances: { record() {} },
+        nextOperationId: () => generatedOperationId(`operation_monitor_next_${suffix}`),
+        timeoutMs: 1_000,
+        initialReviewExpected: [],
+        externalMonitor: monitor,
+        authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+        now: () => "2026-08-05T12:00:00.000Z",
+      },
+      externalMonitor: monitor,
+      ids: () => `live_session_monitor_${suffix}` as LiveSessionId,
+      timeoutMs: 1_000,
+      applicationOperationTimeoutMs,
+    });
+    const opened = await provider.open({
+      schemaVersion: 1,
+      journeyId: journeyId(`journey_monitor_${suffix}`),
+      operationId: generatedOperationId(`operation_monitor_open_${suffix}`),
+      profileLeaseId: `profile_lease_monitor_${suffix}` as ProfileLeaseId,
+      target: {
+        schemaVersion: 1,
+        host: "approved.wd5.myworkdayjobs.invalid",
+        tenant: "approved",
+        posting: "R12345",
+      } as never,
+    }, new AbortController().signal);
+    assert.equal(opened.ok, true);
+    if (!opened.ok) throw new Error("monitor fixture open failed");
+    const controller = new AbortController();
+    const abort = abortAfterMs === undefined
+      ? undefined
+      : setTimeout(() => controller.abort(), abortAfterMs);
+    const result = await provider[ownedApplicationPageAccess]({
+      schemaVersion: 1,
+      journeyId: opened.value.session.journeyId,
+      operationId: generatedOperationId(`operation_monitor_access_${suffix}`),
+      sessionId: opened.value.session.sessionId,
+      target: opened.value.session.target,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "monitor_auth_state" }, controller.signal);
+    if (abort !== undefined) clearTimeout(abort);
+    await context.close();
+    return result;
+  };
+  try {
+    assert.deepEqual(await run(2_500, "budgeted_0001"), { ok: true, value: undefined });
+    assert.deepEqual(await run(undefined, "base_000000001"), {
+      ok: false,
+      error: { code: "browser_timeout", retryable: true },
+    });
+    assert.deepEqual(await run(2_500, "cancelled_00001", 25), {
+      ok: false,
+      error: { code: "operation_cancelled", retryable: false },
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("one owned Playwright page completes application, recovers, proves Review, and never activates Submit", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-owned-runtime-"));
   const server = createServer((_request, response) => {

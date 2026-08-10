@@ -117,4 +117,5 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly inspectionHoldBeforeCleanup?: () => Promise<void>;
   readonly ids: () => LiveSessionId;
   readonly timeoutMs: number;
+  readonly applicationOperationTimeoutMs?: number;
 }

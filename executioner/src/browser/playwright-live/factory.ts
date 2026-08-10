@@ -65,7 +65,18 @@ export function createPlaywrightPersistentBrowserSession(
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,
+    applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs(
+      options.externalMonitor !== undefined,
+      inspection.timeoutMs,
+    ),
   });
+}
+
+export function resolveExternalMonitorOperationTimeoutMs(
+  monitored: boolean,
+  requestedTimeoutMs: number,
+): number | undefined {
+  return monitored ? Math.max(requestedTimeoutMs, 390_000) : undefined;
 }
 
 export function resolveLiveInspectionHoldPolicy(
