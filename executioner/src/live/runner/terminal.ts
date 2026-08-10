@@ -6,6 +6,7 @@ type Stage2ReviewJourneyResult =
   | {
       readonly ok: false;
       readonly code: string;
+      readonly cleanupErrorCode?: "browser_profile_cleanup_failed";
       readonly terminal: {
         readonly status: "review_reached" | "failed" | "blocked" | "cancelled";
         readonly errorCode?: string;
@@ -66,6 +67,9 @@ export function formatStage2ReviewJourneyTerminal(
         ...(result.terminal.status === "failed"
           ? { errorCode: result.terminal.errorCode }
           : {}),
+        ...(result.cleanupErrorCode === undefined
+          ? {}
+          : { cleanupErrorCode: result.cleanupErrorCode }),
       };
   const serialized = `${JSON.stringify(value)}\n`;
   return Buffer.byteLength(serialized, "utf8") <= 512

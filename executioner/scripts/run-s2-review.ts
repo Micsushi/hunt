@@ -38,6 +38,8 @@ try {
   process.stdout.write(formatStage2ReviewJourneyTerminal(result));
   process.exitCode = result.ok
     ? 0
+    : result.cleanupErrorCode !== undefined
+      ? 1
     : result.code === "operation_cancelled"
       ? 130
       : 1;

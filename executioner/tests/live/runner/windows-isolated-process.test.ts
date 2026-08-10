@@ -75,6 +75,28 @@ test("Windows isolated runner round-trips trailing backslashes and attests its d
   }
 });
 
+test("Windows isolated runner inherits the value-free trace flag", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hunt-c3-runner-env-"));
+  try {
+    const output = join(directory, "environment.txt");
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "environment",
+      output,
+    ], {
+      runnerPath: fixture,
+      environment: {
+        ...process.env,
+        HUNT_C3_VALUE_FREE_ACCOUNT_TRACE: "1",
+      },
+    }), 0);
+    assert.equal(await readFile(output, "utf8"), "1");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Windows isolated runner seals exact post-job descendant cleanup evidence", {
   skip: process.platform !== "win32",
 }, async () => {

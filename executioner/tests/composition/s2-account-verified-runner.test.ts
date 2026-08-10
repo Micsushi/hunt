@@ -113,6 +113,7 @@ test("cleanup-bound lifecycle closes before returning success", async () => {
 
 test("session-bound lifecycle preserves factual account blocks without owning session cleanup", async () => {
   const events: string[] = [];
+  const trace: string[] = [];
   const session = browserSession();
   type SessionBrowser = Parameters<
     typeof runSessionBoundAccountVerifiedLifecycle
@@ -158,6 +159,7 @@ test("session-bound lifecycle preserves factual account blocks without owning se
     reconcileOperationId: "operation_reconcile_session1" as OperationId,
     advanceOperationId: "operation_advance_session123" as OperationId,
     now,
+    trace: (event) => trace.push(event),
     runLifecycle: async (ownedSession) => {
       assert.equal(ownedSession, session);
       events.push("lifecycle");
@@ -166,6 +168,73 @@ test("session-bound lifecycle preserves factual account blocks without owning se
   }, new AbortController().signal);
 
   assert.deepEqual(result, { ok: true, value: factual });
+  assert.deepEqual(events, ["reconcile", "advance", "lifecycle"]);
+  assert.deepEqual(trace, [
+    "account_session_reconcile_started",
+    "account_session_reconcile_succeeded",
+    "account_session_advance_started",
+    "account_session_advance_succeeded",
+    "account_session_lifecycle_started",
+    "account_session_lifecycle_succeeded",
+  ]);
+});
+
+test("session-bound lifecycle traces the exact pre-lifecycle failure phase", async () => {
+  const session = browserSession();
+  const trace: string[] = [];
+  const browser = fakeBrowser(session, []);
+  browser.reconcile = async () => ({
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+  const result = await runSessionBoundAccountVerifiedLifecycle({
+    browser,
+    session,
+    journeyId: session.journeyId,
+    expectedTarget: session.target,
+    reconcileOperationId: "operation_reconcile_trace1" as OperationId,
+    advanceOperationId: "operation_advance_trace1234" as OperationId,
+    now,
+    trace: (event) => trace.push(event),
+    runLifecycle: async () => { throw new Error("must not run"); },
+  }, new AbortController().signal);
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_effect_uncertain" },
+  });
+  assert.deepEqual(trace, [
+    "account_session_reconcile_started",
+    "account_session_reconcile_failed",
+  ]);
+});
+
+test("session trace observer failure cannot change the account result", async () => {
+  const session = browserSession();
+  const events: string[] = [];
+  const result = await runSessionBoundAccountVerifiedLifecycle({
+    browser: fakeBrowser(session, events),
+    session,
+    journeyId: session.journeyId,
+    expectedTarget: session.target,
+    reconcileOperationId: "operation_reconcile_throw1" as OperationId,
+    advanceOperationId: "operation_advance_throw1234" as OperationId,
+    now,
+    trace: () => { throw new Error("observer failure"); },
+    runLifecycle: async () => {
+      events.push("lifecycle");
+      return {
+        ok: true,
+        value: {
+          kind: "account_ready",
+          path: "reused_account",
+          independentlyObserved: true,
+          verificationCandidateCount: 0,
+          verificationConsumed: false,
+        },
+      };
+    },
+  }, new AbortController().signal);
+  assert.equal(result.ok, true);
   assert.deepEqual(events, ["reconcile", "advance", "lifecycle"]);
 });
 

@@ -257,6 +257,7 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
   readonly now: string;
   readonly clock?: () => string;
   readonly authorizationExpiresAt?: string;
+  readonly trace?: (event: string) => void;
   readonly runLifecycle: (
     session: LiveBrowserSessionV1,
     signal: AbortSignal,
@@ -266,6 +267,7 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
     if (authorizedEffectNow(options, signal) === null) {
       return sessionFailure("operation_cancelled");
     }
+    emitSessionTrace(options.trace, "account_session_reconcile_started");
     const reconciled = await options.browser.reconcile({
       schemaVersion: 1,
       journeyId: options.journeyId,
@@ -273,12 +275,18 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       session: options.session,
       expectedTarget: options.expectedTarget,
     }, signal);
-    if (!reconciled.ok) return sessionFailure(reconciled.error.code);
+    if (!reconciled.ok) {
+      emitSessionTrace(options.trace, "account_session_reconcile_failed");
+      return sessionFailure(reconciled.error.code);
+    }
     if (reconciled.value.kind !== "matched") {
+      emitSessionTrace(options.trace, "account_session_reconcile_blocked");
       return factualSessionResult(reconciled.value);
     }
+    emitSessionTrace(options.trace, "account_session_reconcile_succeeded");
     const advanceNow = authorizedEffectNow(options, signal);
     if (advanceNow === null) return sessionFailure("operation_cancelled");
+    emitSessionTrace(options.trace, "account_session_advance_started");
     const advanced = await options.browser.advanceToAccountEntry({
       schemaVersion: 1,
       journeyId: options.journeyId,
@@ -287,14 +295,23 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       target: options.expectedTarget,
       now: advanceNow,
     }, signal);
-    if (!advanced.ok) return sessionFailure(advanced.error.code);
+    if (!advanced.ok) {
+      emitSessionTrace(options.trace, "account_session_advance_failed");
+      return sessionFailure(advanced.error.code);
+    }
     if (advanced.value.kind !== "account_boundary") {
+      emitSessionTrace(options.trace, "account_session_advance_blocked");
       return factualSessionResult(advanced.value);
     }
+    emitSessionTrace(options.trace, "account_session_advance_succeeded");
     if (authorizedEffectNow(options, signal) === null) {
       return sessionFailure("operation_cancelled");
     }
+    emitSessionTrace(options.trace, "account_session_lifecycle_started");
     const lifecycle = await options.runLifecycle(options.session, signal);
+    emitSessionTrace(options.trace, lifecycle.ok
+      ? "account_session_lifecycle_succeeded"
+      : "account_session_lifecycle_failed");
     return lifecycle.ok
       ? { ok: true, value: lifecycle.value }
       : sessionFailure(lifecycle.error.code);
@@ -303,6 +320,13 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       signal.aborted ? "operation_cancelled" : "account_proof_invalid",
     );
   }
+}
+
+function emitSessionTrace(
+  trace: ((event: string) => void) | undefined,
+  event: string,
+): void {
+  try { trace?.(event); } catch { /* diagnostics never change account behavior */ }
 }
 
 export function createCleanupBoundAccountVerifiedLifecycle(options: {
@@ -554,6 +578,7 @@ export async function runStage2AccountVerifiedInSession(
           now: admittedNow,
           clock: liveClock,
           authorizationExpiresAt: options.owner.approval.expiresAt,
+          trace: valueFreeTrace,
           runLifecycle: (session, activeSignal) => {
             const current = authorization.current();
             if (current === null) {

@@ -13,6 +13,8 @@ if (mode === "argv") {
   await writeFile(outputPath, "ok", "utf8");
 } else if (mode === "identity") {
   await writeFile(outputPath, JSON.stringify({ pid: process.pid }), "utf8");
+} else if (mode === "environment") {
+  await writeFile(outputPath, process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE ?? "missing", "utf8");
 } else if (mode === "linger") {
   const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: "ignore",

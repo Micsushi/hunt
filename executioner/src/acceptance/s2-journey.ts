@@ -101,6 +101,7 @@ export type Stage2RealJourneyResult =
       readonly ok: false;
       readonly code: Stage2RealJourneyFailureCode;
       readonly terminal: TerminalResultV4;
+      readonly cleanupErrorCode?: "browser_profile_cleanup_failed";
     };
 
 type PendingJourneyResult = Stage2RealJourneyResult;
@@ -133,7 +134,9 @@ export async function runStage2RealJourney(
       const retained = await closeRuntime(runtime, false);
       return retained
         ? errorFailure(invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3)
-        : errorFailure(invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3);
+        : withCleanupFailure(errorFailure(
+          invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3,
+        ));
     }
     const finalized = await closeRuntime(runtime, true);
     return finalized
@@ -141,17 +144,20 @@ export async function runStage2RealJourney(
       : errorFailure(invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3);
   }
   const retained = await closeRuntime(runtime, false);
-  if (!retained) {
-    return errorFailure(
-      invocation.config.journeyId,
-      "cleanup_failed",
-      "browser_profile_cleanup_failed",
-      pending.terminal.completedPages,
-    );
+  if (pending.ok) {
+    const outcome = cancelled(invocation.config.journeyId, pending.terminal.completedPages);
+    return retained ? outcome : withCleanupFailure(outcome);
   }
-  return signal.aborted
+  const outcome = signal.aborted
     ? cancelled(invocation.config.journeyId, pending.terminal.completedPages)
     : pending;
+  return retained ? outcome : withCleanupFailure(outcome);
+}
+
+function withCleanupFailure(
+  result: Extract<Stage2RealJourneyResult, { readonly ok: false }>,
+): Extract<Stage2RealJourneyResult, { readonly ok: false }> {
+  return Object.freeze({ ...result, cleanupErrorCode: "browser_profile_cleanup_failed" });
 }
 
 async function closeRuntime(

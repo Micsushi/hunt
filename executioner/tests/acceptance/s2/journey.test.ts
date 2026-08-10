@@ -316,6 +316,30 @@ test("application failure preserves its exact code and completed-page count", as
   }
 });
 
+test("cleanup failure does not replace the original journey failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-primary-failure-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.account.verify = async () => ({ ok: false, code: "browser_effect_uncertain" });
+  value.cleanup.close = async () => false;
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "account_verification_failed");
+    assert.equal(result.terminal.status, "failed");
+    if (result.terminal.status === "failed") {
+      assert.equal(result.terminal.errorCode, "browser_effect_uncertain");
+    }
+    assert.equal(result.cleanupErrorCode, "browser_profile_cleanup_failed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("arbitrary stage exceptions use only the truthful internal terminal code", async () => {
   for (const stage of ["bind", "account", "recovery", "application", "review", "evidence"] as const) {
     const root = mkdtempSync(join(tmpdir(), `hunt-s2-internal-${stage}-`));

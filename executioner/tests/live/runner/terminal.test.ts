@@ -20,6 +20,18 @@ test("review journey terminal preserves the stable inner error code", () => {
   } as never), '{"status":"failed","code":"account_verification_failed","terminalStatus":"failed","errorCode":"secret_handle_expired"}\n');
 });
 
+test("review journey terminal reports cleanup failure without hiding the primary error", () => {
+  assert.equal(formatStage2ReviewJourneyTerminal({
+    ok: false,
+    code: "account_verification_failed",
+    cleanupErrorCode: "browser_profile_cleanup_failed",
+    terminal: {
+      status: "failed",
+      errorCode: "mailbox_none",
+    },
+  } as never), '{"status":"failed","code":"account_verification_failed","terminalStatus":"failed","errorCode":"mailbox_none","cleanupErrorCode":"browser_profile_cleanup_failed"}\n');
+});
+
 test("review journey terminal preserves success output", () => {
   assert.equal(formatStage2ReviewJourneyTerminal({ ok: true } as never),
     '{"status":"passed","checkpoint":"review","submitActivated":false}\n');
