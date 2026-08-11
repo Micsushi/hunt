@@ -97,7 +97,7 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
           <label>Address Line 1<input id="address--addressLine1" name="addressLine1"></label>
           <label>City<input id="address--city" name="city"></label>
           <button id="address--countryRegion" name="countryRegion" role="combobox"
-            aria-label="Province or Territory Select One">Select One</button>
+            aria-label="Province or Territory Not Required">Select One</button>
           <label>Postal Code<input id="address--postalCode" name="postalCode"></label>
           <button id="phoneNumber--phoneType" name="phoneType" role="combobox"
             aria-label="Phone Device Type Mobile Required" aria-valuetext="Mobile">Mobile</button>
@@ -128,6 +128,7 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
     ]);
     assert.equal(controls.get("address.country")?.required, true);
     assert.equal(controls.get("address.country")?.readback, "Canada");
+    assert.equal(controls.get("address.region")?.required, false);
     assert.equal(controls.get("phone.device_type")?.required, true);
     assert.equal(controls.get("phone.number")?.uiBehavior, "phone");
 

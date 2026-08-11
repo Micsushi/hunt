@@ -559,9 +559,11 @@ async function required(locator: Locator): Promise<boolean> {
     )
   ) return false;
   const ariaLabel = (await locator.getAttribute("aria-label"))?.trim() ?? "";
+  const accessibleRequired = /(?:^|\s)Required$/u.test(ariaLabel) &&
+    !/(?:^|\s)Not Required$/u.test(ariaLabel);
   return await locator.getAttribute("required") !== null ||
     await locator.getAttribute("aria-required") === "true" ||
-    /(?:^|\s)Required$/u.test(ariaLabel);
+    accessibleRequired;
 }
 
 async function validationCleared(locator: Locator): Promise<boolean> {
