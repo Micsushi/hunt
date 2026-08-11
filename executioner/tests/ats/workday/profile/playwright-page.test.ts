@@ -206,6 +206,42 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
   }
 });
 
+test("source control binds through the exact Workday form-field container without sourcePrompt", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <button type="button" role="combobox" aria-required="true"
+              aria-controls="source-options" aria-valuetext="Company Website">
+              Company Website
+            </button>
+          </div>
+          <div id="source-options" role="listbox" hidden></div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required, readback }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+      readback,
+    })), [{
+      fieldId: "source.how_did_you_hear",
+      uiBehavior: "search_select",
+      required: true,
+      readback: "Company Website",
+    }]);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("the source selector never activates an exact category row as an option", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -426,6 +462,115 @@ test("unknown visible required controls block before a reviewed control is mutat
       await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
       "",
     );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("custom ARIA required controls block before a reviewed field is mutated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <div role="checkbox" aria-required="true"
+            data-automation-id="tenantConsent" tabindex="0">Consent</div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        pageType: "profile",
+        fields: [field("identity.given_name", "identity", "text", "Ada")],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      { kind: "blocked", code: "answer_type_unknown" },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+    const unknown = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId.startsWith("unknown.required."),
+    );
+    assert.equal(unknown?.uiBehavior, "checkbox");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("inventories unknown active form controls by structural UI type without retaining values", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required type="date" data-automation-id="tenantStartDate" value="2026-08-11">
+          <input type="tel" data-automation-id="tenantPhone" value="555-0100">
+          <input type="checkbox" data-automation-id="tenantCheckbox" checked>
+          <input required type="file" data-automation-id="tenantDocument">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="tenant-options" data-automation-id="tenantSelect">Select One</button>
+          <div id="tenant-options" role="listbox" hidden></div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required, readback }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+      readback,
+    })), [
+      { fieldId: "unknown.required.1", uiBehavior: "date", required: true, readback: null },
+      { fieldId: "unknown.optional.2", uiBehavior: "phone", required: false, readback: null },
+      { fieldId: "unknown.optional.3", uiBehavior: "checkbox", required: false, readback: null },
+      { fieldId: "unknown.required.4", uiBehavior: "file", required: true, readback: null },
+      { fieldId: "unknown.required.5", uiBehavior: "search_select", required: true, readback: null },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("inventories optional custom ARIA and contenteditable controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div role="checkbox" aria-checked="false"
+            data-automation-id="tenantOptionalConsent" tabindex="0">Consent</div>
+          <div role="radiogroup" data-automation-id="tenantOptionalGroup">Choices</div>
+          <div role="radio" aria-checked="false"
+            data-automation-id="tenantOptionalRadio" tabindex="0">Choice</div>
+          <div contenteditable="true" data-automation-id="tenantOptionalNote">Note</div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+    })), [
+      { fieldId: "unknown.optional.1", uiBehavior: "checkbox", required: false },
+      { fieldId: "unknown.optional.2", uiBehavior: "radio_group", required: false },
+      { fieldId: "unknown.optional.3", uiBehavior: "radio_group", required: false },
+      { fieldId: "unknown.optional.4", uiBehavior: "text", required: false },
+    ]);
   } finally {
     await browser.close();
   }

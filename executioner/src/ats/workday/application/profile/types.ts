@@ -21,6 +21,8 @@ export type ProfileQuestionType =
   | "skill";
 export type ProfileCanonicalAnswerType = "text" | "phone" | "date" | "option";
 export type ProfileUiBehavior =
+  | "checkbox"
+  | "file"
   | "text"
   | "phone"
   | "date"

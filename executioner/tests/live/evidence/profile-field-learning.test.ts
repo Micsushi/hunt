@@ -242,6 +242,53 @@ test("admits reviewed owner-input source and prior-employment controls", () => {
   assert.equal(admitted.fields.length, 2);
 });
 
+test("admits privacy-safe optional checkbox and required file inventory", () => {
+  const admitted = admitProfileFieldLearningEvidence({
+    schemaVersion: 1,
+    evidenceRevision: "s2-profile-field-learning-v1",
+    page: "profile",
+    fields: [
+      {
+        fieldIdentity: "profile.unknown.optional.1",
+        uiType: "checkbox",
+        uiVariant: "workday_unknown_required_v1",
+        questionCategory: "unknown",
+        answerCategory: "unknown",
+        required: false,
+        visibleOptionIds: [],
+        selectedOptionId: null,
+        optionMapping: "unresolved",
+        prefillDisposition: "needs_owner_input",
+        driverAttempt: "none",
+        mechanics: mechanics("text", "not_attempted"),
+      },
+      {
+        fieldIdentity: "profile.unknown.required.2",
+        uiType: "file",
+        uiVariant: "workday_unknown_required_v1",
+        questionCategory: "unknown",
+        answerCategory: "unknown",
+        required: true,
+        visibleOptionIds: [],
+        selectedOptionId: null,
+        optionMapping: "unresolved",
+        prefillDisposition: "needs_owner_input",
+        driverAttempt: "none",
+        mechanics: mechanics("text", "not_attempted"),
+      },
+    ],
+  });
+
+  assert.deepEqual(admitted.fields.map(({ fieldIdentity, uiType, required }) => ({
+    fieldIdentity,
+    uiType,
+    required,
+  })), [
+    { fieldIdentity: "profile.unknown.optional.1", uiType: "checkbox", required: false },
+    { fieldIdentity: "profile.unknown.required.2", uiType: "file", required: true },
+  ]);
+});
+
 test("denies widened, duplicate, and non-opaque learning records", () => {
   const base = {
     schemaVersion: 1 as const,
@@ -280,6 +327,27 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
     {
       ...base,
       fields: [{ ...base.fields[0], uiVariant: "workday_ada_v1" }],
+    },
+    {
+      ...base,
+      fields: [{
+        ...base.fields[0],
+        uiType: "file",
+        uiVariant: "workday_unknown_required_v1",
+      }],
+    },
+    {
+      ...base,
+      fields: [{
+        ...base.fields[0],
+        fieldIdentity: "profile.unknown.required.1",
+        uiType: "checkbox",
+        uiVariant: "workday_text_v1",
+        questionCategory: "unknown",
+        answerCategory: "unknown",
+        optionMapping: "unresolved",
+        prefillDisposition: "needs_owner_input",
+      }],
     },
     {
       ...base,

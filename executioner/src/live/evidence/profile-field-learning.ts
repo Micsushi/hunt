@@ -14,7 +14,9 @@ import {
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
-const uiTypes = new Set(["text", "phone", "date", "search_select", "radio_group"]);
+const uiTypes = new Set([
+  "checkbox", "file", "text", "phone", "date", "search_select", "radio_group",
+]);
 const questionCategories = new Set([
   "identity", "address", "phone", "application_source", "prior_employment",
   "experience", "education", "skill", "unknown",
@@ -193,6 +195,7 @@ export function admitProfileFieldLearningEvidence(
         "optionMapping", "prefillDisposition", "driverAttempt", "mechanics",
       ]) ||
       !validFieldIdentity(field.fieldIdentity) ||
+      !validIdentityBinding(field) ||
       identities.has(field.fieldIdentity) ||
       !uiTypes.has(field.uiType) ||
       !reviewedUiVariants.has(field.uiVariant) ||
@@ -225,13 +228,61 @@ export function admitProfileFieldLearningEvidence(
 }
 
 function validFieldIdentity(value: string): boolean {
-  if (scalarIdentities.has(value) || /^profile\.unknown\.required\.[1-9][0-9]{0,2}$/u.test(value)) {
+  if (
+    scalarIdentities.has(value) ||
+    /^profile\.unknown\.(required|optional)\.[1-9][0-9]{0,2}$/u.test(value)
+  ) {
     return true;
   }
   const match = /^profile\.(experience|education|skills)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(value);
   if (match === null) return false;
   const section = match[1] as "experience" | "education" | "skills";
   return repeatableFields.get(section)?.has(match[3]!) === true;
+}
+
+function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
+  const scalar = profileScalarControlCatalog.find(
+    ({ fieldId }) => field.fieldIdentity === `profile.${fieldId}`,
+  );
+  if (scalar !== undefined) {
+    return field.uiType === scalar.uiBehavior && field.uiVariant === scalar.uiVariant;
+  }
+  const unknown = /^profile\.unknown\.(required|optional)\.[1-9][0-9]{0,2}$/u.exec(
+    field.fieldIdentity,
+  );
+  if (unknown !== null) {
+    const expectedMechanics = emptyMechanics(field.uiType as ProfileControlSnapshot["uiBehavior"]);
+    return field.uiVariant === "workday_unknown_required_v1" &&
+      field.questionCategory === "unknown" && field.answerCategory === "unknown" &&
+      field.required === (unknown[1] === "required") &&
+      field.visibleOptionIds.length === 0 && field.selectedOptionId === null &&
+      field.optionMapping === "unresolved" &&
+      field.prefillDisposition === "needs_owner_input" &&
+      field.driverAttempt === "none" &&
+      sameMechanics(field.mechanics, expectedMechanics);
+  }
+  const repeatable = /^profile\.(experience|education|skills)\.[1-9][0-9]{0,2}\.(.+)$/u.exec(
+    field.fieldIdentity,
+  );
+  if (repeatable === null) return false;
+  const section = repeatable[1] as "experience" | "education" | "skills";
+  const catalog = profileRepeatableCatalog.find((entry) => entry.section === section);
+  const binding = catalog?.fields.find(({ fieldId }) => fieldId === repeatable[2]);
+  return binding !== undefined &&
+    field.uiType === binding.uiBehavior && field.uiVariant === binding.uiVariant;
+}
+
+function sameMechanics(
+  left: ProfileFieldMechanicsV1,
+  right: MutableRecord["mechanics"],
+): boolean {
+  return left.popupBound === right.popupBound &&
+    left.optionFocused === right.optionFocused &&
+    left.optionActivated === right.optionActivated &&
+    left.popupClosed === right.popupClosed &&
+    left.backingValueCommitted === right.backingValueCommitted &&
+    left.validationCleared === right.validationCleared &&
+    left.persistentReadback === right.persistentReadback;
 }
 
 interface MutableRecord {

@@ -43,6 +43,18 @@ export const profileRequiredControlSelector = [
   '[contenteditable="true"][aria-required="true"]',
 ].join(", ");
 
+export const profileInteractiveControlSelector = [
+  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"])',
+  "textarea",
+  "select",
+  '[role="combobox"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="radiogroup"]',
+  '[contenteditable="true"]',
+  'button[aria-haspopup="listbox"]',
+].join(", ");
+
 const text = (fieldId: string, automationId: string): ProfileControlCatalogEntry => ({
   fieldId,
   selector: `[data-automation-id="${automationId}"]`,
@@ -76,7 +88,11 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
     },
     {
       fieldId: "source.how_did_you_hear",
-      selector: '[data-automation-id="sourcePrompt"]',
+      selector: [
+        '[data-automation-id="sourcePrompt"]',
+        '[data-automation-id="formField-source"] [role="combobox"]',
+        '[data-automation-id="formField-source"] button[aria-haspopup="listbox"]',
+      ].join(", "),
       uiBehavior: "search_select",
       uiVariant: "workday_source_select_v1",
     },

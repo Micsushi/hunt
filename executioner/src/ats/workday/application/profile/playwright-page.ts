@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 
 import {
+  profileInteractiveControlSelector,
   profileRequiredControlSelector,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
@@ -72,7 +73,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
       for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
     }
-    controls.push(...await this.#inspectUnknownRequiredControls(profile));
+    controls.push(...await this.#inspectUnknownControls(profile));
     abort(signal);
     return { pageType: this.#pageType, controls, rows };
   }
@@ -231,11 +232,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     };
   }
 
-  async #inspectUnknownRequiredControls(
+  async #inspectUnknownControls(
     profile: Locator,
   ): Promise<ProfileControlSnapshot[]> {
     const candidates = await visibleLocators(
-      profile.locator(profileRequiredControlSelector),
+      profile.locator(`${profileInteractiveControlSelector}, ${profileRequiredControlSelector}`),
     );
     const catalog = {
       scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector),
@@ -247,7 +248,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     };
     const unreviewed: { readonly candidate: Locator; readonly machineKey: string | null }[] = [];
     for (const candidate of candidates) {
-      if (!await required(candidate)) continue;
+      if (await candidate.isDisabled()) continue;
       if (await candidate.evaluate((element) => element.matches(
         'input[type="file"][data-automation-id="file-upload-input-ref"]',
       ))) continue;
@@ -277,7 +278,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       machineKey === null || keyCounts.get(machineKey) !== 1
     )) throw new TypeError("Workday unknown required control identity denied");
     const unknown: ProfileControlSnapshot[] = [];
-    for (const { machineKey } of unreviewed) {
+    for (const { candidate, machineKey } of unreviewed) {
       const stableKey = machineKey as string;
       let ordinal = this.#unknownControlOrdinals.get(stableKey);
       if (ordinal === undefined) {
@@ -285,11 +286,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         this.#nextUnknownControlOrdinal += 1;
         this.#unknownControlOrdinals.set(stableKey, ordinal);
       }
+      const isRequired = await required(candidate);
       unknown.push({
         controlId: `unknown-required:${ordinal}`,
-        fieldId: `unknown.required.${ordinal}`,
-        required: true,
-        uiBehavior: "text",
+        fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
+        required: isRequired,
+        uiBehavior: await unknownUiBehavior(candidate),
         uiVariant: "workday_unknown_required_v1",
         readback: null,
       });
@@ -469,6 +471,28 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (matches.length !== 1) throw new TypeError("Workday row binding is stale or ambiguous");
     return matches[0]!;
   }
+}
+
+async function unknownUiBehavior(
+  locator: Locator,
+): Promise<ProfileControlSnapshot["uiBehavior"]> {
+  return await locator.evaluate((element) => {
+    const role = element.getAttribute("role");
+    if (role === "checkbox") return "checkbox";
+    if (role === "radio" || role === "radiogroup") return "radio_group";
+    if (
+      element instanceof HTMLSelectElement || role === "combobox" ||
+      element.getAttribute("aria-haspopup") === "listbox"
+    ) return "search_select";
+    if (element instanceof HTMLInputElement) {
+      if (element.type === "checkbox") return "checkbox";
+      if (element.type === "date" || element.type === "month") return "date";
+      if (element.type === "file") return "file";
+      if (element.type === "radio") return "radio_group";
+      if (element.type === "tel") return "phone";
+    }
+    return "text";
+  });
 }
 
 async function unknownMachineKey(locator: Locator): Promise<string | null> {
