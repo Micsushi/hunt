@@ -69,6 +69,20 @@ const search = (fieldId: string, automationId: string): ProfileControlCatalogEnt
   uiVariant: "workday_search_select_v1",
 });
 
+const v2Text = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
+  fieldId,
+  selector: `[id="${id}"]`,
+  uiBehavior: "text",
+  uiVariant: "workday_text_v2",
+});
+
+const v2Search = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
+  fieldId,
+  selector: `button[id="${id}"][role="combobox"]`,
+  uiBehavior: "search_select",
+  uiVariant: "workday_search_select_v2",
+});
+
 export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] =
   Object.freeze([
     text("identity.given_name", "legalNameSection_firstName"),
@@ -115,6 +129,28 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiBehavior: "radio_group",
       uiVariant: "workday_previous_worker_radio_v1",
     },
+    v2Text("identity.given_name", "name--legalName--firstName"),
+    v2Text("identity.family_name", "name--legalName--lastName"),
+    {
+      fieldId: "identity.has_preferred_name",
+      selector: 'input[id="name--preferredCheck"][type="checkbox"]',
+      uiBehavior: "checkbox",
+      uiVariant: "workday_checkbox_v2",
+    },
+    v2Text("address.line1", "address--addressLine1"),
+    v2Text("address.city", "address--city"),
+    v2Search("address.country", "country--country"),
+    v2Search("address.region", "address--countryRegion"),
+    v2Text("address.postal_code", "address--postalCode"),
+    v2Search("phone.device_type", "phoneNumber--phoneType"),
+    v2Text("phone.country_code", "phoneNumber--countryPhoneCode"),
+    {
+      fieldId: "phone.number",
+      selector: 'input[id="phoneNumber--phoneNumber"]',
+      uiBehavior: "phone",
+      uiVariant: "workday_phone_v2",
+    },
+    v2Text("phone.extension", "phoneNumber--extension"),
   ]);
 
 interface RepeatableFieldCatalogEntry {

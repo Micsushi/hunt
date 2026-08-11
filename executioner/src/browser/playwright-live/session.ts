@@ -695,11 +695,33 @@ export class PlaywrightPersistentBrowserSession
       if (state.kind === "job_posting" && transitionCount !== 0) {
         return failure("browser_target_invalid");
       }
-      const action: PostingNavigationAction = state.kind === "job_posting"
-        ? "start_application"
+      let action: PostingNavigationAction = state.kind === "job_posting"
+        ? inspected.value.snapshot.traitIds.includes("structural_trait_account_sign_in_v1")
+          ? "account_sign_in"
+          : "start_application"
         : state.kind === "apply_choice"
           ? "apply_manually"
           : "sign_in_with_email";
+      if (state.kind === "job_posting" && action === "start_application") {
+        const signInControl = await bounded(
+          this.#options.postingNavigation!.inspect(
+            this.#page!,
+            "account_sign_in",
+          ),
+          signal,
+          this.#options.timeoutMs,
+        );
+        if (signInControl.kind === "cancelled") return cancelled();
+        if (signInControl.kind === "timeout") return failure("browser_timeout");
+        if (signInControl.kind === "error") return failure("browser_target_invalid");
+        if (signInControl.value.cardinality > 1) {
+          return failure("browser_target_ambiguous");
+        }
+        if (signInControl.value.cardinality === 1) {
+          if (!signInControl.value.actionable) return failure("browser_target_invalid");
+          action = "account_sign_in";
+        }
+      }
       const control = await bounded(
         this.#options.postingNavigation!.inspect(this.#page!, action),
         signal,

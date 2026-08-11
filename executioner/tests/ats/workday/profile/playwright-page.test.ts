@@ -79,6 +79,84 @@ test("Playwright adapter proves reviewed text, phone, date, and active-listbox v
   }
 });
 
+test("v2 semantic ids bind exact profile controls and accessible required wording", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="country--country" name="country" role="combobox"
+            aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+          <label>First Name*<input id="name--legalName--firstName"
+            name="legalName--firstName" required></label>
+          <label>Last Name*<input id="name--legalName--lastName"
+            name="legalName--lastName" required></label>
+          <label><input id="name--preferredCheck" name="preferredCheck"
+            type="checkbox">I have a preferred name</label>
+          <label>Address Line 1<input id="address--addressLine1" name="addressLine1"></label>
+          <label>City<input id="address--city" name="city"></label>
+          <button id="address--countryRegion" name="countryRegion" role="combobox"
+            aria-label="Province or Territory Select One">Select One</button>
+          <label>Postal Code<input id="address--postalCode" name="postalCode"></label>
+          <button id="phoneNumber--phoneType" name="phoneType" role="combobox"
+            aria-label="Phone Device Type Mobile Required" aria-valuetext="Mobile">Mobile</button>
+          <label>Country Phone Code*<input id="phoneNumber--countryPhoneCode" required></label>
+          <label>Phone Number*<input id="phoneNumber--phoneNumber"
+            name="phoneNumber" required></label>
+          <label>Phone Extension<input id="phoneNumber--extension" name="extension"></label>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const controls = new Map(snapshot.controls.map((control) => [control.fieldId, control]));
+
+    assert.deepEqual([...controls.keys()], [
+      "identity.given_name",
+      "identity.family_name",
+      "identity.has_preferred_name",
+      "address.line1",
+      "address.city",
+      "address.country",
+      "address.region",
+      "address.postal_code",
+      "phone.device_type",
+      "phone.country_code",
+      "phone.number",
+      "phone.extension",
+    ]);
+    assert.equal(controls.get("address.country")?.required, true);
+    assert.equal(controls.get("address.country")?.readback, "Canada");
+    assert.equal(controls.get("phone.device_type")?.required, true);
+    assert.equal(controls.get("phone.number")?.uiBehavior, "phone");
+
+    await adapter.commit({
+      controlId: controls.get("identity.given_name")!.controlId,
+      uiBehavior: "text",
+      value: "Ada",
+    }, AbortSignal.any([]));
+    await adapter.commit({
+      controlId: controls.get("phone.country_code")!.controlId,
+      uiBehavior: "text",
+      value: "+1",
+    }, AbortSignal.any([]));
+    await adapter.commit({
+      controlId: controls.get("phone.number")!.controlId,
+      uiBehavior: "phone",
+      value: "5550100",
+    }, AbortSignal.any([]));
+
+    const readback = new Map((await adapter.inspect(AbortSignal.any([]))).controls
+      .map((control) => [control.fieldId, control.readback]));
+    assert.equal(readback.get("identity.given_name"), "Ada");
+    assert.equal(readback.get("phone.country_code"), "+1");
+    assert.equal(readback.get("phone.number"), "5550100");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("search-select refuses an unrelated visible listbox without an ownership link", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

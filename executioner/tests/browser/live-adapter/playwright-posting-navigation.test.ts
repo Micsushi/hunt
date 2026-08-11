@@ -5,6 +5,7 @@ import { PlaywrightPostingNavigationAdapter } from "../../../src/browser/playwri
 
 test("production adapter resolves each closed Workday transition semantically", async () => {
   for (const [action, role, name] of [
+    ["account_sign_in", "link", "Sign In"],
     ["start_application", "button", "Apply"],
     ["start_application", "link", "Apply Now"],
     ["start_application", "button", "Start Your Application"],
@@ -22,6 +23,18 @@ test("production adapter resolves each closed Workday transition semantically", 
     await adapter.activate(page, action);
     assert.deepEqual(page.clicked, [`${role}:${name}`]);
   }
+});
+
+test("account Sign In falls back to one exact text control when no semantic role exists", async () => {
+  const page = new SemanticPage({ "text:Sign In": locator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  assert.deepEqual(
+    await adapter.inspect(page, "account_sign_in", { waitForCandidate: false }),
+    { cardinality: 1, actionable: true },
+  );
+  await adapter.activate(page, "account_sign_in");
+  assert.deepEqual(page.clicked, ["text:Sign In"]);
 });
 
 test("missing, duplicate, hidden, and disabled transition controls fail closed", async () => {
@@ -86,6 +99,21 @@ test("inspection gives an exact Apply control twenty seconds then stays fail clo
   assert.deepEqual(page.clicked, []);
 });
 
+test("posting preflight inspects exact Sign In without waiting for a missing control", async () => {
+  const waits: Array<{
+    readonly state: "attached" | "visible";
+    readonly timeout: number;
+  }> = [];
+  const page = new SemanticPage({ "link:Sign In": absentLocator(waits) });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  assert.deepEqual(
+    await adapter.inspect(page, "account_sign_in", { waitForCandidate: false }),
+    { cardinality: 0, actionable: false },
+  );
+  assert.deepEqual(waits, []);
+});
+
 test("Apply Manually gives the exact destination 20 seconds without repeating a failed click", async () => {
   const trace: string[] = [];
   const page = new SemanticPage(
@@ -126,6 +154,18 @@ test("Sign in with email waits for a credential or application destination", asy
   await adapter.activate(page, "sign_in_with_email");
 
   assert.equal(page.destinationWaits, 1);
+});
+
+test("account Sign In waits for the exact modern page owner, not a partially hydrated email field", async () => {
+  const modernSelector =
+    '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+  const page = new SemanticPage({ "text:Sign In": locator() });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  await adapter.activate(page, "account_sign_in");
+
+  assert.equal(page.destinationQueries[0]?.includes(modernSelector), true);
+  assert.equal(page.destinationQueries[0]?.includes('[data-automation-id="email"]'), false);
 });
 
 test("Apply Manually accepts an admitted destination opened in a popup", async () => {
@@ -175,6 +215,17 @@ class SemanticPage {
   }
   getByRole(role: string, options: { readonly name: string }): LocatorState {
     const key = `${role}:${options.name}`;
+    const item = this.#locators[key] ?? locator(false, false, 0);
+    return {
+      ...item,
+      click: async () => {
+        this.#effectStarted = true;
+        this.clicked.push(key);
+      },
+    };
+  }
+  getByText(text: string): LocatorState {
+    const key = `text:${text}`;
     const item = this.#locators[key] ?? locator(false, false, 0);
     return {
       ...item,

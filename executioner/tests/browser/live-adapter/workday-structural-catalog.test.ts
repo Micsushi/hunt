@@ -20,6 +20,53 @@ const PASSWORD_RESET_REQUIRED_SELECTOR =
   '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))';
 const EMAIL_SIGN_IN_CHOICE_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+const MODERN_SIGN_IN_SELECTOR =
+  '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+const POSTING_SIGN_IN_SELECTOR = '[data-automation-id="navigationItem-Sign In"]';
+
+test("the exact posting header Sign In trait stays a job page and enables account-first navigation", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === POSTING_SIGN_IN_SELECTOR ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, true, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const snapshot = result.kind === "snapshot" ? result.snapshot : undefined;
+  assert.deepEqual(snapshot?.traitIds, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_job_posting_v1",
+    "structural_trait_account_sign_in_v1",
+  ]);
+  assert.deepEqual(snapshot && classifyWorkdayAccountNavigation(snapshot), {
+    kind: "job_posting",
+  });
+});
+
+test("the exact modern sign-in owner is an account sign-in boundary", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === MODERN_SIGN_IN_SELECTOR ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const snapshot = result.kind === "snapshot" ? result.snapshot : undefined;
+  assert.deepEqual(snapshot?.traitIds, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_account_sign_in_v1",
+  ]);
+  assert.deepEqual(snapshot && classifyWorkdayAccountNavigation(snapshot), {
+    kind: "account_boundary",
+  });
+});
 
 test("an inline verification gate outranks retained sign-in controls", async () => {
   const messages = [

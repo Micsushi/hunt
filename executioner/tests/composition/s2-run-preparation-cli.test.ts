@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -37,6 +37,7 @@ test("run preparation CLI captures protected source paths without raw values on 
         revision: 1,
         facts: [
           { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
+          { factId: "region", value: "Alberta", provenance: "owner_provided" },
           { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
         ],
       },
@@ -63,6 +64,21 @@ test("run preparation CLI captures protected source paths without raw values on 
 
     assert.equal(existsSync(join(prepared.runtimeRoot, "application-profile.json")), true);
     assert.equal(existsSync(join(prepared.runtimeRoot, "application-resume.pdf")), true);
+    const captured = JSON.parse(readFileSync(
+      join(prepared.runtimeRoot, "application-profile.json"),
+      "utf8",
+    ));
+    assert.deepEqual(captured.profilePlan.fields[1], {
+      fieldId: "address.country",
+      questionType: "address",
+      answerType: "option",
+      answer: { kind: "answered", value: "CA", provenance: "journey_derived" },
+      optionMapping: {
+        canonicalValue: "CA",
+        visibleOption: "Canada",
+        provenance: "visible_option",
+      },
+    });
     assert.equal(createHash("sha256").update(resume).digest("hex").length, 64);
   } finally {
     resume.fill(0);

@@ -19,6 +19,39 @@ test("concrete session reaches an account boundary through exactly two reclassif
   assert.equal(harness.probeChecks(), 6);
 });
 
+test("a posting with an exact account Sign In enters the verified account route before guest Apply", async () => {
+  const harness = await openedHarness({
+    initialTraits: [
+      "structural_trait_page_job_posting_v1",
+      "structural_trait_account_sign_in_v1",
+    ],
+  });
+
+  const result = await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
+  assert.deepEqual(harness.adapter.actions, ["account_sign_in"]);
+  assert.equal(harness.context.effects, 1);
+});
+
+test("a posting semantically discovers exact account Sign In when structural traits omit it", async () => {
+  const harness = await openedHarness({
+    semanticAccountSignInFact: { cardinality: 1, actionable: true },
+  });
+
+  const result = await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
+  assert.deepEqual(harness.adapter.actions, ["account_sign_in"]);
+  assert.equal(harness.context.effects, 1);
+});
+
 test("an email-provider choice reaches the account boundary through one exact extra effect", async () => {
   const harness = await openedHarness({ emailSignInChoice: true });
 
@@ -284,6 +317,7 @@ function request() {
 async function openedHarness(options: {
   readonly initialTraits?: readonly string[];
   readonly fact?: { readonly cardinality: number; readonly actionable: boolean };
+  readonly semanticAccountSignInFact?: { readonly cardinality: number; readonly actionable: boolean };
   readonly factAfterFirstInspect?: { readonly cardinality: number; readonly actionable: boolean };
   readonly targetAfterOpen?: TargetFact;
   readonly targetAfterEffect?: TargetFact;
@@ -305,6 +339,8 @@ async function openedHarness(options: {
         ? []
         : [options.factAfterFirstInspect]),
     ],
+    options.semanticAccountSignInFact,
+    options.initialTraits?.includes("structural_trait_account_sign_in_v1") ?? false,
     () => { controlInspected = true; },
     (action) => {
       context.effects += 1;
@@ -348,7 +384,11 @@ async function openedHarness(options: {
         if (context.effects > 0 && options.targetAfterEffect !== undefined) {
           return targetObservation(options.targetAfterEffect);
         }
-        return matched(options.initialTraits ?? phaseTraits(context.phase));
+        return matched(
+          context.effects === 0 && options.initialTraits !== undefined
+            ? options.initialTraits
+            : phaseTraits(context.phase),
+        );
       },
     },
     profiles,
@@ -419,6 +459,11 @@ class NavigationAdapter {
     readonly cardinality: number;
     readonly actionable: boolean;
   }[];
+  readonly #semanticAccountSignInFact?: {
+    readonly cardinality: number;
+    readonly actionable: boolean;
+  };
+  readonly #structuralAccountSignIn: boolean;
   readonly #inspect: () => void;
   readonly #activate: (action: string) => void;
   constructor(
@@ -426,15 +471,34 @@ class NavigationAdapter {
       readonly cardinality: number;
       readonly actionable: boolean;
     }[],
+    semanticAccountSignInFact: {
+      readonly cardinality: number;
+      readonly actionable: boolean;
+    } | undefined,
+    structuralAccountSignIn: boolean,
     inspect: () => void,
     activate: (action: string) => void,
   ) {
     this.#facts = facts;
+    this.#semanticAccountSignInFact = semanticAccountSignInFact;
+    this.#structuralAccountSignIn = structuralAccountSignIn;
     this.#inspect = inspect;
     this.#activate = activate;
   }
-  async inspect() {
+  async inspect(
+    _page: FakePage,
+    action: string,
+    options: { readonly waitForCandidate?: boolean } = {},
+  ) {
     this.#inspect();
+    if (action === "account_sign_in") {
+      if (options.waitForCandidate === false) {
+        return { cardinality: 0, actionable: false };
+      }
+      return this.#semanticAccountSignInFact ?? (this.#structuralAccountSignIn
+        ? this.#facts[0]!
+        : { cardinality: 0, actionable: false });
+    }
     const fact = this.#facts[Math.min(this.#inspections, this.#facts.length - 1)]!;
     this.#inspections += 1;
     return fact;

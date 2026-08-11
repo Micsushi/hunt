@@ -5,6 +5,7 @@ import type {
   SemanticPostingNavigationAdapter,
 } from "./account-navigation-types.ts";
 import type { PersistentPage } from "./types.ts";
+import { WORKDAY_MODERN_SIGN_IN_SELECTOR } from "./workday-structural-catalog.ts";
 
 const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="email"]',
@@ -20,7 +21,7 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
 ].join(", ");
 
 const EMAIL_SIGN_IN_DESTINATION = [
-  '[data-automation-id="email"]',
+  WORKDAY_MODERN_SIGN_IN_SELECTOR,
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
   '[data-automation-id="emailVerificationPage"]',
@@ -38,7 +39,9 @@ export type PlaywrightPostingNavigationTraceEvent =
   | "posting_apply_manually_popup_destination_observed"
   | "posting_apply_manually_destination_wait_failed"
   | "posting_sign_in_with_email_same_page_destination_observed"
-  | "posting_sign_in_with_email_destination_wait_failed";
+  | "posting_sign_in_with_email_destination_wait_failed"
+  | "posting_account_sign_in_same_page_destination_observed"
+  | "posting_account_sign_in_destination_wait_failed";
 
 export interface PlaywrightPostingNavigationAdapterOptions {
   readonly trace?: (event: PlaywrightPostingNavigationTraceEvent) => void;
@@ -56,8 +59,9 @@ export class PlaywrightPostingNavigationAdapter
   async inspect(
     page: PersistentPage,
     action: PostingNavigationAction,
+    options: { readonly waitForCandidate?: boolean } = {},
   ): Promise<{ readonly cardinality: number; readonly actionable: boolean }> {
-    await waitForAnyCandidate(page, action);
+    if (options.waitForCandidate !== false) await waitForAnyCandidate(page, action);
     const candidates = await matchingCandidates(page, action);
     const cardinality = candidates.length;
     const actionable = cardinality === 1 &&
@@ -105,14 +109,14 @@ export class PlaywrightPostingNavigationAdapter
           ? "posting_apply_manually_popup_destination_observed"
           : "posting_apply_manually_same_page_destination_observed",
       );
-    } else if (action === "sign_in_with_email") {
+    } else if (action === "sign_in_with_email" || action === "account_sign_in") {
       try {
         await waitForEmailSignInDestination(semanticPage);
       } catch {
-        this.#emit("posting_sign_in_with_email_destination_wait_failed");
+        this.#emit(`posting_${action}_destination_wait_failed`);
         throw new TypeError("account or application destination did not settle");
       }
-      this.#emit("posting_sign_in_with_email_same_page_destination_observed");
+      this.#emit(`posting_${action}_same_page_destination_observed`);
     }
   }
 
@@ -144,38 +148,48 @@ async function matchingCandidates(
   page: PersistentPage,
   action: PostingNavigationAction,
 ): Promise<Locator[]> {
-  const candidates = candidateLocators(page, action);
-  const matching: Locator[] = [];
-  for (const candidate of candidates) {
-    const count = await candidate.count();
-    for (let index = 0; index < count; index += 1) matching.push(candidate.nth(index));
+  for (const candidates of candidateLocatorTiers(page, action)) {
+    const matching: Locator[] = [];
+    for (const candidate of candidates) {
+      const count = await candidate.count();
+      for (let index = 0; index < count; index += 1) matching.push(candidate.nth(index));
+    }
+    if (matching.length > 0) return matching;
   }
-  return matching;
+  return [];
 }
 
-function candidateLocators(
+function candidateLocatorTiers(
   page: PersistentPage,
   action: PostingNavigationAction,
-): Locator[] {
-  const semanticPage = page as unknown as Pick<Page, "getByRole">;
-  return action === "apply_manually"
+): Locator[][] {
+  const semanticPage = page as unknown as Pick<Page, "getByRole" | "getByText">;
+  return action === "account_sign_in"
     ? [
-        semanticPage.getByRole("button", { name: "Apply Manually", exact: true }),
-        semanticPage.getByRole("link", { name: "Apply Manually", exact: true }),
+        [
+          semanticPage.getByRole("link", { name: "Sign In", exact: true }),
+          semanticPage.getByRole("button", { name: "Sign In", exact: true }),
+        ],
+        [semanticPage.getByText("Sign In", { exact: true })],
       ]
+    : action === "apply_manually"
+    ? [[
+          semanticPage.getByRole("button", { name: "Apply Manually", exact: true }),
+          semanticPage.getByRole("link", { name: "Apply Manually", exact: true }),
+        ]]
     : action === "sign_in_with_email"
-      ? [
+      ? [[
           semanticPage.getByRole("button", { name: "Sign in with email", exact: true }),
           semanticPage.getByRole("link", { name: "Sign in with email", exact: true }),
-        ]
-      : [
+        ]]
+      : [[
         semanticPage.getByRole("button", { name: "Apply", exact: true }),
         semanticPage.getByRole("link", { name: "Apply", exact: true }),
         semanticPage.getByRole("button", { name: "Apply Now", exact: true }),
         semanticPage.getByRole("link", { name: "Apply Now", exact: true }),
         semanticPage.getByRole("button", { name: "Start Your Application", exact: true }),
         semanticPage.getByRole("link", { name: "Start Your Application", exact: true }),
-      ];
+      ]];
 }
 
 async function waitForEmailSignInDestination(
@@ -191,7 +205,7 @@ async function waitForAnyCandidate(
   page: PersistentPage,
   action: PostingNavigationAction,
 ): Promise<void> {
-  await Promise.any(candidateLocators(page, action).map((candidate) =>
+  await Promise.any(candidateLocatorTiers(page, action).flat().map((candidate) =>
     candidate.first().waitFor({ state: "visible", timeout: 20_000 })
   )).catch(() => undefined);
 }

@@ -8,6 +8,7 @@ import type {
 import type { PersistentPage } from "./types.ts";
 
 export type PostingNavigationAction =
+  | "account_sign_in"
   | "start_application"
   | "apply_manually"
   | "sign_in_with_email";
@@ -16,6 +17,7 @@ export interface SemanticPostingNavigationAdapter {
   inspect(
     page: PersistentPage,
     action: PostingNavigationAction,
+    options?: { readonly waitForCandidate?: boolean },
   ): Promise<{ readonly cardinality: number; readonly actionable: boolean }>;
   activate(page: PersistentPage, action: PostingNavigationAction): Promise<void>;
 }

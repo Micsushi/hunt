@@ -212,7 +212,7 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
   }
 });
 
-test("admits only the application source as a journey-derived setting", async () => {
+test("admits only the application source and exact region-derived country as journey-derived settings", async () => {
   const fixture = ownerFixture();
   try {
     writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
@@ -246,6 +246,40 @@ test("admits only the application source as a journey-derived setting", async ()
     assert.equal(derived?.kind, "answered");
     if (derived?.kind !== "answered") return;
     assert.equal(derived.provenance, "journey_derived");
+
+    manifest.profile.facts.push({
+      factId: "region",
+      value: "Alberta",
+      provenance: "owner_provided",
+    });
+    manifest.profilePlan.fields.push({
+      fieldId: "address.country",
+      questionType: "address",
+      answerType: "option",
+      answer: { kind: "answered", value: "CA", provenance: "journey_derived" },
+      optionMapping: {
+        canonicalValue: "CA",
+        visibleOption: "Canada",
+        provenance: "visible_option",
+      },
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const countryResolved = await resolver.resolve(
+      request(fixture.runtimeRoot),
+      AbortSignal.any([]),
+    );
+    assert.deepEqual(countryResolved.profilePlan.fields.at(-1),
+      manifest.profilePlan.fields.at(-1));
+
+    manifest.profilePlan.fields.at(-1).answer.value = "US";
+    manifest.profilePlan.fields.at(-1).optionMapping.canonicalValue = "US";
+    manifest.profilePlan.fields.at(-1).optionMapping.visibleOption = "United States";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
+    manifest.profilePlan.fields.pop();
 
     manifest.profilePlan.fields.at(-1).fieldId =
       "employment.previously_worked_for_organization";

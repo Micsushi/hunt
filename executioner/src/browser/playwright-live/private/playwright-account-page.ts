@@ -10,6 +10,7 @@ import type { PersistentPage } from "./types.ts";
 import {
   WORKDAY_ACCOUNT_FACT_SELECTORS,
   WORKDAY_INLINE_VERIFICATION_SELECTORS,
+  WORKDAY_MODERN_SIGN_IN_SELECTOR,
   WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS,
   WORKDAY_SIGN_IN_REJECTION_SELECTORS,
   WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS,
@@ -102,9 +103,6 @@ const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
-const WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR =
-  '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
-
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="verifyEmailPage"]',
@@ -262,7 +260,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
         opposingSubmitOwnerCanSettle = !await opposingSubmitOwner.isVisible();
         if (action === "submit_create_account") {
           modernSignInDestination = playwrightPage(page).locator(
-            WORKDAY_MODERN_SIGN_IN_DESTINATION_SELECTOR,
+            WORKDAY_MODERN_SIGN_IN_SELECTOR,
           );
           modernSignInDestinationCanSettle = !await exactVisible(
             modernSignInDestination,

@@ -558,8 +558,10 @@ async function required(locator: Locator): Promise<boolean> {
       element.readOnly
     )
   ) return false;
+  const ariaLabel = (await locator.getAttribute("aria-label"))?.trim() ?? "";
   return await locator.getAttribute("required") !== null ||
-    await locator.getAttribute("aria-required") === "true";
+    await locator.getAttribute("aria-required") === "true" ||
+    /(?:^|\s)Required$/u.test(ariaLabel);
 }
 
 async function validationCleared(locator: Locator): Promise<boolean> {

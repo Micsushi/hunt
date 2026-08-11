@@ -18,9 +18,13 @@ import type {
 
 const reviewedVariants = new Set([
   "workday_text_v1",
+  "workday_text_v2",
+  "workday_checkbox_v2",
   "workday_phone_v1",
+  "workday_phone_v2",
   "workday_date_v1",
   "workday_search_select_v1",
+  "workday_search_select_v2",
   "workday_source_select_v1",
   "workday_previous_worker_radio_v1",
 ]);
@@ -281,14 +285,13 @@ function validField(field: ProfileFieldPlan): boolean {
   if (field.answerType === "phone" && field.answer.value.replace(/\D/gu, "").length < 7) {
     return false;
   }
-  if (
-    field.answer.provenance === "journey_derived" &&
-    (
-      field.fieldId !== "source.how_did_you_hear" ||
-      field.questionType !== "application_source" ||
-      field.answerType !== "option"
-    )
-  ) return false;
+  if (field.answer.provenance === "journey_derived") {
+    const source = field.fieldId === "source.how_did_you_hear" &&
+      field.questionType === "application_source" && field.answerType === "option";
+    const country = field.fieldId === "address.country" &&
+      field.questionType === "address" && field.answerType === "option";
+    if (!source && !country) return false;
+  }
   return field.answerType !== "option" || (
     field.optionMapping?.provenance === "visible_option" &&
     field.optionMapping.canonicalValue === field.answer.value &&

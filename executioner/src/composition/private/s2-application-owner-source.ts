@@ -28,6 +28,7 @@ import {
   profileOwnerInputCatalog,
   type ProfilePagePlan,
 } from "../../ats/workday/application/profile/index.ts";
+import { deriveProfileCountry } from "./s2-derived-profile-country.ts";
 import {
   createConfiguredNarrativeProvider,
   type ConfiguredNarrativeProvider,
@@ -401,6 +402,19 @@ function validateProfileAuthority(
             answer.provenance === "journey_derived"
           )
         )
+      ) denied();
+    } else if (answer.provenance === "journey_derived") {
+      const country = deriveProfileCountry(facts);
+      const mapping = exact(field.optionMapping, [
+        "canonicalValue", "visibleOption", "provenance",
+      ]);
+      if (
+        field.fieldId !== "address.country" ||
+        field.questionType !== "address" ||
+        field.answerType !== "option" ||
+        country === undefined ||
+        answer.value !== country.canonicalValue ||
+        mapping.visibleOption !== country.visibleOption
       ) denied();
     } else if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
       const factId = factByField[field.fieldId];

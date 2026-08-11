@@ -12,6 +12,7 @@ import {
   type Stage2StorageProtector,
 } from "./private/s2-run-storage.ts";
 import { readStablePrivateFile } from "./private/s2-stable-private-file.ts";
+import { withDerivedProfileCountry } from "./private/s2-derived-profile-country.ts";
 
 export interface Stage2RunPreparationArgs {
   readonly storageRoot: string;
@@ -115,7 +116,7 @@ async function loadApplicationSource(
       typeof value.resumeId !== "string"
     ) invalid();
     const profile = structuredClone(value.profile);
-    const profilePlan = structuredClone(value.profilePlan);
+    const profilePlan = structuredClone(withDerivedProfileCountry(profile, value.profilePlan));
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
     const bytes = Buffer.from(resumeBytes);
     return Object.freeze({
