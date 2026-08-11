@@ -147,6 +147,161 @@ test("stops on a missing required fact before browser inspection or mutation", a
   assert.equal(port.commits.length, 0);
 });
 
+for (const missing of [
+  {
+    fieldId: "source.how_did_you_hear",
+    questionType: "application_source",
+    uiBehavior: "search_select",
+    uiVariant: "workday_source_select_v1",
+  },
+  {
+    fieldId: "employment.previously_worked_for_organization",
+    questionType: "prior_employment",
+    uiBehavior: "radio_group",
+    uiVariant: "workday_previous_worker_radio_v1",
+  },
+] as const) {
+  test(`requires owner input for ${missing.fieldId} before browser mutation`, async () => {
+    const port = new MemoryProfilePage({
+      pageType: "profile",
+      controls: [control(
+        missing.fieldId,
+        missing.uiBehavior,
+        null,
+        missing.uiVariant,
+      )],
+      rows: [],
+    });
+
+    assert.deepEqual(await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [{
+        fieldId: missing.fieldId,
+        questionType: missing.questionType,
+        answerType: "option",
+        answer: { kind: "profile_answer_missing" },
+      }],
+      repeatables: [],
+    }, port, AbortSignal.any([])), {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: missing.fieldId,
+    });
+    assert.equal(port.inspections, 1);
+    assert.equal(port.commits.length, 0);
+  });
+}
+
+test("unresolved tenant owner inputs do not block a tenant where their controls are absent", async () => {
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [
+      {
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        answer: { kind: "profile_answer_missing" },
+      },
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        questionType: "prior_employment",
+        answerType: "option",
+        answer: { kind: "profile_answer_missing" },
+      },
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("maps exact owner source and prior-employment options", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      control(
+        "source.how_did_you_hear",
+        "search_select",
+        null,
+        "workday_source_select_v1",
+      ),
+      control(
+        "employment.previously_worked_for_organization",
+        "radio_group",
+        null,
+        "workday_previous_worker_radio_v1",
+      ),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [
+      field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "owner_provided",
+        "Company Website",
+      ),
+      field(
+        "employment.previously_worked_for_organization",
+        "prior_employment",
+        "option",
+        "false",
+        "owner_provided",
+        "No",
+      ),
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ uiBehavior, value }) => [uiBehavior, value]), [
+    ["search_select", "Company Website"],
+    ["radio_group", "No"],
+  ]);
+});
+
+test("semantically correct option prefills are verified without mutation", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      control("address.country", "search_select", "  Canada  "),
+      control(
+        "employment.previously_worked_for_organization",
+        "radio_group",
+        "No",
+        "workday_previous_worker_radio_v1",
+      ),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [
+      field("address.country", "address", "option", "CA", "owner_provided", "Canada"),
+      field(
+        "employment.previously_worked_for_organization",
+        "prior_employment",
+        "option",
+        "false",
+        "owner_provided",
+        "No",
+      ),
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
 test("rejects a driver success when fresh visible readback does not match", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",

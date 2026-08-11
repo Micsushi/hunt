@@ -1,6 +1,7 @@
 import {
-  applicationCheckpoints,
-  applicationPages,
+  checkpointForApplicationPage,
+  isValidApplicationPageSequence,
+  maximumApplicationPageVisits,
   type ApplicationWalkResult,
   type ApplicationWalkResume,
 } from "../ats/workday/application/page-walk.ts";
@@ -352,6 +353,9 @@ async function executeBoundJourney(
         3,
       );
     }
+    const resumeVerified = application.value.pageChecks.some(
+      ({ page }) => page === "resume",
+    );
     writeLiveEvidencePacket({
       schemaVersion: 1,
       packetRevision: "s2-real-evidence-packet-v1",
@@ -370,7 +374,9 @@ async function executeBoundJourney(
       ],
       verificationSummaries: [
         { kind: "account", status: "verified", verifiedCount: 1 },
-        { kind: "resume", status: "verified", verifiedCount: 1 },
+        resumeVerified
+          ? { kind: "resume", status: "verified", verifiedCount: 1 }
+          : { kind: "resume", status: "missing", verifiedCount: 0 },
         {
           kind: "required_fields",
           status: "verified",
@@ -387,7 +393,7 @@ async function executeBoundJourney(
         { kind: "submit_guard", status: "verified", verifiedCount: 1 },
       ],
       errors: [],
-      missingEvidence: [],
+      missingEvidence: resumeVerified ? [] : ["resume_verification"],
       browserTruth: {
         schemaVersion: 1,
         observer: "independent_browser",
@@ -468,12 +474,13 @@ function verifiedPreReview(
 ): boolean {
   if (
     !value.ok || value.value.checkpoint !== "pre_review" ||
-    value.value.completedPages !== 3 || value.value.submitActivated !== false ||
-    value.value.privacyScan !== "pass" || value.value.pageChecks.length !== 3
+    value.value.completedPages !== value.value.pageChecks.length ||
+    value.value.completedPages > maximumApplicationPageVisits ||
+    value.value.submitActivated !== false || value.value.privacyScan !== "pass" ||
+    !isValidApplicationPageSequence(value.value.pageChecks.map(({ page }) => page))
   ) return false;
-  return value.value.pageChecks.every((check, index) =>
-    check.page === applicationPages[index] &&
-    check.checkpoint === applicationCheckpoints[index] &&
+  return value.value.pageChecks.every((check) =>
+    check.checkpoint === checkpointForApplicationPage(check.page) &&
     check.independentlyVerified === true &&
     Number.isSafeInteger(check.requiredFields) && check.requiredFields >= 0 &&
     check.verifiedFields === check.requiredFields && check.duplicateRows === 0

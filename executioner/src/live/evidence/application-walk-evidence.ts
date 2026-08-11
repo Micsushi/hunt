@@ -2,8 +2,8 @@ import type {
   ApplicationLaneAcceptance,
 } from "../../ats/workday/application/lane-composition.ts";
 import {
-  applicationCheckpoints,
-  applicationPages,
+  checkpointForApplicationPage,
+  isValidApplicationPageSequence,
   type ApplicationCheckpoint,
   type ApplicationPageCheck,
 } from "../../ats/workday/application/page-walk-contract.ts";
@@ -54,13 +54,14 @@ export function admitApplicationWalkAcceptance(
     "targetHandleId", "completedPages", "pageChecks", "laneAcceptances",
     "submitActivated", "privacyScan", "cleanup",
   ];
-  const count = checkpointCount(value.checkpoint);
+  const count = value.pageChecks.length;
   if (
     !exactKeys(value, expected) ||
     value.schemaVersion !== 1 ||
     value.evidenceRevision !== "s2-application-walk-acceptance-v1" ||
     value.status !== "passed" ||
-    count === undefined ||
+    (value.checkpoint !== "pre_review" &&
+      value.pageChecks.at(-1)?.checkpoint !== value.checkpoint) ||
     !/^[0-9a-f]{40}$/u.test(value.sourceRevision) ||
     !/^revision_[A-Za-z0-9_-]{16,64}$/u.test(value.revisionId) ||
     !/^approval_[A-Za-z0-9_-]{16,64}$/u.test(value.approvalId) ||
@@ -70,7 +71,7 @@ export function admitApplicationWalkAcceptance(
     value.pageChecks.length !== count ||
     value.laneAcceptances.length !== count ||
     !validPageChecks(value.pageChecks) ||
-    !validLaneAcceptances(value.laneAcceptances) ||
+    !validLaneAcceptances(value.laneAcceptances, value.pageChecks) ||
     value.submitActivated !== false ||
     value.privacyScan !== "pass" ||
     value.cleanup !== "pass"
@@ -85,13 +86,13 @@ export function admitApplicationWalkAcceptance(
 }
 
 function validPageChecks(values: readonly ApplicationPageCheck[]): boolean {
-  return values.every((value, index) =>
+  return isValidApplicationPageSequence(values.map(({ page }) => page)) &&
+    values.every((value) =>
     exactKeys(value, [
       "page", "checkpoint", "independentlyVerified", "requiredFields",
       "verifiedFields", "duplicateRows",
     ]) &&
-    value.page === applicationPages[index] &&
-    value.checkpoint === applicationCheckpoints[index] &&
+    value.checkpoint === checkpointForApplicationPage(value.page) &&
     value.independentlyVerified === true &&
     Number.isSafeInteger(value.requiredFields) && value.requiredFields >= 0 &&
     value.verifiedFields === value.requiredFields &&
@@ -101,9 +102,11 @@ function validPageChecks(values: readonly ApplicationPageCheck[]): boolean {
 
 function validLaneAcceptances(
   values: readonly ApplicationLaneAcceptance[],
+  checks?: readonly ApplicationPageCheck[],
 ): boolean {
-  return values.every((value, index) =>
-    value.checkpoint === applicationCheckpoints[index] &&
+  return (checks === undefined || values.length === checks.length) &&
+    values.every((value, index) =>
+    (checks === undefined || value.checkpoint === checks[index]?.checkpoint) &&
     (value.checkpoint === "resume_verified"
       ? validResume(value)
       : value.checkpoint === "profile_verified"
@@ -142,11 +145,23 @@ function validResume(
 function validProfile(
   value: Extract<ApplicationLaneAcceptance, { checkpoint: "profile_verified" }>,
 ): boolean {
-  return exactKeys(value, [
+  const requiredKeys = [
     "schemaVersion", "checkpoint", "pageType", "verifiedFields",
     "ownedDuplicateRows", "independentlyVerified", "submitActivated",
     "privacyScan",
-  ]) && value.schemaVersion === 1 &&
+  ];
+  const learningKeys = [
+    "schemaVersion", "checkpoint", "pageType", "verifiedFields",
+    "ownedDuplicateRows", "independentlyVerified", "profileFieldLearningSha256",
+    "submitActivated", "privacyScan",
+  ];
+  const hasLearningDigest = Object.hasOwn(value, "profileFieldLearningSha256");
+  return (hasLearningDigest
+    ? exactKeys(value, learningKeys) &&
+      typeof value.profileFieldLearningSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.profileFieldLearningSha256)
+    : exactKeys(value, requiredKeys)) &&
+    value.schemaVersion === 1 &&
     (value.pageType === "profile" || value.pageType === "contact") &&
     value.verifiedFields.every((field) => {
       const keys = Object.keys(field);
@@ -159,13 +174,18 @@ function validProfile(
         keys.every((key) => required.includes(key) || optional.includes(key)) &&
         !keys.includes("value") &&
         /^[a-z][a-z0-9_.-]{0,127}$/u.test(field.fieldId) &&
-        new Set(["identity", "address", "phone", "experience", "education", "skill"])
+        new Set([
+          "identity", "address", "phone", "application_source", "prior_employment",
+          "experience", "education", "skill",
+        ])
           .has(field.questionType) &&
         new Set(["text", "phone", "date", "option"]).has(field.answerType) &&
-        new Set(["text", "phone", "date", "search_select"]).has(field.uiBehavior) &&
+        new Set(["text", "phone", "date", "search_select", "radio_group"])
+          .has(field.uiBehavior) &&
         new Set([
           "workday_text_v1", "workday_phone_v1", "workday_date_v1",
           "workday_search_select_v1",
+          "workday_source_select_v1", "workday_previous_worker_radio_v1",
         ]).has(field.uiVariant) &&
         new Set(["owner_provided", "resume_verified", "configured_template"])
           .has(field.provenance) &&
@@ -206,12 +226,6 @@ function validQuestionnaire(
     value.protectedPlaceholderCount === 0 &&
     value.independentlyVerified === true && value.submitActivated === false &&
     value.privacyScan === "pass";
-}
-
-function checkpointCount(checkpoint: ApplicationCheckpoint): number | undefined {
-  if (checkpoint === "pre_review") return applicationCheckpoints.length;
-  const index = applicationCheckpoints.indexOf(checkpoint);
-  return index < 0 ? undefined : index + 1;
 }
 
 function exactKeys(value: object, expected: readonly string[]): boolean {

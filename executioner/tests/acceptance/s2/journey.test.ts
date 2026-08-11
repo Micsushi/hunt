@@ -108,6 +108,41 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
   }
 });
 
+test("a tenant-skipped Resume is recorded as missing rather than falsely verified", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-skipped-resume-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.recovery.pending = async () => null;
+  value.application.run = async () => {
+    const baseline = preReview();
+    return {
+      ok: true,
+      value: {
+        ...baseline,
+        completedPages: 2,
+        pageChecks: [baseline.pageChecks[0]!, baseline.pageChecks[2]!],
+      },
+    };
+  };
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const summary = JSON.parse(readFileSync(
+      join(evidenceRoot, "real-evidence", "summary.json"), "utf8",
+    ));
+    assert.deepEqual(summary.verificationSummaries[1], {
+      kind: "resume",
+      status: "missing",
+      verifiedCount: 0,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("acceptance write failure retains recovery and exact evidence is retryable", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retry-"));
   const evidenceRoot = resolve(root, "evidence");

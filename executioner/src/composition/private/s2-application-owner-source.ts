@@ -24,7 +24,10 @@ import {
   createProfileQuery,
   immutableApplicantProfile,
 } from "../../profile/profile.ts";
-import type { ProfilePagePlan } from "../../ats/workday/application/profile/index.ts";
+import {
+  profileOwnerInputCatalog,
+  type ProfilePagePlan,
+} from "../../ats/workday/application/profile/index.ts";
 import {
   createConfiguredNarrativeProvider,
   type ConfiguredNarrativeProvider,
@@ -314,6 +317,10 @@ function validateProfileAuthority(
     "education.degree": "highest_education",
   };
   const factsById = new Map(facts.map((fact) => [fact.factId, fact]));
+  const ownerInputByField = new Map(profileOwnerInputCatalog.map((field) => [
+    field.fieldId,
+    field,
+  ]));
   const fields: unknown[] = [...plan.fields];
   const sections = new Set<string>();
   for (const value of plan.repeatables) {
@@ -346,10 +353,23 @@ function validateProfileAuthority(
     const field = exact(value, [
       "fieldId", "questionType", "answerType", "answer", "optionMapping",
     ], true);
+    const ownerInput = ownerInputByField.get(field.fieldId as string);
+    if (missingOwnerAnswer(field.answer)) {
+      if (
+        ownerInput === undefined ||
+        field.questionType !== ownerInput.questionType ||
+        field.answerType !== ownerInput.answerType ||
+        field.optionMapping !== undefined
+      ) denied();
+      continue;
+    }
     const answer = exact(field.answer, ["kind", "value", "provenance"]);
     if (
       !stringMatches(field.fieldId, /^[a-z][a-z0-9_.-]{0,127}$/u) ||
-      !new Set(["identity", "address", "phone", "experience", "education", "skill"])
+      !new Set([
+        "identity", "address", "phone", "application_source", "prior_employment",
+        "experience", "education", "skill",
+      ])
         .has(field.questionType as string) ||
       !new Set(["text", "phone", "date", "option"])
         .has(field.answerType as string) ||
@@ -370,7 +390,13 @@ function validateProfileAuthority(
         mapping.provenance !== "visible_option"
       ) denied();
     } else if (field.optionMapping !== undefined) denied();
-    if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
+    if (ownerInput !== undefined) {
+      if (
+        field.questionType !== ownerInput.questionType ||
+        field.answerType !== ownerInput.answerType ||
+        answer.provenance !== "owner_provided"
+      ) denied();
+    } else if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
       const factId = factByField[field.fieldId];
       const fact = factId === undefined ? undefined : factsById.get(factId);
       if (fact === undefined || fact.value !== answer.value || fact.provenance !== answer.provenance) {
@@ -485,6 +511,12 @@ function exact(
     denied();
   }
   return value as Record<string, unknown>;
+}
+
+function missingOwnerAnswer(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    (value as Record<string, unknown>).kind === "profile_answer_missing";
 }
 
 function stringMatches(value: unknown, pattern: RegExp): value is string {

@@ -29,6 +29,79 @@ test("writes one exact checkpoint packet with all prior independent lane checks"
   }
 });
 
+test("admits evidence in the exact observed route instead of a tenant-global order", async () => {
+  const baseline = packet();
+  const resumeFirst = {
+    ...baseline,
+    pageChecks: [baseline.pageChecks[1]!, baseline.pageChecks[0]!, baseline.pageChecks[2]!],
+    laneAcceptances: [
+      baseline.laneAcceptances[1]!,
+      baseline.laneAcceptances[0]!,
+      baseline.laneAcceptances[2]!,
+    ],
+  };
+  const skippedResume = {
+    ...baseline,
+    completedPages: 2,
+    pageChecks: [baseline.pageChecks[0]!, baseline.pageChecks[2]!],
+    laneAcceptances: [baseline.laneAcceptances[0]!, baseline.laneAcceptances[2]!],
+  };
+
+  const directReview = {
+    ...baseline,
+    completedPages: 0,
+    pageChecks: [],
+    laneAcceptances: [],
+  };
+  for (const acceptance of [resumeFirst, skippedResume, directReview]) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-route-"));
+    try {
+      await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("admits exact owner-backed source-select and prior-worker radio mechanics", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const acceptance = {
+    ...baseline,
+    laneAcceptances: [{
+      ...profile,
+      verifiedFields: [
+        ...profile.verifiedFields,
+        {
+          fieldId: "source.how_did_you_hear",
+          questionType: "application_source" as const,
+          answerType: "option" as const,
+          uiBehavior: "search_select" as const,
+          uiVariant: "workday_source_select_v1",
+          provenance: "owner_provided" as const,
+          optionMappingProvenance: "visible_option" as const,
+        },
+        {
+          fieldId: "employment.previously_worked_for_organization",
+          questionType: "prior_employment" as const,
+          answerType: "option" as const,
+          uiBehavior: "radio_group" as const,
+          uiVariant: "workday_previous_worker_radio_v1",
+          provenance: "owner_provided" as const,
+          optionMappingProvenance: "visible_option" as const,
+        },
+      ],
+    }, ...baseline.laneAcceptances.slice(1)],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-owner-ui-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", async () => {
   const cases = [
     { ...packet(), submitActivated: true },
@@ -51,6 +124,22 @@ test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", a
                 provenance: "invented",
               })),
             }
+          : lane
+      ),
+    },
+    {
+      ...packet(),
+      laneAcceptances: packet().laneAcceptances.map((lane) =>
+        lane.checkpoint === "profile_verified"
+          ? (() => {
+              const { submitActivated, privacyScan, ...beforeGuard } = lane;
+              return {
+                ...beforeGuard,
+                profileFieldLearningSha256: undefined,
+                submitActivated,
+                privacyScan,
+              };
+            })()
           : lane
       ),
     },

@@ -16,6 +16,7 @@ export const applicationCheckpoints = [
   "resume_verified",
   "questionnaire_verified",
 ] as const;
+export const maximumApplicationPageVisits = 8;
 export const applicationClassifiers = [
   "workday_page",
   "resume_page",
@@ -59,9 +60,11 @@ export type ApplicationPrimitive = (typeof applicationPrimitives)[number];
 
 export interface ApplicationPageTruth {
   readonly page: ApplicationPage;
+  readonly lanes?: readonly ApplicationHandlerPage[];
   readonly pageId: BrowserPageId;
   readonly requiredFields: readonly {
     readonly fieldId: FieldId;
+    readonly page?: ApplicationHandlerPage;
     readonly verification: "verified" | "unverified";
   }[];
   readonly c3OwnedDuplicateRows: number;
@@ -104,6 +107,7 @@ export interface ApplicationPageHandlerPort<
 export interface ApplicationWalkProgress {
   readonly checkpoint: ApplicationCheckpoint;
   readonly browserPage: ApplicationPage;
+  readonly browserLanes: readonly ApplicationHandlerPage[];
   readonly completedPages: number;
   readonly reconciledPages: readonly ApplicationHandlerPage[];
   readonly pageChecks: readonly ApplicationPageCheck[];
@@ -124,7 +128,7 @@ export interface ApplicationWalkDependencies {
         readonly journeyId: JourneyId;
         readonly from: ApplicationHandlerPage;
         readonly fromPageId: BrowserPageId;
-        readonly expected: ApplicationPage;
+        readonly allowed: readonly ApplicationPage[];
       },
       signal: AbortSignal,
     ): Promise<ApplicationPortResult<{ readonly advanced: true }>>;
@@ -185,10 +189,68 @@ export interface ApplicationWalkOptions {
 
 export interface ApplicationWalkResume {
   readonly currentPage: ApplicationPage;
+  readonly currentLanes?: readonly ApplicationHandlerPage[];
   readonly pageChecks: readonly ApplicationPageCheck[];
 }
 
 export interface ApplicationWalkInput {
   readonly journeyId: JourneyId;
   readonly stopAfter?: ApplicationCheckpoint;
+}
+
+export function checkpointForApplicationPage(
+  page: ApplicationHandlerPage,
+): ApplicationVerifiedCheckpoint {
+  return page === "resume"
+    ? "resume_verified"
+    : page === "profile"
+      ? "profile_verified"
+      : "questionnaire_verified";
+}
+
+export function applicationPageForCheckpoint(
+  checkpoint: ApplicationVerifiedCheckpoint,
+): ApplicationHandlerPage {
+  return checkpoint === "resume_verified"
+    ? "resume"
+    : checkpoint === "profile_verified"
+      ? "profile"
+      : "questionnaire";
+}
+
+export function applicationNextPages(
+  page: ApplicationHandlerPage,
+): readonly ApplicationPage[] {
+  return page === "questionnaire"
+    ? ["questionnaire", "pre_review"]
+    : page === "profile"
+      ? ["resume", "questionnaire", "pre_review"]
+      : ["profile", "questionnaire", "pre_review"];
+}
+
+export function isAllowedApplicationTransition(
+  from: ApplicationHandlerPage,
+  to: ApplicationPage,
+  visited: readonly ApplicationHandlerPage[] = [],
+): boolean {
+  if (!applicationNextPages(from).includes(to)) return false;
+  return to === "questionnaire" || to === "pre_review" || !visited.includes(to);
+}
+
+export function isValidApplicationPageSequence(
+  pages: readonly ApplicationHandlerPage[],
+): boolean {
+  if (pages.length > maximumApplicationPageVisits) return false;
+  const visited: ApplicationHandlerPage[] = [];
+  for (const page of pages) {
+    if (!applicationPages.includes(page)) return false;
+    const previous = visited.at(-1);
+    if (
+      previous !== undefined &&
+      !isAllowedApplicationTransition(previous, page, visited)
+    ) return false;
+    if (page !== "questionnaire" && visited.includes(page)) return false;
+    visited.push(page);
+  }
+  return true;
 }

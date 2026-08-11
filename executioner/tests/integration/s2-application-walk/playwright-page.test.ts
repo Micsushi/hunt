@@ -47,7 +47,7 @@ import {
 import type { UnknownCandidateId } from "../../../src/contracts/live/index.ts";
 import { walkFixture } from "./fixtures.ts";
 
-test("walks a real Playwright page through the three verified lanes to pre-Review", async () => {
+test("walks a real combined Resume/Profile page through both verified lanes", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end("<!doctype html><body></body>");
@@ -88,12 +88,19 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
             ? "questionnaire"
             : "pre_review");
       });
-      render("profile");
+      render("combined");
     }, fixturePages());
 
     const sources = applicationSources();
     const questionnaire = questionnaireHandler();
     const applicationPage = new PlaywrightWorkdayApplicationPage(page);
+    const combined = await applicationPage.observe(new AbortController().signal);
+    assert.equal(combined.ok, true, JSON.stringify(combined));
+    if (!combined.ok) throw new Error("combined fixture observation failed");
+    assert.deepEqual(combined.value.lanes, ["resume", "profile"]);
+    assert.deepEqual(combined.value.requiredFields.map(({ page: lane }) => lane), [
+      "resume", "profile",
+    ]);
     const resumePage = createPlaywrightWorkdayResumePage(page);
     const resumeDriver = createWorkdayResumeUploadDriver(resumePage);
     const resumeVerifier = createWorkdayResumeVerifier(resumePage);
@@ -135,10 +142,13 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
     if (!result.ok) return;
     assert.equal(result.value.checkpoint, "pre_review");
     assert.deepEqual(progress, [
-      "profile_verified",
       "resume_verified",
+      "profile_verified",
       "questionnaire_verified",
       "pre_review",
+    ]);
+    assert.deepEqual(result.value.pageChecks.map(({ page }) => page), [
+      "resume", "profile", "questionnaire",
     ]);
     assert.equal(await page.locator('[data-automation-id="applyFlowReviewPage"]').count(), 1);
     assert.equal(await page.locator('button[type="submit"]').count(), 0);
@@ -151,8 +161,56 @@ test("walks a real Playwright page through the three verified lanes to pre-Revie
   }
 });
 
+test("combined detection includes optional profile controls and keeps tenant files in Profile", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    await page.setContent(`
+      <body data-hunt-page-id="combined-optional">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input type="file" required data-hunt-field-id="resume-artifact"
+            data-automation-id="file-upload-input-ref">
+          <input data-automation-id="optionalProfileControl">
+        </main>
+      </body>
+    `);
+    const optional = await application.observe(new AbortController().signal);
+    assert.equal(optional.ok, true, JSON.stringify(optional));
+    assert.deepEqual(optional.ok && optional.value.lanes, ["resume", "profile"]);
+
+    await page.setContent(`
+      <body data-hunt-page-id="combined-tenant-file">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input type="file" required data-hunt-field-id="resume-artifact"
+            data-automation-id="file-upload-input-ref">
+          <input type="file" required data-hunt-field-id="tenant-document"
+            data-automation-id="tenant-required-document">
+        </main>
+      </body>
+    `);
+    const tenantFile = await application.observe(new AbortController().signal);
+    assert.equal(tenantFile.ok, true, JSON.stringify(tenantFile));
+    assert.deepEqual(tenantFile.ok && tenantFile.value.lanes, ["resume", "profile"]);
+    assert.deepEqual(
+      tenantFile.ok && tenantFile.value.requiredFields.map(({ page: owner }) => owner),
+      ["resume", "profile"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 function fixturePages() {
   return {
+    combined: `
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div>
+          <input type="file" required data-hunt-field-id="resume-artifact" data-automation-id="file-upload-input-ref">
+        </div>
+        <input required data-hunt-field-id="contact-email" data-automation-id="legalNameSection_firstName">
+        <button type="button" data-action="next">Next</button>
+      </main>`,
     resume: `
       <main data-automation-id="applyFlowMyInfoPage">
         <div>

@@ -73,7 +73,7 @@ export function dependenciesFor(
     },
     navigation: {
       async next(request) {
-        calls.push(`next:${request.from}:${request.expected}`);
+        calls.push(`next:${request.from}:${request.allowed.join("|")}`);
         return { ok: true, value: { advanced: true } };
       },
     },
@@ -92,6 +92,7 @@ export function truth(page: ApplicationPage): ApplicationPageTruth {
   if (page === "pre_review") {
     return {
       page,
+      lanes: [],
       pageId: walkFixture.pages.pre_review,
       requiredFields: [],
       c3OwnedDuplicateRows: 0,
@@ -100,10 +101,12 @@ export function truth(page: ApplicationPage): ApplicationPageTruth {
   }
   return {
     page,
+    lanes: [page],
     pageId: walkFixture.pages[page],
     requiredFields: [
       {
         fieldId: walkFixture.fields[page],
+        page,
         verification: "verified",
       },
     ],

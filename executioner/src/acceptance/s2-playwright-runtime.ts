@@ -16,8 +16,11 @@ import { createApplicationLaneAcceptanceCollector } from
   "../ats/workday/application/lane-composition.ts";
 import { PlaywrightWorkdayApplicationPage } from "../ats/workday/application/playwright-page.ts";
 import {
-  applicationCheckpoints,
+  checkpointForApplicationPage,
+  isAllowedApplicationTransition,
+  isValidApplicationPageSequence,
   applicationPages,
+  maximumApplicationPageVisits,
   type ApplicationPage,
   type ApplicationPageCheck,
   type ApplicationPageHandlerPort,
@@ -250,7 +253,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             { kind: "observe" }, activeSignal,
           );
           if (!result.ok) return applicationFailure(result.error.code, "page_observation", "ui_behavior");
-          if (result.value.ok) lastObservedPageId = result.value.value.pageId;
+          if (result.value.ok) {
+            lastObservedPageId = result.value.value.pageId;
+          }
           return result.value;
         },
       });
@@ -304,6 +309,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             state,
             progress.pageChecks,
             expected.value,
+            progress.browserLanes,
           )) {
             return applicationFailure("recovery_state_ambiguous", "record", "none");
           }
@@ -855,13 +861,20 @@ function recoveryDependencies(options: {
   readonly nextOperationId: () => OperationId;
   readonly onStateSaved: (revision: number) => void;
 }): RecoveryDependencies {
+  let inspectedBrowserLanes: readonly ("resume" | "profile" | "questionnaire")[] | undefined;
   const state = {
     load: async () => ({
       ok: true as const,
       value: options.store.load()?.checkpoint ?? null,
     }),
     save: async (request: Parameters<RecoveryDependencies["state"]["save"]>[0]) => {
-      if (!options.store.save(request.expectedRevision, request.state)) {
+      if (!options.store.save(
+        request.expectedRevision,
+        request.state,
+        undefined,
+        undefined,
+        inspectedBrowserLanes,
+      )) {
         return recoveryFailure("recovery_state_ambiguous");
       }
       options.onStateSaved(request.state.revision);
@@ -878,6 +891,9 @@ function recoveryDependencies(options: {
         if (inspected.ok) {
           const truth = inspected.value;
           if (!truth.ok) return recoveryFailure("browser_target_stale");
+          inspectedBrowserLanes = truth.value.lanes ?? (
+            truth.value.page === "pre_review" ? [] : [truth.value.page]
+          );
           const kind = recoveryPage(truth.value.page);
           const value: RecoveryBrowserPageTruth = Object.freeze({
             page: Object.freeze({
@@ -969,6 +985,7 @@ interface RecoveryArtifactV1 {
   readonly checkpoint: RecoveryCheckpoint;
   readonly pageChecks: readonly ApplicationPageCheck[];
   readonly reviewExpected: readonly ReviewExpectedField[];
+  readonly browserLanes: readonly ("resume" | "profile" | "questionnaire")[];
 }
 
 interface RecoveryScopeV1 {
@@ -1004,7 +1021,11 @@ function resumeFromArtifact(artifact: RecoveryArtifactV1): ApplicationWalkResume
       currentPage !== "pre_review") {
     throw new TypeError("recovery progress denied");
   }
-  return Object.freeze({ currentPage, pageChecks: artifact.pageChecks });
+  return Object.freeze({
+    currentPage,
+    currentLanes: artifact.browserLanes,
+    pageChecks: artifact.pageChecks,
+  });
 }
 
 function sameRecoveryCheckpoint(left: RecoveryCheckpoint, right: RecoveryCheckpoint): boolean {
@@ -1063,6 +1084,7 @@ class RecoveryFileStore {
     state: RecoveryCheckpoint,
     pageChecks?: readonly ApplicationPageCheck[],
     reviewExpected?: readonly ReviewExpectedField[],
+    browserLanes?: readonly ("resume" | "profile" | "questionnaire")[],
   ): boolean {
     const current = this.load();
     if ((current?.checkpoint.revision ?? 0) !== expectedRevision ||
@@ -1071,13 +1093,15 @@ class RecoveryFileStore {
     }
     const checks = pageChecks ?? current?.pageChecks;
     const expected = reviewExpected ?? current?.reviewExpected;
-    if (checks === undefined || expected === undefined) return false;
+    const lanes = browserLanes ?? current?.browserLanes;
+    if (checks === undefined || expected === undefined || lanes === undefined) return false;
     return this.#write(this.#path, Object.freeze({
       schemaVersion: 1 as const,
       scope: this.#scope,
       checkpoint: state,
       pageChecks: Object.freeze([...checks]),
       reviewExpected: Object.freeze([...expected]),
+      browserLanes: Object.freeze([...lanes]),
     }));
   }
 
@@ -1141,40 +1165,85 @@ class RecoveryFileStore {
 function isRecoveryArtifact(value: unknown): value is RecoveryArtifactV1 {
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Partial<RecoveryArtifactV1>;
-  if (!hasExactKeys(value, ["schemaVersion", "scope", "checkpoint", "pageChecks", "reviewExpected"])) {
+  if (!hasExactKeys(value, [
+    "schemaVersion", "scope", "checkpoint", "pageChecks", "reviewExpected", "browserLanes",
+  ])) {
     return false;
   }
   if (artifact.schemaVersion !== 1 || !isRecoveryScope(artifact.scope) ||
       !Array.isArray(artifact.pageChecks) ||
       !Array.isArray(artifact.reviewExpected) ||
+      !Array.isArray(artifact.browserLanes) ||
       !isRecoveryCheckpoint(artifact.checkpoint)) return false;
   const expectedPage = artifact.checkpoint.page.kind === "resume" ? "resume"
     : artifact.checkpoint.page.kind === "profile" ? "profile"
     : artifact.checkpoint.page.kind === "questionnaire" ? "questionnaire"
     : artifact.checkpoint.page.kind === "review" ? "pre_review" : undefined;
   if (expectedPage === undefined) return false;
-  const pageIndex = expectedPage === "pre_review"
-    ? applicationPages.length
-    : applicationPages.indexOf(expectedPage);
-  const bounds = expectedPage === "pre_review"
-    ? [applicationPages.length, applicationPages.length] as const
-    : [Math.max(1, pageIndex), pageIndex + 1] as const;
-  if (artifact.pageChecks.length < bounds[0] || artifact.pageChecks.length > bounds[1]) return false;
-  return artifact.pageChecks.every((check, index) => {
+  const pages = artifact.pageChecks.flatMap((check) =>
+    typeof check === "object" && check !== null && "page" in check &&
+      applicationPages.includes(check.page as never)
+      ? [check.page as typeof applicationPages[number]]
+      : []
+  );
+  if (
+    pages.length !== artifact.pageChecks.length ||
+    artifact.pageChecks.length > maximumApplicationPageVisits ||
+    !isValidApplicationPageSequence(pages)
+  ) return false;
+  const browserLanes = artifact.browserLanes;
+  const validBrowserLanes = expectedPage === "pre_review"
+    ? browserLanes.length === 0
+    : browserLanes.length >= 1 && browserLanes.length <= 2 &&
+      browserLanes[0] === expectedPage &&
+      (browserLanes.length === 1 ||
+        browserLanes[0] === "resume" && browserLanes[1] === "profile");
+  if (!validBrowserLanes || new Set(browserLanes).size !== browserLanes.length) return false;
+  const processed = expectedPage === "pre_review"
+    ? 0
+    : recoveryProcessedLaneCount(pages, browserLanes);
+  if (!isValidApplicationPageSequence([...pages, ...browserLanes.slice(processed)])) return false;
+  const previous = pages.at(-1);
+  if (expectedPage === "pre_review") {
+    if (previous !== undefined && !isAllowedApplicationTransition(
+      previous,
+      "pre_review",
+      pages,
+    )) return false;
+  } else if (processed === 0 && previous !== undefined &&
+    !isAllowedApplicationTransition(
+      previous,
+      browserLanes[0]!,
+      pages,
+    )
+  ) return false;
+  return artifact.pageChecks.every((check) => {
     if (typeof check !== "object" || check === null) return false;
-    const page = applicationPages[index];
-    const checkpoint = applicationCheckpoints[index];
     const item = check as Partial<ApplicationPageCheck>;
     return hasExactKeys(check, [
       "page", "checkpoint", "independentlyVerified", "requiredFields",
       "verifiedFields", "duplicateRows",
-    ]) && item.page === page && item.checkpoint === checkpoint &&
+    ]) && applicationPages.includes(item.page as never) &&
+      item.checkpoint === checkpointForApplicationPage(item.page as never) &&
       item.independentlyVerified === true &&
       Number.isSafeInteger(item.requiredFields) && (item.requiredFields ?? -1) >= 0 &&
       item.verifiedFields === item.requiredFields && item.duplicateRows === 0;
   }) && artifact.reviewExpected.length <= 128 &&
     new Set(artifact.reviewExpected.map(({ fieldId }) => fieldId)).size === artifact.reviewExpected.length &&
     artifact.reviewExpected.every(isReviewExpectedField);
+}
+
+function recoveryProcessedLaneCount(
+  pages: readonly ("resume" | "profile" | "questionnaire")[],
+  lanes: readonly ("resume" | "profile" | "questionnaire")[],
+): number {
+  for (let count = lanes.length; count > 0; count -= 1) {
+    const suffix = pages.slice(-count);
+    if (suffix.length === count && suffix.every((page, index) => page === lanes[index])) {
+      return count;
+    }
+  }
+  return 0;
 }
 
 function isRecoveryScope(value: unknown): value is RecoveryScopeV1 {

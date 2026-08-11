@@ -3,6 +3,12 @@ import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "no
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 
+import {
+  applicationPages,
+  isAllowedApplicationTransition,
+  maximumApplicationPageVisits,
+  type ApplicationHandlerPage,
+} from "../../ats/workday/application/page-walk-contract.ts";
 import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
 
 const MAX_RECORDS = 128;
@@ -14,7 +20,7 @@ const AUTH_PAGES = new Set([
 const AUTH_MOMENTS = new Set([
   "state_observed", "before_mutation", "after_readback", "before_navigation", "transition",
 ]);
-export const applicationMonitorPages = ["profile", "resume", "questionnaire"] as const;
+export const applicationMonitorPages = applicationPages;
 const APPLICATION_PAGES = new Set([...applicationMonitorPages, "review"]);
 const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
@@ -308,9 +314,7 @@ function sameOperationPair(
 function validateAttempts(groups: readonly OperationGroup[]): void {
   const attempts = new Map<string, number>();
   for (const group of groups) {
-    const key = group.kind === "navigation"
-      ? `${group.fromPage}->${group.toPage}:${group.kind}`
-      : `${group.fromPage}:${group.kind}`;
+    const key = `${group.fromPage}:${group.kind}`;
     const expected = (attempts.get(key) ?? 0) + 1;
     if (group.attempt !== expected || group.attempt > 8) denied();
     attempts.set(key, group.attempt);
@@ -318,8 +322,14 @@ function validateAttempts(groups: readonly OperationGroup[]): void {
 }
 
 function validateApplicationSequence(groups: readonly OperationGroup[]): void {
-  const coverage = new Set<string>();
-  let currentPage: string = applicationMonitorPages[0];
+  let currentPage = groups[0]?.fromPage;
+  if (currentPage === undefined || !APPLICATION_PAGES.has(currentPage)) denied();
+  const visited: ApplicationHandlerPage[] = applicationMonitorPages.includes(
+      currentPage as ApplicationHandlerPage,
+    )
+    ? [currentPage as ApplicationHandlerPage]
+    : [];
+  let inspectedCurrent = false;
   for (const [index, group] of groups.entries()) {
     if (group.fromPage !== currentPage) denied();
     if (group.kind === "review") {
@@ -331,25 +341,45 @@ function validateApplicationSequence(groups: readonly OperationGroup[]): void {
     }
     if (group.kind === "mutation") {
       if (group.toPage !== group.fromPage) denied();
-      coverage.add(`${group.fromPage}:mutation`);
+      inspectedCurrent = true;
     } else if (group.kind === "navigation") {
-      const fromIndex = applicationMonitorPages.indexOf(
-        group.fromPage as typeof applicationMonitorPages[number],
-      );
-      const expected = fromIndex < 0
-        ? undefined
-        : applicationMonitorPages[fromIndex + 1] ?? "review";
-      if (group.toPage !== group.fromPage && group.toPage !== expected) denied();
-      if (group.toPage === expected) coverage.add(`${group.fromPage}:navigation`);
+      if (group.fromPage === "review") denied();
+      if (group.toPage !== group.fromPage) {
+        if (!inspectedCurrent || !legalApplicationTransition(
+          group.fromPage,
+          group.toPage,
+          visited,
+        )) denied();
+        if (group.toPage !== "review") {
+          visited.push(group.toPage as ApplicationHandlerPage);
+          if (visited.length > maximumApplicationPageVisits) denied();
+        }
+        inspectedCurrent = false;
+      }
     } else if (group.kind === "recovery" && group.toPage !== group.fromPage) {
       denied();
     }
     currentPage = group.toPage;
   }
   if (groups.at(-1)?.kind !== "review") denied();
-  for (const page of applicationMonitorPages) {
-    if (!coverage.has(`${page}:mutation`) || !coverage.has(`${page}:navigation`)) denied();
-  }
+}
+
+function legalApplicationTransition(
+  from: string,
+  to: string,
+  visited: readonly ApplicationHandlerPage[],
+): boolean {
+  if (!applicationMonitorPages.includes(from as ApplicationHandlerPage)) return false;
+  const destination = to === "review" ? "pre_review" : to;
+  if (
+    destination !== "pre_review" &&
+    !applicationMonitorPages.includes(destination as ApplicationHandlerPage)
+  ) return false;
+  return isAllowedApplicationTransition(
+    from as ApplicationHandlerPage,
+    destination as ApplicationHandlerPage | "pre_review",
+    visited,
+  );
 }
 
 function validateAuthSequence(groups: readonly OperationGroup[]): void {

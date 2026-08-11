@@ -144,7 +144,20 @@
       const input = event.target;
       if (!(input instanceof HTMLInputElement) || input.getAttribute("role") !== "combobox") return;
       const listbox = document.getElementById(input.getAttribute("aria-controls"));
-      if (listbox) listbox.hidden = false;
+      if (listbox) {
+        listbox.hidden = false;
+        input.setAttribute("aria-expanded", "true");
+      }
+    });
+    document.addEventListener("focusout", (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || input.getAttribute("role") !== "combobox") return;
+      const listbox = document.getElementById(input.getAttribute("aria-controls"));
+      setTimeout(() => {
+        if (!listbox) return;
+        listbox.hidden = true;
+        input.setAttribute("aria-expanded", "false");
+      }, 0);
     });
   </script>
 </body>

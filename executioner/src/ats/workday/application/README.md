@@ -26,9 +26,12 @@ The composition owner supplies three other adapters:
   and `PlaywrightWorkdayProfilePage` bind the real Playwright page to T1/T2.
   T3 continues to receive independently owned `FieldDriver` and
   `FieldVerifier` ports.
-- `navigation.next` exposes only the legal next transition. There is no Submit
-  operation. T4 calls it only after every required field verifies and the
-  C3-owned duplicate-row count is zero.
+- `navigation.next` exposes only a bounded set of legal semantic destinations.
+  The independent observer binds the actual destination after every transition;
+  no tenant-global page order is assumed. Profile-first, Resume-first, skipped
+  optional pages, and repeated Questionnaire pages retain their exact observed
+  sequence. There is no Submit operation. T4 calls navigation only after every
+  required field verifies and the C3-owned duplicate-row count is zero.
 - `progress.record` receives counts and exact checkpoint enums only. T4 records
   `resume_verified`, `profile_verified`, or `questionnaire_verified` only after
   lane and browser truth agree, and records `pre_review` only after the observed

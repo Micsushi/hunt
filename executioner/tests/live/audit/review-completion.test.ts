@@ -24,6 +24,8 @@ import { fieldId, questionId, upstreamResumeId } from "../../../src/contracts/in
 import { writeLiveEvidencePacket } from "../../../src/evidence/live/packet.ts";
 import { writeAccountVerifiedEvidence } from "../../../src/live/evidence/account-verified-evidence.ts";
 import { writeApplicationWalkEvidence } from "../../../src/live/evidence/application-walk-evidence.ts";
+import { admitProfileFieldLearningEvidence } from
+  "../../../src/live/evidence/profile-field-learning.ts";
 
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 const revisionId = "revision_abcdefghijklmnop";
@@ -57,6 +59,9 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
       accountVerification: "present",
       processBinding: "production_bound",
       processAuditSha256: digest(readFileSync(join(layout.evidenceRoot, "process-audit.json"))),
+      profileFieldLearningSha256: digest(readFileSync(
+        join(layout.evidenceRoot, "profile-field-learning.json"),
+      )),
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -89,6 +94,70 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
         "real-evidence/summary.json",
       ],
     );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review finalization rejects schema-valid profile learning replaced after audit sealing", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-learning-tamper-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewlearnbindx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    await auditStage2Completion(layout.evidenceRoot);
+    const path = join(layout.evidenceRoot, "profile-field-learning.json");
+    const learning = JSON.parse(readFileSync(path, "utf8"));
+    const replacement = {
+      ...learning,
+      fields: [{ ...learning.fields[0], required: false }],
+    };
+    assert.doesNotThrow(() => admitProfileFieldLearningEvidence(replacement));
+    writeFileSync(path, `${JSON.stringify(replacement, null, 2)}\n`);
+
+    await assert.rejects(
+      finalizeStage2RunStorage({
+        storageRoot,
+        ownerConfigPath: layout.ownerConfigPath,
+        evidenceRoot: layout.evidenceRoot,
+      }),
+      /storage finalization denied/u,
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion admits an exact tenant-skipped Resume route", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-skip-resume-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewskipxxxxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256, journeyId, true);
+    const audit = await auditStage2Completion(layout.evidenceRoot) as { readonly status: string };
+    assert.equal(audit.status, "pass");
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion admits an independently observed direct Review route", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-direct-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewdirectxxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256, journeyId, false, true);
+    const audit = await auditStage2Completion(layout.evidenceRoot) as { readonly status: string };
+    assert.equal(audit.status, "pass");
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
@@ -548,7 +617,40 @@ async function writeReviewEvidence(
   root: string,
   configSha256: string,
   packetJourneyId = journeyId,
+  skipResume = false,
+  directReview = false,
 ): Promise<void> {
+  const learningBytes = Buffer.from(`${JSON.stringify({
+    schemaVersion: 1,
+    evidenceRevision: "s2-profile-field-learning-v1",
+    page: "profile",
+    fields: [{
+      fieldIdentity: "profile.identity.given_name",
+      uiType: "text",
+      uiVariant: "workday_text_v1",
+      questionCategory: "identity",
+      answerCategory: "text",
+      required: true,
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "not_applicable",
+      prefillDisposition: "already_correct",
+      driverAttempt: "none",
+      mechanics: {
+        popupBound: "not_applicable",
+        optionFocused: "not_applicable",
+        optionActivated: "not_applicable",
+        popupClosed: "not_applicable",
+        backingValueCommitted: "not_observed",
+        validationCleared: "not_observed",
+        persistentReadback: "not_attempted",
+      },
+    }],
+  }, null, 2)}\n`, "utf8");
+  if (!directReview) {
+    writeFileSync(join(root, "profile-field-learning.json"), learningBytes);
+  }
+  const profileFieldLearningSha256 = digest(learningBytes);
   await writeAccountVerifiedEvidence({
     root,
     acceptance: {
@@ -575,7 +677,7 @@ async function writeReviewEvidence(
   });
   await writeApplicationWalkEvidence({
     root,
-    acceptance: applicationWalk(),
+    acceptance: applicationWalk(profileFieldLearningSha256, skipResume, directReview),
     sensitiveValues: [],
   });
   writeStage2ReviewAcceptance(root, reviewAcceptance(configSha256), []);
@@ -616,13 +718,19 @@ async function writeReviewEvidence(
     ],
     verificationSummaries: [
       { kind: "account", status: "verified", verifiedCount: 1 },
-      { kind: "resume", status: "verified", verifiedCount: 1 },
-      { kind: "required_fields", status: "verified", verifiedCount: 3 },
+      skipResume || directReview
+        ? { kind: "resume", status: "missing", verifiedCount: 0 }
+        : { kind: "resume", status: "verified", verifiedCount: 1 },
+      {
+        kind: "required_fields",
+        status: "verified",
+        verifiedCount: directReview ? 0 : skipResume ? 2 : 3,
+      },
       { kind: "review", status: "verified", verifiedCount: 1 },
       { kind: "submit_guard", status: "verified", verifiedCount: 1 },
     ],
     errors: [],
-    missingEvidence: [],
+    missingEvidence: skipResume || directReview ? ["resume_verification"] : [],
     browserTruth: {
       schemaVersion: 1,
       observer: "independent_browser",
@@ -641,7 +749,7 @@ async function writeReviewEvidence(
     forbiddenTokens: [],
   });
   writeAuthMonitorChain(root, false, configSha256);
-  writeMonitorChain(root, false, configSha256);
+  writeMonitorChain(root, false, configSha256, skipResume, directReview);
   writeProcessAudit(root, "2026-08-10T12:01:00.000Z", configSha256);
 }
 
@@ -669,18 +777,41 @@ function writeProcessAudit(root: string, checkedAt: string, configSha256: string
   }));
 }
 
-function writeMonitorChain(root: string, signatureOnly: boolean, configSha256: string): void {
+function writeMonitorChain(
+  root: string,
+  signatureOnly: boolean,
+  configSha256: string,
+  skipResume = false,
+  directReview = false,
+): void {
   writeExternalMonitorChain(
     root,
     "monitor",
-    applicationMoments(),
+    applicationMoments(skipResume, directReview),
     "review_verified",
     signatureOnly,
     configSha256,
   );
 }
 
-function applicationMoments(): Array<readonly [string, string, string, number]> {
+function applicationMoments(
+  skipResume = false,
+  directReview = false,
+): Array<readonly [string, string, string, number]> {
+  if (directReview) return [
+    ["review", "review_readback", "operation_review_readback_01", 1],
+  ];
+  if (skipResume) return [
+    ["profile", "before_mutation", "operation_profile_mutation_01", 1],
+    ["profile", "after_readback", "operation_profile_mutation_01", 1],
+    ["profile", "before_navigation", "operation_profile_navigation_01", 1],
+    ["questionnaire", "transition", "operation_profile_navigation_01", 1],
+    ["questionnaire", "before_mutation", "operation_question_mutation_01", 1],
+    ["questionnaire", "after_readback", "operation_question_mutation_01", 1],
+    ["questionnaire", "before_navigation", "operation_question_navigation_01", 1],
+    ["review", "transition", "operation_question_navigation_01", 1],
+    ["review", "review_readback", "operation_review_readback_01", 1],
+  ];
   return [
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
@@ -904,11 +1035,20 @@ function reviewAcceptance(configSha256: string) {
   };
 }
 
-function applicationWalk() {
+function applicationWalk(
+  profileFieldLearningSha256: string,
+  skipResume = false,
+  directReview = false,
+) {
   const pageChecks = [
     pageCheck("profile", "profile_verified"),
     pageCheck("resume", "resume_verified"),
     pageCheck("questionnaire", "questionnaire_verified"),
+  ];
+  const laneAcceptances = [
+    profileAcceptance(profileFieldLearningSha256),
+    resumeAcceptance(),
+    questionnaireAcceptance(),
   ];
   return {
     schemaVersion: 1 as const,
@@ -920,66 +1060,81 @@ function applicationWalk() {
     approvalId,
     journeyId,
     targetHandleId,
-    completedPages: 3,
-    pageChecks,
-    laneAcceptances: [
-      {
-        schemaVersion: 1 as const,
-        checkpoint: "profile_verified" as const,
-        pageType: "profile" as const,
-        verifiedFields: [{
-          fieldId: "identity.given_name",
-          questionType: "identity" as const,
-          answerType: "text" as const,
-          uiBehavior: "text" as const,
-          uiVariant: "workday_text_v1",
-          provenance: "owner_provided" as const,
-        }],
-        ownedDuplicateRows: 0 as const,
-        independentlyVerified: true as const,
-        submitActivated: false as const,
-        privacyScan: "pass" as const,
-      },
-      {
-        schemaVersion: 1 as const,
-        checkpoint: "resume_verified" as const,
-        artifactId: upstreamResumeId("resume_abcdefghijklmnop"),
-        sizeBytes: 1024,
-        fileType: "pdf" as const,
-        browserState: {
-          variant: "workday_resume_file_upload_v1" as const,
-          inputCardinality: 1 as const,
-          uploadedFileCount: 1 as const,
-          uploadComplete: true as const,
-          requiredErrorVisible: false as const,
-          removeControlCardinality: 1 as const,
-        },
-        independentlyVerified: true as const,
-        duplicateUploadAvoided: false,
-        replacedExisting: false,
-        submitActivated: false as const,
-        privacyScan: "pass" as const,
-      },
-      {
-        schemaVersion: 1 as const,
-        checkpoint: "questionnaire_verified" as const,
-        answers: [{
-          fieldId: fieldId("authorization-answer"),
-          questionId: questionId("s1-question-work-authorization"),
-          provenance: "owner_provided" as const,
-          protectedCategory: "authorization" as const,
-          templateRevision: null,
-          verification: "independent" as const,
-        }],
-        protectedPlaceholderCount: 0 as const,
-        independentlyVerified: true as const,
-        submitActivated: false as const,
-        privacyScan: "pass" as const,
-      },
-    ],
+    completedPages: directReview ? 0 : skipResume ? 2 : 3,
+    pageChecks: directReview
+      ? []
+      : skipResume ? [pageChecks[0]!, pageChecks[2]!] : pageChecks,
+    laneAcceptances: directReview
+      ? []
+      : skipResume
+      ? [laneAcceptances[0]!, laneAcceptances[2]!]
+      : laneAcceptances,
     submitActivated: false as const,
     privacyScan: "pass" as const,
     cleanup: "pass" as const,
+  };
+}
+
+function profileAcceptance(profileFieldLearningSha256: string) {
+  return {
+    schemaVersion: 1 as const,
+    checkpoint: "profile_verified" as const,
+    pageType: "profile" as const,
+    verifiedFields: [{
+      fieldId: "identity.given_name",
+      questionType: "identity" as const,
+      answerType: "text" as const,
+      uiBehavior: "text" as const,
+      uiVariant: "workday_text_v1",
+      provenance: "owner_provided" as const,
+    }],
+    ownedDuplicateRows: 0 as const,
+    independentlyVerified: true as const,
+    profileFieldLearningSha256,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
+  };
+}
+
+function resumeAcceptance() {
+  return {
+    schemaVersion: 1 as const,
+    checkpoint: "resume_verified" as const,
+    artifactId: upstreamResumeId("resume_abcdefghijklmnop"),
+    sizeBytes: 1024,
+    fileType: "pdf" as const,
+    browserState: {
+      variant: "workday_resume_file_upload_v1" as const,
+      inputCardinality: 1 as const,
+      uploadedFileCount: 1 as const,
+      uploadComplete: true as const,
+      requiredErrorVisible: false as const,
+      removeControlCardinality: 1 as const,
+    },
+    independentlyVerified: true as const,
+    duplicateUploadAvoided: false,
+    replacedExisting: false,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
+  };
+}
+
+function questionnaireAcceptance() {
+  return {
+    schemaVersion: 1 as const,
+    checkpoint: "questionnaire_verified" as const,
+    answers: [{
+      fieldId: fieldId("authorization-answer"),
+      questionId: questionId("s1-question-work-authorization"),
+      provenance: "owner_provided" as const,
+      protectedCategory: "authorization" as const,
+      templateRevision: null,
+      verification: "independent" as const,
+    }],
+    protectedPlaceholderCount: 0 as const,
+    independentlyVerified: true as const,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
   };
 }
 

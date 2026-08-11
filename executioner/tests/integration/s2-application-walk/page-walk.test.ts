@@ -33,6 +33,131 @@ test("walks the observed Workday My Information to Experience page order", async
   );
 });
 
+test("walks a Resume-first tenant from semantic browser truth", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("resume"), truth("resume"),
+      truth("profile"), truth("profile"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["resume", "profile", "questionnaire"],
+  );
+});
+
+test("accepts an observed path that skips the optional Resume page", async () => {
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], []),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["profile", "questionnaire"],
+  );
+});
+
+test("recovers between lanes on one physical combined Resume/Profile page", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      combinedTruth("unverified"), combinedTruth("verified"),
+      truth("questionnaire"), truth("questionnaire"), truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    {
+      resume: {
+        currentPage: "resume",
+        currentLanes: ["resume", "profile"],
+        pageChecks: [verifiedChecks(2)[1]!],
+      },
+    },
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.ok && result.value.pageChecks.map(({ page }) => page), [
+    "resume", "profile", "questionnaire",
+  ]);
+  assert.equal(calls.some((call) => call.startsWith("reconcile:resume")), false);
+  assert.equal(calls.some((call) => call.startsWith("reconcile:profile")), true);
+});
+
+test("combined Profile duplicate rows do not fabricate a Resume-lane failure", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      combinedTruth("unverified", 1), combinedTruth("unverified", 1),
+      combinedTruth("verified", 0), truth("questionnaire"),
+      truth("questionnaire"), truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(calls.filter((call) => call.startsWith("reconcile:resume")).length, 1);
+  assert.equal(calls.filter((call) => call.startsWith("reconcile:profile")).length, 1);
+});
+
+test("walks bounded repeated Questionnaire pages", async () => {
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], []),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["profile", "questionnaire", "questionnaire"],
+  );
+});
+
+test("rejects an unbounded repeated Questionnaire loop", async () => {
+  const result = await runApplicationPageWalk(
+    dependenciesFor(Array.from({ length: 21 }, () => truth("questionnaire")), []),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.error.completedPages, 8);
+  assert.equal(!result.ok && result.error.failure.code, "navigation_illegal");
+});
+
+test("accepts direct Review only from independently observed browser truth", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([truth("pre_review")], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.ok && result.value.pageChecks, []);
+  assert.deepEqual(calls, ["observe:pre_review", "progress:pre_review:0"]);
+});
+
 test("walks every application page only after browser-truth verification and stops before Review", async () => {
   const calls: string[] = [];
   const truths = [
@@ -71,17 +196,17 @@ test("walks every application page only after browser-truth verification and sto
     "reconcile:profile:1",
     "observe:profile",
     "progress:profile_verified:1",
-    "next:profile:resume",
+    "next:profile:resume|questionnaire|pre_review",
     "observe:resume",
     "reconcile:resume:1",
     "observe:resume",
     "progress:resume_verified:2",
-    "next:resume:questionnaire",
+    "next:resume:questionnaire|pre_review",
     "observe:questionnaire",
     "reconcile:questionnaire:1",
     "observe:questionnaire",
     "progress:questionnaire_verified:3",
-    "next:questionnaire:pre_review",
+    "next:questionnaire:questionnaire|pre_review",
     "observe:pre_review",
     "progress:pre_review:3",
   ]);
@@ -168,11 +293,10 @@ for (const scenario of [
   });
 }
 
-test("recovery denies incomplete persisted fields, corrupted prefixes, skipped destinations, and regressions", async () => {
+test("recovery denies incomplete persisted fields, corrupted prefixes, and regressions", async () => {
   for (const resume of [
     { currentPage: "resume" as const, pageChecks: verifiedChecks(2) },
     { currentPage: "resume" as const, pageChecks: [{ ...verifiedChecks(1)[0]!, verifiedFields: 0 }] },
-    { currentPage: "questionnaire" as const, pageChecks: verifiedChecks(1) },
     { currentPage: "resume" as const, pageChecks: verifiedChecks(3) },
   ]) {
     const calls: string[] = [];
@@ -361,7 +485,7 @@ test("reobserves browser truth without replaying a verified page effect", async 
     "observe:error",
     "observe:profile",
     "progress:profile_verified:1",
-    "next:profile:resume",
+    "next:profile:resume|questionnaire|pre_review",
   ]);
 });
 
@@ -616,6 +740,29 @@ function verifiedChecks(count: number) {
     verifiedFields: 1,
     duplicateRows: 0,
   }));
+}
+
+function combinedTruth(
+  profileVerification: "verified" | "unverified",
+  c3OwnedDuplicateRows = 0,
+): ApplicationPageTruth {
+  return {
+    ...truth("resume"),
+    lanes: ["resume", "profile"],
+    c3OwnedDuplicateRows,
+    requiredFields: [
+      {
+        fieldId: walkFixture.fields.resume,
+        page: "resume",
+        verification: "verified",
+      },
+      {
+        fieldId: walkFixture.fields.profile,
+        page: "profile",
+        verification: profileVerification,
+      },
+    ],
+  };
 }
 
 function incompleteTruth(page: "resume" | "questionnaire"): ApplicationPageTruth {

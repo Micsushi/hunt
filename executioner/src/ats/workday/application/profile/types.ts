@@ -14,11 +14,18 @@ export type ProfileQuestionType =
   | "identity"
   | "address"
   | "phone"
+  | "application_source"
+  | "prior_employment"
   | "experience"
   | "education"
   | "skill";
 export type ProfileCanonicalAnswerType = "text" | "phone" | "date" | "option";
-export type ProfileUiBehavior = "text" | "phone" | "date" | "search_select";
+export type ProfileUiBehavior =
+  | "text"
+  | "phone"
+  | "date"
+  | "search_select"
+  | "radio_group";
 
 export type ProfileFieldAnswer =
   | {
@@ -86,6 +93,17 @@ export interface ProfileCommitRequest {
   readonly value: string;
 }
 
+export interface ProfileInteractionSnapshot {
+  readonly popupBound: boolean | null;
+  readonly optionFocused: boolean | null;
+  readonly optionActivated: boolean | null;
+  readonly popupClosed: boolean | null;
+  readonly backingValueCommitted: boolean;
+  readonly validationCleared: boolean;
+  readonly visibleOptionCount: number | null;
+  readonly selectedOptionOrdinal: number | null;
+}
+
 export interface WorkdayProfilePagePort {
   inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
   commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void>;
@@ -98,6 +116,7 @@ export interface WorkdayProfilePagePort {
     rowId: string,
     signal: AbortSignal,
   ): Promise<void>;
+  interaction?(controlId: string): ProfileInteractionSnapshot | undefined;
 }
 
 export interface VerifiedProfileField {

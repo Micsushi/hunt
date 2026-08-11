@@ -40,7 +40,7 @@ const authMoments = [
   ["application_ready", "state_observed"],
 ] as const;
 
-test("application monitor order matches the page-walk contract", () => {
+test("application monitor page catalog matches the page-walk contract", () => {
   assert.deepEqual(applicationMonitorPages, applicationPages);
 });
 
@@ -702,8 +702,8 @@ test("application monitor retains the exact mutation, readback, navigation, tran
     ["profile", "after_readback", "operation_profile_mutation_001", 1],
     ["profile", "before_navigation", "operation_profile_reload_00001", 1],
     ["profile", "transition", "operation_profile_reload_00001", 1],
-    ["profile", "before_navigation", "operation_profile_navigation_1", 1],
-    ["resume", "transition", "operation_profile_navigation_1", 1],
+    ["profile", "before_navigation", "operation_profile_navigation_1", 2],
+    ["resume", "transition", "operation_profile_navigation_1", 2],
     ["resume", "before_mutation", "operation_resume_mutation_0001", 1],
     ["resume", "after_readback", "operation_resume_mutation_0001", 1],
     ["resume", "before_navigation", "operation_resume_navigation_01", 1],
@@ -769,28 +769,166 @@ test("application monitor retains the exact mutation, readback, navigation, tran
   }
 });
 
-test("application monitor rejects the legacy resume-first order", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-old-order-"));
+for (const [name, route, mutationCounts] of [
+  ["Resume-first", ["resume", "profile", "questionnaire"], [1, 1, 1]],
+  ["skipped Resume with repeated Questionnaire", ["profile", "questionnaire", "questionnaire"], [1, 1, 1]],
+  ["combined Resume/Profile", ["resume", "questionnaire"], [2, 1]],
+] as const) {
+  test(`application monitor binds the exact observed ${name} route`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-route-"));
+    const moments: [string, string, string, number][] = [];
+    const attempts = new Map<string, number>();
+    for (const [index, page] of route.entries()) {
+      for (let mutation = 0; mutation < mutationCounts[index]!; mutation += 1) {
+        const kind = "mutation" as const;
+        const attempt = (attempts.get(`${page}:${kind}`) ?? 0) + 1;
+        attempts.set(`${page}:${kind}`, attempt);
+        const operationId = `operation_${name.replace(/\W/gu, "_")}_${index}_${kind}_${mutation}`;
+        moments.push([page, "before_mutation", operationId, attempt]);
+        moments.push([
+          page,
+          "after_readback",
+          operationId,
+          attempt,
+        ]);
+      }
+      const attempt = (attempts.get(`${page}:navigation`) ?? 0) + 1;
+      attempts.set(`${page}:navigation`, attempt);
+      const operationId = `operation_${name.replace(/\W/gu, "_")}_${index}_navigation_0001`;
+      moments.push([page, "before_navigation", operationId, attempt]);
+      moments.push([route[index + 1] ?? "review", "transition", operationId, attempt]);
+    }
+    moments.push(["review", "review_readback", `operation_${name.replace(/\W/gu, "_")}_review_0001`, 1]);
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        now: ordinalClock(),
+        waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+          runtimeRoot: root,
+          evidenceRoot: root,
+          requestPath: request.path,
+          classification: request.ordinal === moments.length ? "review_verified" : "safe_to_continue",
+          observedIdentityDigests: identityDigests(),
+          structuralDescriptionIds: [structuralIdFor(request.page)],
+          observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
+        }),
+      });
+      for (const [page, moment, operationId, attempt] of moments) {
+        await runtime.application(
+          fixturePage(),
+          page as "resume" | "profile" | "questionnaire" | "review",
+          moment,
+          { ...taxonomy(), submitPresent: page === "review" },
+          { operationId, attempt },
+          new AbortController().signal,
+        );
+      }
+      runtime.close();
+      assert.equal(readStage2ReviewMonitorChain(join(root, "monitor"), {
+        journeyId: binding.journeyId,
+        targetHandleId: binding.targetHandleId,
+        sourceRevision: binding.sourceRevision,
+        configSha256: binding.configSha256,
+        hostSha256: digest(Buffer.from(binding.host)),
+        tenantSha256: digest(Buffer.from(binding.tenant)),
+        postingSha256: digest(Buffer.from(binding.posting)),
+        processLiveNonceSha256: binding.processLiveNonceSha256,
+        processIssuedAt: binding.processIssuedAt,
+        processCheckedAt: "2026-08-10T12:00:01.000Z",
+        processExitObservedAt: "2026-08-10T12:00:00.999Z",
+        processInstanceSha256: processInstanceSha256(),
+      }).classification, "review_verified");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("application monitor admits a directly and independently observed Review", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-direct-review-"));
   try {
     const runtime = createStage2ExternalMonitorRuntime({
       ...binding,
       evidenceRoot: root,
       runtimeRoot: root,
-      waitForAcknowledgement: async () => undefined,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "review_verified",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor("review")],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
     });
-    await assert.rejects(
-      () => runtime.application(
-        fixturePage(),
-        "resume",
-        "before_mutation",
-        taxonomy(),
-        { operationId: "operation_resume_mutation_legacy", attempt: 1 },
-        new AbortController().signal,
-      ),
-      /external monitor runtime denied/u,
+    await runtime.application(
+      fixturePage(),
+      "review",
+      "review_readback",
+      { ...taxonomy(), submitPresent: true },
+      { operationId: "operation_direct_review_0001", attempt: 1 },
+      new AbortController().signal,
     );
     runtime.close();
-    assert.equal(existsSync(join(root, "monitor")), false);
+    assert.equal(readStage2ReviewMonitorChain(join(root, "monitor"), {
+      journeyId: binding.journeyId,
+      targetHandleId: binding.targetHandleId,
+      sourceRevision: binding.sourceRevision,
+      configSha256: binding.configSha256,
+      hostSha256: digest(Buffer.from(binding.host)),
+      tenantSha256: digest(Buffer.from(binding.tenant)),
+      postingSha256: digest(Buffer.from(binding.posting)),
+      processLiveNonceSha256: binding.processLiveNonceSha256,
+      processIssuedAt: binding.processIssuedAt,
+      processCheckedAt: "2026-08-10T12:00:01.000Z",
+      processExitObservedAt: "2026-08-10T12:00:00.999Z",
+      processInstanceSha256: processInstanceSha256(),
+    }).classification, "review_verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("application monitor rejects a semantic regression to an already visited page", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-regression-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentityDigests: identityDigests(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
+      }),
+    });
+    const signal = new AbortController().signal;
+    for (const [page, moment, operationId] of [
+      ["profile", "before_mutation", "operation_regression_profile_mutation"],
+      ["profile", "after_readback", "operation_regression_profile_mutation"],
+      ["profile", "before_navigation", "operation_regression_profile_next_01"],
+      ["resume", "transition", "operation_regression_profile_next_01"],
+      ["resume", "before_mutation", "operation_regression_resume_mutation1"],
+      ["resume", "after_readback", "operation_regression_resume_mutation1"],
+      ["resume", "before_navigation", "operation_regression_resume_next_001"],
+    ] as const) {
+      await runtime.application(
+        fixturePage(), page, moment, taxonomy(),
+        { operationId, attempt: 1 }, signal,
+      );
+    }
+    await assert.rejects(() => runtime.application(
+      fixturePage(), "profile", "transition", taxonomy(),
+      { operationId: "operation_regression_resume_next_001", attempt: 1 }, signal,
+    ), /external monitor runtime denied/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

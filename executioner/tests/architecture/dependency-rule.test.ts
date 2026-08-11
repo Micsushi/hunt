@@ -418,7 +418,35 @@ test("S2-F3 application composition owns only its exact integration seams", () =
       path: "src/live/evidence/application-walk-evidence.ts",
       source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
     },
+    {
+      path: "src/live/evidence/external-monitor-runtime.ts",
+      source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
+    },
+    {
+      path: "src/live/evidence/review-monitor-chain.ts",
+      source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
+    },
+    {
+      path: "src/live/evidence/profile-field-learning.ts",
+      source: [
+        'import type { Profile } from "../../ats/workday/application/profile/index.ts";',
+        'import { catalog } from "../../ats/workday/application/profile/catalog.ts";',
+      ].join("\n"),
+    },
   ]), []);
+  assert.deepEqual(dependencyViolations([
+    {
+      path: "src/live/evidence/other.ts",
+      source: 'import type { Walk } from "../../ats/workday/application/page-walk-contract.ts";',
+    },
+    {
+      path: "src/live/evidence/profile-field-learning.ts",
+      source: 'import { handler } from "../../ats/workday/application/profile/handler.ts";',
+    },
+  ]), [
+    "src/live/evidence/other.ts imports peer implementation src/ats/workday/application/page-walk-contract.ts",
+    "src/live/evidence/profile-field-learning.ts imports peer implementation src/ats/workday/application/profile/handler.ts",
+  ]);
 });
 
 test("the raw-page owner admits only the exact closed Workday runtime assembler", () => {
@@ -426,6 +454,10 @@ test("the raw-page owner admits only the exact closed Workday runtime assembler"
   assert.deepEqual(dependencyViolations([{
     path: "src/browser/playwright-live/private/workday-application-runtime.ts",
     source,
+  }]), []);
+  assert.deepEqual(dependencyViolations([{
+    path: "src/browser/playwright-live/private/workday-application-runtime.ts",
+    source: 'import { capture } from "../../../live/evidence/profile-field-learning.ts";',
   }]), []);
   assert.deepEqual(dependencyViolations([{
     path: "src/browser/playwright-live/private/other-application-runtime.ts",

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
@@ -21,6 +22,8 @@ import {
   admitApplicationWalkAcceptance,
   type ApplicationWalkAcceptanceV1,
 } from "../../live/evidence/application-walk-evidence.ts";
+import { admitProfileFieldLearningEvidence } from
+  "../../live/evidence/profile-field-learning.ts";
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import {
@@ -49,6 +52,7 @@ export interface Stage2ReviewCompletionAuditV1 {
   readonly accountVerification: "present";
   readonly processBinding: "production_bound";
   readonly processAuditSha256: string;
+  readonly profileFieldLearningSha256: string | null;
   readonly authMonitor: "external_chain_acknowledged";
   readonly monitor: "external_chain_acknowledged";
   readonly monitorClassification: "review_verified";
@@ -92,6 +96,15 @@ export function inspectStage2ReviewCompletion(
     const review = readStage2ReviewAcceptance(root);
     const gate = readStage2AcceptanceManifest(root);
     const application = readApplicationWalk(root);
+    const profileFieldLearningSha256 = profileLearningDigest(application);
+    const learningPath = join(root, "profile-field-learning.json");
+    if (profileFieldLearningSha256 === null) {
+      if (existsSync(learningPath)) denied();
+    } else {
+      const learningBytes = readStableFile(learningPath, 128 * 1024);
+      admitProfileFieldLearningEvidence(JSON.parse(learningBytes.toString("utf8")));
+      if (digest(learningBytes) !== profileFieldLearningSha256) denied();
+    }
     const packet = readRealEvidence(root);
     const processAudit = readWindowsProcessAudit(root);
     const processBytes = readStableFile(join(root, "process-audit.json"), 16 * 1024);
@@ -161,6 +174,7 @@ export function inspectStage2ReviewCompletion(
       accountVerification: "present",
       processBinding: "production_bound",
       processAuditSha256: digest(processBytes),
+      profileFieldLearningSha256,
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -177,6 +191,20 @@ export function inspectStage2ReviewCompletion(
   } catch {
     return denied();
   }
+}
+
+function profileLearningDigest(application: ApplicationWalkAcceptanceV1): string | null {
+  const profiles = application.laneAcceptances.filter(
+    (value) => value.checkpoint === "profile_verified",
+  );
+  if (profiles.length === 0 && application.completedPages === 0) return null;
+  if (profiles.length !== 1) denied();
+  const sha256 = profiles[0]?.checkpoint === "profile_verified"
+    ? profiles[0].profileFieldLearningSha256
+    : undefined;
+  if (sha256 === undefined) return null;
+  if (!/^[0-9a-f]{64}$/u.test(sha256)) denied();
+  return sha256;
 }
 
 function validateMonitorLedger(
@@ -278,10 +306,9 @@ function readRealEvidence(root: string): {
     summary.journeyId !== manifest.journeyId || summary.sealedAt !== sealedAt ||
     !allVerified(milestones, [
       "account_verified", "application_completed", "review_reached", "submit_guarded",
-    ]) || !allVerified(verifications, [
-      "account", "resume", "required_fields", "review", "submit_guard",
-    ], true) || !Array.isArray(summary.errors) || summary.errors.length !== 0 ||
-    !Array.isArray(summary.missingEvidence) || summary.missingEvidence.length !== 0
+    ]) || !validVerificationSummaries(verifications) ||
+    !Array.isArray(summary.errors) || summary.errors.length !== 0 ||
+    !validOptionalResumeEvidence(verifications, summary.missingEvidence)
   ) denied();
   const comparison = record(summary.diagnosticComparison);
   exactKeys(comparison, [
@@ -297,7 +324,7 @@ function readRealEvidence(root: string): {
     (item) => item.kind === "required_fields",
   );
   if (required === undefined || !Number.isSafeInteger(required.verifiedCount) ||
-    (required.verifiedCount as number) < 1) denied();
+    (required.verifiedCount as number) < 0) denied();
   return Object.freeze({
     sourceRevision: manifest.sourceRevision,
     revisionId: manifest.configurationRevisionId,
@@ -319,6 +346,35 @@ function allVerified(
     return item.kind === kind && item.status === "verified" &&
       (!counted || Number.isSafeInteger(item.verifiedCount) && (item.verifiedCount as number) > 0);
   });
+}
+
+function validVerificationSummaries(value: unknown): boolean {
+  const kinds = ["account", "resume", "required_fields", "review", "submit_guard"];
+  if (!Array.isArray(value) || value.length !== kinds.length) return false;
+  return kinds.every((kind, index) => {
+    const item = record(value[index]);
+    exactKeys(item, ["kind", "status", "verifiedCount"]);
+    if (item.kind !== kind || !Number.isSafeInteger(item.verifiedCount)) return false;
+    return kind === "resume"
+      ? item.status === "verified" && (item.verifiedCount as number) > 0 ||
+        item.status === "missing" && item.verifiedCount === 0
+      : kind === "required_fields"
+        ? item.status === "verified" && (item.verifiedCount as number) >= 0
+      : item.status === "verified" && (item.verifiedCount as number) > 0;
+  });
+}
+
+function validOptionalResumeEvidence(
+  verifications: unknown,
+  missingEvidence: unknown,
+): boolean {
+  if (!Array.isArray(verifications) || !Array.isArray(missingEvidence)) return false;
+  const resume = verifications.find((item) =>
+    typeof item === "object" && item !== null && "kind" in item && item.kind === "resume"
+  ) as Record<string, unknown> | undefined;
+  return resume?.status === "missing"
+    ? missingEvidence.length === 1 && missingEvidence[0] === "resume_verification"
+    : missingEvidence.length === 0;
 }
 
 function sameConfig(value: Stage2ConfigCapture, expected: Stage2ConfigCapture): boolean {

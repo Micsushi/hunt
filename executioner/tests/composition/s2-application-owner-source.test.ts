@@ -116,6 +116,102 @@ test("admits an omitted narrative fact as unresolved owner input", async () => {
   }
 });
 
+test("admits unresolved reusable profile owner inputs without substantive defaults", async () => {
+  const fixture = ownerFixture();
+  try {
+    writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profilePlan.fields.push(
+      {
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        answer: { kind: "profile_answer_missing" },
+      },
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        questionType: "prior_employment",
+        answerType: "option",
+        answer: { kind: "profile_answer_missing" },
+      },
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    }).resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+
+    assert.deepEqual(resolved.profilePlan.fields.slice(-2).map(({ fieldId, answer }) => ({
+      fieldId,
+      answer,
+    })), [
+      {
+        fieldId: "source.how_did_you_hear",
+        answer: { kind: "profile_answer_missing" },
+      },
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        answer: { kind: "profile_answer_missing" },
+      },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("admits only exact owner-provided values for reusable profile owner inputs", async () => {
+  const fixture = ownerFixture();
+  try {
+    writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profilePlan.fields.push(
+      {
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        answer: { kind: "answered", value: "company-website", provenance: "owner_provided" },
+        optionMapping: {
+          canonicalValue: "company-website",
+          visibleOption: "Company Website",
+          provenance: "visible_option",
+        },
+      },
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        questionType: "prior_employment",
+        answerType: "option",
+        answer: { kind: "answered", value: "false", provenance: "owner_provided" },
+        optionMapping: {
+          canonicalValue: "false",
+          visibleOption: "No",
+          provenance: "visible_option",
+        },
+      },
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+
+    const resolved = await resolver.resolve(
+      request(fixture.runtimeRoot),
+      AbortSignal.any([]),
+    );
+    assert.deepEqual(resolved.profilePlan.fields.slice(-2), manifest.profilePlan.fields.slice(-2));
+
+    manifest.profilePlan.fields.at(-1).answer.provenance = "resume_verified";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("admits Unicode plain text and an exact normal email address", async () => {
   const fixture = ownerFixture();
   try {

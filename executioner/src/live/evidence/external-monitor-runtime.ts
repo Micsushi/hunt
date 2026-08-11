@@ -13,6 +13,11 @@ import {
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
 import {
+  isAllowedApplicationTransition,
+  maximumApplicationPageVisits,
+  type ApplicationHandlerPage,
+} from "../../ats/workday/application/page-walk-contract.ts";
+import {
   applicationMonitorPages,
   validateStage2MonitorPng,
 } from "./review-monitor-chain.ts";
@@ -123,6 +128,7 @@ export class Stage2ExternalMonitorRuntime {
   readonly #attempts = new Map<string, number>();
   #currentAuthPage: string | undefined;
   #currentApplicationPage: string | undefined;
+  readonly #applicationVisited: ApplicationHandlerPage[] = [];
   #closed = false;
   #active = false;
 
@@ -339,7 +345,9 @@ export class Stage2ExternalMonitorRuntime {
       const current = chain === "auth" ? this.#currentAuthPage : this.#currentApplicationPage;
       return pending === undefined && page !== "review" &&
         (chain !== "auth" || safeAuthEffectPage(page)) &&
-        (current === undefined ? chain === "auth" || page === applicationMonitorPages[0] : current === page) &&
+        (current === undefined ? chain === "auth" || applicationMonitorPages.includes(
+          page as ApplicationHandlerPage,
+        ) : current === page) &&
         !used.has(event.operationId) &&
         (kind === "navigation" ||
           event.attempt === (this.#attempts.get(attemptKey) ?? 0) + 1);
@@ -348,9 +356,9 @@ export class Stage2ExternalMonitorRuntime {
       const kind = moment === "after_readback" ? "mutation" : "navigation";
       const routeAttemptKey = pending === undefined
         ? ""
-        : `${chain}:${pending.page}->${page}:navigation`;
+        : `${chain}:${pending.page}:navigation`;
       return pending !== undefined && pending.kind === kind &&
-        legalPair(chain, kind, pending.page, page) &&
+        legalPair(chain, kind, pending.page, page, this.#applicationVisited) &&
         pending.operationId === event.operationId && pending.attempt === event.attempt &&
         (kind === "mutation" ||
           event.attempt === (this.#attempts.get(routeAttemptKey) ?? 0) + 1);
@@ -358,7 +366,9 @@ export class Stage2ExternalMonitorRuntime {
     const used = chain === "auth" ? this.#usedAuthOperations : this.#usedApplicationOperations;
     const attemptKey = `${chain}:${page}:${moment}`;
     const current = chain === "auth" ? this.#currentAuthPage : this.#currentApplicationPage;
-    return pending === undefined && (current === undefined ? chain === "auth" : current === page) &&
+    return pending === undefined && (current === undefined
+      ? chain === "auth" || page === "review" && moment === "review_readback"
+      : current === page) &&
       !used.has(event.operationId) &&
       event.attempt === (this.#attempts.get(attemptKey) ?? 0) + 1 &&
       (moment !== "review_readback" || page === "review");
@@ -387,7 +397,10 @@ export class Stage2ExternalMonitorRuntime {
     if (finishes && kind === "navigation") {
       const pendingPage = chain === "auth" ? this.#pendingAuth?.page : this.#pendingApplication?.page;
       if (pendingPage === undefined) denied();
-      this.#attempts.set(`${chain}:${pendingPage}->${page}:navigation`, event.attempt);
+      this.#attempts.set(`${chain}:${pendingPage}:navigation`, event.attempt);
+      if (
+        chain === "application" && page !== pendingPage && page !== "review"
+      ) this.#applicationVisited.push(page as ApplicationHandlerPage);
     }
     if (chain === "auth") {
       this.#pendingAuth = starts ? value : finishes ? undefined : this.#pendingAuth;
@@ -395,7 +408,10 @@ export class Stage2ExternalMonitorRuntime {
       if (finishes || !starts) this.#currentAuthPage = page;
     } else {
       this.#pendingApplication = starts ? value : finishes ? undefined : this.#pendingApplication;
-      if (starts && this.#currentApplicationPage === undefined) this.#currentApplicationPage = page;
+      if (starts && this.#currentApplicationPage === undefined) {
+        this.#currentApplicationPage = page;
+        this.#applicationVisited.push(page as ApplicationHandlerPage);
+      }
       if (finishes || !starts) this.#currentApplicationPage = page;
     }
   }
@@ -678,11 +694,25 @@ function legalPair(
   kind: "mutation" | "navigation",
   from: string,
   to: string,
+  visited: readonly ApplicationHandlerPage[],
 ): boolean {
   if (chain === "application") {
     if (kind === "mutation") return from === to;
-    const index = applicationMonitorPages.findIndex((page) => page === from);
-    return to === from || index >= 0 && to === (applicationMonitorPages[index + 1] ?? "review");
+    if (to === from) return true;
+    if (!applicationMonitorPages.includes(from as ApplicationHandlerPage)) return false;
+    const destination = to === "review" ? "pre_review" : to;
+    if (
+      destination !== "pre_review" &&
+      !applicationMonitorPages.includes(destination as ApplicationHandlerPage)
+    ) return false;
+    if (destination !== "pre_review" && visited.length >= maximumApplicationPageVisits) {
+      return false;
+    }
+    return isAllowedApplicationTransition(
+      from as ApplicationHandlerPage,
+      destination as ApplicationHandlerPage | "pre_review",
+      visited,
+    );
   }
   if (!safeAuthEffectPage(from) || !safeAuthEffectPage(to)) return false;
   return kind === "mutation" && from === to || legalAuthTransition(from, to);

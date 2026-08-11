@@ -288,7 +288,7 @@ test("discard removes only an exact unfinished run and refuses completed evidenc
   }
 });
 
-test("storage finalizes a fully monitored account-verified checkpoint", async () => {
+test("account-verified storage rejects unsealed profile learning", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-storage-"));
   try {
     const layout = await prepareStage2RunStorage(
@@ -323,15 +323,60 @@ test("storage finalizes a fully monitored account-verified checkpoint", async ()
       membersAliveAfterClose: 0,
       checkedAt: "2026-08-04T12:01:00.000Z",
     }));
+    const learningPath = join(layout.evidenceRoot, "profile-field-learning.json");
+    writeFileSync(learningPath, "{}\n");
 
-    await finalizeStage2RunStorage({
+    await assert.rejects(() => finalizeStage2RunStorage({
       storageRoot,
       ownerConfigPath: layout.ownerConfigPath,
       evidenceRoot: layout.evidenceRoot,
-    });
-    const entry = readStage2StorageCatalog(storageRoot).entries[0];
-    assert.equal(entry?.runStatus, "passed");
-    assert.equal(entry?.monitorClassification, "application_ready");
+    }), /storage finalization denied/u);
+
+    const validLearning = {
+      schemaVersion: 1,
+      evidenceRevision: "s2-profile-field-learning-v1",
+      page: "profile",
+      fields: [{
+        fieldIdentity: "profile.identity.given_name",
+        uiType: "text",
+        uiVariant: "workday_text_v1",
+        questionCategory: "identity",
+        answerCategory: "text",
+        required: true,
+        visibleOptionIds: [],
+        selectedOptionId: null,
+        optionMapping: "not_applicable",
+        prefillDisposition: "already_correct",
+        driverAttempt: "none",
+        mechanics: {
+          popupBound: "not_applicable",
+          optionFocused: "not_applicable",
+          optionActivated: "not_applicable",
+          popupClosed: "not_applicable",
+          backingValueCommitted: "not_observed",
+          validationCleared: "not_observed",
+          persistentReadback: "not_attempted",
+        },
+      }],
+    };
+    writeFileSync(learningPath, `${JSON.stringify({
+      ...validLearning,
+      fields: [{ ...validLearning.fields[0], rawLabel: "private applicant value" }],
+    })}\n`);
+
+    await assert.rejects(() => finalizeStage2RunStorage({
+      storageRoot,
+      ownerConfigPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    }), /storage finalization denied/u);
+
+    writeFileSync(learningPath, `${JSON.stringify(validLearning)}\n`);
+
+    await assert.rejects(() => finalizeStage2RunStorage({
+      storageRoot,
+      ownerConfigPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    }), /storage finalization denied/u);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }

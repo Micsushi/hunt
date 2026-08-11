@@ -1,4 +1,6 @@
 import type {
+  ProfileCanonicalAnswerType,
+  ProfileQuestionType,
   ProfileRepeatableSection,
   ProfileUiBehavior,
 } from "./types.ts";
@@ -9,6 +11,26 @@ export interface ProfileControlCatalogEntry {
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
 }
+
+export interface ProfileOwnerInputCatalogEntry {
+  readonly fieldId: string;
+  readonly questionType: ProfileQuestionType;
+  readonly answerType: ProfileCanonicalAnswerType;
+}
+
+export const profileOwnerInputCatalog: readonly ProfileOwnerInputCatalogEntry[] =
+  Object.freeze([
+    {
+      fieldId: "source.how_did_you_hear",
+      questionType: "application_source",
+      answerType: "option",
+    },
+    {
+      fieldId: "employment.previously_worked_for_organization",
+      questionType: "prior_employment",
+      answerType: "option",
+    },
+  ]);
 
 export const profileRequiredControlSelector = [
   "input[required]",
@@ -51,6 +73,18 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       selector: '[data-automation-id="phone-number"]',
       uiBehavior: "phone",
       uiVariant: "workday_phone_v1",
+    },
+    {
+      fieldId: "source.how_did_you_hear",
+      selector: '[data-automation-id="sourcePrompt"]',
+      uiBehavior: "search_select",
+      uiVariant: "workday_source_select_v1",
+    },
+    {
+      fieldId: "employment.previously_worked_for_organization",
+      selector: 'input[name="candidateIsPreviousWorker"]',
+      uiBehavior: "radio_group",
+      uiVariant: "workday_previous_worker_radio_v1",
     },
   ]);
 

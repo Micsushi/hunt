@@ -1,5 +1,6 @@
 export { completeWorkdayProfilePage } from "./handler.ts";
 export {
+  profileOwnerInputCatalog,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
 } from "./catalog.ts";
@@ -13,6 +14,7 @@ export type {
   ProfileControlSnapshot,
   ProfileFieldAnswer,
   ProfileFieldPlan,
+  ProfileInteractionSnapshot,
   ProfileOptionMapping,
   ProfilePageCompletionResult,
   ProfilePagePlan,

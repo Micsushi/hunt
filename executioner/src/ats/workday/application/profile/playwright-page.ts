@@ -10,6 +10,7 @@ import {
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  ProfileInteractionSnapshot,
   ProfilePageSnapshot,
   ProfilePageType,
   ProfileRepeatableSection,
@@ -20,6 +21,18 @@ import type {
 interface ResolvedControl {
   readonly locator: Locator;
   readonly uiBehavior: ProfileControlSnapshot["uiBehavior"];
+  readonly uiVariant: string;
+}
+
+interface MutableInteraction {
+  popupBound: boolean | null;
+  optionFocused: boolean | null;
+  optionActivated: boolean | null;
+  popupClosed: boolean | null;
+  backingValueCommitted: boolean;
+  validationCleared: boolean;
+  visibleOptionCount: number | null;
+  selectedOptionOrdinal: number | null;
 }
 
 export interface PlaywrightWorkdayProfilePageOptions {
@@ -32,6 +45,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #pageType: ProfilePageType;
   readonly #timeoutMs: number;
   readonly #controls = new Map<string, ResolvedControl>();
+  readonly #interactions = new Map<string, MutableInteraction>();
+  readonly #unknownControlOrdinals = new Map<string, number>();
+  #nextUnknownControlOrdinal = 1;
 
   constructor(page: Page, options: PlaywrightWorkdayProfilePageOptions) {
     this.#page = page;
@@ -67,12 +83,37 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (resolved === undefined || resolved.uiBehavior !== request.uiBehavior) {
       throw new TypeError("profile control binding is stale or incompatible");
     }
+    const interaction = emptyInteraction(request.uiBehavior);
+    this.#interactions.set(request.controlId, interaction);
     if (request.uiBehavior === "search_select") {
-      await this.#selectSearchOption(resolved.locator, request.value);
+      await this.#selectSearchOption(
+        resolved.locator,
+        request.value,
+        resolved.uiVariant,
+        interaction,
+      );
+    } else if (request.uiBehavior === "radio_group") {
+      await this.#selectRadioOption(resolved.locator, request.value, interaction);
     } else {
       await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
+      await resolved.locator.blur({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
+      interaction.backingValueCommitted = normalize(
+        await readback(resolved.locator, request.uiBehavior) ?? "",
+      ) === normalize(request.value);
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday profile value did not commit");
+      }
     }
     abort(signal);
+  }
+
+  interaction(controlId: string): ProfileInteractionSnapshot | undefined {
+    const interaction = this.#interactions.get(controlId);
+    return interaction === undefined
+      ? undefined
+      : Object.freeze({ ...interaction });
   }
 
   async addOwnedRow(
@@ -130,10 +171,31 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     rowIdValue?: string,
   ): Promise<ProfileControlSnapshot[]> {
     const matches = await visibleLocators(locator);
+    if (entry.uiBehavior === "radio_group") {
+      if (matches.length === 0) return [];
+      const controlId = [rowIdValue ?? "scalar", entry.fieldId, 0].join(":");
+      this.#controls.set(controlId, {
+        locator,
+        uiBehavior: entry.uiBehavior,
+        uiVariant: entry.uiVariant,
+      });
+      return [{
+        controlId,
+        fieldId: entry.fieldId,
+        required: (await Promise.all(matches.map(required))).some(Boolean),
+        uiBehavior: entry.uiBehavior,
+        uiVariant: entry.uiVariant,
+        readback: await radioReadback(matches),
+      }];
+    }
     const snapshots: ProfileControlSnapshot[] = [];
     for (const [index, match] of matches.entries()) {
       const controlId = [rowIdValue ?? "scalar", entry.fieldId, index].join(":");
-      this.#controls.set(controlId, { locator: match, uiBehavior: entry.uiBehavior });
+      this.#controls.set(controlId, {
+        locator: match,
+        uiBehavior: entry.uiBehavior,
+        uiVariant: entry.uiVariant,
+      });
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
@@ -183,9 +245,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         suffixes: entry.fields.map(({ suffix }) => suffix),
       })),
     };
-    const unknown: ProfileControlSnapshot[] = [];
+    const unreviewed: { readonly candidate: Locator; readonly machineKey: string | null }[] = [];
     for (const candidate of candidates) {
       if (!await required(candidate)) continue;
+      if (await candidate.evaluate((element) => element.matches(
+        'input[type="file"][data-automation-id="file-upload-input-ref"]',
+      ))) continue;
       const admitted = await candidate.evaluate((element, reviewed) => {
         if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
           return true;
@@ -200,10 +265,29 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         });
       }, catalog);
       if (admitted) continue;
-      const index = unknown.length + 1;
+      unreviewed.push({ candidate, machineKey: await unknownMachineKey(candidate) });
+    }
+    const keyCounts = new Map<string, number>();
+    for (const { machineKey } of unreviewed) {
+      if (machineKey !== null) {
+        keyCounts.set(machineKey, (keyCounts.get(machineKey) ?? 0) + 1);
+      }
+    }
+    if (unreviewed.some(({ machineKey }) =>
+      machineKey === null || keyCounts.get(machineKey) !== 1
+    )) throw new TypeError("Workday unknown required control identity denied");
+    const unknown: ProfileControlSnapshot[] = [];
+    for (const { machineKey } of unreviewed) {
+      const stableKey = machineKey as string;
+      let ordinal = this.#unknownControlOrdinals.get(stableKey);
+      if (ordinal === undefined) {
+        ordinal = this.#nextUnknownControlOrdinal;
+        this.#nextUnknownControlOrdinal += 1;
+        this.#unknownControlOrdinals.set(stableKey, ordinal);
+      }
       unknown.push({
-        controlId: `unknown-required:${index}`,
-        fieldId: `unknown.required.${index}`,
+        controlId: `unknown-required:${ordinal}`,
+        fieldId: `unknown.required.${ordinal}`,
         required: true,
         uiBehavior: "text",
         uiVariant: "workday_unknown_required_v1",
@@ -213,20 +297,136 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     return unknown;
   }
 
-  async #selectSearchOption(control: Locator, value: string): Promise<void> {
+  async #selectSearchOption(
+    control: Locator,
+    value: string,
+    uiVariant: string,
+    interaction: MutableInteraction,
+  ): Promise<void> {
     await control.click({ timeout: this.#timeoutMs });
-    await control.fill(value, { timeout: this.#timeoutMs });
+    if (await control.evaluate((element) =>
+      (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+      !element.readOnly
+    )) await control.fill(value, { timeout: this.#timeoutMs });
     const relationship = await control.getAttribute("aria-controls") ??
       await control.getAttribute("aria-owns");
     if (relationship === null || relationship.trim().split(/\s+/u).length !== 1) {
       throw new TypeError("Workday listbox ownership is unavailable or ambiguous");
     }
     const listboxes = this.#page.locator(`#${cssIdentifier(relationship.trim())}`);
-    const listbox = await exactVisible(listboxes);
-    const option = await exactVisible(
-      listbox.getByRole("option", { name: value, exact: true }),
+    const listbox = await this.#waitForExactVisible(listboxes);
+    interaction.popupBound = true;
+    const selected = await this.#waitForSelectableLeaf(listbox, value, uiVariant);
+    interaction.visibleOptionCount = selected.visibleOptionCount;
+    interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
+    interaction.optionFocused = await selected.option.evaluate((element) =>
+      element.ownerDocument.activeElement === element
     );
-    await option.click({ timeout: this.#timeoutMs });
+    await selected.option.click({ timeout: this.#timeoutMs });
+    interaction.optionActivated = true;
+    await control.blur({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(25);
+    interaction.popupClosed = !await listbox.isVisible() &&
+      await control.getAttribute("aria-expanded") !== "true";
+    interaction.backingValueCommitted = normalize(
+      await readback(control, "search_select") ?? "",
+    ) === normalize(value);
+    interaction.validationCleared = await validationCleared(control);
+    if (!interaction.popupClosed) {
+      throw new TypeError("Workday selection popup remained open");
+    }
+    if (!interaction.backingValueCommitted) {
+      throw new TypeError("Workday selection backing value did not commit");
+    }
+    if (!interaction.validationCleared) {
+      throw new TypeError("Workday selection validation did not clear");
+    }
+  }
+
+  async #waitForExactVisible(locator: Locator): Promise<Locator> {
+    const deadline = Date.now() + this.#timeoutMs;
+    while (Date.now() < deadline) {
+      const matches = await visibleLocators(locator);
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length > 1) {
+        throw new TypeError("Workday control is missing or ambiguous");
+      }
+      await this.#page.waitForTimeout(25);
+    }
+    throw new TypeError("Workday control is missing or ambiguous");
+  }
+
+  async #waitForSelectableLeaf(
+    listbox: Locator,
+    value: string,
+    uiVariant: string,
+  ): Promise<{
+    readonly option: Locator;
+    readonly visibleOptionCount: number;
+    readonly selectedOptionOrdinal: number;
+  }> {
+    const deadline = Date.now() + this.#timeoutMs;
+    while (Date.now() < deadline) {
+      const candidates = await visibleLocators(listbox.getByRole("option"));
+      const leaves: Locator[] = [];
+      for (const option of candidates) {
+        const automationId = await option.getAttribute("data-automation-id");
+        if (
+          (uiVariant === "workday_source_select_v1"
+            ? automationId !== "promptLeafNode"
+            : automationId === "promptCategory") ||
+          await option.getAttribute("aria-disabled") === "true"
+        ) continue;
+        leaves.push(option);
+      }
+      if (leaves.length > 64) {
+        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+      }
+      const exact: { readonly option: Locator; readonly ordinal: number }[] = [];
+      for (const [index, option] of leaves.entries()) {
+        if (normalize(await option.innerText()) === normalize(value)) {
+          exact.push({ option, ordinal: index + 1 });
+        }
+      }
+      if (exact.length === 1) return {
+        option: exact[0]!.option,
+        visibleOptionCount: leaves.length,
+        selectedOptionOrdinal: exact[0]!.ordinal,
+      };
+      if (exact.length > 1) {
+        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+      }
+      await this.#page.waitForTimeout(25);
+    }
+    throw new TypeError("Workday selectable leaf is missing or ambiguous");
+  }
+
+  async #selectRadioOption(
+    controls: Locator,
+    value: string,
+    interaction: MutableInteraction,
+  ): Promise<void> {
+    const visible = await visibleLocators(controls);
+    const matches: Locator[] = [];
+    for (const radio of visible) {
+      if (normalize(await radioOptionLabel(radio)) === normalize(value)) matches.push(radio);
+    }
+    if (matches.length !== 1) {
+      throw new TypeError("Workday radio option is missing or ambiguous");
+    }
+    await matches[0]!.click({ timeout: this.#timeoutMs });
+    interaction.optionActivated = true;
+    interaction.visibleOptionCount = visible.length;
+    interaction.selectedOptionOrdinal = visible.indexOf(matches[0]!) + 1;
+    await matches[0]!.blur({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(25);
+    interaction.backingValueCommitted = normalize(
+      await radioReadback(visible) ?? "",
+    ) === normalize(value);
+    interaction.validationCleared = await validationCleared(matches[0]!);
+    if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+      throw new TypeError("Workday radio selection did not commit");
+    }
   }
 
   async #rowIds(
@@ -271,6 +471,23 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   }
 }
 
+async function unknownMachineKey(locator: Locator): Promise<string | null> {
+  return await locator.evaluate((element) => {
+    const attributes = [
+      element.getAttribute("data-automation-id"),
+      element.id,
+      element.getAttribute("name"),
+      element.getAttribute("aria-controls"),
+    ].filter((value): value is string => value !== null && value !== "");
+    if (
+      attributes.length === 0 ||
+      attributes.some((value) => !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(value))
+    ) return null;
+    const type = element instanceof HTMLInputElement ? element.type : "element";
+    return [element.tagName.toLowerCase(), type, ...attributes].join("\u0000");
+  });
+}
+
 async function readback(
   locator: Locator,
   behavior: ProfileControlSnapshot["uiBehavior"],
@@ -279,6 +496,8 @@ async function readback(
     const value = await locator.inputValue();
     return value === "" ? null : value;
   }
+  const ariaValue = (await locator.getAttribute("aria-valuetext"))?.trim() ?? "";
+  if (ariaValue !== "") return ariaValue;
   const selected = (await locator.getAttribute("data-selected-label"))?.trim() ?? "";
   if (selected !== "") return selected;
   const field = locator.locator('xpath=ancestor::*[@data-automation-id][1]');
@@ -286,6 +505,24 @@ async function readback(
   if (pills.length !== 1) return null;
   const label = (await pills[0]!.innerText()).replace(/\s+/gu, " ").trim();
   return label === "" ? null : label;
+}
+
+async function radioReadback(radios: readonly Locator[]): Promise<string | null> {
+  const checked: Locator[] = [];
+  for (const radio of radios) {
+    if (await radio.isChecked()) checked.push(radio);
+  }
+  return checked.length === 1 ? await radioOptionLabel(checked[0]!) : null;
+}
+
+async function radioOptionLabel(radio: Locator): Promise<string> {
+  return await radio.evaluate((element) => {
+    if (!(element instanceof HTMLInputElement)) return "";
+    const label = element.labels?.length === 1
+      ? element.labels[0]?.innerText ?? element.labels[0]?.textContent ?? ""
+      : element.getAttribute("aria-label") ?? "";
+    return label.replace(/\s+/gu, " ").trim();
+  });
 }
 
 async function required(locator: Locator): Promise<boolean> {
@@ -299,6 +536,17 @@ async function required(locator: Locator): Promise<boolean> {
   ) return false;
   return await locator.getAttribute("required") !== null ||
     await locator.getAttribute("aria-required") === "true";
+}
+
+async function validationCleared(locator: Locator): Promise<boolean> {
+  if (await locator.getAttribute("aria-invalid") === "true") return false;
+  const field = locator.locator(
+    'xpath=ancestor::*[@data-automation-id="formField"][1]',
+  );
+  const root = await field.count() === 1 ? field : locator;
+  return (await visibleLocators(root.locator(
+    '[data-automation-id="errorMessage"], [role="alert"]',
+  ))).length === 0;
 }
 
 async function visibleLocators(locator: Locator): Promise<Locator[]> {
@@ -336,6 +584,28 @@ function cssIdentifier(value: string): string {
     throw new TypeError("invalid Workday listbox identifier");
   }
   return value;
+}
+
+function normalize(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim()
+    .toLocaleLowerCase("en-US");
+}
+
+function emptyInteraction(
+  behavior: ProfileControlSnapshot["uiBehavior"],
+): MutableInteraction {
+  const choice = behavior === "search_select" || behavior === "radio_group";
+  const popup = behavior === "search_select";
+  return {
+    popupBound: popup ? false : null,
+    optionFocused: popup ? false : null,
+    optionActivated: choice ? false : null,
+    popupClosed: popup ? false : null,
+    backingValueCommitted: false,
+    validationCleared: false,
+    visibleOptionCount: choice ? 0 : null,
+    selectedOptionOrdinal: choice ? 0 : null,
+  };
 }
 
 function abort(signal: AbortSignal): void {

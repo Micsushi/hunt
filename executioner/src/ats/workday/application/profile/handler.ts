@@ -1,4 +1,5 @@
 import {
+  profileOwnerInputCatalog,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
 } from "./catalog.ts";
@@ -20,6 +21,8 @@ const reviewedVariants = new Set([
   "workday_phone_v1",
   "workday_date_v1",
   "workday_search_select_v1",
+  "workday_source_select_v1",
+  "workday_previous_worker_radio_v1",
 ]);
 const answerProvenances = new Set([
   "owner_provided",
@@ -31,12 +34,17 @@ const questionTypes = new Set([
   "identity",
   "address",
   "phone",
+  "application_source",
+  "prior_employment",
   "experience",
   "education",
   "skill",
 ]);
 const answerTypes = new Set(["text", "phone", "date", "option"]);
 const repeatableSections = new Set(["experience", "education", "skills"]);
+const optionalOwnerInputIds = new Set(
+  profileOwnerInputCatalog.map(({ fieldId }) => fieldId),
+);
 
 type BlockedResult = Extract<
   ProfilePageCompletionResult,
@@ -76,6 +84,11 @@ export async function completeWorkdayProfilePage(
 
   const verified: VerifiedProfileField[] = [];
   for (const item of plan.fields) {
+    if (item.answer.kind === "profile_answer_missing") continue;
+    if (
+      optionalOwnerInputIds.has(item.fieldId) &&
+      !snapshot.controls.some(({ fieldId }) => fieldId === item.fieldId)
+    ) continue;
     const result = await reconcileField(
       item,
       () => page.inspect(signal).then(({ controls }) => controls),
@@ -131,12 +144,18 @@ function preflightRequiredControls(
     required && !admittedScalarIds.has(fieldId)
   )) return blocked("answer_type_unknown");
 
-  const plannedScalarIds = new Set(plan.fields.map(({ fieldId }) => fieldId));
+  const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
   const unplannedScalar = snapshot.controls.find(({ fieldId, required }) =>
-    required && !plannedScalarIds.has(fieldId)
+    required && !plannedScalar.has(fieldId)
   );
   if (unplannedScalar !== undefined) {
     return blocked("profile_answer_missing", { fieldId: unplannedScalar.fieldId });
+  }
+  const unresolvedScalar = snapshot.controls.find(({ fieldId, required }) =>
+    required && plannedScalar.get(fieldId)?.answer.kind === "profile_answer_missing"
+  );
+  if (unresolvedScalar !== undefined) {
+    return blocked("profile_answer_missing", { fieldId: unresolvedScalar.fieldId });
   }
 
   for (const catalog of profileRepeatableCatalog) {
@@ -200,17 +219,19 @@ async function inspectAndPreflight(
 
 function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | undefined {
   if (!pageTypes.has(plan.pageType)) return blocked("profile_plan_invalid");
-  const allFields = [
-    ...plan.fields,
-    ...plan.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
-  ];
-  const missing = allFields.find(({ answer }) => answer.kind === "profile_answer_missing");
-  if (missing !== undefined) {
-    return blocked("profile_answer_missing", { fieldId: missing.fieldId });
-  }
   const fieldIds = new Set<string>();
   for (const item of plan.fields) {
-    if (fieldIds.has(item.fieldId) || !validField(item)) {
+    if (fieldIds.has(item.fieldId)) {
+      return blocked("profile_plan_invalid", { fieldId: item.fieldId });
+    }
+    if (item.answer.kind === "profile_answer_missing") {
+      if (!optionalOwnerInputIds.has(item.fieldId)) {
+        return blocked("profile_answer_missing", { fieldId: item.fieldId });
+      }
+      fieldIds.add(item.fieldId);
+      continue;
+    }
+    if (!validField(item)) {
       return blocked("profile_plan_invalid", { fieldId: item.fieldId });
     }
     fieldIds.add(item.fieldId);
@@ -225,6 +246,12 @@ function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | unde
     const rowKeys = new Set<string>();
     const fingerprints = new Set<string>();
     for (const row of repeatable.rows) {
+      const missing = row.fields.find(({ answer }) =>
+        answer.kind === "profile_answer_missing"
+      );
+      if (missing !== undefined) {
+        return blocked("profile_answer_missing", { fieldId: missing.fieldId });
+      }
       const fingerprint = desiredFingerprint(row.fields);
       if (
         !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(row.rowKey) ||
@@ -469,7 +496,8 @@ function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): b
     (field.answerType === "text" && control.uiBehavior === "text") ||
     (field.answerType === "phone" && control.uiBehavior === "phone") ||
     (field.answerType === "date" && control.uiBehavior === "date") ||
-    (field.answerType === "option" && control.uiBehavior === "search_select")
+    (field.answerType === "option" &&
+      (control.uiBehavior === "search_select" || control.uiBehavior === "radio_group"))
   );
 }
 

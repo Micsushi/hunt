@@ -67,7 +67,20 @@ const exactPeerAssemblyImports = new Map<string, ReadonlySet<string>>([[
     "src/interaction/drivers/registry.ts",
     "src/interaction/review/index.ts",
     "src/interaction/verification/field-verifier.ts",
+    "src/live/evidence/profile-field-learning.ts",
     "src/safety/guards.ts",
+  ]),
+], [
+  "src/live/evidence/external-monitor-runtime.ts",
+  new Set(["src/ats/workday/application/page-walk-contract.ts"]),
+], [
+  "src/live/evidence/review-monitor-chain.ts",
+  new Set(["src/ats/workday/application/page-walk-contract.ts"]),
+], [
+  "src/live/evidence/profile-field-learning.ts",
+  new Set([
+    "src/ats/workday/application/profile/index.ts",
+    "src/ats/workday/application/profile/catalog.ts",
   ]),
 ]]);
 

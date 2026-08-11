@@ -77,8 +77,9 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
     "utf8",
   );
   for (const checkpoint of [
-    "applicationPages",
-    "applicationCheckpoints",
+    "checkpointForApplicationPage",
+    "isValidApplicationPageSequence",
+    "maximumApplicationPageVisits",
     "pre_review",
   ]) assert.match(composition, new RegExp(checkpoint, "u"));
   assert.match(composition, /recoverBrowserInterruption/u);

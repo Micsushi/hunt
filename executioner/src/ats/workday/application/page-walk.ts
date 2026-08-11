@@ -4,10 +4,14 @@ import {
 } from "../../../contracts/s2-common-wire.ts";
 import {
   applicationClassifiers,
-  applicationCheckpoints,
+  applicationNextPages,
   applicationPages,
   applicationPrimitives,
   applicationUnknownLayers,
+  checkpointForApplicationPage,
+  isAllowedApplicationTransition,
+  isValidApplicationPageSequence,
+  maximumApplicationPageVisits,
   type ApplicationClassifier,
   type ApplicationHandlerPage,
   type ApplicationPage,
@@ -78,24 +82,42 @@ export async function runApplicationPageWalk(
     );
   }
 
-  let startIndex = 0;
+  let recoveryLanePrefix: number | undefined;
   if (resume !== undefined) {
-    const resumed = validateResume(resume.currentPage, pageChecks, current.value);
+    const resumed = validateResume(
+      resume.currentPage,
+      resume.currentLanes,
+      pageChecks,
+      current.value,
+    );
     if (!resumed.ok) {
       return failure("browser_truth", resumed.error, current.value.page, 1);
     }
-    startIndex = resumed.startIndex;
+    recoveryLanePrefix = resumed.processedLanes;
     if (resumed.advanceFromVerifiedCurrent) {
-      const from = applicationPages[startIndex - 1]!;
-      const expected = applicationPages[startIndex] ?? "pre_review";
+      const from = current.value.page;
+      const routeFrom = reconciledPages.at(-1);
+      if (from === "pre_review" || routeFrom === undefined) {
+        return failure("browser_truth", internalFailure(
+          "recovery_state_ambiguous", "progress_projection", "record", "page_type",
+        ), from, 1);
+      }
       const advanced = await dependencies.navigation.next(
-        { journeyId: input.journeyId, from, fromPageId: current.value.pageId, expected },
+        {
+          journeyId: input.journeyId,
+          from,
+          fromPageId: current.value.pageId,
+          allowed: allowedDestinations(routeFrom, reconciledPages),
+        },
         signal,
       );
       if (!advanced.ok) return failure("navigation", advanced.error, current.value.page, 1);
       current = await dependencies.observer.observe(signal);
-      if (!current.ok) return failure("browser_truth", current.error, expected, 1);
-      if (current.value.page !== expected || current.value.submitActivated) {
+      if (!current.ok) return failure("browser_truth", current.error, from, 1);
+      if (
+        current.value.submitActivated ||
+        !isAllowedApplicationTransition(routeFrom, current.value.page, reconciledPages)
+      ) {
         return failure(
           "navigation",
           current.value.submitActivated ? submitFailure() : internalFailure(
@@ -105,143 +127,122 @@ export async function runApplicationPageWalk(
           1,
         );
       }
+      recoveryLanePrefix = undefined;
     }
   }
 
-  for (let index = startIndex; index < applicationPages.length; index += 1) {
-    const page = applicationPages[index]!;
-    const expected = applicationPages[index + 1] ?? "pre_review";
-    if (current.value.page !== page) {
-      return failure(
+  while (current.value.page !== "pre_review") {
+    const physicalPage = current.value.page;
+    const lanes = observedLanes(current.value);
+    if (lanes === undefined || !applicationPages.includes(physicalPage)) return failure(
+      "browser_truth",
+      internalFailure("navigation_illegal", "workday_page", "page_observation", "page_type"),
+      physicalPage,
+      1,
+    );
+    const processed = recoveryLanePrefix ?? 0;
+    recoveryLanePrefix = undefined;
+    if (!isValidApplicationPageSequence([
+      ...reconciledPages,
+      ...lanes.slice(processed),
+    ])) return failure("browser_truth", internalFailure(
+      "navigation_illegal", "progress_projection", "record", "navigation",
+    ), physicalPage, 1);
+    let truth = current.value;
+    for (const lane of lanes.slice(processed)) {
+      if (pageChecks.length >= maximumApplicationPageVisits) return failure(
         "browser_truth",
-        internalFailure("navigation_illegal", "workday_page", "page_observation", "page_type"),
-        current.value.page,
+        internalFailure("navigation_illegal", "progress_projection", "record", "navigation"),
+        physicalPage,
         1,
       );
-    }
-
-    const handler = dependencies.handlers[page];
-    let truth = current.value;
-    let check: ApplicationPageCheck | undefined;
-    let verifiedPageId: ApplicationPageTruth["pageId"] | undefined;
-    const expectedCheckpoint = checkpointFor(page);
-    for (let attempt = 1; attempt <= retryLimit + 1; attempt += 1) {
-      if (verifiedPageId === undefined) {
-        const handled = await handler.reconcile(
-          { journeyId: input.journeyId, pageId: truth.pageId, attempt },
-          signal,
-        );
-        if (!handled.ok) {
-          const safeError = sanitizeFailure(handled.error);
-          if (
-            s2StableErrorPolicy[safeError.code].retryable &&
-            attempt <= retryLimit
-          ) continue;
-          return failure(page, safeError, page, attempt);
-        }
-        if (handled.value.page !== page || handled.value.pageId !== truth.pageId) {
-          return failure(
-            page,
-            internalFailure("navigation_uncertain", classifierFor(page), primitiveFor(page), "page_type"),
-            page,
-            attempt,
+      const handler = dependencies.handlers[lane];
+      let check: ApplicationPageCheck | undefined;
+      let verifiedPageId: ApplicationPageTruth["pageId"] | undefined;
+      const expectedCheckpoint = checkpointForApplicationPage(lane);
+      for (let attempt = 1; attempt <= retryLimit + 1; attempt += 1) {
+        if (verifiedPageId === undefined) {
+          const handled = await handler.reconcile(
+            { journeyId: input.journeyId, pageId: truth.pageId, attempt }, signal,
           );
+          if (!handled.ok) {
+            const safeError = sanitizeFailure(handled.error);
+            if (s2StableErrorPolicy[safeError.code].retryable && attempt <= retryLimit) continue;
+            return failure(lane, safeError, physicalPage, attempt);
+          }
+          if (handled.value.page !== lane || handled.value.pageId !== truth.pageId) {
+            return failure(lane, internalFailure(
+              "navigation_uncertain", classifierFor(lane), primitiveFor(lane), "page_type",
+            ), physicalPage, attempt);
+          }
+          if (handled.value.checkpoint !== expectedCheckpoint ||
+              handled.value.independentlyVerified !== true) {
+            return failure(lane, internalFailure(
+              "failure_context_invalid", classifierFor(lane), primitiveFor(lane), "none",
+            ), physicalPage, attempt);
+          }
+          verifiedPageId = handled.value.pageId;
         }
-        if (
-          handled.value.checkpoint !== expectedCheckpoint ||
-          handled.value.independentlyVerified !== true
-        ) {
-          return failure(
-            page,
-            internalFailure(
-              "failure_context_invalid",
-              classifierFor(page),
-              primitiveFor(page),
-              "none",
-            ),
-            page,
-            attempt,
-          );
+        const observed = await dependencies.observer.observe(signal);
+        if (!observed.ok) {
+          const safeError = sanitizeFailure(observed.error);
+          if (s2StableErrorPolicy[safeError.code].retryable && attempt <= retryLimit) continue;
+          return failure("browser_truth", safeError, physicalPage, attempt);
         }
-        verifiedPageId = handled.value.pageId;
-      }
-
-      const observed = await dependencies.observer.observe(signal);
-      if (!observed.ok) {
-        const safeError = sanitizeFailure(observed.error);
-        if (
-          s2StableErrorPolicy[safeError.code].retryable &&
-          attempt <= retryLimit
-        ) continue;
-        return failure("browser_truth", safeError, page, attempt);
-      }
-      truth = observed.value;
-      if (truth.page !== page || truth.pageId !== verifiedPageId) {
-        return failure(
-          "browser_truth",
-          internalFailure(
-            "navigation_uncertain",
-            "workday_page",
-            "page_observation",
-            "navigation",
-          ),
-          truth.page,
-          attempt,
+        truth = observed.value;
+        if (truth.page !== physicalPage || truth.pageId !== verifiedPageId ||
+            !samePages(observedLanes(truth), lanes)) {
+          return failure("browser_truth", internalFailure(
+            "navigation_uncertain", "workday_page", "page_observation", "navigation",
+          ), truth.page, attempt);
+        }
+        if (truth.submitActivated) return failure(
+          "browser_truth", submitFailure(), truth.page, attempt,
         );
-      }
-      if (truth.submitActivated) {
-        return failure("browser_truth", submitFailure(), truth.page, attempt);
-      }
-      check = pageCheck(page, expectedCheckpoint, truth);
-      if (
-        !truth.submitActivated &&
-        check.requiredFields === check.verifiedFields &&
-        check.duplicateRows === 0
-      ) break;
-      if (attempt > retryLimit) {
-        const duplicate = check.duplicateRows > 0;
-        return failure(
-          page,
-          internalFailure(
+        check = pageCheck(lane, expectedCheckpoint, truth);
+        if (check.requiredFields === check.verifiedFields && check.duplicateRows === 0) break;
+        if (attempt > retryLimit) {
+          const duplicate = check.duplicateRows > 0;
+          return failure(lane, internalFailure(
             "page_incomplete",
             duplicate ? "repeatable_row_gate" : "required_field_gate",
             duplicate ? "repeatable_row_reconciliation" : "required_field_verification",
             duplicate ? "repeatable_row" : "required_field",
-          ),
-          page,
-          attempt,
-        );
+          ), physicalPage, attempt);
+        }
       }
-    }
-
-    pageChecks.push(check!);
-    reconciledPages.push(page);
-    const recorded = await dependencies.progress.record(
-      {
-        checkpoint: checkpointFor(page),
-        browserPage: page,
+      pageChecks.push(check!);
+      reconciledPages.push(lane);
+      const recorded = await dependencies.progress.record({
+        checkpoint: expectedCheckpoint,
+        browserPage: physicalPage,
+        browserLanes: lanes,
         completedPages: reconciledPages.length,
         reconciledPages: [...reconciledPages],
         pageChecks: [...pageChecks],
-      },
-      signal,
-    );
-    if (!recorded.ok) return failure("progress", recorded.error, page, 1);
-    if (stopAfter === checkpointFor(page)) {
-      return success(stopAfter);
+      }, signal);
+      if (!recorded.ok) return failure("progress", recorded.error, physicalPage, 1);
+      if (stopAfter === expectedCheckpoint) return success(stopAfter);
     }
 
+    const routeFrom = reconciledPages.at(-1)!;
+    const allowed = allowedDestinations(routeFrom, reconciledPages);
     const advanced = await dependencies.navigation.next(
-      { journeyId: input.journeyId, from: page, fromPageId: truth.pageId, expected },
+      { journeyId: input.journeyId, from: physicalPage, fromPageId: truth.pageId, allowed },
       signal,
     );
-    if (!advanced.ok) return failure("navigation", advanced.error, page, 1);
+    if (!advanced.ok) return failure("navigation", advanced.error, physicalPage, 1);
     current = await dependencies.observer.observe(signal);
-    if (!current.ok) return failure("browser_truth", current.error, page, 1);
-    if (current.value.page !== expected) {
+    if (!current.ok) return failure("browser_truth", current.error, physicalPage, 1);
+    if (
+      current.value.submitActivated ||
+      !isAllowedApplicationTransition(routeFrom, current.value.page, reconciledPages)
+    ) {
       return failure(
         "navigation",
-        internalFailure("navigation_uncertain", "page_navigation", "next", "navigation"),
+        current.value.submitActivated ? submitFailure() : internalFailure(
+          "navigation_uncertain", "page_navigation", "next", "navigation",
+        ),
         current.value.page,
         1,
       );
@@ -279,7 +280,8 @@ export async function runApplicationPageWalk(
     {
       checkpoint: "pre_review",
       browserPage: "pre_review",
-      completedPages: 3,
+      browserLanes: [],
+      completedPages: pageChecks.length,
       reconciledPages: [...reconciledPages],
       pageChecks: [...pageChecks],
     },
@@ -335,57 +337,78 @@ export async function runApplicationPageWalk(
 
 function validateResume(
   currentPage: ApplicationPage,
+  currentLanes: readonly ApplicationHandlerPage[] | undefined,
   checks: readonly ApplicationPageCheck[],
   truth: ApplicationPageTruth,
-): { readonly ok: true; readonly startIndex: number; readonly advanceFromVerifiedCurrent: boolean } | {
+): {
+  readonly ok: true;
+  readonly advanceFromVerifiedCurrent: boolean;
+  readonly processedLanes: number;
+} | {
   readonly ok: false;
   readonly error: ApplicationPortFailure;
 } {
-  const currentIndex = currentPage === "pre_review"
-    ? applicationPages.length
-    : applicationPages.indexOf(currentPage);
-  const minimumCount = currentPage === "pre_review" ? applicationPages.length : currentIndex;
-  const maximumCount = currentPage === "pre_review" ? applicationPages.length : currentIndex + 1;
-  if (truth.page !== currentPage || currentIndex < 0 ||
-      checks.length < minimumCount || checks.length > maximumCount || checks.length === 0) {
+  const lanes = observedLanes(truth);
+  if (
+    truth.page !== currentPage || lanes === undefined ||
+    (currentLanes !== undefined && !samePages(currentLanes, lanes)) ||
+    !isValidApplicationPageSequence(checks.map(({ page }) => page))
+  ) {
     return { ok: false, error: internalFailure(
       "recovery_state_ambiguous", "progress_projection", "record", "page_type",
     ) };
   }
-  for (let index = 0; index < checks.length; index += 1) {
-    const page = applicationPages[index];
-    const check = checks[index];
+  for (const check of checks) {
     if (
-      page === undefined || check === undefined || check.page !== page ||
-      check.checkpoint !== checkpointFor(page) || check.independentlyVerified !== true ||
+      check.checkpoint !== checkpointForApplicationPage(check.page) ||
+      check.independentlyVerified !== true ||
       !Number.isSafeInteger(check.requiredFields) || check.requiredFields < 0 ||
       check.verifiedFields !== check.requiredFields || check.duplicateRows !== 0
     ) return { ok: false, error: internalFailure(
       "recovery_state_ambiguous", "progress_projection", "record", "required_field",
     ) };
   }
-  const currentVerified = currentPage !== "pre_review" && checks.length === currentIndex + 1;
-  const browserAdvancedCurrent = currentPage !== "pre_review" && checks.length === currentIndex;
-  if (currentVerified) {
-    const currentCheck = checks.at(-1)!;
-    const observed = pageCheck(currentCheck.page, currentCheck.checkpoint, truth);
-    if (
-      observed.requiredFields !== currentCheck.requiredFields ||
-      observed.verifiedFields !== currentCheck.verifiedFields ||
-      observed.duplicateRows !== 0
-    ) return { ok: false, error: internalFailure(
-      "recovery_state_ambiguous", "progress_projection", "record", "required_field",
+  const pages = checks.map(({ page }) => page);
+  const previous = pages.at(-1);
+  const processed = currentPage === "pre_review" ? 0 : processedLaneCount(pages, lanes);
+  if (!isValidApplicationPageSequence([...pages, ...lanes.slice(processed)])) {
+    return { ok: false, error: internalFailure(
+      "recovery_state_ambiguous", "progress_projection", "record", "page_type",
     ) };
-  } else if (!browserAdvancedCurrent && (
-    truth.requiredFields.some(({ verification }) => verification !== "verified") ||
-    truth.c3OwnedDuplicateRows !== 0
-  )) return { ok: false, error: internalFailure(
-    "recovery_state_ambiguous", "progress_projection", "record", "required_field",
-  ) };
+  }
+  const currentVerified = currentPage !== "pre_review" &&
+    processed === lanes.length && processed > 0;
+  const browserAdvancedCurrent = currentPage !== "pre_review" && (
+    processed > 0 || previous === undefined ||
+    isAllowedApplicationTransition(previous, lanes[0]!, pages)
+  );
+  const reviewAdvanced = currentPage === "pre_review" && (
+    previous === undefined || isAllowedApplicationTransition(
+      previous,
+      "pre_review",
+      pages,
+    )
+  );
+  if (!currentVerified && !browserAdvancedCurrent && !reviewAdvanced) {
+    return { ok: false, error: internalFailure(
+      "recovery_state_ambiguous", "progress_projection", "record", "page_type",
+    ) };
+  }
+  if (processed > 0) {
+    for (const check of checks.slice(-processed)) {
+      const observed = pageCheck(check.page, check.checkpoint, truth);
+      if (observed.requiredFields !== check.requiredFields ||
+          observed.verifiedFields !== check.verifiedFields || observed.duplicateRows !== 0) {
+        return { ok: false, error: internalFailure(
+          "recovery_state_ambiguous", "progress_projection", "record", "required_field",
+        ) };
+      }
+    }
+  }
   return {
     ok: true,
-    startIndex: currentVerified ? currentIndex + 1 : currentIndex,
     advanceFromVerifiedCurrent: currentVerified,
+    processedLanes: processed,
   };
 }
 
@@ -435,18 +458,61 @@ function pageCheck(
   checkpoint: ApplicationVerifiedCheckpoint,
   truth: ApplicationPageTruth,
 ): ApplicationPageCheck {
+  const requiredFields = truth.requiredFields.filter((field) =>
+    (field.page ?? truth.page) === page
+  );
   return {
     page,
     checkpoint,
     independentlyVerified: true,
-    requiredFields: truth.requiredFields.length,
-    verifiedFields: truth.requiredFields.filter(({ verification }) => verification === "verified").length,
-    duplicateRows: truth.c3OwnedDuplicateRows,
+    requiredFields: requiredFields.length,
+    verifiedFields: requiredFields.filter(({ verification }) => verification === "verified").length,
+    duplicateRows: page === "resume" && truth.page === "resume" &&
+        truth.lanes?.includes("profile") === true
+      ? 0
+      : truth.c3OwnedDuplicateRows,
   };
 }
 
-function checkpointFor(page: ApplicationHandlerPage): ApplicationVerifiedCheckpoint {
-  return applicationCheckpoints[applicationPages.indexOf(page)]!;
+function observedLanes(
+  truth: ApplicationPageTruth,
+): readonly ApplicationHandlerPage[] | undefined {
+  if (truth.page === "pre_review") {
+    return truth.lanes === undefined || truth.lanes.length === 0 ? [] : undefined;
+  }
+  const lanes = truth.lanes ?? [truth.page];
+  if (lanes.length < 1 || lanes.length > 2 || lanes[0] !== truth.page) return undefined;
+  if (lanes.length === 2 && (lanes[0] !== "resume" || lanes[1] !== "profile")) {
+    return undefined;
+  }
+  return new Set(lanes).size === lanes.length ? lanes : undefined;
+}
+
+function processedLaneCount(
+  reconciled: readonly ApplicationHandlerPage[],
+  lanes: readonly ApplicationHandlerPage[],
+): number {
+  for (let count = lanes.length; count > 0; count -= 1) {
+    if (samePages(reconciled.slice(-count), lanes.slice(0, count))) return count;
+  }
+  return 0;
+}
+
+function samePages(
+  left: readonly ApplicationHandlerPage[] | undefined,
+  right: readonly ApplicationHandlerPage[],
+): boolean {
+  return left !== undefined && left.length === right.length &&
+    left.every((page, index) => page === right[index]);
+}
+
+function allowedDestinations(
+  from: ApplicationHandlerPage,
+  visited: readonly ApplicationHandlerPage[],
+): readonly ApplicationPage[] {
+  return applicationNextPages(from).filter((page) =>
+    isAllowedApplicationTransition(from, page, visited)
+  );
 }
 
 function internalFailure(

@@ -17,7 +17,8 @@ import {
   type WorkdayResumeUploadHandler,
 } from "./resume/index.ts";
 import {
-  applicationCheckpoints,
+  applicationPageForCheckpoint,
+  isValidApplicationPageSequence,
   type ApplicationCheckpoint,
   type ApplicationPageHandlerPort,
   type ApplicationPortFailure,
@@ -92,6 +93,7 @@ export type ApplicationLaneAcceptance =
       readonly verifiedFields: VerifiedProfilePage["verifiedFields"];
       readonly ownedDuplicateRows: 0;
       readonly independentlyVerified: true;
+      readonly profileFieldLearningSha256?: string;
       readonly submitActivated: false;
       readonly privacyScan: "pass";
     }
@@ -115,30 +117,32 @@ export interface ApplicationLaneAcceptanceCollector
 }
 
 export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAcceptanceCollector {
-  const records = new Map<
-    ApplicationLaneAcceptance["checkpoint"],
-    ApplicationLaneAcceptance
-  >();
+  const records: ApplicationLaneAcceptance[] = [];
   return Object.freeze({
     record(acceptance: ApplicationLaneAcceptance): void {
-      const index = applicationCheckpoints.indexOf(acceptance.checkpoint);
-      if (index < 0 || records.has(acceptance.checkpoint) || records.size !== index) {
+      const candidate = [...records, acceptance];
+      if (!isValidApplicationPageSequence(candidate.map(({ checkpoint }) =>
+        applicationPageForCheckpoint(checkpoint)
+      ))) {
         throw new TypeError("application lane acceptance order is invalid");
       }
-      records.set(
-        acceptance.checkpoint,
-        deepFreeze(structuredClone(acceptance)),
-      );
+      records.push(deepFreeze(structuredClone(acceptance)));
     },
     snapshot(checkpoint: ApplicationCheckpoint): readonly ApplicationLaneAcceptance[] {
-      const count = checkpoint === "pre_review"
-        ? applicationCheckpoints.length
-        : applicationCheckpoints.indexOf(checkpoint) + 1;
-      const ordered = applicationCheckpoints.map((item) => records.get(item)).slice(0, count);
-      if (ordered.some((record) => record === undefined)) {
+      let count = records.length;
+      if (checkpoint !== "pre_review") {
+        count = 0;
+        for (let index = records.length - 1; index >= 0; index -= 1) {
+          if (records[index]?.checkpoint === checkpoint) {
+            count = index + 1;
+            break;
+          }
+        }
+      }
+      if (count < 1 && checkpoint !== "pre_review") {
         throw new TypeError("application lane acceptance is incomplete");
       }
-      return Object.freeze(ordered as ApplicationLaneAcceptance[]);
+      return Object.freeze(records.slice(0, count));
     },
   });
 }
@@ -202,7 +206,7 @@ function profileHandler(
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
         ownedDuplicateRows: 0,
-        independentlyVerified: true,
+      independentlyVerified: true,
         submitActivated: false,
         privacyScan: "pass",
       })) return laneFailure("profile", { code: "evidence_denied" });

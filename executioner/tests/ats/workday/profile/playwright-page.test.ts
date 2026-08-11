@@ -108,6 +108,298 @@ test("search-select refuses an unrelated visible listbox without an ownership li
   }
 });
 
+test("exact owner inputs commit the reviewed source button leaf and previous-worker radio", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox" hidden>
+            <div role="option" data-automation-id="promptCategory">Company Website</div>
+            <div role="option" data-automation-id="promptLeafNode"
+              data-value="company-website">Company Website</div>
+          </div>
+          <fieldset>
+            <legend>Have you previously worked for the organization?</legend>
+            <input id="previous-yes" required type="radio"
+              name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
+            <input id="previous-no" required type="radio"
+              name="candidateIsPreviousWorker" value="false"><label for="previous-no">No</label>
+          </fieldset>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            listbox.hidden = false;
+            source.setAttribute('aria-expanded', 'true');
+          });
+          document.querySelector('[data-automation-id="promptLeafNode"]')
+            .addEventListener('click', event => {
+              source.setAttribute('data-selected-label', event.currentTarget.textContent.trim());
+              source.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const before = await adapter.inspect(AbortSignal.any([]));
+    const source = before.controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+    const previousWorker = before.controls.find(
+      ({ fieldId }) => fieldId === "employment.previously_worked_for_organization",
+    )!;
+
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [
+        field(
+          "source.how_did_you_hear",
+          "application_source",
+          "option",
+          "company-website",
+          "Company Website",
+        ),
+        field(
+          "employment.previously_worked_for_organization",
+          "prior_employment",
+          "option",
+          "false",
+          "No",
+        ),
+      ],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[data-automation-id="sourcePrompt"]')
+      .getAttribute("data-selected-label"), "Company Website");
+    assert.equal(await page.locator('#previous-no').isChecked(), true);
+    assert.deepEqual(adapter.interaction(source.controlId), {
+      popupBound: true,
+      optionFocused: false,
+      optionActivated: true,
+      popupClosed: true,
+      backingValueCommitted: true,
+      validationCleared: true,
+      visibleOptionCount: 1,
+      selectedOptionOrdinal: 1,
+    });
+    assert.deepEqual(adapter.interaction(previousWorker.controlId), {
+      popupBound: null,
+      optionFocused: null,
+      optionActivated: true,
+      popupClosed: null,
+      backingValueCommitted: true,
+      validationCleared: true,
+      visibleOptionCount: 2,
+      selectedOptionOrdinal: 2,
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
+test("the source selector never activates an exact category row as an option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox">
+            <div role="option" data-automation-id="promptCategory">Company Website</div>
+          </div>
+        </main>
+        <script>
+          globalThis.optionClicks = 0;
+          document.querySelector('[role="option"]').addEventListener('click', () => {
+            globalThis.optionClicks += 1;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: source.controlId,
+      uiBehavior: "search_select",
+      value: "Company Website",
+    }, AbortSignal.any([])), /selectable leaf/iu);
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { optionClicks: number }).optionClicks
+    ), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical source aria-valuetext prefill is already correct and never reopened", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-valuetext="Company Website"
+            data-automation-id="sourcePrompt">Company Website</button>
+          <div id="source-options" role="listbox" hidden></div>
+        </main>
+        <script>
+          globalThis.sourceClicks = 0;
+          document.querySelector('[data-automation-id="sourcePrompt"]')
+            .addEventListener('click', () => { globalThis.sourceClicks += 1; });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "Company Website",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { sourceClicks: number }).sourceClicks
+    ), 0);
+    assert.equal(adapter.interaction(source.controlId), undefined);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical source waits for its delayed owned listbox leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            const listbox = document.createElement('div');
+            listbox.id = 'source-options';
+            listbox.setAttribute('role', 'listbox');
+            document.body.append(listbox);
+            setTimeout(() => {
+              listbox.innerHTML = '<div role="option" data-automation-id="promptLeafNode">Company Website</div>';
+              listbox.firstElementChild.addEventListener('click', event => {
+                source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
+                source.setAttribute('aria-expanded', 'false');
+                listbox.hidden = true;
+              });
+            }, 40);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 1_000,
+    });
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "Company Website",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[data-automation-id="sourcePrompt"]')
+      .getAttribute("aria-valuetext"), "Company Website");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a highlighted source leaf without backing selection is never a commit", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox" hidden>
+            <div id="source-highlight" role="option"
+              data-automation-id="promptLeafNode">Company Website</div>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            listbox.hidden = false;
+            source.setAttribute('aria-expanded', 'true');
+          });
+          document.querySelector('#source-highlight').addEventListener('click', event => {
+            source.setAttribute('aria-activedescendant', event.currentTarget.id);
+            source.setAttribute('aria-expanded', 'false');
+            listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: source.controlId,
+      uiBehavior: "search_select",
+      value: "Company Website",
+    }, AbortSignal.any([])), /backing value did not commit/u);
+    assert.deepEqual(adapter.interaction(source.controlId), {
+      popupBound: true,
+      optionFocused: false,
+      optionActivated: true,
+      popupClosed: true,
+      backingValueCommitted: false,
+      validationCleared: true,
+      visibleOptionCount: 1,
+      selectedOptionOrdinal: 1,
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("unknown visible required controls block before a reviewed control is mutated", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -133,6 +425,83 @@ test("unknown visible required controls block before a reviewed control is mutat
     assert.equal(
       await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
       "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a combined page excludes only the exact Resume-owned file control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required type="file" data-automation-id="file-upload-input-ref">
+          <input required type="file" data-automation-id="tenant-required-document">
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId }) => fieldId), [
+      "unknown.required.1",
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown required control identities survive DOM reordering without retaining labels", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="tenantQuestionAlpha">
+          <input required data-automation-id="tenantQuestionBeta">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const first = (await adapter.inspect(AbortSignal.any([]))).controls.map(
+      ({ fieldId }) => fieldId,
+    );
+    await page.locator('[data-automation-id="tenantQuestionBeta"]').evaluate(
+      (element) => element.parentElement?.prepend(element),
+    );
+    const second = (await adapter.inspect(AbortSignal.any([]))).controls.map(
+      ({ fieldId }) => fieldId,
+    );
+
+    assert.deepEqual(second, [first[1], first[0]]);
+    assert.equal(JSON.stringify([...first, ...second]).includes("tenantQuestion"), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown required controls without a unique machine identity fail before mutation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required>
+          <input required>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    await assert.rejects(
+      adapter.inspect(AbortSignal.any([])),
+      /unknown required control identity denied/u,
     );
   } finally {
     await browser.close();

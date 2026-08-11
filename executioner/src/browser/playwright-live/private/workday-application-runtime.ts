@@ -9,6 +9,7 @@ import { PlaywrightWorkdayApplicationPage } from
 import {
   completeWorkdayProfilePage,
   PlaywrightWorkdayProfilePage,
+  type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
 import { createQuestionnairePageHandler } from
   "../../../ats/workday/application/questions/index.ts";
@@ -55,6 +56,8 @@ import {
 } from "../../../interaction/review/index.ts";
 import { createFieldVerifier } from
   "../../../interaction/verification/field-verifier.ts";
+import { createProfileFieldLearningCapture } from
+  "../../../live/evidence/profile-field-learning.ts";
 import { createSafetyGuard } from "../../../safety/guards.ts";
 import type { OwnedApplicationOperation } from "./application-page-types.ts";
 import type { OwnedApplicationPageRequest } from "./application-page-types.ts";
@@ -93,6 +96,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #now: () => string;
   readonly #reviewExpected = new Map<string, ReviewExpectedField>();
   readonly #navigationMonitorAttempts = new Map<string, number>();
+  readonly #mutationMonitorAttempts = new Map<string, number>();
 
   constructor(options: OwnedWorkdayApplicationRuntimeOptions) {
     this.#request = options.request;
@@ -155,11 +159,8 @@ export class OwnedWorkdayApplicationRuntime {
         return observed;
       }
       case "next": {
-        const input = operation.input as { readonly from: "resume" | "profile" | "questionnaire" };
-        const destination = monitorPage((operation.input as {
-          readonly expected: "resume" | "profile" | "questionnaire" | "pre_review";
-        }).expected);
-        const attempt = this.#nextNavigationMonitorAttempt(input.from, destination);
+        const input = operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0];
+        const attempt = this.#nextNavigationMonitorAttempt(input.from);
         await this.#monitor(
           page,
           input.from,
@@ -170,22 +171,35 @@ export class OwnedWorkdayApplicationRuntime {
         );
         this.#assertAuthorized(signal);
         const advanced = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).next(
-          operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0], signal,
+          input, signal,
         );
-        if (advanced.ok) await this.#monitor(
-          page,
-          destination,
-          "transition",
-          ownedRequest.operationId,
-          attempt,
-          signal,
-        );
+        if (advanced.ok) {
+          const observed = await new PlaywrightWorkdayApplicationPage(
+            page,
+            { timeoutMs: this.#timeoutMs },
+          ).observe(signal);
+          if (!observed.ok || !input.allowed.includes(observed.value.page)) {
+            throw new TypeError("application navigation readback denied");
+          }
+          await this.#monitor(
+            page,
+            monitorPage(observed.value.page),
+            "transition",
+            ownedRequest.operationId,
+            attempt,
+            signal,
+          );
+        }
         if (advanced.ok) this.#assertAuthorized(signal);
         return advanced;
       }
       case "reconcile_resume": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"resume">["reconcile"]>[0];
-        await this.#monitor(page, "resume", "before_mutation", ownedRequest.operationId, input.attempt, signal);
+        const monitorPageName = await this.#monitorPageForLane(page, "resume");
+        const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
+        await this.#monitor(
+          page, monitorPageName, "before_mutation", ownedRequest.operationId, monitorAttempt, signal,
+        );
         this.#assertAuthorized(signal);
         const resumePage = createPlaywrightWorkdayResumePage(page);
         const result = await createWorkdayResumeUploadHandler({
@@ -196,23 +210,76 @@ export class OwnedWorkdayApplicationRuntime {
         if (!result.ok) throw new TypeError("resume reconciliation denied");
         this.#acceptances.record(result.value);
         this.#recordReviewExpectation("s1-field-resume", "resume_verified", "resume.pdf");
-        await this.#monitor(page, "resume", "after_readback", ownedRequest.operationId, input.attempt, signal);
+        if (await this.#monitorPageForLane(page, "resume") !== monitorPageName) {
+          throw new TypeError("resume reconciliation page drift denied");
+        }
+        await this.#monitor(
+          page, monitorPageName, "after_readback", ownedRequest.operationId, monitorAttempt, signal,
+        );
         this.#assertAuthorized(signal);
         return verified("resume", "resume_verified", input.pageId);
       }
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
-        await this.#monitor(page, "profile", "before_mutation", ownedRequest.operationId, input.attempt, signal);
-        this.#assertAuthorized(signal);
-        const result = await completeWorkdayProfilePage(
-          request.ownerSources.profilePlan,
-          new PlaywrightWorkdayProfilePage(page, {
-            pageType: request.ownerSources.profilePlan.pageType,
-            timeoutMs: this.#timeoutMs,
-          }),
-          signal,
+        const monitorPageName = await this.#monitorPageForLane(page, "profile");
+        const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
+        await this.#monitor(
+          page, monitorPageName, "before_mutation", ownedRequest.operationId, monitorAttempt, signal,
         );
+        this.#assertAuthorized(signal);
+        let mutationAttempted = false;
+        const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
+          pageType: request.ownerSources.profilePlan.pageType,
+          timeoutMs: this.#timeoutMs,
+        });
+        const profilePage: WorkdayProfilePagePort = {
+          inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),
+          commit: (commit, innerSignal) => {
+            mutationAttempted = true;
+            return playwrightProfilePage.commit(commit, innerSignal);
+          },
+          addOwnedRow: (section, innerSignal) => {
+            mutationAttempted = true;
+            return playwrightProfilePage.addOwnedRow(section, innerSignal);
+          },
+          removeOwnedRow: (section, rowId, innerSignal) => {
+            mutationAttempted = true;
+            return playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
+          },
+          interaction: (controlId) => playwrightProfilePage.interaction(controlId),
+        };
+        const learning = createProfileFieldLearningCapture({
+          page: profilePage,
+          plan: request.ownerSources.profilePlan,
+          root: request.owner?.roots?.evidence?.path,
+          sensitiveValues: request.ownerSources.sensitiveValues,
+        });
+        let learningSha256: string | null = null;
+        let result;
+        try {
+          result = await completeWorkdayProfilePage(
+            request.ownerSources.profilePlan,
+            learning.page,
+            signal,
+          );
+        } finally {
+          learningSha256 = learning.write();
+        }
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
+          if (!mutationAttempted && result.kind === "blocked") {
+            return applicationFailure(
+              result.code === "operation_cancelled"
+                ? "operation_cancelled"
+                : "page_incomplete",
+              "profile_control",
+              result.code === "operation_cancelled"
+                ? "none"
+                : result.code === "answer_type_unknown" ||
+                  result.code === "profile_answer_missing"
+                ? "required_field"
+                : "ui_behavior",
+            );
+          }
           throw new TypeError("profile reconciliation denied");
         }
         this.#acceptances.record(Object.freeze({
@@ -222,22 +289,32 @@ export class OwnedWorkdayApplicationRuntime {
           verifiedFields: result.verifiedFields,
           ownedDuplicateRows: 0,
           independentlyVerified: true,
+          ...(learningSha256 === null
+            ? {}
+            : { profileFieldLearningSha256: learningSha256 }),
           submitActivated: false,
           privacyScan: "pass",
         }));
         this.#recordProfileReviewExpectations(request, result.verifiedFields);
-        await this.#monitor(page, "profile", "after_readback", ownedRequest.operationId, input.attempt, signal);
+        if (await this.#monitorPageForLane(page, "profile") !== monitorPageName) {
+          throw new TypeError("profile reconciliation page drift denied");
+        }
+        await this.#monitor(
+          page, monitorPageName, "after_readback", ownedRequest.operationId, monitorAttempt, signal,
+        );
         this.#assertAuthorized(signal);
         return verified("profile", "profile_verified", input.pageId);
       }
       case "reconcile_questionnaire": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0];
+        const monitorPageName = await this.#monitorPageForLane(page, "questionnaire");
+        const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
         await this.#monitor(
           page,
-          "questionnaire",
+          monitorPageName,
           "before_mutation",
           ownedRequest.operationId,
-          input.attempt,
+          monitorAttempt,
           signal,
         );
         this.#assertAuthorized(signal);
@@ -248,12 +325,15 @@ export class OwnedWorkdayApplicationRuntime {
           session,
           signal,
         );
+        if (await this.#monitorPageForLane(page, "questionnaire") !== monitorPageName) {
+          throw new TypeError("questionnaire reconciliation page drift denied");
+        }
         await this.#monitor(
           page,
-          "questionnaire",
+          monitorPageName,
           "after_readback",
           ownedRequest.operationId,
-          input.attempt,
+          monitorAttempt,
           signal,
         );
         this.#assertAuthorized(signal);
@@ -266,7 +346,7 @@ export class OwnedWorkdayApplicationRuntime {
         ).observe(signal);
         if (!observed.ok) throw new TypeError("application reload monitor denied");
         const fromPage = monitorPage(observed.value.page);
-        const attempt = this.#nextNavigationMonitorAttempt(fromPage, fromPage);
+        const attempt = this.#nextNavigationMonitorAttempt(fromPage);
         await this.#monitor(
           page,
           fromPage,
@@ -372,11 +452,33 @@ export class OwnedWorkdayApplicationRuntime {
     );
   }
 
-  #nextNavigationMonitorAttempt(from: string, to: string): number {
-    const key = `${from}->${to}`;
+  #nextNavigationMonitorAttempt(from: string): number {
+    const key = from;
     const attempt = (this.#navigationMonitorAttempts.get(key) ?? 0) + 1;
     this.#navigationMonitorAttempts.set(key, attempt);
     return attempt;
+  }
+
+  #nextMutationMonitorAttempt(page: string): number {
+    const attempt = (this.#mutationMonitorAttempts.get(page) ?? 0) + 1;
+    this.#mutationMonitorAttempts.set(page, attempt);
+    return attempt;
+  }
+
+  async #monitorPageForLane(
+    page: Page,
+    lane: "resume" | "profile" | "questionnaire",
+  ): Promise<"resume" | "profile" | "questionnaire"> {
+    const observed = await new PlaywrightWorkdayApplicationPage(
+      page,
+      { timeoutMs: this.#timeoutMs },
+    ).observe(AbortSignal.any([]));
+    if (!observed.ok || observed.value.submitActivated || observed.value.page === "pre_review") {
+      throw new TypeError("application mutation page denied");
+    }
+    const lanes = observed.value.lanes ?? [observed.value.page];
+    if (!lanes.includes(lane)) throw new TypeError("application mutation lane denied");
+    return observed.value.page;
   }
 
   #assertAuthorized(signal: AbortSignal): void {

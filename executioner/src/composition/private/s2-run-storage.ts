@@ -26,6 +26,8 @@ import {
 } from "node:path";
 
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
+import { admitProfileFieldLearningEvidence } from
+  "../../live/evidence/profile-field-learning.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
 import { sweepExpiredVerificationReplayClaims } from "./s2-verification-replay-ledger.ts";
@@ -53,6 +55,7 @@ const REVIEW_RETAINED_FILES = new Set([
   "acceptance.json",
   "application-walk-acceptance.json",
   "completion-audit.json",
+  "profile-field-learning.json",
   "process-audit.json",
   "review-acceptance.json",
   "s2-acceptance-manifest.json",
@@ -835,6 +838,13 @@ function retainedFileDigests(
     const path = admittedFile(join(root, file), 12 * 1024 * 1024);
     const bytes = readFileSync(path);
     try {
+      if (file === "profile-field-learning.json") {
+        try {
+          admitProfileFieldLearningEvidence(JSON.parse(bytes.toString("utf8")));
+        } catch {
+          denied("storage finalization denied");
+        }
+      }
       return Object.freeze({
         file,
         sha256: createHash("sha256").update(bytes).digest("hex"),

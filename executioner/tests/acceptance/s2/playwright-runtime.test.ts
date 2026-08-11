@@ -32,6 +32,231 @@ import { PlaywrightPersistentBrowserSession } from
 import { isReviewExpectedField, OwnedWorkdayApplicationRuntime } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 
+test("a profile preflight owner-input block remains a deterministic page failure before mutation", async () => {
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-runtime-"));
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"><input required data-automation-id="unreviewedRequiredControl"></main></body></html>`);
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      owner: { roots: { evidence: { path: evidenceRoot } } },
+      ownerSources: {
+        profilePlan: {
+          pageType: "profile",
+          fields: [{
+            fieldId: "identity.given_name",
+            questionType: "identity",
+            answerType: "text",
+            answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+          }],
+          repeatables: [],
+        },
+        sensitiveValues: ["Ada"],
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_profile_preflight_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_profile_preflight_01"),
+    sessionId: "live_session_profile_preflight_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_preflight_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_profile_preflight_01"),
+      operationId: generatedOperationId("operation_profile_preflight_02"),
+      sessionId: "live_session_profile_preflight_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_profile",
+      input: { attempt: 1, pageId: "page-profile" } as never,
+    }, new AbortController().signal);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: "page_incomplete",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "required_field",
+      },
+    });
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+    const learning = readFileSync(join(evidenceRoot, "profile-field-learning.json"), "utf8");
+    assert.equal(learning.includes("Ada"), false);
+    assert.equal(learning.includes("unreviewedRequiredControl"), false);
+    assert.equal(JSON.parse(learning).fields[1].prefillDisposition, "needs_owner_input");
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
+test("a profile block after a commit remains browser-effect uncertain", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"><input required data-automation-id="legalNameSection_lastName"><input hidden required data-automation-id="unreviewedConditional"></main><script>document.querySelector('[data-automation-id="legalNameSection_firstName"]').addEventListener('input',()=>document.querySelector('[data-automation-id="unreviewedConditional"]').hidden=false)</script></body></html>`);
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      ownerSources: {
+        profilePlan: {
+          pageType: "profile",
+          fields: [
+            {
+              fieldId: "identity.given_name",
+              questionType: "identity",
+              answerType: "text",
+              answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+            },
+            {
+              fieldId: "identity.family_name",
+              questionType: "identity",
+              answerType: "text",
+              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
+            },
+          ],
+          repeatables: [],
+        },
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_profile_effect_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_profile_effect_01"),
+    sessionId: "live_session_profile_effect_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_effect_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    await assert.rejects(() => runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_profile_effect_01"),
+      operationId: generatedOperationId("operation_profile_effect_02"),
+      sessionId: "live_session_profile_effect_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_profile",
+      input: { attempt: 1, pageId: "page-profile" } as never,
+    }, new AbortController().signal), /profile reconciliation denied/u);
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_lastName"]').inputValue(),
+      "",
+    );
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("profile cancellation before mutation remains operation_cancelled", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"></main></body></html>`);
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      ownerSources: {
+        profilePlan: {
+          pageType: "profile",
+          fields: [{
+            fieldId: "identity.given_name",
+            questionType: "identity",
+            answerType: "text",
+            answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+          }],
+          repeatables: [],
+        },
+        sensitiveValues: ["Ada"],
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_profile_cancel_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_profile_cancel_01"),
+    sessionId: "live_session_profile_cancel_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_cancel_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  let abortReads = 0;
+  const signal = {
+    get aborted() {
+      abortReads += 1;
+      return abortReads > 2;
+    },
+  } as AbortSignal;
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_profile_cancel_01"),
+      operationId: generatedOperationId("operation_profile_cancel_02"),
+      sessionId: "live_session_profile_cancel_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_profile",
+      input: { attempt: 1, pageId: "page-profile" } as never,
+    }, signal);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: "operation_cancelled",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "none",
+      },
+    });
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("Review monitor ACK is followed by a fresh exact visible field and structure readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -962,6 +1187,61 @@ for (const scenario of [
   });
 }
 
+test("combined Resume/Profile recovery preserves the exact physical capabilities", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-combined-recovery-"));
+  const directory = join(root, "stage2-acceptance");
+  mkdirSync(directory, { recursive: true });
+  const artifact = {
+    ...validRecoveryArtifact("resume", 1),
+    pageChecks: [{
+      page: "resume",
+      checkpoint: "resume_verified",
+      independentlyVerified: true,
+      requiredFields: 1,
+      verifiedFields: 1,
+      duplicateRows: 0,
+    }],
+    browserLanes: ["resume", "profile"],
+  } as const;
+  writeFileSync(
+    join(directory, "revision_0123456789abcdef.recovery.json"),
+    `${JSON.stringify(artifact)}\n`,
+    { mode: 0o600 },
+  );
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => closedRecoveryBrowser("resume", ["resume", "profile"]),
+      nextOperationId: operationIds(750),
+      now: () => "2026-08-05T12:00:00.000Z",
+    }).bind({
+      owner: owner(root, "https://fixture.invalid/application-questions"),
+      ownerBinding: {} as never,
+      ownerSources: {} as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+    const pending = await runtime.recovery.pending(new AbortController().signal);
+    assert.notEqual(pending, null);
+    if (pending === null) throw new Error("combined recovery artifact missing");
+    const recovered = await recoverBrowserInterruption(
+      pending.dependencies,
+      pending.input,
+      new AbortController().signal,
+    );
+    assert.equal(recovered.ok, true, JSON.stringify(recovered));
+    if (!recovered.ok || recovered.value.kind !== "resumed") {
+      throw new Error("combined recovery did not resume");
+    }
+    const cursor = pending.resume(recovered.value.state);
+    assert.equal(cursor.currentPage, "resume");
+    assert.deepEqual(cursor.currentLanes, ["resume", "profile"]);
+    assert.deepEqual(cursor.pageChecks.map(({ page }) => page), ["resume"]);
+    assert.equal(await runtime.cleanup.close(new AbortController().signal, false), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("recovery storage rejects a linked checkpoint directory before browser ownership", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-linked-recovery-"));
   const outside = mkdtempSync(join(tmpdir(), "hunt-s2-linked-outside-"));
@@ -1265,6 +1545,7 @@ function validRecoveryArtifact(
       duplicateRows: 0,
     })),
     reviewExpected: [],
+    browserLanes: page === "pre_review" ? [] : [page],
   };
 }
 
@@ -1291,7 +1572,10 @@ function equalValueReviewDocument(): string {
   </html>`;
 }
 
-function closedRecoveryBrowser(page: "resume" | "profile" | "questionnaire" | "pre_review") {
+function closedRecoveryBrowser(
+  page: "resume" | "profile" | "questionnaire" | "pre_review",
+  lanes?: readonly ("resume" | "profile" | "questionnaire")[],
+) {
   const target = validRecoveryArtifact().scope.target as never;
   const session: LiveBrowserSessionV1 = {
     schemaVersion: 1,
@@ -1323,6 +1607,7 @@ function closedRecoveryBrowser(page: "resume" | "profile" | "questionnaire" | "p
           ok: true as const,
           value: {
             page,
+            ...(lanes === undefined ? {} : { lanes }),
             pageId: `page-${page.replace("_", "-")}`,
             requiredFields: [],
             c3OwnedDuplicateRows: 0,
@@ -1401,7 +1686,7 @@ async function proveOwnerSourcesReleased(
         journeyId: journeyId("journey_runtime_fixture_01"),
         from: "resume",
         fromPageId: "page-resume" as never,
-        expected: "profile",
+        allowed: ["profile", "questionnaire", "pre_review"],
       }, new AbortController().signal));
       assert.equal(await runtime.cleanup.close(new AbortController().signal), true);
     }

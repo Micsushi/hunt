@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -16,6 +16,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 
 const MAX_ACCEPTANCE_BYTES = 16 * 1024;
 const MAX_DIAGNOSTICS_BYTES = 64 * 1024;
+const MAX_PROFILE_FIELD_LEARNING_BYTES = 128 * 1024;
 const OPAQUE_ID_PREFIXES = [
   "approval_", "checkpoint_", "event_", "host_", "journey_", "operation_",
   "posting_", "profile_lease_", "revision_", "target_ref_", "tenant_",
@@ -36,10 +37,11 @@ export interface AtomicJsonEvidenceRequest {
     | "completion-audit.json"
     | "s2-acceptance-manifest.json"
     | "storage-manifest.json"
-    | "disposal-audit.json";
+    | "disposal-audit.json"
+    | "profile-field-learning.json";
 }
 
-export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): void {
+export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): string {
   const unavailable = () => failure(`${request.label} evidence unavailable`);
   const denied = () => failure(`${request.label} evidence denied`);
   const root = admittedRoot(request.root, unavailable);
@@ -51,9 +53,12 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): voi
     return value;
   }, 2);
   const payload = Buffer.from(`${serialized}\n`, "utf8");
-  const maxBytes = request.fileName === "diagnostics.json"
-    ? MAX_DIAGNOSTICS_BYTES
-    : MAX_ACCEPTANCE_BYTES;
+  const sha256 = createHash("sha256").update(payload).digest("hex");
+  const maxBytes = request.fileName === "profile-field-learning.json"
+    ? MAX_PROFILE_FIELD_LEARNING_BYTES
+    : request.fileName === "diagnostics.json"
+      ? MAX_DIAGNOSTICS_BYTES
+      : MAX_ACCEPTANCE_BYTES;
   if (payload.byteLength > maxBytes) denied();
   for (const sensitive of request.sensitiveValues) {
     const normalizedSensitive = withoutOpaquePrefix(sensitive);
@@ -80,8 +85,9 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): voi
     chmodSync(partial, 0o600);
     if (existsSync(target)) unavailable();
     renameSync(partial, target);
+    return sha256;
   } catch {
-    unavailable();
+    return unavailable();
   } finally {
     payload.fill(0);
     if (descriptor !== undefined) {
