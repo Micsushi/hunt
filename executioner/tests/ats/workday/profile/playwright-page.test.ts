@@ -213,7 +213,7 @@ test("source control binds through the exact Workday form-field container withou
     await page.setContent(`
       <body data-hunt-profile-page-type="profile">
         <main data-automation-id="applyFlowMyInfoPage">
-          <div data-automation-id="formField-source">
+          <div data-automation-id="formField-source--source">
             <button type="button" role="combobox" aria-required="true"
               aria-controls="source-options" aria-valuetext="Company Website">
               Company Website
@@ -237,6 +237,58 @@ test("source control binds through the exact Workday form-field container withou
       required: true,
       readback: "Company Website",
     }]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("source-specific native action controls are never bound or activated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const unsafeControls = [
+      '<button id="source--default-submit" role="combobox" aria-required="true">Select One</button>',
+      '<button type="submit" id="source--submit" role="combobox" aria-required="true">Select One</button>',
+      '<input type="submit" id="source--input-submit" role="combobox" aria-required="true">',
+      '<input type="image" id="source--image" role="combobox" aria-required="true">',
+      '<input type="reset" id="source--reset" role="combobox" aria-required="true">',
+    ];
+    for (const unsafeControl of unsafeControls) {
+      await page.setContent(`
+        <body data-hunt-profile-page-type="profile">
+          <main data-automation-id="applyFlowMyInfoPage">
+            <form id="application-form">
+              <div data-automation-id="formField-source--unsafe">${unsafeControl}</div>
+            </form>
+          </main>
+          <script>
+            globalThis.submitCount = 0;
+            globalThis.resetCount = 0;
+            document.querySelector('#application-form').addEventListener('submit', (event) => {
+              event.preventDefault();
+              globalThis.submitCount += 1;
+            });
+            document.querySelector('#application-form').addEventListener('reset', () => {
+              globalThis.resetCount += 1;
+            });
+          </script>
+        </body>
+      `);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      let sourceBound = false;
+      try {
+        sourceBound = (await adapter.inspect(AbortSignal.any([]))).controls.some(
+          ({ fieldId }) => fieldId === "source.how_did_you_hear",
+        );
+      } catch (error) {
+        assert.match(String(error), /unknown required control identity denied/iu);
+      }
+      assert.equal(sourceBound, false);
+      assert.deepEqual(await page.evaluate(() => ({
+        reset: (globalThis as { resetCount?: number }).resetCount,
+        submit: (globalThis as { submitCount?: number }).submitCount,
+      })), { reset: 0, submit: 0 });
+    }
   } finally {
     await browser.close();
   }
