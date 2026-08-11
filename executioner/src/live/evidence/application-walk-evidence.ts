@@ -187,7 +187,10 @@ function validProfile(
           "workday_search_select_v1",
           "workday_source_select_v1", "workday_previous_worker_radio_v1",
         ]).has(field.uiVariant) &&
-        new Set(["owner_provided", "resume_verified", "configured_template"])
+        new Set([
+          "owner_provided", "resume_verified", "configured_template",
+          "journey_derived",
+        ])
           .has(field.provenance) &&
         (field.optionMappingProvenance === undefined ||
           field.optionMappingProvenance === "visible_option") &&

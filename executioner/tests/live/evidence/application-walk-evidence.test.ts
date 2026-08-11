@@ -63,7 +63,7 @@ test("admits evidence in the exact observed route instead of a tenant-global ord
   }
 });
 
-test("admits exact owner-backed source-select and prior-worker radio mechanics", async () => {
+test("admits derived source-select and owner-backed prior-worker radio mechanics", async () => {
   const baseline = packet();
   const profile = baseline.laneAcceptances[0];
   if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
@@ -79,7 +79,7 @@ test("admits exact owner-backed source-select and prior-worker radio mechanics",
           answerType: "option" as const,
           uiBehavior: "search_select" as const,
           uiVariant: "workday_source_select_v1",
-          provenance: "owner_provided" as const,
+          provenance: "journey_derived" as const,
           optionMappingProvenance: "visible_option" as const,
         },
         {

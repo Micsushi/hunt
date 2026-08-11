@@ -394,7 +394,13 @@ function validateProfileAuthority(
       if (
         field.questionType !== ownerInput.questionType ||
         field.answerType !== ownerInput.answerType ||
-        answer.provenance !== "owner_provided"
+        (
+          answer.provenance !== "owner_provided" &&
+          !(
+            field.fieldId === "source.how_did_you_hear" &&
+            answer.provenance === "journey_derived"
+          )
+        )
       ) denied();
     } else if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
       const factId = factByField[field.fieldId];

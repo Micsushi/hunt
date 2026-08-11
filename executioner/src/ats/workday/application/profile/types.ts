@@ -1,5 +1,9 @@
 import type { ProfileAnswerProvenance } from "../../../../contracts/index.ts";
 
+export type ProfileFieldAnswerProvenance =
+  | ProfileAnswerProvenance
+  | "journey_derived";
+
 export const profilePageTypes = ["profile", "contact"] as const;
 export type ProfilePageType = (typeof profilePageTypes)[number];
 
@@ -33,7 +37,7 @@ export type ProfileFieldAnswer =
   | {
       readonly kind: "answered";
       readonly value: string;
-      readonly provenance: ProfileAnswerProvenance;
+      readonly provenance: ProfileFieldAnswerProvenance;
     }
   | { readonly kind: "profile_answer_missing" };
 
@@ -127,7 +131,7 @@ export interface VerifiedProfileField {
   readonly answerType: ProfileCanonicalAnswerType;
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
-  readonly provenance: ProfileAnswerProvenance;
+  readonly provenance: ProfileFieldAnswerProvenance;
   readonly optionMappingProvenance?: "visible_option";
   readonly rowKey?: string;
 }

@@ -28,6 +28,7 @@ const answerProvenances = new Set([
   "owner_provided",
   "resume_verified",
   "configured_template",
+  "journey_derived",
 ]);
 const pageTypes = new Set(["profile", "contact"]);
 const questionTypes = new Set([
@@ -280,6 +281,14 @@ function validField(field: ProfileFieldPlan): boolean {
   if (field.answerType === "phone" && field.answer.value.replace(/\D/gu, "").length < 7) {
     return false;
   }
+  if (
+    field.answer.provenance === "journey_derived" &&
+    (
+      field.fieldId !== "source.how_did_you_hear" ||
+      field.questionType !== "application_source" ||
+      field.answerType !== "option"
+    )
+  ) return false;
   return field.answerType !== "option" || (
     field.optionMapping?.provenance === "visible_option" &&
     field.optionMapping.canonicalValue === field.answer.value &&

@@ -212,6 +212,57 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
   }
 });
 
+test("admits only the application source as a journey-derived setting", async () => {
+  const fixture = ownerFixture();
+  try {
+    writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profilePlan.fields.push({
+      fieldId: "source.how_did_you_hear",
+      questionType: "application_source",
+      answerType: "option",
+      answer: {
+        kind: "answered",
+        value: "company-website",
+        provenance: "journey_derived",
+      },
+      optionMapping: {
+        canonicalValue: "company-website",
+        visibleOption: "Company Website",
+        provenance: "visible_option",
+      },
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+
+    const resolved = await resolver.resolve(
+      request(fixture.runtimeRoot),
+      AbortSignal.any([]),
+    );
+    const derived = resolved.profilePlan.fields.at(-1)?.answer;
+    assert.equal(derived?.kind, "answered");
+    if (derived?.kind !== "answered") return;
+    assert.equal(derived.provenance, "journey_derived");
+
+    manifest.profilePlan.fields.at(-1).fieldId =
+      "employment.previously_worked_for_organization";
+    manifest.profilePlan.fields.at(-1).questionType = "prior_employment";
+    manifest.profilePlan.fields.at(-1).answer.value = "false";
+    manifest.profilePlan.fields.at(-1).optionMapping.canonicalValue = "false";
+    manifest.profilePlan.fields.at(-1).optionMapping.visibleOption = "No";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("admits Unicode plain text and an exact normal email address", async () => {
   const fixture = ownerFixture();
   try {

@@ -267,6 +267,59 @@ test("maps exact owner source and prior-employment options", async () => {
   ]);
 });
 
+test("accepts a journey-derived application source but no derived employment fact", async () => {
+  const source = field(
+    "source.how_did_you_hear",
+    "application_source",
+    "option",
+    "company-website",
+    "owner_provided",
+    "Company Website",
+  );
+  const derivedSource = {
+    ...source,
+    answer: { ...source.answer, provenance: "journey_derived" as const },
+  };
+  const sourcePort = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("source.how_did_you_hear", "search_select", "")],
+    rows: [],
+  });
+
+  const accepted = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [derivedSource],
+    repeatables: [],
+  }, sourcePort, AbortSignal.any([]));
+  assert.equal(accepted.kind, "verified", JSON.stringify(accepted));
+
+  const prior = field(
+    "employment.previously_worked_for_organization",
+    "prior_employment",
+    "option",
+    "false",
+    "owner_provided",
+    "No",
+  );
+  const rejected = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [{
+      ...prior,
+      answer: {
+        kind: "answered",
+        value: "false",
+        provenance: "journey_derived" as const,
+      },
+    }],
+    repeatables: [],
+  }, new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] }), AbortSignal.any([]));
+  assert.deepEqual(rejected, {
+    kind: "blocked",
+    code: "profile_plan_invalid",
+    fieldId: "employment.previously_worked_for_organization",
+  });
+});
+
 test("semantically correct option prefills are verified without mutation", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
