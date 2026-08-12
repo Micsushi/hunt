@@ -6,6 +6,8 @@ import type { LiveSessionId } from "../../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
+import { authMonitorPhase } from
+  "../../../src/browser/playwright-live/private/owned-account-page-coordinator.ts";
 import type { Stage2ExternalMonitorRuntime } from
   "../../../src/live/evidence/external-monitor-runtime.ts";
 
@@ -59,6 +61,20 @@ test("external monitor ACK blocks account mutation and binds the same owned page
   ]);
   assert.equal(records[0]?.[0], context.page);
   assert.equal(records[1]?.[0], context.page);
+});
+
+test("auth monitoring reports a visible sign-in overlay before its backing application page", () => {
+  assert.equal(authMonitorPhase({
+    schemaVersion: 1,
+    traitIds: [
+      "structural_trait_page_candidate_home_v1",
+      "structural_trait_page_account_entry_v1",
+      "structural_trait_account_sign_in_v1",
+    ],
+    controlCount: 3,
+    requiredControlCount: 2,
+    optionCount: 0,
+  }), "sign_in");
 });
 
 test("callback receives only closed semantic account controls after exact ownership admission", async () => {

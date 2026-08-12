@@ -254,13 +254,13 @@ export function authMonitorPhase(snapshot: import("./types.ts").ValueFreeOwnedPa
   if (traits.has("structural_trait_challenge_mfa_v1")) return "mfa";
   if (traits.has("structural_trait_challenge_access_control_v1")) return "access_control";
   if (traits.has("structural_trait_page_email_verification_v1")) return "verification_required";
+  if (traits.has("structural_trait_page_account_entry_v1")) {
+    return traits.has("structural_trait_account_sign_in_v1") ? "sign_in" : "account_entry";
+  }
   if (traits.has("structural_trait_page_profile_step_v1") ||
       traits.has("structural_trait_page_questionnaire_v1") ||
       traits.has("structural_trait_page_review_step_v1") ||
       traits.has("structural_trait_page_candidate_home_v1")) return "application_ready";
-  if (traits.has("structural_trait_page_account_entry_v1")) {
-    return traits.has("structural_trait_account_sign_in_v1") ? "sign_in" : "account_entry";
-  }
   if (traits.has("structural_trait_navigation_email_sign_in_choice_v1")) {
     return "email_sign_in_choice";
   }

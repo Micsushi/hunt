@@ -23,6 +23,7 @@ const EMAIL_SIGN_IN_CHOICE_SELECTOR =
 const MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
 const POSTING_SIGN_IN_SELECTOR = '[data-automation-id="navigationItem-Sign In"]';
+const CANDIDATE_HOME_SELECTOR = '[data-automation-id="candidateHomePage"]';
 
 test("the exact posting header Sign In trait stays a job page and enables account-first navigation", async () => {
   const page: WorkdayStructuralPage = {
@@ -470,6 +471,31 @@ test("hidden provider and application markers cannot classify navigation or read
     snapshot === undefined ? "invalid" : classifyWorkdayAccountNavigation(snapshot).kind,
     "invalid",
   );
+});
+
+test("a visible sign-in overlay suppresses its backing candidate page", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () =>
+        selector === MODERN_SIGN_IN_SELECTOR || selector === CANDIDATE_HOME_SELECTOR
+          ? 1
+          : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const snapshot = result.kind === "snapshot" ? result.snapshot : undefined;
+  assert.deepEqual(snapshot?.traitIds, [
+    "structural_trait_ats_workday_family_v1",
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_account_sign_in_v1",
+  ]);
+  assert.deepEqual(snapshot && classifyWorkdayAccountNavigation(snapshot), {
+    kind: "account_boundary",
+  });
 });
 
 test("a modern sign-in modal over its posting route is an account boundary", async () => {

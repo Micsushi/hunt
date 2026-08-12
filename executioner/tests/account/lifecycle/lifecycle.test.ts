@@ -45,11 +45,42 @@ test("independently observed application-ready state skips every effect", async 
       verificationConsumed: false,
     },
   });
-  assert.equal(accountState.calls.length, 1);
+  assert.equal(accountState.calls.length, 2);
   assert.equal(credential.calls.length, 0);
   assert.equal(mailbox.calls.length, 0);
   assert.equal(artifacts.calls.length, 0);
   assert.equal(navigator.calls.length, 0);
+});
+
+test("a transient ready observation reclassifies before deciding whether to sign in", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: {
+      ok: true,
+      value: {
+        kind: "application_ready",
+        attemptedFields: ["email", "password"],
+      },
+    },
+  });
+  const accountState = observer(
+    "application_ready",
+    "existing_account",
+    "application_ready",
+  );
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: accountState.port,
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path,
+    "reused_account");
+  assert.equal(accountState.calls.length, 3);
+  assert.equal(credential.calls.length, 1);
 });
 
 test("an existing account signs in once and completes only after re-observation", async () => {

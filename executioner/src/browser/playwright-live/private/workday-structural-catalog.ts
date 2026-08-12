@@ -223,6 +223,19 @@ export async function inspectWorkdayStructure(
         : "structural_trait_account_sign_in_v1",
     );
   }
+  const accountEntry = traitIds.includes("structural_trait_page_account_entry_v1");
+  if (accountEntry) {
+    for (const backgroundTrait of [
+      "structural_trait_page_job_posting_v1",
+      "structural_trait_page_candidate_home_v1",
+      "structural_trait_page_profile_step_v1",
+      "structural_trait_page_questionnaire_v1",
+      "structural_trait_page_review_step_v1",
+    ]) {
+      const index = traitIds.indexOf(backgroundTrait);
+      if (index >= 0) traitIds.splice(index, 1);
+    }
+  }
   const controlCount = await boundedCount(page, controlSelector);
   const requiredControlCount = Math.min(
     controlCount,

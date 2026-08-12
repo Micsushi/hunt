@@ -104,8 +104,16 @@ export class AccountVerificationLifecycle {
     ) {
       return mailboxInvalid();
     }
-    const observed = await this.#observe(input, signal);
+    let observed = await this.#observe(input, signal);
     if (!observed.ok) return observed;
+    if (
+      observed.value.kind === "classified_account" &&
+      observed.value.state.kind === "application_ready"
+    ) {
+      const confirmed = await this.#observe(input, signal);
+      if (!confirmed.ok) return confirmed;
+      observed = confirmed;
+    }
     if (observed.value.kind === "target_mismatch") {
       return targetBlocked({
         kind: observed.value.kind,

@@ -53,7 +53,7 @@ test("same operation replays one frozen receipt and a changed fingerprint confli
   });
   assert.deepEqual(approvalConflict, conflict);
   assert.deepEqual(requestOperationConflict, conflict);
-  assert.equal(accountState.calls.length, 1);
+  assert.equal(accountState.calls.length, 2);
   assert.equal(credential.calls.length, 0);
   assert.equal(mailbox.calls.length, 0);
   assert.equal(artifacts.calls.length, 0);
