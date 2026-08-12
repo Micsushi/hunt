@@ -111,6 +111,9 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly profiles: ProfileStore;
   readonly accountPage?: SemanticAccountPageAdapter;
   readonly postingNavigation?: SemanticPostingNavigationAdapter;
+  readonly accountNavigationTrace?: (
+    event: import("./account-navigation-types.ts").PostingNavigationSessionTraceEvent,
+  ) => void;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
   readonly applicationRuntime?: import("./workday-application-runtime.ts").OwnedWorkdayApplicationRuntimeOptions;
   readonly externalMonitor?: import("./external-monitor-port.ts").ExternalMonitorPort;

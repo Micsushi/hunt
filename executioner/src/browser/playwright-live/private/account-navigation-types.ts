@@ -44,3 +44,15 @@ export type AccountEntryAdvancePortResult = LivePortResult<
   AccountEntryAdvanceResult,
   PersistentBrowserErrorCode
 >;
+
+type PostingNavigationObservedKind = "matched" | AccountEntryAdvanceResult["kind"];
+type PostingNavigationFailureCode = PersistentBrowserErrorCode | "operation_cancelled";
+
+export type PostingNavigationSessionTraceEvent =
+  | `posting_navigation_reconcile_failed_${PostingNavigationFailureCode}`
+  | `posting_navigation_reconcile_observed_${PostingNavigationObservedKind}`
+  | `posting_navigation_transition_inspection_failed_${PostingNavigationFailureCode}`
+  | `posting_navigation_transition_inspection_observed_${PostingNavigationObservedKind}`
+  | "posting_navigation_transition_monitor_started"
+  | "posting_navigation_transition_monitor_succeeded"
+  | "posting_navigation_transition_monitor_failed";

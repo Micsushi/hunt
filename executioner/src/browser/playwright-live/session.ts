@@ -27,6 +27,7 @@ import type {
   AccountEntryAdvanceRequest,
   AccountEntryAdvanceResult,
   PostingNavigationAction,
+  PostingNavigationSessionTraceEvent,
 } from "./private/account-navigation-types.ts";
 import {
   authMonitorPhase,
@@ -806,7 +807,15 @@ export class PlaywrightPersistentBrowserSession
         signal,
         this.#options.timeoutMs,
       );
-      if (!reconciled.ok) return this.#uncertainAdvanceFailure();
+      if (!reconciled.ok) {
+        this.#emitAccountNavigationTrace(
+          `posting_navigation_reconcile_failed_${reconciled.error.code}`,
+        );
+        return this.#uncertainAdvanceFailure();
+      }
+      this.#emitAccountNavigationTrace(
+        `posting_navigation_reconcile_observed_${reconciled.value.kind}`,
+      );
       if (reconciled.value.kind !== "matched") {
         return this.#stopAfterTargetFact(reconciled.value);
       }
@@ -820,10 +829,20 @@ export class PlaywrightPersistentBrowserSession
           signal,
           this.#options.timeoutMs,
         );
-        if (!transitioned.ok || transitioned.value.target.kind !== "matched") {
+        if (!transitioned.ok) {
+          this.#emitAccountNavigationTrace(
+            `posting_navigation_transition_inspection_failed_${transitioned.error.code}`,
+          );
+          return failure("browser_effect_uncertain");
+        }
+        this.#emitAccountNavigationTrace(
+          `posting_navigation_transition_inspection_observed_${transitioned.value.target.kind}`,
+        );
+        if (transitioned.value.target.kind !== "matched") {
           return failure("browser_effect_uncertain");
         }
         try {
+          this.#emitAccountNavigationTrace("posting_navigation_transition_monitor_started");
           await this.#options.externalMonitor.auth(
             this.#page as never,
             authMonitorPhase(transitioned.value.snapshot),
@@ -832,7 +851,9 @@ export class PlaywrightPersistentBrowserSession
             { operationId: monitorOperationId, attempt: monitorAttempt },
             signal,
           );
+          this.#emitAccountNavigationTrace("posting_navigation_transition_monitor_succeeded");
         } catch {
+          this.#emitAccountNavigationTrace("posting_navigation_transition_monitor_failed");
           return failure("browser_effect_uncertain");
         }
       }
@@ -852,6 +873,14 @@ export class PlaywrightPersistentBrowserSession
     return classifyWorkdayAccountNavigation(final.value.snapshot).kind === "account_boundary"
       ? { ok: true, value: { kind: "account_boundary" } }
       : failure("browser_target_invalid");
+  }
+
+  #emitAccountNavigationTrace(event: PostingNavigationSessionTraceEvent): void {
+    try {
+      this.#options.accountNavigationTrace?.(event);
+    } catch {
+      // Diagnostics must never change navigation behavior.
+    }
   }
 
   #validAdvanceRequest(request: AccountEntryAdvanceRequest): boolean {

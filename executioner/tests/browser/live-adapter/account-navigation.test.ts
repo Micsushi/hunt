@@ -259,6 +259,25 @@ test("redirect mismatch and popup ambiguity preserve exact facts then release ow
   assert.equal(popup.profiles.cleanupCount, 1);
 });
 
+test("post-activation reconciliation failure emits its exact value-free primitive", async () => {
+  const trace: string[] = [];
+  const harness = await openedHarness({
+    probeFailureAfterEffect: true,
+    accountNavigationTrace: (event) => trace.push(event),
+  });
+
+  assert.deepEqual(
+    await harness.provider.advanceToAccountEntry(
+      request(),
+      new AbortController().signal,
+    ),
+    { ok: false, error: { code: "browser_effect_uncertain", retryable: false } },
+  );
+  assert.deepEqual(trace, [
+    "posting_navigation_reconcile_failed_browser_target_stale",
+  ]);
+});
+
 test("a repeated apply-choice cycle stops before repeating the same effect", async () => {
   const harness = await openedHarness({ remainApplyChoice: true });
   const result = await harness.provider.advanceToAccountEntry(
@@ -328,6 +347,8 @@ async function openedHarness(options: {
   readonly emailSignInChoice?: boolean;
   readonly applicationAfterApply?: boolean;
   readonly activationFailureAfterEffect?: "start_application" | "apply_manually" | "sign_in_with_email";
+  readonly probeFailureAfterEffect?: boolean;
+  readonly accountNavigationTrace?: (event: string) => void;
 } = {}) {
   const context = new FakeContext();
   const profiles = new MemoryProfiles();
@@ -372,6 +393,9 @@ async function openedHarness(options: {
     probe: {
       async inspect() {
         checks += 1;
+        if (context.effects > 0 && options.probeFailureAfterEffect) {
+          throw new Error("value-free probe failure");
+        }
         if (controlInspected && options.targetAfterControlInspect !== undefined) {
           return targetObservation(options.targetAfterControlInspect);
         }
@@ -393,6 +417,7 @@ async function openedHarness(options: {
     },
     profiles,
     postingNavigation: adapter,
+    accountNavigationTrace: options.accountNavigationTrace,
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,
   });
