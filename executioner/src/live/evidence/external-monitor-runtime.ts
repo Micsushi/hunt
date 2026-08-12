@@ -849,7 +849,7 @@ function legalAuthTransition(from: string, to: string): boolean {
     account_entry: ["verification_required", "verification_navigation", "sign_in", "application_ready"],
     verification_required: ["verification_navigation", "sign_in", "application_ready"],
     verification_navigation: ["sign_in", "application_ready"],
-    sign_in: ["application_ready"],
+    sign_in: ["job_posting", "application_ready"],
     application_ready: [],
   };
   return edges[from]?.includes(to) === true;
