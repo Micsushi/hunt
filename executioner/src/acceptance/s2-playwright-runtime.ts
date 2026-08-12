@@ -192,6 +192,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         externalMonitor,
         authorizationExpiresAt: request.owner.approval.expiresAt,
         now,
+        trace: valueFreeTrace,
       });
       let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
       const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"

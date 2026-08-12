@@ -83,6 +83,7 @@ export interface OwnedWorkdayApplicationRuntimeOptions {
   readonly externalMonitor?: ExternalMonitorPort;
   readonly authorizationExpiresAt: string;
   readonly now: () => string;
+  readonly trace?: (event: string, details?: object) => void;
 }
 
 /** Fixed browser-owner implementation. Callers supply data, never executable page code. */
@@ -95,6 +96,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #externalMonitor: ExternalMonitorPort | undefined;
   readonly #authorizationExpiresAt: string;
   readonly #now: () => string;
+  readonly #trace: OwnedWorkdayApplicationRuntimeOptions["trace"];
   readonly #reviewExpected = new Map<string, ReviewExpectedField>();
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
@@ -107,6 +109,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#externalMonitor = options.externalMonitor;
     this.#authorizationExpiresAt = options.authorizationExpiresAt;
     this.#now = options.now;
+    this.#trace = options.trace;
     for (const value of options.initialReviewExpected) {
       if (!isReviewExpectedField(value) || this.#reviewExpected.has(value.fieldId) ||
           [...this.#reviewExpected.values()].some(({ rowIdentity }) => rowIdentity === value.rowIdentity)) {
@@ -267,6 +270,18 @@ export class OwnedWorkdayApplicationRuntime {
           learningSha256 = learning.write();
         }
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
+          if (result.kind === "blocked") {
+            try {
+              this.#trace?.("profile_reconciliation_blocked", {
+                code: result.code,
+                ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+                ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),
+                mutationAttempted,
+              });
+            } catch {
+              // Diagnostics never change application behavior.
+            }
+          }
           if (!mutationAttempted && result.kind === "blocked") {
             return applicationFailure(
               result.code === "operation_cancelled"

@@ -73,6 +73,7 @@ test("a profile preflight owner-input block remains a deterministic page failure
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"><input required data-automation-id="unreviewedRequiredControl"></main></body></html>`);
+  const traces: { readonly event: string; readonly details?: object }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
@@ -97,6 +98,7 @@ test("a profile preflight owner-input block remains a deterministic page failure
     externalMonitor: { async auth() {}, async application() {} },
     authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
     now: () => "2026-08-05T12:00:00.000Z",
+    trace: (event, details) => traces.push({ event, ...(details === undefined ? {} : { details }) }),
   });
   runtime.bindSession({
     schemaVersion: 1,
@@ -136,6 +138,13 @@ test("a profile preflight owner-input block remains a deterministic page failure
     assert.equal(learning.includes("Ada"), false);
     assert.equal(learning.includes("unreviewedRequiredControl"), false);
     assert.equal(JSON.parse(learning).fields[1].prefillDisposition, "needs_owner_input");
+    assert.deepEqual(traces, [{
+      event: "profile_reconciliation_blocked",
+      details: {
+        code: "answer_type_unknown",
+        mutationAttempted: false,
+      },
+    }]);
   } finally {
     runtime.dispose();
     await context.close();
