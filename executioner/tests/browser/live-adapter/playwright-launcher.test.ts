@@ -165,6 +165,69 @@ test("visible secondary launch attests isolation before Playwright launch", asyn
   }
 });
 
+test("default visible production launch receives the bounded native timeout", async () => {
+  const tempProfilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-visible-timeout-"));
+  let launchOptions: Record<string, unknown> | undefined;
+  const page = {};
+  const context = {
+    pages: () => [page],
+    newPage: async () => page,
+    newCDPSession: async () => ({
+      send: async (method: string) => method === "Browser.getWindowForTarget"
+        ? { windowId: 77 }
+        : {
+            bounds: {
+              left: 1747,
+              top: 40,
+              width: 1400,
+              height: 810,
+              windowState: "minimized",
+            },
+          },
+      detach: async () => undefined,
+    }),
+  };
+  const launcher = new PlaywrightPersistentContextLauncher({
+    timeoutMs: 2_500,
+    launch: async (_profilePath, options) => {
+      launchOptions = options;
+      return context as never;
+    },
+    isolatedDesktop: async () => undefined,
+    visibleWindow: () => ({ x: 1747, y: 40, width: 1400, height: 832 }),
+  });
+
+  try {
+    await launcher.launchPersistentContext(tempProfilePath, { headless: false });
+    assert.equal(launchOptions?.headless, false);
+    assert.equal(launchOptions?.timeout, 2_500);
+    assert.equal(launchOptions?.viewport, null);
+  } finally {
+    await rm(tempProfilePath, { recursive: true, force: true });
+  }
+});
+
+test("headless production launch receives the bounded native timeout", async () => {
+  const tempProfilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-headless-timeout-"));
+  let launchOptions: Record<string, unknown> | undefined;
+  const launcher = new PlaywrightPersistentContextLauncher({
+    timeoutMs: 2_500,
+    launch: async (_profilePath, options) => {
+      launchOptions = options;
+      return { pages: () => [] } as never;
+    },
+    visibleWindow: () => undefined,
+  });
+
+  try {
+    await launcher.launchPersistentContext(tempProfilePath, { headless: true });
+    assert.equal(launchOptions?.headless, true);
+    assert.equal(launchOptions?.timeout, 2_500);
+  } finally {
+    await rm(tempProfilePath, { recursive: true, force: true });
+  }
+});
+
 test("production launch disables Chrome password storage in the isolated profile", async () => {
   const profilePath = await mkdtemp(join(tmpdir(), "hunt-launcher-profile-"));
   const defaultPath = join(profilePath, "Default");

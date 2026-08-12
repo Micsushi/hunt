@@ -248,6 +248,110 @@ test("protected answers require explicit owner provenance and never mutate on de
   assert.equal(calls.verified, 0);
 });
 
+test("reviewed age aliases are legal and reject injected defaults before mutation", async () => {
+  const age = field(
+    "s2-field-age-requirement",
+    "Are you 18 years of age or older?",
+    "radio",
+    [
+      { id: optionId("s2-option-age-yes"), label: boundedText("Yes") },
+      { id: optionId("s2-option-age-no"), label: boundedText("No") },
+    ],
+  );
+  const resolver: AnswerResolver = {
+    async resolve(input) {
+      return {
+        ok: true,
+        value: {
+          kind: "resolved",
+          intent: {
+            kind: "choice",
+            behavior: "radio",
+            fieldId: input.field.fieldId,
+            target: input.field.target,
+            optionId: optionId("s2-option-age-yes"),
+            expectedOption: boundedText("Yes"),
+            provenance: "reviewed_catalog",
+          },
+        },
+      };
+    },
+  };
+  const { handler, calls } = dependencies({ resolver });
+
+  assert.deepEqual(await handler.complete(
+    request([age]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "protected_answer_denied",
+      fieldId: age.fieldId,
+      protectedCategory: "legal",
+    },
+  });
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
+});
+
+test("protected synthetic facts report provenance and count without mutation", async () => {
+  const priorEmployment = field(
+    "s2-field-prior-employment",
+    "Have you ever been employed by QTS Data Centers?",
+    "radio",
+    [
+      { id: optionId("s2-option-prior-yes"), label: boundedText("Yes") },
+      { id: optionId("s2-option-prior-no"), label: boundedText("No") },
+    ],
+  );
+  const { handler, calls } = dependencies();
+
+  assert.deepEqual(await handler.complete(
+    request([priorEmployment]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "protected_answer_denied",
+      fieldId: priorEmployment.fieldId,
+      protectedCategory: "legal",
+      protectedPlaceholderCount: 1,
+      placeholderProvenance: "synthetic_ui_learning",
+    },
+  });
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
+});
+
+test("non-protected synthetic facts report provenance without becoming owner facts", async () => {
+  const source = field(
+    "s2-field-application-source",
+    "How Did You Hear About Us?",
+    "select",
+    [{ id: optionId("s2-option-source-linkedin"), label: boundedText("LinkedIn") }],
+  );
+  const { handler, calls } = dependencies();
+
+  assert.deepEqual(await handler.complete(
+    request([source]),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: source.fieldId,
+      protectedCategory: null,
+      protectedPlaceholderCount: 0,
+      placeholderProvenance: "synthetic_ui_learning",
+    },
+  });
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
+});
+
 test("missing protected facts retain their stable missing code and never mutate", async () => {
   const profile: ProfileQuery = {
     async query() {

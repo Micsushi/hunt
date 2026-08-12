@@ -19,9 +19,10 @@ import {
   createWorkdayResumeUploadHandler,
   createWorkdayResumeVerifier,
 } from "../../../ats/workday/application/resume/index.ts";
-import type {
-  ApplicationPageHandlerPort,
-  ApplicationPortFailure,
+import {
+  WORKDAY_APPLICATION_PAGE_SELECTORS,
+  type ApplicationPageHandlerPort,
+  type ApplicationPortFailure,
 } from "../../../ats/workday/application/page-walk.ts";
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
@@ -537,8 +538,29 @@ export class OwnedWorkdayApplicationRuntime {
       if (!completed.ok && new Set([
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
-      if (!completed.ok || completed.value.kind !== "verified" ||
-          completed.value.protectedPlaceholderCount !== 0) {
+      if (!completed.ok) {
+        return applicationFailure("page_incomplete", "question_control", "question");
+      }
+      if (completed.value.kind === "blocked") {
+        const placeholderCount = completed.value.protectedPlaceholderCount;
+        if (
+          completed.value.placeholderProvenance !== undefined &&
+          placeholderCount !== 0 && placeholderCount !== 1
+        ) return applicationFailure("page_incomplete", "question_control", "question");
+        const safePlaceholderCount: 0 | 1 = placeholderCount === 1 ? 1 : 0;
+        return applicationFailure(
+          completed.value.code,
+          "question_control",
+          "question",
+          completed.value.placeholderProvenance === undefined
+            ? undefined
+            : {
+                protectedPlaceholderCount: safePlaceholderCount,
+                placeholderProvenance: completed.value.placeholderProvenance,
+              },
+        );
+      }
+      if (completed.value.protectedPlaceholderCount !== 0) {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       this.#acceptances.record(Object.freeze({
@@ -816,6 +838,10 @@ function applicationFailure(
   code: string,
   primitive: ApplicationPortFailure["primitive"],
   unknownLayer: ApplicationPortFailure["unknownLayer"],
+  placeholder?: Readonly<{
+    protectedPlaceholderCount: 0 | 1;
+    placeholderProvenance: "synthetic_ui_learning";
+  }>,
 ) {
   const stable = Object.hasOwn(s2StableErrorPolicy, code) ? code : "page_incomplete";
   return {
@@ -828,6 +854,7 @@ function applicationFailure(
             primitive === "file_upload" ? "resume_page" as const : "workday_page" as const,
       primitive,
       unknownLayer,
+      ...(placeholder ?? {}),
     },
   };
 }
@@ -839,9 +866,25 @@ function playwrightPage(page: PersistentPage): Page {
   return page as Page;
 }
 
-async function bindQuestionnaireTargets(page: Page, pageId: BrowserPageId): Promise<void> {
-  const result = await page.evaluate((declaredPageId) => {
-    const roots = document.querySelectorAll('[data-automation-id="applyFlowApplicationQuestionsPage"]');
+export async function bindQuestionnaireTargets(
+  page: Page,
+  pageId: BrowserPageId,
+): Promise<void> {
+  const result = await page.evaluate(({ declaredPageId, selectors }) => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    const roots = [
+      selectors.primaryQuestions,
+      selectors.primaryQuestionnaire,
+      selectors.applicationQuestions,
+      selectors.voluntaryDisclosuresAndSelfIdentify,
+    ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
+      .filter(visible);
     if (roots.length !== 1) return false;
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
     const controls = roots[0]!.querySelectorAll<HTMLElement>(
@@ -877,7 +920,7 @@ async function bindQuestionnaireTargets(page: Page, pageId: BrowserPageId): Prom
       index += 1;
     }
     return index > 0 && index <= 128;
-  }, pageId);
+  }, { declaredPageId: pageId, selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
   if (!result) throw new TypeError("questionnaire control binding denied");
 }
 

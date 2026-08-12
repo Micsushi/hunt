@@ -10,7 +10,7 @@ import {
 } from "../../contracts/index.ts";
 import { mapVisibleOption } from "../options/mapper.ts";
 import {
-  questionFor,
+  questionForField,
   resolveQuestion,
   type CanonicalQuestionId,
 } from "../questions/catalog.ts";
@@ -149,9 +149,8 @@ export function createAnswerResolver(
       if (questionResolution.kind === "ambiguous") return failure("question_ambiguous");
 
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
-      const question = questionFor(canonicalQuestionId);
-      if (question === undefined) return failure("question_unknown");
-      if (field.behavior !== question.behavior) return unsupported(field);
+      const question = questionForField(field.label, field.behavior);
+      if (question === undefined) return unsupported(field);
 
       if (question.source.kind === "resume") {
         return resolved({
@@ -177,6 +176,16 @@ export function createAnswerResolver(
           target: field.target,
           value: narrativeTemplate,
           provenance: "configured_template",
+        });
+      }
+      if (question.source.kind === "neutral_disclosure") {
+        return failure("protected_answer_denied");
+      }
+      if (question.source.kind === "synthetic_placeholder") {
+        if (question.source.protected) return failure("protected_answer_denied");
+        return success({
+          kind: "profile_answer_missing",
+          questionId: questionId(canonicalQuestionId),
         });
       }
 

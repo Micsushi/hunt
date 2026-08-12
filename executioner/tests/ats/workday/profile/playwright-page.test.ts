@@ -38,6 +38,32 @@ const field = (
       }),
 });
 
+test("Playwright adapter owns repeatables on the My Experience root", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <section data-automation-id="workExperienceSection">
+            <div data-row-id="experience-1">
+              <label>Company<input data-automation-id="workExperience-1--company"
+                value="Analytical Engines"></label>
+            </div>
+          </section>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.rows[0]?.section, "experience");
+    assert.equal(snapshot.rows[0]?.controls[0]?.fieldId, "experience.company");
+    assert.equal(snapshot.rows[0]?.controls[0]?.readback, "Analytical Engines");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Playwright adapter proves reviewed text, phone, date, and active-listbox variants", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -47,7 +47,7 @@ export function createPlaywrightPersistentBrowserSession(
   const inspectionHold = holdAction === undefined ? undefined : oneShot(holdAction);
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
-    launcher: new PlaywrightPersistentContextLauncher(),
+    launcher: new PlaywrightPersistentContextLauncher({ timeoutMs: inspection.timeoutMs }),
     probe: new WorkdayOwnedTargetProbe(),
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter({

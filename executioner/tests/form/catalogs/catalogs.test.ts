@@ -8,6 +8,8 @@ import {
 } from "../../../src/form/questions/normalize.ts";
 import {
   questionCatalog,
+  questionFor,
+  questionForField,
   resolveQuestion,
 } from "../../../src/form/questions/catalog.ts";
 import {
@@ -37,9 +39,70 @@ test("only frozen Workday labels resolve deterministically", () => {
     id: "s1-question-family-name",
     provenance: "reviewed_catalog",
   });
-  for (const outOfScope of ["Legal First Name", "Surname", "Email address"]) {
+  for (const outOfScope of [
+    "Legal First Name",
+    "Surname",
+    "Email address",
+    "Mobile Phone",
+    "State/Province",
+    "ZIP/Postal Code",
+    "Current Employer",
+    "Current Job Title",
+  ]) {
     assert.deepEqual(resolveQuestion(outOfScope), { kind: "unknown" });
   }
+});
+
+test("reviewed questionnaire aliases resolve without admitting profile-page labels", () => {
+  const cases = [
+    ["Are you legally authorized to work in this country?", "s1-question-work-authorization"],
+    ["Are you 18 years of age or older?", "s1-question-age-requirement-met"],
+    ["Will you now or in the future require sponsorship?", "s1-question-sponsorship-required"],
+    ["Highest Level of Education", "workday-question-highest-education"],
+    ["Years of Relevant Experience", "workday-question-years-experience"],
+    ["Desired Salary", "workday-question-desired-salary"],
+    ["Gender", "workday-question-gender-disclosure"],
+    ["Veteran Status", "workday-question-veteran-disclosure"],
+    ["How Did You Hear About Us?", "workday-placeholder-application-source"],
+  ] as const;
+
+  for (const [label, id] of cases) {
+    assert.deepEqual(resolveQuestion(label), {
+      kind: "resolved",
+      id,
+      provenance: "reviewed_catalog",
+    });
+  }
+});
+
+test("every resolved alias-only ID has one retrievable canonical definition", () => {
+  const resolution = resolveQuestion("Highest Level of Education");
+  assert.equal(resolution.kind, "resolved");
+  if (resolution.kind !== "resolved") return;
+  const definition = questionFor(resolution.id);
+  assert.equal(definition?.id, resolution.id);
+  assert.deepEqual(questionForField("Highest Level of Education", "select"), {
+    id: "workday-question-highest-education",
+    labels: ["Highest Level of Education", "Highest Education", "Degree Level"],
+    behavior: "select",
+    provenance: "reviewed_catalog",
+    source: {
+      kind: "profile",
+      factId: "highest_education",
+      ownerProvidedOnly: true,
+    },
+  });
+});
+
+test("synthetic placeholders retain explicit source provenance", () => {
+  const resolution = resolveQuestion("How Did You Hear About Us?");
+  assert.equal(resolution.kind, "resolved");
+  if (resolution.kind !== "resolved") return;
+  const definition = questionFor(resolution.id);
+  assert.equal(definition?.source?.kind, "synthetic_placeholder");
+  if (definition?.source?.kind !== "synthetic_placeholder") return;
+  assert.equal(definition.source.placeholderProvenance, "synthetic_ui_learning");
+  assert.equal(definition.source.protected, false);
 });
 
 test("question catalog is exactly the frozen ten-row S1 matrix", () => {

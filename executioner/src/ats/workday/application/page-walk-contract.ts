@@ -17,6 +17,16 @@ export const applicationCheckpoints = [
   "questionnaire_verified",
 ] as const;
 export const maximumApplicationPageVisits = 8;
+export const WORKDAY_APPLICATION_PAGE_SELECTORS = Object.freeze({
+  myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
+  experience: '[data-automation-id="applyFlowMyExperiencePage"]',
+  primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
+  primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
+  applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  voluntaryDisclosuresAndSelfIdentify:
+    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+  review: '[data-automation-id="applyFlowReviewPage"]',
+});
 export const applicationClassifiers = [
   "workday_page",
   "resume_page",
@@ -76,6 +86,8 @@ export interface ApplicationPortFailure {
   readonly classifier: ApplicationClassifier;
   readonly primitive: ApplicationPrimitive;
   readonly unknownLayer: ApplicationUnknownLayer;
+  readonly protectedPlaceholderCount?: 0 | 1;
+  readonly placeholderProvenance?: "synthetic_ui_learning";
 }
 
 export type ApplicationPortResult<T> = PortResult<T, ApplicationPortFailure>;
@@ -163,6 +175,8 @@ export interface ApplicationWalkFailurePacket {
   readonly unknownLayer: ApplicationUnknownLayer;
   readonly page: ApplicationPage;
   readonly attempt: number;
+  readonly protectedPlaceholderCount?: 0 | 1;
+  readonly placeholderProvenance?: "synthetic_ui_learning";
 }
 
 export type ApplicationWalkResult = PortResult<
@@ -234,6 +248,7 @@ export function isAllowedApplicationTransition(
   visited: readonly ApplicationHandlerPage[] = [],
 ): boolean {
   if (!applicationNextPages(from).includes(to)) return false;
+  if (from === "resume" && to === "profile") return true;
   return to === "questionnaire" || to === "pre_review" || !visited.includes(to);
 }
 
@@ -249,7 +264,10 @@ export function isValidApplicationPageSequence(
       previous !== undefined &&
       !isAllowedApplicationTransition(previous, page, visited)
     ) return false;
-    if (page !== "questionnaire" && visited.includes(page)) return false;
+    if (
+      page !== "questionnaire" && visited.includes(page) &&
+      !(page === "profile" && previous === "resume")
+    ) return false;
     visited.push(page);
   }
   return true;

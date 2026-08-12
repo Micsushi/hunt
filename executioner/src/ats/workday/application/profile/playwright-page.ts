@@ -155,7 +155,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
 
   async #assertPageType(): Promise<Locator> {
     const profile = await exactVisible(
-      this.#page.locator('[data-automation-id="applyFlowMyInfoPage"]'),
+      this.#page.locator([
+        '[data-automation-id="applyFlowMyInfoPage"]',
+        '[data-automation-id="applyFlowMyExperiencePage"]',
+      ].join(", ")),
     );
     const declared = await this.#page.locator("body").getAttribute(
       "data-hunt-profile-page-type",

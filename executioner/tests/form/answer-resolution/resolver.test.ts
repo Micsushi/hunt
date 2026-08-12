@@ -135,6 +135,74 @@ test("choice mapping uses each frozen row's exact behavior and visible option", 
   }
 });
 
+test("age aliases reject non-owner answers before producing an intent", async () => {
+  const { resolver } = resolverWith({
+    kind: "answered",
+    value: true,
+    provenance: "resume_verified",
+  });
+  const options = Object.freeze([
+    Object.freeze({ id: optionId("age-yes"), label: boundedText("Yes") }),
+    Object.freeze({ id: optionId("age-no"), label: boundedText("No") }),
+  ]);
+
+  assert.deepEqual(await resolver.resolve(
+    request(field("Are you 18 years of age or older?", "radio", options)),
+    new AbortController().signal,
+  ), {
+    ok: false,
+    error: { code: "protected_answer_denied", retryable: false },
+  });
+});
+
+test("reviewed demographic defaults are denied without querying profile facts", async () => {
+  const profile = createProfileQueryFake();
+  const resolver = createAnswerResolver(profile.port, "Narrative.");
+  const options = Object.freeze([
+    Object.freeze({ id: optionId("gender-neutral"), label: boundedText("Prefer not to answer") }),
+  ]);
+
+  assert.deepEqual(await resolver.resolve(
+    request(field("Gender", "listbox", options)),
+    new AbortController().signal,
+  ), {
+    ok: false,
+    error: { code: "protected_answer_denied", retryable: false },
+  });
+  assert.deepEqual(profile.calls, []);
+});
+
+test("synthetic facts never become owner facts or mutation intents", async () => {
+  const profile = createProfileQueryFake();
+  const resolver = createAnswerResolver(profile.port, "Narrative.");
+  const yesNo = Object.freeze([
+    Object.freeze({ id: optionId("prior-yes"), label: boundedText("Yes") }),
+    Object.freeze({ id: optionId("prior-no"), label: boundedText("No") }),
+  ]);
+  assert.deepEqual(await resolver.resolve(
+    request(field("Have you ever been employed by QTS Data Centers?", "radio", yesNo)),
+    new AbortController().signal,
+  ), {
+    ok: false,
+    error: { code: "protected_answer_denied", retryable: false },
+  });
+
+  const sources = Object.freeze([
+    Object.freeze({ id: optionId("source-linkedin"), label: boundedText("LinkedIn") }),
+  ]);
+  assert.deepEqual(await resolver.resolve(
+    request(field("How Did You Hear About Us?", "select", sources)),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "profile_answer_missing",
+      questionId: "workday-placeholder-application-source",
+    },
+  });
+  assert.deepEqual(profile.calls, []);
+});
+
 test("visible option no-match and ambiguity remain distinct and immutable", () => {
   const noMatch = mapVisibleOption(true, [
     { id: optionId("option-no"), label: boundedText("No") },
@@ -284,6 +352,8 @@ test("unknown, hidden, ambiguous, unsupported, invalid date, and abort are expli
     field("Given name", "unsupported"),
     field("Given name", "text", [], "hidden"),
     field("Given name", "text", [], "ambiguous"),
+    field("Given name", "textarea"),
+    field("Are you at least 18 years of age?", "textarea"),
   ]) {
     assert.deepEqual(await resolver.resolve(request(observed), signal), {
       ok: true,

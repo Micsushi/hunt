@@ -551,10 +551,12 @@ for every account or application mutation, readback, navigation, recovery, and
 Review observation. Each request binds the live process, source, config, target,
 operation, attempt, screenshot, sanitized taxonomy, and previous ACK. The
 runner blocks the corresponding browser effect until the independent monitor
-writes an exact ACK. The independent monitor supplies only a protected
-`NNNN-page-moment.observation.json` containing four identity digests, reviewed
-structural IDs, and its observation time. Raw host, title, applicant values,
-selectors, and DOM content never appear on the command line.
+writes an exact ACK. The independent monitor supplies a protected version-2
+`NNNN-page-moment.observation.json` containing its independently read host,
+tenant, posting, and title, the retained screenshot digest, reviewed structural
+IDs, and its observation time. The ACK writer derives identity digests itself
+and rehashes the retained PNG; applicant values, selectors, and DOM content
+never appear on the command line.
 
 ```text
 npm run ack:s2-monitor -- --runtime-root C:\private\hunt-c3-storage\transient\...\runtime --evidence-root C:\private\hunt-c3-storage\retained\...\evidence --monitor-request C:\private\hunt-c3-storage\retained\...\evidence\monitor\0001-resume-before_mutation.request.json --classification safe_to_continue --observation C:\private\hunt-c3-storage\transient\...\runtime\0001-resume-before_mutation.observation.json

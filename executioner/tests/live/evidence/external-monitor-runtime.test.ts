@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { deflateSync } from "node:zlib";
 
@@ -16,7 +16,7 @@ import {
   readStage2ExternalMonitorObservation,
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
-  writeStage2ExternalMonitorAcknowledgement,
+  writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
 
@@ -61,7 +61,7 @@ test("external monitor blocks each auth effect until the exact independent ACK",
           evidenceRoot: root,
           requestPath: request.path,
           classification: request.ordinal === 3 ? "account_verified" : "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: `2026-08-10T12:00:00.00${request.ordinal * 2}Z`,
         });
@@ -184,6 +184,44 @@ test("external monitor derives exact identity from the observed page URL", async
   }
 });
 
+test("external monitor hashes independently supplied title and posting text", async () => {
+  for (const [dimension, observedIdentityValue] of [
+    ["posting", { ...observedIdentity(), posting: "99999999" }],
+    ["title", { ...observedIdentity(), title: "Copied digest cannot stand in for a title" }],
+  ] as const) {
+    const root = mkdtempSync(join(tmpdir(), `hunt-s2-monitor-observed-${dimension}-`));
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        evidenceRoot: root,
+        runtimeRoot: root,
+        now: ordinalClock(),
+        waitForAcknowledgement: async (request) => assert.throws(
+          () => writeStage2ExternalMonitorAcknowledgement({
+            runtimeRoot: root,
+            evidenceRoot: root,
+            requestPath: request.path,
+            classification: "safe_to_continue",
+            observedIdentity: observedIdentityValue,
+            structuralDescriptionIds: [structuralIdFor(request.page)],
+            observedAt: "2026-08-10T12:00:00.002Z",
+          }),
+          /external monitor acknowledgement denied/u,
+        ),
+      });
+      await assert.rejects(
+        () => runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
+          operationId: `operation_observed_${dimension}_01`,
+          attempt: 1,
+        }, new AbortController().signal),
+        /external monitor acknowledgement denied/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("external monitor ignores site underscores before the Workday job route", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-site-underscore-"));
   const target = {
@@ -207,11 +245,11 @@ test("external monitor ignores site underscores before the Workday job route", a
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: {
-          hostSha256: digest(Buffer.from(target.host)),
-          tenantSha256: digest(Buffer.from(target.tenant)),
-          postingSha256: digest(Buffer.from(target.posting)),
-          titleSha256: digest(Buffer.from(target.title)),
+        observedIdentity: {
+          host: target.host,
+          tenant: target.tenant,
+          posting: target.posting,
+          title: target.title,
         },
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
@@ -241,7 +279,7 @@ test("external monitor admits an exact zero-control job-posting taxonomy", async
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -353,7 +391,7 @@ test("external monitor traces the exact capture boundary without changing behavi
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -396,7 +434,7 @@ test("external monitor trace observer failure cannot change capture behavior", a
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -423,7 +461,7 @@ test("external monitor accepts the standard RGB PNG emitted by Playwright", asyn
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -474,7 +512,7 @@ test("external monitor accepts only the reviewed structure for the observed page
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: ["monitor_structure_profile_v1"],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -482,6 +520,57 @@ test("external monitor accepts only the reviewed structure for the observed page
     await assert.rejects(
       () => runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
         operationId: "operation_wrong_structure_001",
+        attempt: 1,
+      }, new AbortController().signal),
+      /external monitor acknowledgement denied/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("external monitor ACK independently rehashes the retained screenshot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-screenshot-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => {
+        const common = {
+          runtimeRoot: root,
+          evidenceRoot: root,
+          requestPath: request.path,
+          classification: "safe_to_continue" as const,
+          observedIdentity: observedIdentity(),
+          structuralDescriptionIds: [structuralIdFor(request.page)],
+          observedAt: "2026-08-10T12:00:00.002Z",
+        };
+        assert.throws(
+          () => writeExternalMonitorAcknowledgement({
+            ...common,
+            observedScreenshotSha256: "0".repeat(64),
+          }),
+          /external monitor acknowledgement denied/u,
+        );
+        const monitorRequest = JSON.parse(readFileSync(request.path, "utf8")) as {
+          readonly screenshotFile: string;
+        };
+        const screenshotPath = join(dirname(request.path), monitorRequest.screenshotFile);
+        writeFileSync(screenshotPath, png(321, 200));
+        assert.throws(
+          () => writeExternalMonitorAcknowledgement({
+            ...common,
+            observedScreenshotSha256: digest(readFileSync(screenshotPath)),
+          }),
+          /external monitor acknowledgement denied/u,
+        );
+      },
+    });
+    await assert.rejects(
+      () => runtime.auth(fixturePage(), "account_entry", "before_mutation", taxonomy(), {
+        operationId: "operation_screenshot_rehash_01",
         attempt: 1,
       }, new AbortController().signal),
       /external monitor acknowledgement denied/u,
@@ -505,7 +594,7 @@ test("external monitor never acknowledges an unsafe auth page", async () => {
           evidenceRoot: root,
           requestPath: request.path,
           classification: "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
           observedAt: "2026-08-10T12:00:00.002Z",
         }),
@@ -616,7 +705,7 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
           evidenceRoot: root,
           requestPath: request.path,
           classification: "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         });
@@ -642,7 +731,7 @@ test("external monitor denies crossed live roots, illegal page graphs, and malfo
           evidenceRoot: graphRoot,
           requestPath: request.path,
           classification: "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         }),
@@ -725,7 +814,7 @@ test("application monitor retains the exact mutation, readback, navigation, tran
         evidenceRoot: root,
         requestPath: request.path,
         classification: request.ordinal === moments.length ? "review_verified" : "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
       }),
@@ -810,7 +899,7 @@ for (const [name, route, mutationCounts] of [
           evidenceRoot: root,
           requestPath: request.path,
           classification: request.ordinal === moments.length ? "review_verified" : "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
         }),
@@ -859,7 +948,7 @@ test("application monitor admits a directly and independently observed Review", 
         evidenceRoot: root,
         requestPath: request.path,
         classification: "review_verified",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor("review")],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -892,7 +981,7 @@ test("application monitor admits a directly and independently observed Review", 
   }
 });
 
-test("application monitor rejects a semantic regression to an already visited page", async () => {
+test("application monitor admits My Experience then rejects a repeated Resume regression", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-regression-"));
   try {
     const runtime = createStage2ExternalMonitorRuntime({
@@ -905,7 +994,7 @@ test("application monitor rejects a semantic regression to an already visited pa
         evidenceRoot: root,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
       }),
@@ -925,29 +1014,39 @@ test("application monitor rejects a semantic regression to an already visited pa
         { operationId, attempt: 1 }, signal,
       );
     }
-    await assert.rejects(() => runtime.application(
+    await runtime.application(
       fixturePage(), "profile", "transition", taxonomy(),
       { operationId: "operation_regression_resume_next_001", attempt: 1 }, signal,
+    );
+    await runtime.application(
+      fixturePage(), "profile", "before_navigation", taxonomy(),
+      { operationId: "operation_regression_profile_next_02", attempt: 1 }, signal,
+    );
+    await assert.rejects(() => runtime.application(
+      fixturePage(), "resume", "transition", taxonomy(),
+      { operationId: "operation_regression_profile_next_02", attempt: 1 }, signal,
     ), /external monitor runtime denied/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("ordinal CLI observation input is protected, digest-only, and exact", () => {
+test("ordinal CLI observation input is protected, independently derived, and exact", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-observation-"));
   try {
     const path = join(root, "0001-account_entry-before_mutation.observation.json");
     writeFileSync(path, `${JSON.stringify({
-      schemaVersion: 1,
-      evidenceRevision: "s2-external-monitor-observation-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-external-monitor-observation-v2",
       observer: "independent_visual_monitor",
-      observedIdentityDigests: identityDigests(),
+      observedScreenshotSha256: digest(Buffer.from("independent screenshot")),
+      observedIdentity: observedIdentity(),
       structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.002Z",
     })}\n`, { flag: "wx", mode: 0o600 });
     assert.deepEqual(readStage2ExternalMonitorObservation(root, path), {
-      observedIdentityDigests: identityDigests(),
+      observedScreenshotSha256: digest(Buffer.from("independent screenshot")),
+      observedIdentity: observedIdentity(),
       structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.002Z",
     });
@@ -1005,17 +1104,18 @@ test("external monitor rejects missing, crossed, replayed, late, and post-close 
       evidenceRoot: root,
       requestPath,
       classification: "safe_to_continue",
-      observedIdentityDigests: identityDigests(),
+      observedIdentity: observedIdentity(),
       structuralDescriptionIds: ["monitor_structure_account_entry_v1"],
       observedAt: "2026-08-10T12:00:00.001Z",
       journeyId: "journey_crossed_monitor_01",
     }), /external monitor acknowledgement denied/u);
     const unknownPath = join(root, "0002-account_entry-before_mutation.observation.json");
     writeFileSync(unknownPath, `${JSON.stringify({
-      schemaVersion: 1,
-      evidenceRevision: "s2-external-monitor-observation-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-external-monitor-observation-v2",
       observer: "independent_visual_monitor",
-      observedIdentityDigests: identityDigests(),
+      observedScreenshotSha256: digest(Buffer.from("independent screenshot")),
+      observedIdentity: observedIdentity(),
       structuralDescriptionIds: ["monitor_structure_unreviewed_v1"],
       observedAt: "2026-08-10T12:00:00.003Z",
     })}\n`, { flag: "wx", mode: 0o600 });
@@ -1025,10 +1125,11 @@ test("external monitor rejects missing, crossed, replayed, late, and post-close 
     );
     const wrongPagePath = join(root, "0003-account_entry-before_mutation.observation.json");
     writeFileSync(wrongPagePath, `${JSON.stringify({
-      schemaVersion: 1,
-      evidenceRevision: "s2-external-monitor-observation-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-external-monitor-observation-v2",
       observer: "independent_visual_monitor",
-      observedIdentityDigests: identityDigests(),
+      observedScreenshotSha256: digest(Buffer.from("independent screenshot")),
+      observedIdentity: observedIdentity(),
       structuralDescriptionIds: ["monitor_structure_profile_v1"],
       observedAt: "2026-08-10T12:00:00.004Z",
     })}\n`, { flag: "wx", mode: 0o600 });
@@ -1056,7 +1157,7 @@ test("external monitor rejects abrupt owner exit, stale liveness, and PID-start 
         evidenceRoot: abruptRoot,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -1095,7 +1196,7 @@ test("external monitor rejects abrupt owner exit, stale liveness, and PID-start 
         evidenceRoot: reusedRoot,
         requestPath: request.path,
         classification: "safe_to_continue",
-        observedIdentityDigests: identityDigests(),
+        observedIdentity: observedIdentity(),
         structuralDescriptionIds: [structuralIdFor(request.page)],
         observedAt: "2026-08-10T12:00:00.002Z",
       }),
@@ -1128,7 +1229,7 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
           evidenceRoot: root,
           requestPath: request.path,
           classification: "safe_to_continue",
-          observedIdentityDigests: identityDigests(),
+          observedIdentity: observedIdentity(),
           structuralDescriptionIds: [structuralIdFor(request.page)],
           observedAt: "2026-08-10T12:00:00.002Z",
         });
@@ -1142,7 +1243,6 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
     rmSync(root, { recursive: true, force: true });
   }
 });
-
 function taxonomy() {
   return {
     fieldCount: 2,
@@ -1156,6 +1256,15 @@ function taxonomy() {
   };
 }
 
+function observedIdentity() {
+  return {
+    host: binding.host,
+    tenant: binding.tenant,
+    posting: binding.posting,
+    title: "Business Manager",
+  };
+}
+
 function identityDigests() {
   return {
     hostSha256: digest(Buffer.from(binding.host)),
@@ -1163,6 +1272,22 @@ function identityDigests() {
     postingSha256: digest(Buffer.from(binding.posting)),
     titleSha256: digest(Buffer.from("Business Manager")),
   };
+}
+
+function writeStage2ExternalMonitorAcknowledgement(
+  request: Omit<
+    Parameters<typeof writeExternalMonitorAcknowledgement>[0],
+    "observedScreenshotSha256"
+  >,
+): void {
+  const monitorRequest = JSON.parse(readFileSync(request.requestPath, "utf8")) as {
+    readonly screenshotFile: string;
+  };
+  const screenshot = readFileSync(join(dirname(request.requestPath), monitorRequest.screenshotFile));
+  writeExternalMonitorAcknowledgement({
+    ...request,
+    observedScreenshotSha256: digest(screenshot),
+  });
 }
 
 function processInstanceSha256() {

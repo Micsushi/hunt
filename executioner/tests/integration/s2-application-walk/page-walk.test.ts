@@ -201,7 +201,7 @@ test("walks every application page only after browser-truth verification and sto
     "reconcile:resume:1",
     "observe:resume",
     "progress:resume_verified:2",
-    "next:resume:questionnaire|pre_review",
+    "next:resume:profile|questionnaire|pre_review",
     "observe:questionnaire",
     "reconcile:questionnaire:1",
     "observe:questionnaire",
@@ -637,6 +637,55 @@ test("failure projection replaces malformed enum values with safe metadata", asy
     attempt: 1,
   });
   assert.doesNotMatch(JSON.stringify(result), /sensitive-value/u);
+});
+
+test("failure projection preserves bounded synthetic placeholder provenance", async () => {
+  const placeholderFailure = {
+    ok: false,
+    error: {
+      code: "protected_answer_denied",
+      classifier: "questionnaire_page",
+      primitive: "question_control",
+      unknownLayer: "question",
+      protectedPlaceholderCount: 1,
+      placeholderProvenance: "synthetic_ui_learning",
+      detail: "must-not-escape",
+    },
+  } as unknown as ApplicationPortResult<never>;
+  const result = await runApplicationPageWalk(
+    dependenciesFor([truth("profile")], [], () => placeholderFailure),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.failure.protectedPlaceholderCount, 1);
+  assert.equal(result.error.failure.placeholderProvenance, "synthetic_ui_learning");
+  assert.doesNotMatch(JSON.stringify(result), /must-not-escape/u);
+});
+
+test("failure projection rejects incomplete placeholder metadata", async () => {
+  const malformedPlaceholder = {
+    ok: false,
+    error: {
+      code: "protected_answer_denied",
+      classifier: "questionnaire_page",
+      primitive: "question_control",
+      unknownLayer: "question",
+      protectedPlaceholderCount: 1,
+    },
+  } as unknown as ApplicationPortResult<never>;
+  const result = await runApplicationPageWalk(
+    dependenciesFor([truth("profile")], [], () => malformedPlaceholder),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.failure.code, "failure_context_invalid");
+  assert.equal("protectedPlaceholderCount" in result.error.failure, false);
 });
 
 test("does not navigate when a lane reports the wrong independent checkpoint", async () => {

@@ -150,7 +150,7 @@ function readMonitorChain(
       exactKeys(ack, [
         "schemaVersion", "evidenceRevision", "status", "observer", "journeyId",
         "targetHandleId", "operationId", "attempt", "ordinal", "page", "moment", "requestFile", "requestSha256",
-        "classification", "identityReconciliation", "identityDimensions",
+        "classification", "observedScreenshotSha256", "identityReconciliation", "identityDimensions",
         "observedIdentityDigests", "structuralDescriptionIds", "privacyScan",
         "submitPresent", "submitActivated", "observedAt",
       ]);
@@ -159,11 +159,12 @@ function readMonitorChain(
         : "safe_to_continue";
       const observedAt = timestamp(ack.observedAt);
       if (
-        ack.schemaVersion !== 1 || ack.evidenceRevision !== "s2-external-monitor-ack-v1" ||
+        ack.schemaVersion !== 2 || ack.evidenceRevision !== "s2-external-monitor-ack-v2" ||
         ack.status !== "acknowledged" || ack.observer !== "independent_visual_monitor" ||
         !sameMoment(ack, expected, ordinal, page, moment) || ack.requestFile !== requestFile ||
         ack.operationId !== request.operationId || ack.attempt !== request.attempt ||
         ack.requestSha256 !== digest(requestBytes) || ack.classification !== expectedClassification ||
+        ack.observedScreenshotSha256 !== request.screenshotSha256 ||
         ack.identityReconciliation !== "matched" ||
         !exactArray(ack.identityDimensions, ["host", "posting", "title"]) ||
         !identityDigests(ack.observedIdentityDigests, expected) ||

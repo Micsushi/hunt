@@ -472,6 +472,39 @@ test("hidden provider and application markers cannot classify navigation or read
   );
 });
 
+test("all observed Workday application roots are exact application boundaries", async () => {
+  for (const selector of [
+    '[data-automation-id="applyFlowMyInfoPage"]',
+    '[data-automation-id="applyFlowMyExperiencePage"]',
+    '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
+    '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
+    '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+    '[data-automation-id="applyFlowReviewPage"]',
+  ]) {
+    const page: WorkdayStructuralPage = {
+      locator: (candidate) => ({
+        count: async () => candidate === selector ? 1 : 0,
+        isVisible: async () => true,
+      }),
+    };
+
+    const result = await inspectWorkdayStructure(page, false, emptyInspector());
+
+    assert.equal(result.kind, "snapshot");
+    if (result.kind !== "snapshot") continue;
+    assert.equal(
+      result.snapshot.traitIds.some((trait) =>
+        trait === "structural_trait_page_profile_step_v1" ||
+        trait === "structural_trait_page_questionnaire_v1" ||
+        trait === "structural_trait_page_review_step_v1"
+      ),
+      true,
+      selector,
+    );
+  }
+});
+
 function signInInspector(): WorkdaySemanticAccountInspector {
   return {
     inspect: async (control) => ({

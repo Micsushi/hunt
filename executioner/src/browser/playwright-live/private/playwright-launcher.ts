@@ -32,6 +32,7 @@ type PersistentLaunch = (
 type VisiblePersistentLaunch = (
   profilePath: string,
   window: VisibleSecondaryWindow,
+  timeoutMs: number,
 ) => Promise<BrowserContext>;
 
 export interface PlaywrightPersistentContextLauncherOptions {
@@ -39,6 +40,7 @@ export interface PlaywrightPersistentContextLauncherOptions {
   readonly visibleLaunch?: VisiblePersistentLaunch;
   readonly visibleWindow?: () => VisibleSecondaryWindow | undefined;
   readonly isolatedDesktop?: () => Promise<void>;
+  readonly timeoutMs?: number;
 }
 
 export class PlaywrightPersistentContextLauncher
@@ -48,14 +50,16 @@ export class PlaywrightPersistentContextLauncher
   readonly #visibleLaunch: VisiblePersistentLaunch;
   readonly #visibleWindow: () => VisibleSecondaryWindow | undefined;
   readonly #isolatedDesktop: () => Promise<void>;
+  readonly #timeoutMs: number;
 
   constructor(options: PlaywrightPersistentContextLauncherOptions = {}) {
     this.#launch = options.launch ?? ((profilePath, launchOptions) =>
       chromium.launchPersistentContext(profilePath, launchOptions));
-    this.#visibleLaunch = options.visibleLaunch ?? ((profilePath, window) =>
-      this.#launch(profilePath, visiblePersistentLaunchOptions(window)));
+    this.#visibleLaunch = options.visibleLaunch ?? ((profilePath, window, timeoutMs) =>
+      this.#launch(profilePath, visiblePersistentLaunchOptions(window, timeoutMs)));
     this.#visibleWindow = options.visibleWindow ?? minimizedSecondaryWindowForLiveTest;
     this.#isolatedDesktop = options.isolatedDesktop ?? assertCurrentProcessIsOnIsolatedDesktop;
+    this.#timeoutMs = launchTimeout(options.timeoutMs ?? 30_000);
   }
 
   async launchPersistentContext(
@@ -66,8 +70,8 @@ export class PlaywrightPersistentContextLauncher
     if (visibleWindow !== undefined) await this.#isolatedDesktop();
     await disablePasswordStorage(profilePath);
     const context = visibleWindow === undefined
-      ? await this.#launch(profilePath, { headless: options.headless })
-      : await this.#visibleLaunch(profilePath, visibleWindow);
+      ? await this.#launch(profilePath, { headless: options.headless, timeout: this.#timeoutMs })
+      : await this.#visibleLaunch(profilePath, visibleWindow, this.#timeoutMs);
     if (visibleWindow === undefined) return context;
     try {
       await verifyMinimizedSecondaryWindow(context, visibleWindow);
@@ -79,11 +83,20 @@ export class PlaywrightPersistentContextLauncher
   }
 }
 
+function launchTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 300_000) {
+    throw new TypeError("invalid browser launch timeout");
+  }
+  return value;
+}
+
 function visiblePersistentLaunchOptions(
   window: VisibleSecondaryWindow,
+  timeoutMs: number,
 ): NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]> {
   return {
     headless: false,
+    timeout: timeoutMs,
     viewport: null,
     args: [
       "--start-minimized",

@@ -32,6 +32,7 @@ import {
 } from "../../../../contracts/live/index.ts";
 import { createAnswerResolver } from "../../../../form/answers/resolver.ts";
 import {
+  questionForField,
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
 import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
@@ -40,6 +41,10 @@ import {
   type ActiveListboxEvidence,
 } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
+import {
+  protectedQuestionCategory,
+  type ProtectedQuestionCategory,
+} from "./protected.ts";
 
 export {
   resolveActiveListbox,
@@ -50,10 +55,9 @@ export {
   createConfiguredNarrativeProvider,
   type ConfiguredNarrativeProvider,
 } from "./narrative.ts";
+export type { ProtectedQuestionCategory } from "./protected.ts";
 
 const narrativeQuestionId = "s1-question-configured-narrative" as const;
-
-export type ProtectedQuestionCategory = "authorization" | "legal" | "consent";
 
 export interface QuestionnairePageRequest {
   readonly journeyId: JourneyId;
@@ -106,6 +110,8 @@ export type QuestionnairePageValue =
       readonly fieldId: FieldId;
       readonly protectedCategory: ProtectedQuestionCategory | null;
       readonly candidate?: SanitizedUnknownCandidateV1;
+      readonly protectedPlaceholderCount?: number;
+      readonly placeholderProvenance?: "synthetic_ui_learning";
     };
 
 type QuestionnairePageError =
@@ -171,8 +177,27 @@ export function createQuestionnairePageHandler(
       const answers: VerifiedQuestionnaireAnswer[] = [];
       for (const field of request.page.fields) {
         if (!field.required || field.state === "hidden") continue;
-        const category = protectedCategory(field.label);
         const question = resolveQuestion(field.label);
+        const category = protectedQuestionCategory(
+          field.label,
+          question.kind === "resolved" ? question.id : undefined,
+        );
+        const definition = question.kind === "resolved" &&
+            field.behavior !== "unsupported"
+          ? questionForField(field.label, field.behavior)
+          : undefined;
+        if (definition?.source.kind === "synthetic_placeholder") {
+          return blocked(
+            definition.source.protected
+              ? "protected_answer_denied"
+              : "profile_answer_missing",
+            field.fieldId,
+            category,
+            undefined,
+            definition.source.placeholderProvenance,
+            definition.source.protected,
+          );
+        }
         if (
           question.kind === "resolved" &&
           question.id === narrativeQuestionId &&
@@ -349,20 +374,6 @@ export function createQuestionnairePageHandler(
   });
 }
 
-function protectedCategory(label: string): ProtectedQuestionCategory | null {
-  const normalized = normalizeCatalogText(label);
-  if (/\b(?:consent|agree|acknowledge|terms|signature)\b/u.test(normalized)) {
-    return "consent";
-  }
-  if (/\b(?:authori[sz](?:e|ed|ation)?|sponsor|visa|work permit)\b/u.test(normalized)) {
-    return "authorization";
-  }
-  if (/\b(?:legal|criminal|background check|disclosure|salary|compensation|at least 18)\b/u.test(normalized)) {
-    return "legal";
-  }
-  return null;
-}
-
 function isPlaceholder(value: string): boolean {
   return /^(?:n a|na|none|not applicable|placeholder|tbd|todo|unknown)$/u.test(
     normalizeCatalogText(value),
@@ -401,6 +412,8 @@ function blocked(
   fieldId: FieldId,
   protectedCategory: ProtectedQuestionCategory | null,
   candidate?: SanitizedUnknownCandidateV1,
+  placeholderProvenance?: "synthetic_ui_learning",
+  protectedPlaceholder = false,
 ): PortResult<QuestionnairePageValue, never> {
   return {
     ok: true,
@@ -410,6 +423,12 @@ function blocked(
       fieldId,
       protectedCategory,
       ...(candidate === undefined ? {} : { candidate }),
+      ...(placeholderProvenance === undefined
+        ? {}
+        : {
+            protectedPlaceholderCount: protectedPlaceholder ? 1 : 0,
+            placeholderProvenance,
+          }),
     }),
   };
 }

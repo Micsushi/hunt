@@ -40,6 +40,16 @@ const EMAIL_SIGN_IN_CHOICE_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
 export const WORKDAY_MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
+  myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
+  experience: '[data-automation-id="applyFlowMyExperiencePage"]',
+  primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
+  primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
+  applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  voluntaryDisclosuresAndSelfIdentify:
+    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+  review: '[data-automation-id="applyFlowReviewPage"]',
+});
 
 const pageRules = Object.freeze([
   rule("structural_trait_navigation_apply_choice_v1", '[data-automation-id="applyManually"]'),
@@ -57,9 +67,15 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="emailVerificationPage"]'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="verifyEmailPage"]'),
   rule("structural_trait_page_candidate_home_v1", '[data-automation-id="candidateHomePage"]'),
-  rule("structural_trait_page_profile_step_v1", '[data-automation-id="applyFlowMyInfoPage"]'),
-  rule("structural_trait_page_questionnaire_v1", '[data-automation-id="applyFlowApplicationQuestionsPage"]'),
-  rule("structural_trait_page_review_step_v1", '[data-automation-id="applyFlowReviewPage"]'),
+  rule("structural_trait_page_profile_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.myInformation),
+  rule("structural_trait_page_profile_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.experience),
+  ...[
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestions,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestionnaire,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.applicationQuestions,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.voluntaryDisclosuresAndSelfIdentify,
+  ].map((selector) => rule("structural_trait_page_questionnaire_v1", selector)),
+  rule("structural_trait_page_review_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.review),
 ] satisfies readonly TraitRule[]);
 
 export const WORKDAY_VERIFICATION_EMAIL_SENT_SELECTORS = Object.freeze([

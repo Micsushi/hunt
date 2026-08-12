@@ -55,6 +55,13 @@ export interface Stage2MonitorIdentityDigests {
   readonly titleSha256: string;
 }
 
+export interface Stage2MonitorObservedIdentity {
+  readonly host: string;
+  readonly tenant: string;
+  readonly posting: string;
+  readonly title: string;
+}
+
 export interface Stage2MonitorTaxonomy {
   readonly fieldCount: number;
   readonly requiredFieldCount: number;
@@ -434,7 +441,8 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
   readonly evidenceRoot: string;
   readonly requestPath: string;
   readonly classification: MonitorClassification;
-  readonly observedIdentityDigests: Stage2MonitorIdentityDigests;
+  readonly observedScreenshotSha256: string;
+  readonly observedIdentity: Stage2MonitorObservedIdentity;
   readonly structuralDescriptionIds: readonly string[];
   readonly observedAt?: string;
   readonly journeyId?: string;
@@ -461,7 +469,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       : monitorRequest.page === "application_ready" && monitorRequest.moment === "state_observed"
         ? "account_verified"
       : "safe_to_continue";
-    const observedIdentityDigests = exactDigests(request.observedIdentityDigests);
+    const observedIdentityDigests = identityDigestsFromObservation(request.observedIdentity);
     if (
       classification !== expectedClassification ||
       request.journeyId !== undefined && request.journeyId !== monitorRequest.journeyId ||
@@ -471,9 +479,17 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
     const page = monitorRequest.page as string;
     const moment = monitorRequest.moment as string;
     const prefix = `${String(ordinal).padStart(4, "0")}-${page}-${moment}`;
+    const screenshotBytes = readStable(join(parent, `${prefix}.png`), 12 * 1024 * 1024, 8);
+    validateStage2MonitorPng(screenshotBytes);
+    const observedScreenshotSha256 = exactSha256(request.observedScreenshotSha256);
+    if (
+      monitorRequest.screenshotFile !== `${prefix}.png` ||
+      monitorRequest.screenshotSha256 !== digest(screenshotBytes) ||
+      observedScreenshotSha256 !== monitorRequest.screenshotSha256
+    ) ackDenied();
     const ack = {
-      schemaVersion: 1,
-      evidenceRevision: "s2-external-monitor-ack-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-external-monitor-ack-v2",
       status: "acknowledged",
       observer: "independent_visual_monitor",
       journeyId: monitorRequest.journeyId,
@@ -486,6 +502,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       requestFile: `${prefix}.request.json`,
       requestSha256: digest(requestBytes),
       classification,
+      observedScreenshotSha256,
       identityReconciliation: "matched",
       identityDimensions: ["host", "posting", "title"],
       observedIdentityDigests,
@@ -509,7 +526,8 @@ export function readStage2ExternalMonitorObservation(
   runtimeRootValue: string,
   observationPathValue: string,
 ): {
-  readonly observedIdentityDigests: Stage2MonitorIdentityDigests;
+  readonly observedScreenshotSha256: string;
+  readonly observedIdentity: Stage2MonitorObservedIdentity;
   readonly structuralDescriptionIds: readonly string[];
   readonly observedAt: string;
 } {
@@ -521,17 +539,19 @@ export function readStage2ExternalMonitorObservation(
     if (dirname(path) !== runtimeRoot || filenameMatch === null) throw new Error();
     const value = JSON.parse(readStable(path, 16 * 1024, 2).toString("utf8")) as Record<string, unknown>;
     const keys = [
-      "schemaVersion", "evidenceRevision", "observer", "observedIdentityDigests",
+      "schemaVersion", "evidenceRevision", "observer", "observedScreenshotSha256",
+      "observedIdentity",
       "structuralDescriptionIds", "observedAt",
     ];
     if (Object.keys(value).length !== keys.length ||
         keys.some((key, index) => Object.keys(value)[index] !== key) ||
-        value.schemaVersion !== 1 ||
-        value.evidenceRevision !== "s2-external-monitor-observation-v1" ||
+        value.schemaVersion !== 2 ||
+        value.evidenceRevision !== "s2-external-monitor-observation-v2" ||
         value.observer !== "independent_visual_monitor") throw new Error();
     return Object.freeze({
-      observedIdentityDigests: exactDigests(
-        value.observedIdentityDigests as Stage2MonitorIdentityDigests,
+      observedScreenshotSha256: exactSha256(value.observedScreenshotSha256 as string),
+      observedIdentity: exactObservedIdentity(
+        value.observedIdentity as Stage2MonitorObservedIdentity,
       ),
       structuralDescriptionIds: exactStructuralIds(
         value.structuralDescriptionIds as readonly string[],
@@ -580,12 +600,13 @@ function validateAck(
       ? "account_verified"
     : "safe_to_continue";
   if (
-    ack.schemaVersion !== 1 || ack.evidenceRevision !== "s2-external-monitor-ack-v1" ||
+    ack.schemaVersion !== 2 || ack.evidenceRevision !== "s2-external-monitor-ack-v2" ||
     ack.status !== "acknowledged" || ack.observer !== "independent_visual_monitor" ||
     ack.journeyId !== request.journeyId || ack.targetHandleId !== request.targetHandleId ||
     ack.operationId !== request.operationId || ack.attempt !== request.attempt ||
     ack.ordinal !== request.ordinal || ack.page !== request.page || ack.moment !== request.moment ||
     ack.requestSha256 !== requestSha256 || ack.classification !== expectedClassification ||
+    ack.observedScreenshotSha256 !== request.screenshotSha256 ||
     ack.identityReconciliation !== "matched" || ack.privacyScan !== "pass" ||
     ack.submitPresent !== (request.page === "review") || ack.submitActivated !== false ||
     JSON.stringify(ack.observedIdentityDigests) !== JSON.stringify(request.capturedIdentityDigests) ||
@@ -616,6 +637,37 @@ function exactDigests(value: Stage2MonitorIdentityDigests): Stage2MonitorIdentit
   if (keys.length !== expected.length || expected.some((key, index) => key !== keys[index]) ||
       Object.values(value).some((item) => !/^[0-9a-f]{64}$/u.test(item))) ackDenied();
   return Object.freeze({ ...value });
+}
+
+function exactSha256(value: string): string {
+  if (!/^[0-9a-f]{64}$/u.test(value)) ackDenied();
+  return value;
+}
+
+function exactObservedIdentity(
+  value: Stage2MonitorObservedIdentity,
+): Stage2MonitorObservedIdentity {
+  const keys = Object.keys(value);
+  const expected = ["host", "tenant", "posting", "title"];
+  if (keys.length !== expected.length || expected.some((key, index) => key !== keys[index])) {
+    ackDenied();
+  }
+  const host = value.host.toLowerCase();
+  const tenant = value.tenant.toLowerCase();
+  if (
+    host !== value.host || tenant !== value.tenant ||
+    !/^[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])$/u.test(host) ||
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(tenant) ||
+    !/^[A-Za-z0-9-]{2,64}$/u.test(value.posting)
+  ) ackDenied();
+  return Object.freeze({ host, tenant, posting: value.posting, title: boundedTitle(value.title) });
+}
+
+function identityDigestsFromObservation(
+  value: Stage2MonitorObservedIdentity,
+): Stage2MonitorIdentityDigests {
+  const observed = exactObservedIdentity(value);
+  return identityDigests(observed, observed.title);
 }
 
 function observedIdentity(

@@ -906,8 +906,8 @@ function writeExternalMonitorChain(
     });
     writeFileSync(join(monitorRoot, requestFile), request);
     const ack = jsonBytes({
-      schemaVersion: 1,
-      evidenceRevision: "s2-external-monitor-ack-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-external-monitor-ack-v2",
       status: "acknowledged",
       observer: "independent_visual_monitor",
       journeyId,
@@ -920,6 +920,7 @@ function writeExternalMonitorChain(
       requestFile,
       requestSha256: digest(request),
       classification: index === moments.length - 1 ? finalClassification : "safe_to_continue",
+      observedScreenshotSha256: digest(screenshot),
       identityReconciliation: "matched",
       identityDimensions: ["host", "posting", "title"],
       observedIdentityDigests: identityDigests(),

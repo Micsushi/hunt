@@ -29,8 +29,43 @@ import {
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
-import { isReviewExpectedField, OwnedWorkdayApplicationRuntime } from
+import {
+  bindQuestionnaireTargets,
+  isReviewExpectedField,
+  OwnedWorkdayApplicationRuntime,
+} from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("questionnaire binding owns every admitted visible Workday question root", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    for (const root of [
+      "applyFlowPrimaryQuestionsPage",
+      "applyFlowPrimaryQuestionnairePage",
+      "applyFlowApplicationQuestionsPage",
+      "applyFlowVoluntaryDisclosuresPage",
+    ]) {
+      await page.setContent(`
+        <main data-automation-id="${root}">
+          <label>Brief interest statement
+            <textarea required aria-label="Brief interest statement"></textarea>
+          </label>
+        </main>
+      `);
+      await bindQuestionnaireTargets(page, "questionnaire-root-fixture" as never);
+      assert.equal(
+        await page.locator("textarea").getAttribute("data-hunt-target-token"),
+        "target-s1-field-interest",
+        root,
+      );
+    }
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
 
 test("a profile preflight owner-input block remains a deterministic page failure before mutation", async () => {
   const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-runtime-"));

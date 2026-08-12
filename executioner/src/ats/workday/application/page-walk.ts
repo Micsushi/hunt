@@ -311,6 +311,12 @@ export async function runApplicationPageWalk(
           unknownLayer: safeError.unknownLayer,
           page,
           attempt,
+          ...(safeError.placeholderProvenance === undefined
+            ? {}
+            : {
+                protectedPlaceholderCount: safeError.protectedPlaceholderCount,
+                placeholderProvenance: safeError.placeholderProvenance,
+              }),
         },
         submitActivated: false,
         privacyScan: "pass",
@@ -429,11 +435,33 @@ function sanitizeFailure(error: unknown): ApplicationPortFailure {
     typeof error.unknownLayer === "string" &&
     unknownLayerSet.has(error.unknownLayer)
   ) {
+    const failureRecord = error as Record<string, unknown>;
+    const hasPlaceholderCount = "protectedPlaceholderCount" in error;
+    const hasPlaceholderProvenance = "placeholderProvenance" in error;
+    if (
+      hasPlaceholderCount !== hasPlaceholderProvenance ||
+      (hasPlaceholderCount && (
+        (failureRecord.protectedPlaceholderCount !== 0 &&
+          failureRecord.protectedPlaceholderCount !== 1) ||
+        failureRecord.placeholderProvenance !== "synthetic_ui_learning"
+      ))
+    ) return internalFailure(
+      "failure_context_invalid",
+      "workday_page",
+      "page_observation",
+      "none",
+    );
     return {
       code: error.code as S2StableErrorCode,
       classifier: error.classifier as ApplicationClassifier,
       primitive: error.primitive as ApplicationPrimitive,
       unknownLayer: error.unknownLayer as ApplicationUnknownLayer,
+      ...(hasPlaceholderCount
+        ? {
+            protectedPlaceholderCount: failureRecord.protectedPlaceholderCount as 0 | 1,
+            placeholderProvenance: "synthetic_ui_learning" as const,
+          }
+        : {}),
     };
   }
   return internalFailure(
