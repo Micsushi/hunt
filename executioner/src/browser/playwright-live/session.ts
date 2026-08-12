@@ -116,6 +116,7 @@ export class PlaywrightPersistentBrowserSession
       probe: options.probe,
       timeoutMs: options.timeoutMs,
       externalMonitor: options.externalMonitor,
+      trace: options.accountNavigationTrace,
       state: () => ({
         page: this.#page,
         session: this.#session,

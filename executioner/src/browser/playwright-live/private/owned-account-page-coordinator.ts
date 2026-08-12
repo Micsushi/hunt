@@ -19,6 +19,7 @@ import type {
   ProfileMarkerV1,
 } from "./types.ts";
 import type { ExternalMonitorPort } from "./external-monitor-port.ts";
+import type { PostingNavigationSessionTraceEvent } from "./account-navigation-types.ts";
 
 export interface AccountPageOwnershipState {
   readonly page: PersistentPage | undefined;
@@ -34,6 +35,7 @@ interface OwnedAccountPageCoordinatorOptions {
   readonly state: () => AccountPageOwnershipState;
   readonly invalidate: () => Promise<void>;
   readonly externalMonitor?: Pick<ExternalMonitorPort, "auth">;
+  readonly trace?: (event: PostingNavigationSessionTraceEvent) => void;
 }
 
 export class OwnedAccountPageCoordinator {
@@ -227,7 +229,11 @@ export class OwnedAccountPageCoordinator {
       if (
         current.page !== page || current.approvedTarget !== approvedTarget ||
         current.session?.sessionId !== request.sessionId
-      ) return failure("browser_session_invalidated");
+      ) {
+        this.#trace("account_post_submit_state_invalidated");
+        return failure("browser_session_invalidated");
+      }
+      this.#trace("account_post_submit_inspection_started");
       const inspected = await inspectPinnedTarget(
         page,
         this.#options.probe,
@@ -236,7 +242,13 @@ export class OwnedAccountPageCoordinator {
         new AbortController().signal,
         this.#options.timeoutMs,
       );
+      if (!inspected.ok) {
+        this.#trace(`account_post_submit_inspection_failed_${inspected.error.code}`);
+      } else {
+        this.#trace(`account_post_submit_inspection_observed_${inspected.value.target.kind}`);
+      }
       if (inspected.ok && inspected.value.target.kind === "matched") {
+        this.#trace("account_post_submit_monitor_started");
         const monitored = await this.#monitor(
           page,
           authMonitorPhase(inspected.value.snapshot),
@@ -246,6 +258,9 @@ export class OwnedAccountPageCoordinator {
           inspected.value.snapshot,
           new AbortController().signal,
         );
+        this.#trace(monitored
+          ? "account_post_submit_monitor_succeeded"
+          : "account_post_submit_monitor_failed");
         return monitored
           ? { ok: true, value: undefined }
           : failure("browser_effect_uncertain");
@@ -254,6 +269,10 @@ export class OwnedAccountPageCoordinator {
       await delay(Math.min(100, Math.max(1, deadline - Date.now())));
     }
     return failure("browser_effect_uncertain");
+  }
+
+  #trace(event: PostingNavigationSessionTraceEvent): void {
+    try { this.#options.trace?.(event); } catch { /* diagnostics never alter behavior */ }
   }
 }
 

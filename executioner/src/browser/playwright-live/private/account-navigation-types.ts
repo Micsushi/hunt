@@ -55,4 +55,11 @@ export type PostingNavigationSessionTraceEvent =
   | `posting_navigation_transition_inspection_observed_${PostingNavigationObservedKind}`
   | "posting_navigation_transition_monitor_started"
   | "posting_navigation_transition_monitor_succeeded"
-  | "posting_navigation_transition_monitor_failed";
+  | "posting_navigation_transition_monitor_failed"
+  | "account_post_submit_state_invalidated"
+  | "account_post_submit_inspection_started"
+  | `account_post_submit_inspection_failed_${PostingNavigationFailureCode}`
+  | `account_post_submit_inspection_observed_${PostingNavigationObservedKind}`
+  | "account_post_submit_monitor_started"
+  | "account_post_submit_monitor_succeeded"
+  | "account_post_submit_monitor_failed";

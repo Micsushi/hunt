@@ -67,6 +67,7 @@ test("external monitoring retries exact ownership through a bounded post-submit 
   const context = new FakeContext();
   const semantic = new FakeSemanticAccountPage();
   let inspections = 0;
+  const traces: string[] = [];
   const records: Parameters<Stage2ExternalMonitorRuntime["auth"]>[] = [];
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
@@ -83,6 +84,7 @@ test("external monitoring retries exact ownership through a bounded post-submit 
       async auth(...args) { records.push(args); },
       async application() {},
     },
+    accountNavigationTrace: (event) => traces.push(event),
     ids: () => liveFixtures.session.sessionId as LiveSessionId,
     timeoutMs: 250,
   });
@@ -102,6 +104,14 @@ test("external monitoring retries exact ownership through a bounded post-submit 
   assert.deepEqual(result, { ok: true, value: undefined });
   assert.equal(inspections >= 4, true);
   assert.deepEqual(records.map((args) => args[2]), ["before_mutation", "after_readback"]);
+  assert.deepEqual(traces.slice(-6), [
+    "account_post_submit_inspection_started",
+    "account_post_submit_inspection_failed_browser_session_missing",
+    "account_post_submit_inspection_started",
+    "account_post_submit_inspection_observed_matched",
+    "account_post_submit_monitor_started",
+    "account_post_submit_monitor_succeeded",
+  ]);
 });
 
 test("auth monitoring reports a visible sign-in overlay before its backing application page", () => {
