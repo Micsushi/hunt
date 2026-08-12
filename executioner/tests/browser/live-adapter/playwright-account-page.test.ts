@@ -1057,6 +1057,38 @@ test("a markerless rejected submit may detach then reattach before classificatio
   ]);
 });
 
+test("an externally monitored submit delegates an observed transition without a second wait", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+  });
+  const absentDestination = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+    externallyMonitored: true,
+  }).activate(new FakePage(submit, absentDestination), "submit_sign_in");
+
+  assert.deepEqual(submit.waitForArguments, [
+    { state: "hidden", timeout: 10_000 },
+  ]);
+  assert.deepEqual(events, [
+    "submit_hit_target_clear",
+    "submit_click_started",
+    "submit_click_succeeded",
+    "submit_transition_deferred_to_monitor",
+  ]);
+});
+
 test("a hidden attached submit owner cannot beat a known destination", async () => {
   const events: string[] = [];
   const submit = new FakeLocator({

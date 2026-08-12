@@ -55,6 +55,7 @@ export function createPlaywrightPersistentBrowserSession(
     accountPage: new PlaywrightAccountPageAdapter({
       trace: options.accountTrace,
       unsettledInspectionHold: inspectionHold,
+      externallyMonitored: options.externalMonitor !== undefined,
     }),
     postingNavigation: new PlaywrightPostingNavigationAdapter({
       trace: options.accountTrace,

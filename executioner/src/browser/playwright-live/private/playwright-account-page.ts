@@ -70,6 +70,7 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_rejection_password_confirmation_wait_failed"
   | "submit_stabilization_failed"
   | "submit_stabilization_deferred"
+  | "submit_transition_deferred_to_monitor"
   | "submit_dom_click_retry_started"
   | "submit_dom_click_retry_succeeded"
   | "submit_dom_click_retry_failed"
@@ -97,6 +98,7 @@ interface AccountSubmitFailureDiagnosticV1 {
 export interface PlaywrightAccountPageAdapterOptions {
   readonly trace?: (event: PlaywrightAccountPageTraceEvent) => void;
   readonly unsettledInspectionHold?: () => Promise<void>;
+  readonly externallyMonitored?: boolean;
 }
 
 const WORKDAY_VISIBLE_ALERT_SELECTOR = '[role="alert"]';
@@ -127,10 +129,12 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
   readonly #unsettledInspectionHold: PlaywrightAccountPageAdapterOptions[
     "unsettledInspectionHold"
   ];
+  readonly #externallyMonitored: boolean;
 
   constructor(options: PlaywrightAccountPageAdapterOptions = {}) {
     this.#trace = options.trace;
     this.#unsettledInspectionHold = options.unsettledInspectionHold;
+    this.#externallyMonitored = options.externallyMonitored === true;
   }
 
   async inspect(
@@ -366,6 +370,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           await emitExactSignInAlert();
           this.#emit("submit_exact_fact_observed");
         } else {
+          if (this.#externallyMonitored) {
+            this.#emit("submit_transition_deferred_to_monitor");
+            return;
+          }
           let observed: "destination" | "rejection" | "exact_fact";
           try {
             try {
