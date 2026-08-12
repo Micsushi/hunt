@@ -1646,7 +1646,7 @@ test("a successful submit click defers unknown stabilization to account classifi
   ]);
 });
 
-test("create-account retries one exact noCaptcha DOM click after no progress", async () => {
+test("externally monitored create-account still retries one exact noCaptcha DOM click", async () => {
   const events: string[] = [];
   const submit = new FakeLocator({
     count: 1,
@@ -1671,6 +1671,7 @@ test("create-account retries one exact noCaptcha DOM click after no progress", a
 
   await new PlaywrightAccountPageAdapter({
     trace: (event) => events.push(event),
+    externallyMonitored: true,
   }).activate(new FakePage(submit, absent, new Map([
     ['[data-automation-id="createAccountPage"]', createPage],
   ])), "submit_create_account");

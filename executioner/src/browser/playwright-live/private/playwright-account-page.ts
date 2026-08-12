@@ -370,7 +370,7 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
           await emitExactSignInAlert();
           this.#emit("submit_exact_fact_observed");
         } else {
-          if (this.#externallyMonitored) {
+          if (this.#externallyMonitored && action === "submit_sign_in") {
             this.#emit("submit_transition_deferred_to_monitor");
             return;
           }
