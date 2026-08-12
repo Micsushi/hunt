@@ -112,7 +112,7 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
     await page.setContent(`
       <body data-hunt-profile-page-type="profile">
         <main data-automation-id="applyFlowMyInfoPage">
-          <button id="country--country" name="country" role="combobox"
+          <button id="country--country" name="country" aria-haspopup="listbox"
             aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
           <label>First Name*<input id="name--legalName--firstName"
             name="legalName--firstName" required></label>
@@ -122,10 +122,11 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
             type="checkbox">I have a preferred name</label>
           <label>Address Line 1<input id="address--addressLine1" name="addressLine1"></label>
           <label>City<input id="address--city" name="city"></label>
-          <button id="address--countryRegion" name="countryRegion" role="combobox"
+          <button id="address--countryRegion" name="countryRegion" aria-haspopup="listbox"
             aria-label="Province or Territory Not Required">Select One</button>
           <label>Postal Code<input id="address--postalCode" name="postalCode"></label>
-          <button id="phoneNumber--phoneType" name="phoneType" role="combobox"
+          <label>Email*<input id="emailAddress--emailAddress" required></label>
+          <button id="phoneNumber--phoneType" name="phoneType" aria-haspopup="listbox"
             aria-label="Phone Device Type Mobile Required" aria-valuetext="Mobile">Mobile</button>
           <label>Country Phone Code*<input id="phoneNumber--countryPhoneCode" required></label>
           <label>Phone Number*<input id="phoneNumber--phoneNumber"
@@ -147,6 +148,7 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
       "address.country",
       "address.region",
       "address.postal_code",
+      "contact.email",
       "phone.device_type",
       "phone.country_code",
       "phone.number",
@@ -155,6 +157,7 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
     assert.equal(controls.get("address.country")?.required, true);
     assert.equal(controls.get("address.country")?.readback, "Canada");
     assert.equal(controls.get("address.region")?.required, false);
+    assert.equal(controls.get("contact.email")?.required, true);
     assert.equal(controls.get("phone.device_type")?.required, true);
     assert.equal(controls.get("phone.number")?.uiBehavior, "phone");
 

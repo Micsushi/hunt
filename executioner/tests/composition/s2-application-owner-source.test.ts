@@ -297,6 +297,47 @@ test("admits only the application source and exact region-derived country as jou
   }
 });
 
+test("admits a contact email field only when it matches the authoritative email fact", async () => {
+  const fixture = ownerFixture();
+  try {
+    writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const email = {
+      factId: "email_address",
+      value: "owner@example.invalid",
+      provenance: "owner_provided",
+    };
+    manifest.profile.facts.push(email);
+    manifest.profilePlan.fields.push({
+      fieldId: "contact.email",
+      questionType: "identity",
+      answerType: "text",
+      answer: {
+        kind: "answered",
+        value: email.value,
+        provenance: email.provenance,
+      },
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    });
+
+    const resolved = await resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+    assert.equal(resolved.profilePlan.fields.at(-1)?.fieldId, "contact.email");
+
+    manifest.profilePlan.fields.at(-1).answer.value = "different@example.invalid";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("admits Unicode plain text and an exact normal email address", async () => {
   const fixture = ownerFixture();
   try {

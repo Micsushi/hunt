@@ -78,7 +78,10 @@ const v2Text = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
 
 const v2Search = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
   fieldId,
-  selector: `button[id="${id}"][role="combobox"]`,
+  selector: [
+    `button[id="${id}"][role="combobox"]`,
+    `button[id="${id}"][aria-haspopup="listbox"]`,
+  ].join(", "),
   uiBehavior: "search_select",
   uiVariant: "workday_search_select_v2",
 });
@@ -142,6 +145,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
     v2Search("address.country", "country--country"),
     v2Search("address.region", "address--countryRegion"),
     v2Text("address.postal_code", "address--postalCode"),
+    v2Text("contact.email", "emailAddress--emailAddress"),
     v2Search("phone.device_type", "phoneNumber--phoneType"),
     v2Text("phone.country_code", "phoneNumber--countryPhoneCode"),
     {

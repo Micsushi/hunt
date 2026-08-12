@@ -9,6 +9,8 @@ import {
   parseStage2RunPreparationArgs,
   runStage2RunPreparationCli,
 } from "../../src/composition/s2-run-preparation-cli.ts";
+import { withDerivedProfileCountry } from
+  "../../src/composition/private/s2-derived-profile-country.ts";
 
 const storageRoot = resolve("C:\\protected\\hunt-c3-storage");
 const targetUrl = "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422";
@@ -37,6 +39,8 @@ test("run preparation CLI captures protected source paths without raw values on 
         revision: 1,
         facts: [
           { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
+          { factId: "email_address", value: "synthetic@example.com", provenance: "owner_provided" },
+          { factId: "city", value: "Calgary", provenance: "resume_verified" },
           { factId: "region", value: "Alberta", provenance: "owner_provided" },
           { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
         ],
@@ -79,11 +83,83 @@ test("run preparation CLI captures protected source paths without raw values on 
         provenance: "visible_option",
       },
     });
+    assert.deepEqual(captured.profilePlan.fields.slice(2), [
+      {
+        fieldId: "contact.email",
+        questionType: "identity",
+        answerType: "text",
+        answer: {
+          kind: "answered",
+          value: "synthetic@example.com",
+          provenance: "owner_provided",
+        },
+      },
+      {
+        fieldId: "address.city",
+        questionType: "address",
+        answerType: "text",
+        answer: {
+          kind: "answered",
+          value: "Calgary",
+          provenance: "resume_verified",
+        },
+      },
+      {
+        fieldId: "address.region",
+        questionType: "address",
+        answerType: "option",
+        answer: {
+          kind: "answered",
+          value: "Alberta",
+          provenance: "owner_provided",
+        },
+        optionMapping: {
+          canonicalValue: "Alberta",
+          visibleOption: "Alberta",
+          provenance: "visible_option",
+        },
+      },
+    ]);
     assert.equal(createHash("sha256").update(resume).digest("hex").length, 64);
   } finally {
     resume.fill(0);
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("profile fact projection preserves planned fields and leaves missing facts unresolved", () => {
+  const plan = {
+    pageType: "profile",
+    fields: [{
+      fieldId: "contact.email",
+      questionType: "identity",
+      answerType: "text",
+      answer: { kind: "answered", value: "planned@example.com", provenance: "owner_provided" },
+    }],
+    repeatables: [],
+  };
+
+  const projected = withDerivedProfileCountry({
+    facts: [
+      { factId: "email_address", value: "fact@example.com", provenance: "owner_provided" },
+      { factId: "city", value: "Edmonton", provenance: "configured_template" },
+    ],
+  }, plan) as typeof plan;
+
+  assert.deepEqual(projected.fields, [
+    plan.fields[0],
+    {
+      fieldId: "address.city",
+      questionType: "address",
+      answerType: "text",
+      answer: {
+        kind: "answered",
+        value: "Edmonton",
+        provenance: "configured_template",
+      },
+    },
+  ]);
+  assert.equal(projected.fields.some(({ fieldId }) => fieldId === "address.region"), false);
 });
 
 test("run preparation CLI rejects caller-supplied IDs and malformed argument sets", () => {

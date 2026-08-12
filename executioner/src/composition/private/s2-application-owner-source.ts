@@ -308,6 +308,7 @@ function validateProfileAuthority(
     "identity.given_name": "given_name",
     "identity.family_name": "family_name",
     "identity.preferred_name": "preferred_name",
+    "contact.email": "email_address",
     "address.city": "city",
     "address.region": "region",
     "address.country": "country",
