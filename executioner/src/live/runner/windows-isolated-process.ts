@@ -362,9 +362,16 @@ $desktopName = 'HuntC3_' + [guid]::NewGuid().ToString('N')
 # DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS.
 # Deliberately omit the desktop-switch right.
 $desktop = [HuntC3IsolatedRunner]::CreateDesktop($desktopName, [IntPtr]::Zero, [IntPtr]::Zero, 0, [uint32]0x00C3, [IntPtr]::Zero)
-if ($desktop -eq [IntPtr]::Zero) { exit 123 }
+if ($desktop -eq [IntPtr]::Zero) {
+    [Console]::Error.WriteLine('isolated runner CreateDesktop failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    exit 123
+}
 $job = [HuntC3IsolatedRunner]::CreateJobObject([IntPtr]::Zero, $null)
-if ($job -eq [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null; exit 124 }
+if ($job -eq [IntPtr]::Zero) {
+    [Console]::Error.WriteLine('isolated runner CreateJobObject failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
+    exit 124
+}
 $processInfo = New-Object HuntC3IsolatedRunner+PROCESS_INFORMATION
 $attributeList = [IntPtr]::Zero
 $jobValue = [IntPtr]::Zero

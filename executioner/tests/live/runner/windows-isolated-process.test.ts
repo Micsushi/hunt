@@ -40,6 +40,8 @@ test("Windows live runner owns an unswitched desktop and kill-on-close process j
     "s2-windows-process-audit-v2",
     "processLiveNonceSha256",
     "monitorChainSha256",
+    "isolated runner CreateDesktop failed:",
+    "isolated runner CreateJobObject failed:",
   ]) assert.match(source, new RegExp(required, "u"), required);
   assert.doesNotMatch(source, /AssignProcessToJobObject/u);
   for (const forbidden of ["SwitchDesktop", "SetForegroundWindow", "connectOverCDP"]) {
