@@ -95,6 +95,7 @@ test("external monitoring retries exact ownership through a bounded post-submit 
     AbortSignal.any([]),
     async (access) => {
       assert.deepEqual(await access.activate("submit_sign_in"), { ok: true, value: undefined });
+      assert.deepEqual(records.map((args) => args[2]), ["before_mutation", "after_readback"]);
     },
   );
 

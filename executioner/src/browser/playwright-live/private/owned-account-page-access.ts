@@ -18,11 +18,13 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   readonly #timeoutMs: number;
   readonly #revalidate: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
   readonly #revalidateAfterActivation: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
+  readonly #monitorAfterActivation?: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
   readonly #invalidate: () => Promise<void>;
   readonly #unverifiedFields = new Set<AccountFieldName>();
   #terminalError: PersistentBrowserErrorCode | "operation_cancelled" | undefined;
   #active = true;
   #effectStarted = false;
+  #activationMonitored = false;
 
   constructor(
     page: PersistentPage,
@@ -32,6 +34,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     revalidate: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>,
     invalidate: () => Promise<void>,
     revalidateAfterActivation = revalidate,
+    monitorAfterActivation?: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>,
   ) {
     this.#page = page;
     this.#adapter = adapter;
@@ -39,6 +42,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     this.#timeoutMs = timeoutMs;
     this.#revalidate = revalidate;
     this.#revalidateAfterActivation = revalidateAfterActivation;
+    this.#monitorAfterActivation = monitorAfterActivation;
     this.#invalidate = invalidate;
   }
 
@@ -93,6 +97,11 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     if (applied.kind !== "value") return this.#uncertain();
     const ownership = await this.#revalidateAfterActivation();
     if (!ownership.ok) return this.#uncertain();
+    if (this.#monitorAfterActivation !== undefined) {
+      const monitored = await this.#monitorAfterActivation();
+      if (!monitored.ok) return this.#uncertain();
+      this.#activationMonitored = true;
+    }
     return { ok: true, value: undefined } as const;
   }
 
@@ -105,6 +114,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   }
 
   get effectStarted(): boolean { return this.#effectStarted; }
+  get activationMonitored(): boolean { return this.#activationMonitored; }
 
   deactivate(): void {
     this.#active = false;

@@ -103,6 +103,9 @@ export class OwnedAccountPageCoordinator {
       this.#options.externalMonitor === undefined
         ? undefined
         : () => this.#revalidateAfterTransition(page, approvedTarget, request, signal),
+      this.#options.externalMonitor === undefined
+        ? undefined
+        : () => this.#monitorAfterActivation(page, approvedTarget, request, attempt),
     );
     let callbackFailed = false;
     try {
@@ -127,26 +130,12 @@ export class OwnedAccountPageCoordinator {
       await this.#options.invalidate();
       return failure("browser_effect_uncertain");
     }
-    const after = await inspectPinnedTarget(
+    const monitored = scope.activationMonitored || await this.#monitorAfterActivation(
       page,
-      this.#options.probe,
       approvedTarget,
-      request.target,
-      new AbortController().signal,
-      this.#options.timeoutMs,
-    );
-    const afterPage = after.ok && after.value.target.kind === "matched"
-      ? authMonitorPhase(after.value.snapshot)
-      : "unknown";
-    const monitored = after.ok && after.value.target.kind === "matched" && await this.#monitor(
-      page,
-      afterPage,
-      "after_readback",
-      request.operationId,
+      request,
       attempt,
-      after.value.snapshot,
-      new AbortController().signal,
-    );
+    ).then((result) => result.ok);
     if (!monitored || callbackFailed || scope.terminalError === "browser_effect_uncertain" ||
         scope.hasUnverifiedEffect) {
       await this.#options.invalidate();
@@ -254,6 +243,37 @@ export class OwnedAccountPageCoordinator {
       await delay(Math.min(100, Math.max(1, deadline - Date.now())));
     }
     return failure("browser_session_invalidated");
+  }
+
+  async #monitorAfterActivation(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedAccountPageAccessRequest,
+    attempt: number,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    const inspected = await inspectPinnedTarget(
+      page,
+      this.#options.probe,
+      approvedTarget,
+      request.target,
+      new AbortController().signal,
+      this.#options.timeoutMs,
+    );
+    if (!inspected.ok || inspected.value.target.kind !== "matched") {
+      return failure("browser_effect_uncertain");
+    }
+    const monitored = await this.#monitor(
+      page,
+      authMonitorPhase(inspected.value.snapshot),
+      "after_readback",
+      request.operationId,
+      attempt,
+      inspected.value.snapshot,
+      new AbortController().signal,
+    );
+    return monitored
+      ? { ok: true, value: undefined }
+      : failure("browser_effect_uncertain");
   }
 }
 
