@@ -63,6 +63,46 @@ test("external monitor ACK blocks account mutation and binds the same owned page
   assert.equal(records[1]?.[0], context.page);
 });
 
+test("external monitoring retries exact ownership through a bounded post-submit transition", async () => {
+  const context = new FakeContext();
+  const semantic = new FakeSemanticAccountPage();
+  let inspections = 0;
+  const records: Parameters<Stage2ExternalMonitorRuntime["auth"]>[] = [];
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        inspections += 1;
+        return inspections === 3 ? { ownership: "foreign" as const } : ownedAccountEntry();
+      },
+    },
+    profiles: new MemoryProfiles(),
+    accountPage: semantic,
+    externalMonitor: {
+      async auth(...args) { records.push(args); },
+      async application() {},
+    },
+    ids: () => liveFixtures.session.sessionId as LiveSessionId,
+    timeoutMs: 250,
+  });
+  const opened = await provider.open(openRequest(), AbortSignal.any([]));
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.withOwnedAccountPageAccess(
+    accessRequest(opened.value.session.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      assert.deepEqual(await access.activate("submit_sign_in"), { ok: true, value: undefined });
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.equal(inspections >= 5, true);
+  assert.deepEqual(records.map((args) => args[2]), ["before_mutation", "after_readback"]);
+});
+
 test("auth monitoring reports a visible sign-in overlay before its backing application page", () => {
   assert.equal(authMonitorPhase({
     schemaVersion: 1,

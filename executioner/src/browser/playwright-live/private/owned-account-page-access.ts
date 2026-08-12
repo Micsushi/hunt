@@ -17,6 +17,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
   readonly #signal: AbortSignal;
   readonly #timeoutMs: number;
   readonly #revalidate: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
+  readonly #revalidateAfterActivation: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>;
   readonly #invalidate: () => Promise<void>;
   readonly #unverifiedFields = new Set<AccountFieldName>();
   #terminalError: PersistentBrowserErrorCode | "operation_cancelled" | undefined;
@@ -30,12 +31,14 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     timeoutMs: number,
     revalidate: () => Promise<LivePortResult<void, PersistentBrowserErrorCode>>,
     invalidate: () => Promise<void>,
+    revalidateAfterActivation = revalidate,
   ) {
     this.#page = page;
     this.#adapter = adapter;
     this.#signal = signal;
     this.#timeoutMs = timeoutMs;
     this.#revalidate = revalidate;
+    this.#revalidateAfterActivation = revalidateAfterActivation;
     this.#invalidate = invalidate;
   }
 
@@ -88,7 +91,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
       this.#timeoutMs,
     );
     if (applied.kind !== "value") return this.#uncertain();
-    const ownership = await this.#revalidate();
+    const ownership = await this.#revalidateAfterActivation();
     if (!ownership.ok) return this.#uncertain();
     return { ok: true, value: undefined } as const;
   }

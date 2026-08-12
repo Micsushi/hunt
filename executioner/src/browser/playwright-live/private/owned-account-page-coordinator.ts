@@ -100,6 +100,9 @@ export class OwnedAccountPageCoordinator {
       this.#options.timeoutMs,
       () => this.#revalidate(page, approvedTarget, request, signal),
       this.#options.invalidate,
+      this.#options.externalMonitor === undefined
+        ? undefined
+        : () => this.#revalidateAfterTransition(page, approvedTarget, request, signal),
     );
     let callbackFailed = false;
     try {
@@ -222,6 +225,40 @@ export class OwnedAccountPageCoordinator {
       ? { ok: true, value: undefined }
       : failure("browser_session_invalidated");
   }
+
+  async #revalidateAfterTransition(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedAccountPageAccessRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    const deadline = Date.now() + this.#options.timeoutMs;
+    while (!signal.aborted) {
+      const current = this.#options.state();
+      if (
+        current.page !== page || current.approvedTarget !== approvedTarget ||
+        current.session?.sessionId !== request.sessionId
+      ) return failure("browser_session_invalidated");
+      const inspected = await inspectPinnedTarget(
+        page,
+        this.#options.probe,
+        approvedTarget,
+        request.target,
+        signal,
+        this.#options.timeoutMs,
+      );
+      if (inspected.ok && inspected.value.target.kind === "matched") {
+        return { ok: true, value: undefined };
+      }
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+    }
+    return failure("browser_session_invalidated");
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function validAdmission(
