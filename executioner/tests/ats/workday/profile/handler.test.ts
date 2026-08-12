@@ -565,6 +565,7 @@ test("classifies an unknown required profile control without exposing its identi
       kind: "blocked",
       code: "answer_type_unknown",
       fieldId: "unknown.required.1",
+      uiBehavior: "text",
       uiVariant: "workday_unknown_required_v1",
     },
   );
@@ -608,6 +609,7 @@ test("rechecks required controls revealed after a scalar commit before the next 
       kind: "blocked",
       code: "answer_type_unknown",
       fieldId: "unknown.required.1",
+      uiBehavior: "text",
       uiVariant: "workday_unknown_required_v1",
     },
   );
@@ -830,6 +832,7 @@ test("rechecks required controls revealed by a repeatable add before filling the
       kind: "blocked",
       code: "answer_type_unknown",
       fieldId: "unknown.required.1",
+      uiBehavior: "text",
       uiVariant: "workday_unknown_required_v1",
     },
   );

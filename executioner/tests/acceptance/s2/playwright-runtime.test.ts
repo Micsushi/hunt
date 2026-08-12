@@ -143,6 +143,7 @@ test("a profile preflight owner-input block remains a deterministic page failure
       details: {
         code: "answer_type_unknown",
         fieldId: "unknown.required.1",
+        uiBehavior: "text",
         uiVariant: "workday_unknown_required_v1",
         mutationAttempted: false,
       },

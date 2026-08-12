@@ -58,7 +58,11 @@ type BlockedResult = Extract<
 
 const blocked = (
   code: BlockedResult["code"],
-  detail: { readonly fieldId?: string; readonly uiVariant?: string } = {},
+  detail: {
+    readonly fieldId?: string;
+    readonly uiBehavior?: ProfileControlSnapshot["uiBehavior"];
+    readonly uiVariant?: string;
+  } = {},
 ): BlockedResult => ({ kind: "blocked", code, ...detail });
 
 const portFailure = (
@@ -151,6 +155,7 @@ function preflightRequiredControls(
   if (unknownScalar !== undefined) {
     return blocked("answer_type_unknown", {
       fieldId: unknownScalar.fieldId,
+      uiBehavior: unknownScalar.uiBehavior,
       uiVariant: unknownScalar.uiVariant,
     });
   }
@@ -180,6 +185,7 @@ function preflightRequiredControls(
     if (unknownRepeatable !== undefined) {
       return blocked("answer_type_unknown", {
         fieldId: unknownRepeatable.fieldId,
+        uiBehavior: unknownRepeatable.uiBehavior,
         uiVariant: unknownRepeatable.uiVariant,
       });
     }

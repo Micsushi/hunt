@@ -159,5 +159,6 @@ export type ProfilePageCompletionResult =
         | "profile_ui_behavior_mismatch"
         | "profile_ui_variant_unreviewed";
       readonly fieldId?: string;
+      readonly uiBehavior?: ProfileUiBehavior;
       readonly uiVariant?: string;
     };

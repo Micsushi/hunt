@@ -619,6 +619,7 @@ test("unknown visible required controls block before a reviewed control is mutat
         kind: "blocked",
         code: "answer_type_unknown",
         fieldId: "unknown.required.1",
+        uiBehavior: "text",
         uiVariant: "workday_unknown_required_v1",
       },
     );
@@ -656,6 +657,7 @@ test("custom ARIA required controls block before a reviewed field is mutated", a
         kind: "blocked",
         code: "answer_type_unknown",
         fieldId: "unknown.required.1",
+        uiBehavior: "checkbox",
         uiVariant: "workday_unknown_required_v1",
       },
     );
@@ -957,6 +959,7 @@ test("a required control enabled after an earlier commit blocks the next mutatio
         kind: "blocked",
         code: "answer_type_unknown",
         fieldId: "unknown.required.1",
+        uiBehavior: "text",
         uiVariant: "workday_unknown_required_v1",
       },
     );

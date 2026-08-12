@@ -275,6 +275,7 @@ export class OwnedWorkdayApplicationRuntime {
               this.#trace?.("profile_reconciliation_blocked", {
                 code: result.code,
                 ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+                ...(result.uiBehavior === undefined ? {} : { uiBehavior: result.uiBehavior }),
                 ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),
                 mutationAttempted,
               });
