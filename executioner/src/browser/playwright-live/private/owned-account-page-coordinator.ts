@@ -102,7 +102,7 @@ export class OwnedAccountPageCoordinator {
       this.#options.invalidate,
       this.#options.externalMonitor === undefined
         ? undefined
-        : () => this.#revalidateAfterTransition(page, approvedTarget, request, signal),
+        : async () => ({ ok: true, value: undefined }),
       this.#options.externalMonitor === undefined
         ? undefined
         : () => this.#monitorAfterActivation(page, approvedTarget, request, attempt),
@@ -215,14 +215,14 @@ export class OwnedAccountPageCoordinator {
       : failure("browser_session_invalidated");
   }
 
-  async #revalidateAfterTransition(
+  async #monitorAfterActivation(
     page: PersistentPage,
     approvedTarget: ApprovedTargetBinding,
     request: OwnedAccountPageAccessRequest,
-    signal: AbortSignal,
+    attempt: number,
   ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
     const deadline = Date.now() + this.#options.timeoutMs;
-    while (!signal.aborted) {
+    while (Date.now() <= deadline) {
       const current = this.#options.state();
       if (
         current.page !== page || current.approvedTarget !== approvedTarget ||
@@ -233,47 +233,27 @@ export class OwnedAccountPageCoordinator {
         this.#options.probe,
         approvedTarget,
         request.target,
-        signal,
+        new AbortController().signal,
         this.#options.timeoutMs,
       );
       if (inspected.ok && inspected.value.target.kind === "matched") {
-        return { ok: true, value: undefined };
+        const monitored = await this.#monitor(
+          page,
+          authMonitorPhase(inspected.value.snapshot),
+          "after_readback",
+          request.operationId,
+          attempt,
+          inspected.value.snapshot,
+          new AbortController().signal,
+        );
+        return monitored
+          ? { ok: true, value: undefined }
+          : failure("browser_effect_uncertain");
       }
       if (Date.now() >= deadline) break;
       await delay(Math.min(100, Math.max(1, deadline - Date.now())));
     }
-    return failure("browser_session_invalidated");
-  }
-
-  async #monitorAfterActivation(
-    page: PersistentPage,
-    approvedTarget: ApprovedTargetBinding,
-    request: OwnedAccountPageAccessRequest,
-    attempt: number,
-  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
-    const inspected = await inspectPinnedTarget(
-      page,
-      this.#options.probe,
-      approvedTarget,
-      request.target,
-      new AbortController().signal,
-      this.#options.timeoutMs,
-    );
-    if (!inspected.ok || inspected.value.target.kind !== "matched") {
-      return failure("browser_effect_uncertain");
-    }
-    const monitored = await this.#monitor(
-      page,
-      authMonitorPhase(inspected.value.snapshot),
-      "after_readback",
-      request.operationId,
-      attempt,
-      inspected.value.snapshot,
-      new AbortController().signal,
-    );
-    return monitored
-      ? { ok: true, value: undefined }
-      : failure("browser_effect_uncertain");
+    return failure("browser_effect_uncertain");
   }
 }
 

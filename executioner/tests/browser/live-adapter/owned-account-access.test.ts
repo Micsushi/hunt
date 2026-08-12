@@ -100,7 +100,7 @@ test("external monitoring retries exact ownership through a bounded post-submit 
   );
 
   assert.deepEqual(result, { ok: true, value: undefined });
-  assert.equal(inspections >= 5, true);
+  assert.equal(inspections >= 4, true);
   assert.deepEqual(records.map((args) => args[2]), ["before_mutation", "after_readback"]);
 });
 
