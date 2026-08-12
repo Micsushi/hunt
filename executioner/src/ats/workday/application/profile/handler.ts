@@ -145,9 +145,15 @@ function preflightRequiredControls(
       fields.map(({ fieldId }) => fieldId)
     ),
   ]);
-  if (snapshot.controls.some(({ fieldId, required }) =>
+  const unknownScalar = snapshot.controls.find(({ fieldId, required }) =>
     required && !admittedScalarIds.has(fieldId)
-  )) return blocked("answer_type_unknown");
+  );
+  if (unknownScalar !== undefined) {
+    return blocked("answer_type_unknown", {
+      fieldId: unknownScalar.fieldId,
+      uiVariant: unknownScalar.uiVariant,
+    });
+  }
 
   const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
   const unplannedScalar = snapshot.controls.find(({ fieldId, required }) =>
@@ -168,9 +174,15 @@ function preflightRequiredControls(
       section === catalog.section
     );
     const admittedIds = new Set(catalog.fields.map(({ fieldId }) => fieldId));
-    if (visibleRows.some(({ controls }) => controls.some(({ fieldId, required }) =>
-      required && !admittedIds.has(fieldId)
-    ))) return blocked("answer_type_unknown");
+    const unknownRepeatable = visibleRows
+      .flatMap(({ controls }) => controls)
+      .find(({ fieldId, required }) => required && !admittedIds.has(fieldId));
+    if (unknownRepeatable !== undefined) {
+      return blocked("answer_type_unknown", {
+        fieldId: unknownRepeatable.fieldId,
+        uiVariant: unknownRepeatable.uiVariant,
+      });
+    }
 
     const repeatable = plan.repeatables.find(({ section }) =>
       section === catalog.section

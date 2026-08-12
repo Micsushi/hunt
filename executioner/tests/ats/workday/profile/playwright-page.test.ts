@@ -228,11 +228,11 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
             <div role="option" data-automation-id="promptLeafNode"
               data-value="company-website">Company Website</div>
           </div>
-          <fieldset>
+          <fieldset role="radiogroup" aria-required="true">
             <legend>Have you previously worked for the organization?</legend>
-            <input id="previous-yes" required type="radio"
+            <input id="previous-yes" type="radio"
               name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
-            <input id="previous-no" required type="radio"
+            <input id="previous-no" type="radio"
               name="candidateIsPreviousWorker" value="false"><label for="previous-no">No</label>
           </fieldset>
         </main>
@@ -260,6 +260,8 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
     const previousWorker = before.controls.find(
       ({ fieldId }) => fieldId === "employment.previously_worked_for_organization",
     )!;
+    assert.equal(previousWorker.required, true);
+    assert.equal(before.controls.some(({ fieldId }) => fieldId.startsWith("unknown.")), false);
 
     const result = await completeWorkdayProfilePage({
       pageType: "profile",
@@ -613,7 +615,12 @@ test("unknown visible required controls block before a reviewed control is mutat
         fields: [field("identity.given_name", "identity", "text", "Ada")],
         repeatables: [],
       }, adapter, AbortSignal.any([])),
-      { kind: "blocked", code: "answer_type_unknown" },
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiVariant: "workday_unknown_required_v1",
+      },
     );
     assert.equal(
       await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
@@ -645,7 +652,12 @@ test("custom ARIA required controls block before a reviewed field is mutated", a
         fields: [field("identity.given_name", "identity", "text", "Ada")],
         repeatables: [],
       }, adapter, AbortSignal.any([])),
-      { kind: "blocked", code: "answer_type_unknown" },
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiVariant: "workday_unknown_required_v1",
+      },
     );
     assert.equal(
       await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
@@ -941,7 +953,12 @@ test("a required control enabled after an earlier commit blocks the next mutatio
         ],
         repeatables: [],
       }, adapter, AbortSignal.any([])),
-      { kind: "blocked", code: "answer_type_unknown" },
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiVariant: "workday_unknown_required_v1",
+      },
     );
     assert.equal(
       await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),

@@ -561,7 +561,12 @@ test("classifies an unknown required profile control without exposing its identi
       fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
     }, port, AbortSignal.any([])),
-    { kind: "blocked", code: "answer_type_unknown" },
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiVariant: "workday_unknown_required_v1",
+    },
   );
   assert.equal(port.commits.length, 0);
   assert.equal(port.added.length, 0);
@@ -599,7 +604,12 @@ test("rechecks required controls revealed after a scalar commit before the next 
       ],
       repeatables: [],
     }, port, AbortSignal.any([])),
-    { kind: "blocked", code: "answer_type_unknown" },
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiVariant: "workday_unknown_required_v1",
+    },
   );
   assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
     "control-identity.given_name",
@@ -816,7 +826,12 @@ test("rechecks required controls revealed by a repeatable add before filling the
         rows: [{ rowKey: "experience-1", fields: desired }],
       }],
     }, port, AbortSignal.any([])),
-    { kind: "blocked", code: "answer_type_unknown" },
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiVariant: "workday_unknown_required_v1",
+    },
   );
   assert.deepEqual(port.added, ["experience"]);
   assert.equal(port.commits.length, 0);

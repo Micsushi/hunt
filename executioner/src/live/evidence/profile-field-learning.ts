@@ -241,12 +241,12 @@ function validFieldIdentity(value: string): boolean {
 }
 
 function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
-  const scalar = profileScalarControlCatalog.find(
-    ({ fieldId }) => field.fieldIdentity === `profile.${fieldId}`,
+  const scalar = profileScalarControlCatalog.some(
+    ({ fieldId, uiBehavior, uiVariant }) =>
+      field.fieldIdentity === `profile.${fieldId}` &&
+      field.uiType === uiBehavior && field.uiVariant === uiVariant,
   );
-  if (scalar !== undefined) {
-    return field.uiType === scalar.uiBehavior && field.uiVariant === scalar.uiVariant;
-  }
+  if (scalar) return true;
   const unknown = /^profile\.unknown\.(required|optional)\.[1-9][0-9]{0,2}$/u.exec(
     field.fieldIdentity,
   );

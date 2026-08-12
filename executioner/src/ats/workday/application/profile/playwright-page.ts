@@ -186,7 +186,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       return [{
         controlId,
         fieldId: entry.fieldId,
-        required: (await Promise.all(matches.map(required))).some(Boolean),
+        required: (await Promise.all(matches.map((match) =>
+          required(match, "radiogroup")
+        ))).some(Boolean),
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         readback: await radioReadback(matches),
@@ -243,6 +245,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     );
     const catalog = {
       scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector),
+      radioGroupSelectors: profileScalarControlCatalog
+        .filter(({ uiBehavior }) => uiBehavior === "radio_group")
+        .map(({ selector }) => selector),
       repeatables: profileRepeatableCatalog.map((entry) => ({
         sectionSelector: entry.sectionSelector,
         rowSelector: entry.rowSelector,
@@ -259,6 +264,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
           return true;
         }
+        if (
+          element.getAttribute("role") === "radiogroup" &&
+          reviewed.radioGroupSelectors.some((selector) =>
+            element.querySelector(selector) !== null
+          )
+        ) return true;
         return reviewed.repeatables.some((entry) => {
           const section = element.closest(entry.sectionSelector);
           const row = element.closest(entry.rowSelector);
@@ -552,7 +563,10 @@ async function radioOptionLabel(radio: Locator): Promise<string> {
   });
 }
 
-async function required(locator: Locator): Promise<boolean> {
+async function required(
+  locator: Locator,
+  compositeRole?: "radiogroup",
+): Promise<boolean> {
   if (
     await locator.isDisabled() ||
     await locator.getAttribute("aria-disabled") === "true" ||
@@ -564,9 +578,16 @@ async function required(locator: Locator): Promise<boolean> {
   const ariaLabel = (await locator.getAttribute("aria-label"))?.trim() ?? "";
   const accessibleRequired = /(?:^|\s)Required$/u.test(ariaLabel) &&
     !/(?:^|\s)Not Required$/u.test(ariaLabel);
+  const compositeRequired = compositeRole === undefined
+    ? false
+    : await locator.evaluate(
+      (element, role) =>
+        element.closest(`[role="${role}"]`)?.getAttribute("aria-required") === "true",
+      compositeRole,
+    );
   return await locator.getAttribute("required") !== null ||
     await locator.getAttribute("aria-required") === "true" ||
-    accessibleRequired;
+    accessibleRequired || compositeRequired;
 }
 
 async function validationCleared(locator: Locator): Promise<boolean> {

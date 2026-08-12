@@ -142,6 +142,8 @@ test("a profile preflight owner-input block remains a deterministic page failure
       event: "profile_reconciliation_blocked",
       details: {
         code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiVariant: "workday_unknown_required_v1",
         mutationAttempted: false,
       },
     }]);

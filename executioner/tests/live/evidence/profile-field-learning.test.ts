@@ -242,6 +242,30 @@ test("admits reviewed owner-input source and prior-employment controls", () => {
   assert.equal(admitted.fields.length, 2);
 });
 
+test("admits a reviewed v2 variant for a duplicated scalar field identity", () => {
+  const admitted = admitProfileFieldLearningEvidence({
+    schemaVersion: 1,
+    evidenceRevision: "s2-profile-field-learning-v1",
+    page: "profile",
+    fields: [{
+      fieldIdentity: "profile.identity.given_name",
+      uiType: "text",
+      uiVariant: "workday_text_v2",
+      questionCategory: "identity",
+      answerCategory: "text",
+      required: true,
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "not_applicable",
+      prefillDisposition: "blank",
+      driverAttempt: "none",
+      mechanics: mechanics("text", "not_attempted"),
+    }],
+  });
+
+  assert.equal(admitted.fields[0]?.uiVariant, "workday_text_v2");
+});
+
 test("admits privacy-safe optional checkbox and required file inventory", () => {
   const admitted = admitProfileFieldLearningEvidence({
     schemaVersion: 1,
