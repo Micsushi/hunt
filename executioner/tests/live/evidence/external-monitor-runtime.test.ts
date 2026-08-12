@@ -185,6 +185,60 @@ test("external monitor derives exact identity from the observed page URL", async
   }
 });
 
+test("a reviewed posting-free sign-in descendant keeps the approved posting binding", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-posting-free-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.002Z",
+      }),
+    });
+    await runtime.auth(
+      fixturePage(`https://${binding.host}/en-US/Careers/login`),
+      "sign_in",
+      "before_mutation",
+      taxonomy(),
+      { operationId: "operation_posting_free_signin_01", attempt: 1 },
+      new AbortController().signal,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a posting-free URL never satisfies a job-posting monitor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-posting-required-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async () => assert.fail("posting-free job page reached ACK"),
+    });
+    await assert.rejects(() => runtime.auth(
+      fixturePage(`https://${binding.host}/en-US/Careers/login`),
+      "job_posting",
+      "before_navigation",
+      taxonomy(),
+      { operationId: "operation_posting_required_001", attempt: 1 },
+      new AbortController().signal,
+    ), /external monitor runtime denied/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("external monitor hashes independently supplied title and posting text", async () => {
   for (const [dimension, observedIdentityValue] of [
     ["posting", { ...observedIdentity(), posting: "99999999" }],

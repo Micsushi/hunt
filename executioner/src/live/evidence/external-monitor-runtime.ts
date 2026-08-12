@@ -40,6 +40,11 @@ const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
   "recovery_observed", "review_readback",
 ]);
+const POSTING_FREE_MONITOR_PAGES = new Set([
+  "apply_choice", "email_sign_in_choice", "account_entry", "verification_required",
+  "verification_navigation", "sign_in", "application_ready", "captcha", "mfa",
+  "access_control", "resume", "profile", "questionnaire", "review",
+]);
 const LIVE_FILE = "external-monitor-live.json";
 
 type AuthPage = string;
@@ -266,7 +271,7 @@ export class Stage2ExternalMonitorRuntime {
       emitMonitorTrace(this.#options.trace, "external_monitor_url_after_read", traceContext);
       failureStage = "identity_verification";
       const capturedIdentityDigests = identityDigests(
-        observedIdentity(urlBefore, urlAfter, this.#options),
+        observedIdentity(urlBefore, urlAfter, this.#options, pageName),
         title,
       );
       emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified", traceContext);
@@ -728,6 +733,7 @@ function observedIdentity(
   beforeValue: string,
   afterValue: string,
   expected: Stage2ExternalMonitorRuntimeOptions,
+  pageName: string,
 ): { readonly host: string; readonly tenant: string; readonly posting: string } {
   try {
     if (beforeValue !== afterValue) denied();
@@ -746,10 +752,13 @@ function observedIdentity(
       });
     if (
       parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
-      parsed.port !== "" || tenant === undefined || postings.length !== 1 ||
-      host !== expected.host || tenant !== expected.tenant || postings[0] !== expected.posting
+      parsed.port !== "" || tenant === undefined || postings.length > 1 ||
+      host !== expected.host || tenant !== expected.tenant ||
+      (postings.length === 1
+        ? postings[0] !== expected.posting
+        : !POSTING_FREE_MONITOR_PAGES.has(pageName))
     ) denied();
-    return Object.freeze({ host, tenant, posting: postings[0] });
+    return Object.freeze({ host, tenant, posting: postings[0] ?? expected.posting });
   } catch {
     return denied();
   }
