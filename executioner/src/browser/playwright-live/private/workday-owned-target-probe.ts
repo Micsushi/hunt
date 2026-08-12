@@ -136,7 +136,6 @@ export class WorkdayOwnedTargetProbe implements OwnedTargetProbe {
       parsed.postings.length === 0 &&
       !hasExactlyOnePostingFreeDescendantTrait(preliminary.snapshot)
     ) {
-      this.#matchedLineage.delete(probePage);
       return owned(preliminary.snapshot, { kind: "target_ambiguous" });
     }
     if (parsed.postings.length === 1) {

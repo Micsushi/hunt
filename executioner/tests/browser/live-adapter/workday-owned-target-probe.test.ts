@@ -197,6 +197,35 @@ test("a target contradiction revokes posting-free lineage for that page", async 
   );
 });
 
+test("a transient posting-free snapshot preserves exact lineage for a settled descendant", async () => {
+  const probe = new WorkdayOwnedTargetProbe();
+  const page = new ProbePage(
+    "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
+  );
+  assert.equal(
+    (await probe.inspect(page, expected, new AbortController().signal)).ownership,
+    "owned",
+  );
+
+  page.currentUrl = "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/apply";
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned({ kind: "target_ambiguous" }),
+  );
+
+  page.counts = { '[data-automation-id="applyFlowMyInfoPage"]': 1 };
+  assert.deepEqual(
+    await probe.inspect(page, expected, new AbortController().signal),
+    owned(
+      { kind: "matched" },
+      [
+        "structural_trait_ats_workday_family_v1",
+        "structural_trait_page_profile_step_v1",
+      ],
+    ),
+  );
+});
+
 test("posting-free lineage rejects conflicting descendant page types", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const page = new ProbePage(
