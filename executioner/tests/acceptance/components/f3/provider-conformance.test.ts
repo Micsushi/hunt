@@ -12,6 +12,9 @@ test("real Playwright provider conforms to the exact BrowserSession port", async
   const context = await browser.newContext();
   await context.route("https://fixture.invalid/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/questionnaire") {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
     await route.fulfill({
       contentType: "text/html",
       body: url.pathname === "/profile"

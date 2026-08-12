@@ -303,7 +303,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
       const count = await matches.count();
       if (count !== 1) return count === 0 ? "invalid" as const : "ambiguous" as const;
       effectStarted = true;
-      const applied = await clickNext(active.page, Math.min(500, this.#timeoutMs));
+      const applied = await clickNext(active.page, this.#timeoutMs);
       if (applied !== "applied") return applied;
       await active.page.waitForFunction(
         (fromPageId) =>
