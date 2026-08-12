@@ -48,6 +48,12 @@ export function classifyWorkdayAccountNavigation(
     !signIn &&
     !create
   ) return { kind: "email_sign_in_choice" };
+  if (
+    pages.length === 2 &&
+    traits.has(pageTraits.job) &&
+    traits.has(pageTraits.account) &&
+    signIn !== create
+  ) return { kind: "account_boundary" };
   if (pages.length > 1) return { kind: "ambiguous" };
   if (pages.length === 0) return { kind: "invalid" };
   const page = pages[0]![0];

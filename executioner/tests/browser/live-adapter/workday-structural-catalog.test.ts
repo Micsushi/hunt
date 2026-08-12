@@ -472,6 +472,23 @@ test("hidden provider and application markers cannot classify navigation or read
   );
 });
 
+test("a modern sign-in modal over its posting route is an account boundary", async () => {
+  const page: WorkdayStructuralPage = {
+    locator: (selector) => ({
+      count: async () => selector === MODERN_SIGN_IN_SELECTOR ? 1 : 0,
+      isVisible: async () => true,
+    }),
+  };
+
+  const result = await inspectWorkdayStructure(page, true, emptyInspector());
+
+  assert.equal(result.kind, "snapshot");
+  const snapshot = result.kind === "snapshot" ? result.snapshot : undefined;
+  assert.deepEqual(snapshot && classifyWorkdayAccountNavigation(snapshot), {
+    kind: "account_boundary",
+  });
+});
+
 test("all observed Workday application roots are exact application boundaries", async () => {
   for (const selector of [
     '[data-automation-id="applyFlowMyInfoPage"]',
