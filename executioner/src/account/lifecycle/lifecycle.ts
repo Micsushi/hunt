@@ -17,6 +17,7 @@ import {
   frozen,
   mailboxBlocked,
   mailboxInvalid,
+  navigationRequired,
   navigationBlocked,
   navigationDenied,
   ready,
@@ -208,6 +209,9 @@ export class AccountVerificationLifecycle {
       });
     }
     if (result.kind === "verification_required") return this.#verify(input, signal);
+    if (result.kind === "navigation_required") {
+      return navigationRequired("reused_account", 0, false);
+    }
     if (result.kind === "application_ready") {
       return this.#confirmReady(input, signal, "reused_account");
     }
@@ -257,6 +261,9 @@ export class AccountVerificationLifecycle {
       });
     }
     if (result.kind === "verification_required") return this.#verify(input, signal);
+    if (result.kind === "navigation_required") {
+      return navigationRequired("created_account", 0, false);
+    }
     if (result.kind === "application_ready") {
       return this.#confirmReady(input, signal, "created_account");
     }
@@ -315,6 +322,9 @@ export class AccountVerificationLifecycle {
       });
     }
     if (signInResult.kind === "verification_required") return this.#verify(input, signal);
+    if (signInResult.kind === "navigation_required") {
+      return navigationRequired(path, 0, false);
+    }
     if (signInResult.kind === "application_ready") {
       return this.#confirmReady(input, signal, path);
     }
@@ -493,6 +503,9 @@ export class AccountVerificationLifecycle {
           reason: result.reason,
         });
       }
+      if (result.kind === "navigation_required") {
+        return navigationRequired("verified_account", 1, true);
+      }
       if (result.kind !== "application_ready") {
         this.#emit("lifecycle_cycle_stopped");
         return denied();
@@ -597,6 +610,32 @@ function parseLifecycleCredentialMutationResult(
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    Object.keys(value).length === 3 &&
+    Object.prototype.hasOwnProperty.call(value, "kind") &&
+    Object.prototype.hasOwnProperty.call(value, "pageType") &&
+    Object.prototype.hasOwnProperty.call(value, "attemptedFields")
+  ) {
+    const candidate = value as {
+      readonly kind?: unknown;
+      readonly pageType?: unknown;
+      readonly attemptedFields?: unknown;
+    };
+    if (
+      candidate.kind === "navigation_required" &&
+      candidate.pageType === "job_posting" &&
+      exactAttemptedFields(candidate.attemptedFields)
+    ) {
+      return {
+        kind: candidate.kind,
+        pageType: candidate.pageType,
+        attemptedFields: ["email", "password"],
+      };
+    }
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
     Object.keys(value).length === 2 &&
     Object.prototype.hasOwnProperty.call(value, "kind") &&
     Object.prototype.hasOwnProperty.call(value, "attemptedFields")
@@ -609,10 +648,7 @@ function parseLifecycleCredentialMutationResult(
       (candidate.kind === "account_absent" ||
         candidate.kind === "account_exists" ||
         candidate.kind === "sign_in_required") &&
-      Array.isArray(candidate.attemptedFields) &&
-      candidate.attemptedFields.length === 2 &&
-      candidate.attemptedFields[0] === "email" &&
-      candidate.attemptedFields[1] === "password"
+      exactAttemptedFields(candidate.attemptedFields)
     ) {
       return {
         kind: candidate.kind,
@@ -621,4 +657,9 @@ function parseLifecycleCredentialMutationResult(
     }
   }
   return parseCredentialMutationResult(value);
+}
+
+function exactAttemptedFields(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 2 &&
+    value[0] === "email" && value[1] === "password";
 }

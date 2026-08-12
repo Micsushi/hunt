@@ -12,6 +12,7 @@ import type {
   PersistentBrowserErrorCode,
   SecretStoreErrorCode,
   TargetIdentityV1,
+  WorkdayPageType,
 } from "../../contracts/live/index.ts";
 
 export type AccountFieldName = "email" | "password" | "password_confirmation";
@@ -41,6 +42,7 @@ export type AccountEntryTraceEvent =
   | "post_submit_classify_started"
   | "post_submit_classify_retry"
   | "post_submit_classify_failed"
+  | "post_submit_navigation_required"
   | "post_submit_existing_account"
   | "post_submit_create_account"
   | "post_submit_account_absent"
@@ -108,7 +110,7 @@ export type ClassifiedAccountObservation =
       readonly documentGenerationId: string;
     }
   | { readonly kind: "target_mismatch" | "target_ambiguous" | "posting_unavailable" }
-  | { readonly kind: "classification_stopped" };
+  | { readonly kind: "classification_stopped"; readonly pageType: WorkdayPageType | null };
 
 export interface ClassifiedAccountStateSource {
   inspectClassifiedAccount(
@@ -144,6 +146,11 @@ export type AccountLifecycleCredentialMutationResult =
   | CredentialMutationResult
   | {
       readonly kind: "account_absent" | "account_exists" | "sign_in_required";
+      readonly attemptedFields: readonly ["email", "password"];
+    }
+  | {
+      readonly kind: "navigation_required";
+      readonly pageType: "job_posting";
       readonly attemptedFields: readonly ["email", "password"];
     };
 

@@ -60,7 +60,8 @@ export function createAccountEntryCredentialMutationAdapter(
           settled.ok &&
           (settled.value.kind === "account_absent" ||
             settled.value.kind === "account_exists" ||
-            settled.value.kind === "sign_in_required")
+            settled.value.kind === "sign_in_required" ||
+            settled.value.kind === "navigation_required")
         ) return failure("credential_mutation_denied");
         return settled as Awaited<ReturnType<CredentialMutationAdapter["mutate"]>>;
       });
@@ -249,6 +250,18 @@ async function mutateOnce(
           emit(dependencies, "account_submit_activated");
           emit(dependencies, "post_submit_classify_started");
           const reconciled = await classifyAfterSubmit(dependencies, request, signal);
+          if (
+            reconciled.ok && reconciled.value.kind === "classification_stopped" &&
+            reconciled.value.pageType === "job_posting"
+          ) {
+            emit(dependencies, "post_submit_navigation_required");
+            result = {
+              kind: "navigation_required",
+              pageType: "job_posting",
+              attemptedFields: ["email", "password"],
+            };
+            return accountStateResult(state.state, ["email", "password"]);
+          }
           if (!reconciled.ok || reconciled.value.kind !== "classified_account") {
             emit(dependencies, "post_submit_classify_failed");
             localFailure = failure("credential_effect_uncertain");
@@ -412,7 +425,9 @@ async function classifyAfterSubmit(
       !inspected.ok ||
       inspected.value.kind === "classified_account" ||
       inspected.value.kind === "target_mismatch" ||
-      inspected.value.kind === "posting_unavailable"
+      inspected.value.kind === "posting_unavailable" ||
+      (inspected.value.kind === "classification_stopped" &&
+        inspected.value.pageType === "job_posting")
     ) return inspected;
     if (signal.aborted) return inspected;
     emit(dependencies, "post_submit_classify_retry");

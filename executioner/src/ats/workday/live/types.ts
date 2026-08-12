@@ -6,6 +6,7 @@ import type {
   PersistentBrowserErrorCode,
   PersistentBrowserReconcileResult,
   TargetIdentityV1,
+  WorkdayPageType,
 } from "../../../contracts/live/index.ts";
 import type { ResolvedLiveAccountStateResult } from "./account-state.ts";
 
@@ -53,6 +54,7 @@ export type ClassifiedAccountObservation =
       readonly sourceRevisionId: ClassificationRevisionId;
       readonly snapshotId: LiveEntrySnapshotId;
       readonly documentGenerationId: LiveEntryDocumentGenerationId;
+      readonly pageType: WorkdayPageType | null;
     };
 
 export interface ClassifiedAccountObservationSource {

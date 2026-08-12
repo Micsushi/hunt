@@ -173,11 +173,34 @@ test("T5-facing classification stops preserve facts without exposing candidate t
   assert.deepEqual(result.ok ? result.value : result, {
     kind: "classification_stopped",
     outcome: "workday_page_unknown",
+    pageType: null,
     classificationId: null,
     sourceRevisionId: LIVE_ENTRY_CLASSIFICATION_REVISION_ID,
     snapshotId: "snapshot_0123456789abcdef",
     documentGenerationId: "document_generation_0123456789abcdef",
   });
+  assert.equal(JSON.stringify(result).includes("trait"), false);
+});
+
+test("a classified posting preserves its page type for state-driven routing", async () => {
+  const accountSource = createClassifiedAccountObservationSource(
+    createLiveEntryVerifier(source([
+      inspection({ kind: "matched" }, snapshot([
+        LIVE_ENTRY_TRAITS.ats.workday,
+        LIVE_ENTRY_TRAITS.pages.job_posting,
+      ])),
+    ])),
+  );
+  const result = await accountSource.inspectClassifiedAccount(
+    { schemaVersion: 1, sessionId, target },
+    signal,
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.kind, "classification_stopped");
+  if (result.value.kind !== "classification_stopped") return;
+  assert.equal(result.value.outcome, "account_state_unknown");
+  assert.equal(result.value.pageType, "job_posting");
   assert.equal(JSON.stringify(result).includes("trait"), false);
 });
 

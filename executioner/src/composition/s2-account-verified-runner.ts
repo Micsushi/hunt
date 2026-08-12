@@ -284,37 +284,69 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       return factualSessionResult(reconciled.value);
     }
     emitSessionTrace(options.trace, "account_session_reconcile_succeeded");
-    const advanceNow = authorizedEffectNow(options, signal);
-    if (advanceNow === null) return sessionFailure("operation_cancelled");
-    emitSessionTrace(options.trace, "account_session_advance_started");
-    const advanced = await options.browser.advanceToAccountEntry({
-      schemaVersion: 1,
-      journeyId: options.journeyId,
-      operationId: options.advanceOperationId,
-      sessionId: options.session.sessionId,
-      target: options.expectedTarget,
-      now: advanceNow,
-    }, signal);
-    if (!advanced.ok) {
-      emitSessionTrace(options.trace, "account_session_advance_failed");
-      return sessionFailure(advanced.error.code);
+    let operationId = options.advanceOperationId;
+    let routed: Extract<
+      Extract<AccountLifecycleResult, { readonly ok: true }>["value"],
+      { readonly kind: "navigation_required" }
+    > | undefined;
+    for (let transition = 0; transition < 4; transition += 1) {
+      const advanceNow = authorizedEffectNow(options, signal);
+      if (advanceNow === null) return sessionFailure("operation_cancelled");
+      emitSessionTrace(options.trace, "account_session_advance_started");
+      const advanced = await options.browser.advanceToAccountEntry({
+        schemaVersion: 1,
+        journeyId: options.journeyId,
+        operationId,
+        sessionId: options.session.sessionId,
+        target: options.expectedTarget,
+        now: advanceNow,
+      }, signal);
+      if (!advanced.ok) {
+        emitSessionTrace(options.trace, "account_session_advance_failed");
+        return sessionFailure(advanced.error.code);
+      }
+      if (advanced.value.kind !== "account_boundary") {
+        emitSessionTrace(options.trace, "account_session_advance_blocked");
+        return factualSessionResult(advanced.value);
+      }
+      emitSessionTrace(options.trace, "account_session_advance_succeeded");
+      if (authorizedEffectNow(options, signal) === null) {
+        return sessionFailure("operation_cancelled");
+      }
+      emitSessionTrace(options.trace, "account_session_lifecycle_started");
+      const lifecycle = await options.runLifecycle(options.session, signal);
+      emitSessionTrace(options.trace, lifecycle.ok
+        ? "account_session_lifecycle_succeeded"
+        : "account_session_lifecycle_failed");
+      if (!lifecycle.ok) return sessionFailure(lifecycle.error.code);
+      if (lifecycle.value.kind === "navigation_required") {
+        if (routed !== undefined) return sessionFailure("browser_target_invalid");
+        routed = lifecycle.value;
+        operationId = `operation_${randomBytes(16).toString("hex")}` as OperationId;
+        emitSessionTrace(options.trace, "account_session_page_redispatch_started");
+        continue;
+      }
+      if (
+        routed !== undefined && lifecycle.value.kind === "account_ready" &&
+        lifecycle.value.path === "already_ready"
+      ) {
+        return {
+          ok: true,
+          value: {
+            kind: "account_ready",
+            path: routed.path,
+            independentlyObserved: true,
+            verificationCandidateCount: routed.verificationCandidateCount,
+            verificationConsumed: routed.verificationConsumed,
+          },
+        };
+      }
+      if (routed !== undefined && lifecycle.value.kind === "account_ready") {
+        return sessionFailure("account_proof_invalid");
+      }
+      return { ok: true, value: lifecycle.value };
     }
-    if (advanced.value.kind !== "account_boundary") {
-      emitSessionTrace(options.trace, "account_session_advance_blocked");
-      return factualSessionResult(advanced.value);
-    }
-    emitSessionTrace(options.trace, "account_session_advance_succeeded");
-    if (authorizedEffectNow(options, signal) === null) {
-      return sessionFailure("operation_cancelled");
-    }
-    emitSessionTrace(options.trace, "account_session_lifecycle_started");
-    const lifecycle = await options.runLifecycle(options.session, signal);
-    emitSessionTrace(options.trace, lifecycle.ok
-      ? "account_session_lifecycle_succeeded"
-      : "account_session_lifecycle_failed");
-    return lifecycle.ok
-      ? { ok: true, value: lifecycle.value }
-      : sessionFailure(lifecycle.error.code);
+    return sessionFailure("browser_target_invalid");
   } catch {
     return sessionFailure(
       signal.aborted ? "operation_cancelled" : "account_proof_invalid",

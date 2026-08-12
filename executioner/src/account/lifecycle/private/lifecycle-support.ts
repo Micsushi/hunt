@@ -18,6 +18,23 @@ export function ready(
   };
 }
 
+export function navigationRequired(
+  path: "reused_account" | "created_account" | "verified_account",
+  verificationCandidateCount: 0 | 1,
+  verificationConsumed: boolean,
+): AccountLifecycleResult {
+  return {
+    ok: true,
+    value: {
+      kind: "navigation_required",
+      pageType: "job_posting",
+      path,
+      verificationCandidateCount,
+      verificationConsumed,
+    },
+  };
+}
+
 export function blocked(
   source: "account_access",
   result: {

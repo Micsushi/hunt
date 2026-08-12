@@ -96,6 +96,11 @@ export type AccountLifecycleCredentialMutationResult =
   | {
       readonly kind: "account_absent" | "account_exists" | "sign_in_required";
       readonly attemptedFields: readonly ["email", "password"];
+    }
+  | {
+      readonly kind: "navigation_required";
+      readonly pageType: "job_posting";
+      readonly attemptedFields: readonly ["email", "password"];
     };
 
 export type AccountLifecycleTraceEvent =
@@ -159,5 +164,16 @@ export interface AccountLifecycleReady {
   readonly verificationConsumed: boolean;
 }
 
-export type AccountLifecycleValue = AccountLifecycleReady | LiveBlocked;
+export interface AccountLifecycleNavigationRequired {
+  readonly kind: "navigation_required";
+  readonly pageType: "job_posting";
+  readonly path: Exclude<AccountLifecycleReady["path"], "already_ready">;
+  readonly verificationCandidateCount: 0 | 1;
+  readonly verificationConsumed: boolean;
+}
+
+export type AccountLifecycleValue =
+  | AccountLifecycleReady
+  | AccountLifecycleNavigationRequired
+  | LiveBlocked;
 export type AccountLifecycleResult = LiveCoordinatorResult<AccountLifecycleValue>;

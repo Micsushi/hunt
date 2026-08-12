@@ -70,6 +70,7 @@ export type LiveEntryVerificationResult =
       readonly kind: "account_state_unknown" | "account_state_ambiguous";
       readonly classificationId: ClassificationId;
       readonly sourceRevisionId: ClassificationRevisionId;
+      readonly pageType: WorkdayPageType;
       readonly observation: SanitizedStructuralObservationV1 & {
         readonly layer: "workday_page_type";
       };

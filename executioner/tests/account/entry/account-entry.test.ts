@@ -170,7 +170,7 @@ test("post-submit classification retries transient page states without repeating
   const fixture = accountFixture(["existing_account", "application_ready"]);
   const observations: ClassifiedAccountObservation[] = [
     stateObservation("existing_account"),
-    { kind: "classification_stopped" },
+    { kind: "classification_stopped", pageType: null },
     { kind: "target_ambiguous" },
     stateObservation("application_ready"),
   ];
@@ -196,6 +196,72 @@ test("post-submit classification retries transient page states without repeating
   ).length, 1);
 });
 
+test("post-submit account-entry uncertainty settles before state-driven routing", async () => {
+  const fixture = accountFixture(["existing_account"]);
+  let classificationCalls = 0;
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => {},
+    classifiedAccount: {
+      inspectClassifiedAccount: async () => ({
+        ok: true,
+        value: classificationCalls++ === 0
+          ? stateObservation("existing_account")
+          : classificationCalls === 2
+            ? { kind: "classification_stopped", pageType: "account_entry" }
+            : stateObservation("application_ready"),
+      }),
+    },
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "application_ready", attemptedFields: ["email", "password"] },
+  });
+  assert.equal(classificationCalls, 3);
+});
+
+test("a post-mutation posting returns its classified page for coordinator dispatch", async () => {
+  const fixture = accountFixture(["existing_account"]);
+  let classificationCalls = 0;
+  const events: string[] = [];
+  const adapter = createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => {},
+    trace: (event) => events.push(event),
+    classifiedAccount: {
+      inspectClassifiedAccount: async () => ({
+        ok: true,
+        value: classificationCalls++ === 0
+          ? stateObservation("existing_account")
+          : { kind: "classification_stopped", pageType: "job_posting" },
+      }),
+    },
+  });
+  const result = await adapter.lifecycle.mutate(
+    request("sign_in"),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "navigation_required",
+      pageType: "job_posting",
+      attemptedFields: ["email", "password"],
+    },
+  });
+  assert.equal(classificationCalls, 2);
+  assert.equal(events.at(-1), "post_submit_navigation_required");
+  assert.deepEqual(
+    await adapter.mutate(request("sign_in"), new AbortController().signal),
+    {
+      ok: false,
+      error: { code: "credential_mutation_denied", retryable: false },
+    },
+  );
+});
+
 test("post-submit classification admits an exact state on the twenty-first observation", async () => {
   const fixture = accountFixture(["create_account"]);
   fixture.controls.set("accept_terms", { cardinality: 0, actionable: false });
@@ -213,7 +279,7 @@ test("post-submit classification admits an exact state on the twenty-first obser
             ? stateObservation("existing_account")
             : classificationCalls % 2 === 0
               ? { kind: "target_ambiguous" }
-              : { kind: "classification_stopped" },
+              : { kind: "classification_stopped", pageType: null },
       }),
     },
   });

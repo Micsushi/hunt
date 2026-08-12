@@ -92,6 +92,7 @@ export function createLiveEntryVerifier(
             kind: state.kind,
             classificationId: state.classificationId,
             sourceRevisionId: state.sourceRevisionId,
+            pageType: pageResult.value.pageType,
             observation: pageObservation,
             snapshotId: snapshot.snapshotId,
             documentGenerationId: snapshot.documentGenerationId,
@@ -146,6 +147,7 @@ export function createClassifiedAccountObservationSource(
         value: Object.freeze({
           kind: "classification_stopped",
           outcome: result.kind,
+          pageType: "pageType" in result ? result.pageType : null,
           classificationId: "classificationId" in result
             ? result.classificationId
             : null,

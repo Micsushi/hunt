@@ -179,6 +179,104 @@ test("session-bound lifecycle preserves factual account blocks without owning se
   ]);
 });
 
+test("session-bound coordinator redispatches a classified posting and preserves sign-in proof", async () => {
+  const session = browserSession();
+  const operationIds: string[] = [];
+  let lifecycleCalls = 0;
+  const result = await runSessionBoundAccountVerifiedLifecycle({
+    browser: {
+      async reconcile() {
+        return { ok: true, value: { kind: "matched", session } };
+      },
+      async advanceToAccountEntry(request) {
+        operationIds.push(request.operationId);
+        return { ok: true, value: { kind: "account_boundary" } };
+      },
+    },
+    session,
+    journeyId: session.journeyId,
+    expectedTarget: session.target,
+    reconcileOperationId: "operation_reconcile_state_loop" as OperationId,
+    advanceOperationId: "operation_advance_state_loop1" as OperationId,
+    now,
+    runLifecycle: async () => lifecycleCalls++ === 0
+      ? {
+          ok: true,
+          value: {
+            kind: "navigation_required",
+            pageType: "job_posting",
+            path: "reused_account",
+            verificationCandidateCount: 0,
+            verificationConsumed: false,
+          },
+        }
+      : {
+          ok: true,
+          value: {
+            kind: "account_ready",
+            path: "already_ready",
+            independentlyObserved: true,
+            verificationCandidateCount: 0,
+            verificationConsumed: false,
+          },
+        },
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "account_ready",
+      path: "reused_account",
+      independentlyObserved: true,
+      verificationCandidateCount: 0,
+      verificationConsumed: false,
+    },
+  });
+  assert.equal(lifecycleCalls, 2);
+  assert.equal(operationIds.length, 2);
+  assert.notEqual(operationIds[0], operationIds[1]);
+});
+
+test("session-bound coordinator rejects a second posting redispatch without downgrading proof", async () => {
+  const session = browserSession();
+  let lifecycleCalls = 0;
+  const result = await runSessionBoundAccountVerifiedLifecycle({
+    browser: {
+      async reconcile() {
+        return { ok: true, value: { kind: "matched", session } };
+      },
+      async advanceToAccountEntry() {
+        return { ok: true, value: { kind: "account_boundary" } };
+      },
+    },
+    session,
+    journeyId: session.journeyId,
+    expectedTarget: session.target,
+    reconcileOperationId: "operation_reconcile_route_cycle" as OperationId,
+    advanceOperationId: "operation_advance_route_cycle1" as OperationId,
+    now,
+    runLifecycle: async () => {
+      lifecycleCalls += 1;
+      return {
+        ok: true,
+        value: {
+          kind: "navigation_required",
+          pageType: "job_posting",
+          path: lifecycleCalls === 1 ? "verified_account" : "reused_account",
+          verificationCandidateCount: lifecycleCalls === 1 ? 1 : 0,
+          verificationConsumed: lifecycleCalls === 1,
+        },
+      };
+    },
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "browser_target_invalid" },
+  });
+  assert.equal(lifecycleCalls, 2);
+});
+
 test("session-bound lifecycle traces the exact pre-lifecycle failure phase", async () => {
   const session = browserSession();
   const trace: string[] = [];
