@@ -832,7 +832,9 @@ function safeAuthEffectPage(page: string): boolean {
 
 function legalAuthTransition(from: string, to: string): boolean {
   const edges: Readonly<Record<string, readonly string[]>> = {
-    job_posting: ["apply_choice", "email_sign_in_choice", "account_entry", "application_ready"],
+    job_posting: [
+      "apply_choice", "email_sign_in_choice", "account_entry", "sign_in", "application_ready",
+    ],
     apply_choice: ["email_sign_in_choice", "account_entry", "application_ready"],
     email_sign_in_choice: ["account_entry", "sign_in", "application_ready"],
     account_entry: ["verification_required", "verification_navigation", "sign_in", "application_ready"],

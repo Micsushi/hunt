@@ -310,6 +310,38 @@ test("external monitor admits an exact zero-control job-posting taxonomy", async
   }
 });
 
+test("external monitor admits a direct job-posting to sign-in transition", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-direct-sign-in-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.010Z",
+      }),
+    });
+    const event = { operationId: "operation_direct_sign_in_0001", attempt: 1 } as const;
+    await runtime.auth(
+      fixturePage(), "job_posting", "before_navigation", taxonomy(), event,
+      new AbortController().signal,
+    );
+    await runtime.auth(
+      fixturePage(), "sign_in", "transition", taxonomy(), event,
+      new AbortController().signal,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("external monitor rejects incomplete or malformed taxonomy arrays before evidence", async () => {
   const base = taxonomy();
   const cases: unknown[] = [
