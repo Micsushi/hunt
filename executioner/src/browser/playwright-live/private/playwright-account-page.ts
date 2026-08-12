@@ -70,6 +70,9 @@ export type PlaywrightAccountPageTraceEvent =
   | "submit_rejection_password_confirmation_wait_failed"
   | "submit_stabilization_failed"
   | "submit_stabilization_deferred"
+  | "submit_dom_click_retry_started"
+  | "submit_dom_click_retry_succeeded"
+  | "submit_dom_click_retry_failed"
   | "verification_email_request_click_started"
   | "verification_email_request_click_succeeded"
   | "verification_email_request_click_failed"
@@ -448,6 +451,10 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
               this.#emit("submit_destination_observed");
               return;
             }
+            if (
+              action === "submit_create_account" &&
+              await retryCreateAccountDomClick(page, locator, this.#emit.bind(this))
+            ) return;
             this.#emit("submit_stabilization_deferred");
             return;
           }
@@ -467,6 +474,29 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     } catch {
       // Diagnostic observation cannot affect browser behavior.
     }
+  }
+}
+
+async function retryCreateAccountDomClick(
+  page: PersistentPage,
+  submit: Locator,
+  emit: (event: PlaywrightAccountPageTraceEvent) => void,
+): Promise<boolean> {
+  const source = playwrightPage(page);
+  if (
+    !await exactVisible(source.locator('[data-automation-id="createAccountPage"]')) ||
+    await anyExactVisible([source.locator(WORKDAY_VISIBLE_ALERT_SELECTOR)]) ||
+    !await exactVisible(submit)
+  ) return false;
+  emit("submit_dom_click_retry_started");
+  try {
+    await submit.evaluate((element) => (element as HTMLElement).click());
+    await submit.waitFor({ state: "hidden", timeout: 10_000 });
+    emit("submit_dom_click_retry_succeeded");
+    return true;
+  } catch {
+    emit("submit_dom_click_retry_failed");
+    return false;
   }
 }
 

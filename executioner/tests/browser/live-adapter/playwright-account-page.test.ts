@@ -1614,6 +1614,42 @@ test("a successful submit click defers unknown stabilization to account classifi
   ]);
 });
 
+test("create-account retries one exact noCaptcha DOM click after no progress", async () => {
+  const events: string[] = [];
+  const submit = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: true,
+    editable: false,
+    visibleWaitFails: true,
+  });
+  const createPage = new FakeLocator({
+    count: 1,
+    visible: true,
+    enabled: false,
+    editable: false,
+  });
+  const absent = new FakeLocator({
+    count: 0,
+    visible: false,
+    enabled: false,
+    editable: false,
+    visibleWaitFails: true,
+  });
+
+  await new PlaywrightAccountPageAdapter({
+    trace: (event) => events.push(event),
+  }).activate(new FakePage(submit, absent, new Map([
+    ['[data-automation-id="createAccountPage"]', createPage],
+  ])), "submit_create_account");
+
+  assert.equal(submit.evaluateCalls, 2);
+  assert.deepEqual(events.slice(-2), [
+    "submit_dom_click_retry_started",
+    "submit_dom_click_retry_succeeded",
+  ]);
+});
+
 test("submit click failure never repositions the page", async () => {
   const events: string[] = [];
   const submit = new FakeLocator({
