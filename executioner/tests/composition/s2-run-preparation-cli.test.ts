@@ -39,7 +39,7 @@ test("run preparation CLI captures protected source paths without raw values on 
         revision: 1,
         facts: [
           { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
-          { factId: "email_address", value: "synthetic@example.com", provenance: "owner_provided" },
+          { factId: "email_address", value: "synthetic@example.invalid", provenance: "owner_provided" },
           { factId: "city", value: "Calgary", provenance: "resume_verified" },
           { factId: "region", value: "Alberta", provenance: "owner_provided" },
           { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
@@ -90,7 +90,7 @@ test("run preparation CLI captures protected source paths without raw values on 
         answerType: "text",
         answer: {
           kind: "answered",
-          value: "synthetic@example.com",
+          value: "synthetic@example.invalid",
           provenance: "owner_provided",
         },
       },
@@ -134,14 +134,14 @@ test("profile fact projection preserves planned fields and leaves missing facts 
       fieldId: "contact.email",
       questionType: "identity",
       answerType: "text",
-      answer: { kind: "answered", value: "planned@example.com", provenance: "owner_provided" },
+      answer: { kind: "answered", value: "planned@example.invalid", provenance: "owner_provided" },
     }],
     repeatables: [],
   };
 
   const projected = withDerivedProfileCountry({
     facts: [
-      { factId: "email_address", value: "fact@example.com", provenance: "owner_provided" },
+      { factId: "email_address", value: "fact@example.invalid", provenance: "owner_provided" },
       { factId: "city", value: "Edmonton", provenance: "configured_template" },
     ],
   }, plan) as typeof plan;
