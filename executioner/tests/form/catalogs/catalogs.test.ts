@@ -53,6 +53,22 @@ test("only frozen Workday labels resolve deterministically", () => {
   }
 });
 
+test("normalization removes accessible required suffixes without changing question text", () => {
+  assert.equal(
+    normalizeCatalogText("How Did You Hear About Us? Required"),
+    "how did you hear about us",
+  );
+  assert.equal(
+    normalizeCatalogText("Are you legally authorized to work in this country? Required *"),
+    "are you legally authorized to work in this country",
+  );
+  assert.equal(
+    normalizeCatalogText("Province or Territory Not Required"),
+    "province or territory not required",
+  );
+  assert.equal(normalizeCatalogText("Is certification required?"), "is certification required");
+});
+
 test("reviewed questionnaire aliases resolve without admitting profile-page labels", () => {
   const cases = [
     ["Are you legally authorized to work in this country?", "s1-question-work-authorization"],
@@ -73,6 +89,12 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
       provenance: "reviewed_catalog",
     });
   }
+
+  assert.deepEqual(resolveQuestion("How Did You Hear About Us? Required"), {
+    kind: "resolved",
+    id: "workday-placeholder-application-source",
+    provenance: "reviewed_catalog",
+  });
 });
 
 test("every resolved alias-only ID has one retrievable canonical definition", () => {

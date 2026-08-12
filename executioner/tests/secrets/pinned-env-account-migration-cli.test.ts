@@ -12,3 +12,13 @@ test("one-time env migration CLI accepts only pinned paths and a digest", async 
   assert.match(source, /bootstrapS2AccountSecret/u);
   assert.doesNotMatch(source, /accountEmail|accountPassword|PASSWORD|EMAIL/u);
 });
+
+test("the standard account provisioner can reuse the pinned source without a credential prompt", async () => {
+  const source = await readFile("scripts/provision-s2-account.ts", "utf8");
+  assert.match(source, /--config/u);
+  assert.match(source, /--env-source/u);
+  assert.match(source, /--sha256/u);
+  assert.match(source, /WindowsPinnedEnvAccountSealer/u);
+  assert.match(source, /bootstrapS2AccountSecret/u);
+  assert.doesNotMatch(source, /accountEmail|accountPassword/u);
+});

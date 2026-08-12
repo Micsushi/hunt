@@ -98,7 +98,7 @@ test("profile answers produce exact immutable intents with provenance", async ()
 
 test("choice mapping uses each frozen row's exact behavior and visible option", async () => {
   const cases = [
-    ["Are you authorized to work in this location?", "radio", true, "s1-option-work-authorization-no", "No", "s1-option-work-authorization-yes", "Yes"],
+    ["Are you authorized to work in this location? Required", "radio", true, "s1-option-work-authorization-no", "No", "s1-option-work-authorization-yes", "Yes"],
     ["Will you require sponsorship?", "select", true, "s1-option-sponsorship-no", "No", "s1-option-sponsorship-yes", "Yes"],
     ["Country", "listbox", "United States", "s1-option-country-ca", "Canada", "s1-option-country-us", "United States"],
   ] as const;

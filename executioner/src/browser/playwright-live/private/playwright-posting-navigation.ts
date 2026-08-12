@@ -5,7 +5,10 @@ import type {
   SemanticPostingNavigationAdapter,
 } from "./account-navigation-types.ts";
 import type { PersistentPage } from "./types.ts";
-import { WORKDAY_MODERN_SIGN_IN_SELECTOR } from "./workday-structural-catalog.ts";
+import {
+  WORKDAY_COMPLETE_SIGN_IN_SELECTOR,
+  WORKDAY_MODERN_SIGN_IN_SELECTOR,
+} from "./workday-structural-catalog.ts";
 
 const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="email"]',
@@ -22,6 +25,7 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
 
 const EMAIL_SIGN_IN_DESTINATION = [
   WORKDAY_MODERN_SIGN_IN_SELECTOR,
+  WORKDAY_COMPLETE_SIGN_IN_SELECTOR,
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
   '[data-automation-id="emailVerificationPage"]',
@@ -35,6 +39,9 @@ export type PlaywrightPostingNavigationTraceEvent =
   | `posting_${PostingNavigationAction}_click_started`
   | `posting_${PostingNavigationAction}_click_succeeded`
   | `posting_${PostingNavigationAction}_click_failed`
+  | "posting_cookie_decline_started"
+  | "posting_cookie_decline_succeeded"
+  | "posting_cookie_decline_failed"
   | "posting_apply_manually_same_page_destination_observed"
   | "posting_apply_manually_popup_destination_observed"
   | "posting_apply_manually_destination_wait_failed"
@@ -74,6 +81,7 @@ export class PlaywrightPostingNavigationAdapter
     page: PersistentPage,
     action: PostingNavigationAction,
   ): Promise<void> {
+    await this.#declineCookieBanner(page);
     const candidates = await matchingCandidates(page, action);
     if (
       candidates.length !== 1 ||
@@ -126,6 +134,25 @@ export class PlaywrightPostingNavigationAdapter
     } catch {
       // Diagnostics must never change navigation behavior.
     }
+  }
+
+  async #declineCookieBanner(page: PersistentPage): Promise<void> {
+    const semanticPage = page as unknown as Pick<Page, "getByRole">;
+    const candidate = semanticPage.getByRole("button", { name: "Decline", exact: true });
+    const count = await candidate.count();
+    if (count === 0) return;
+    if (count !== 1) throw new TypeError("cookie decline control ambiguous");
+    if (!await candidate.isVisible()) return;
+    if (!await candidate.isEnabled()) throw new TypeError("cookie decline control unavailable");
+    this.#emit("posting_cookie_decline_started");
+    try {
+      await candidate.click();
+      await candidate.waitFor({ state: "hidden", timeout: 5_000 });
+    } catch (error) {
+      this.#emit("posting_cookie_decline_failed");
+      throw error;
+    }
+    this.#emit("posting_cookie_decline_succeeded");
   }
 }
 

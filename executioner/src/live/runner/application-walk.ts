@@ -6,6 +6,10 @@ import {
   type ApplicationCheckpoint,
   type ApplicationWalkDependencies,
   type ApplicationWalkFailurePacket,
+  type ApplicationWalkInput,
+  type ApplicationWalkOptions,
+  type ApplicationWalkProgress,
+  type ApplicationWalkResult,
 } from "../../ats/workday/application/page-walk.ts";
 import type { JourneyId } from "../../contracts/index.ts";
 import type { S2StableErrorCode } from "../../contracts/s2-common-wire.ts";
@@ -30,10 +34,100 @@ export interface ApplicationWalkAcceptanceWriter {
 export interface Stage2ApplicationWalkDependencies {
   readonly walk: ApplicationWalkDependencies;
   readonly laneAcceptances: Pick<ApplicationLaneAcceptanceCollector, "snapshot">;
+  readonly trace?: (event: Stage2ApplicationWalkTraceEvent) => void;
   readonly cleanup: {
     close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
   };
   readonly evidence: ApplicationWalkAcceptanceWriter;
+}
+
+export type Stage2ApplicationWalkTraceEvent =
+  | {
+      readonly kind: "application_walk_started";
+      readonly journeyId: string;
+      readonly stopAfter: ApplicationCheckpoint;
+      readonly submitActivated: false;
+    }
+  | {
+      readonly kind: "application_walk_progress";
+      readonly journeyId: string;
+      readonly checkpoint: ApplicationCheckpoint;
+      readonly browserPage: string;
+      readonly browserLanes: readonly string[];
+      readonly completedPages: number;
+      readonly requiredFields: number;
+      readonly verifiedFields: number;
+      readonly duplicateRows: number;
+      readonly questionTypes: readonly string[];
+      readonly answerTypes: readonly string[];
+      readonly uiBehaviors: readonly string[];
+      readonly provenances: readonly string[];
+      readonly submitActivated: false;
+    }
+  | {
+      readonly kind: "application_walk_terminal";
+      readonly journeyId: string;
+      readonly status: "passed" | "blocked" | "failed";
+      readonly checkpoint: string;
+      readonly completedPages: number;
+      readonly failure: ApplicationWalkFailurePacket | null;
+      readonly submitActivated: false;
+    };
+
+export async function runObservedApplicationPageWalk(
+  dependencies: Pick<Stage2ApplicationWalkDependencies, "walk" | "laneAcceptances" | "trace">,
+  input: ApplicationWalkInput,
+  signal: AbortSignal,
+  options: ApplicationWalkOptions = {},
+): Promise<ApplicationWalkResult> {
+  emitTrace(dependencies.trace, {
+    kind: "application_walk_started",
+    journeyId: input.journeyId,
+    stopAfter: input.stopAfter ?? "pre_review",
+    submitActivated: false,
+  });
+  const walk = dependencies.trace === undefined ? dependencies.walk : {
+    ...dependencies.walk,
+    progress: {
+      async record(progress: ApplicationWalkProgress, progressSignal: AbortSignal) {
+        const result = await dependencies.walk.progress.record(progress, progressSignal);
+        if (result.ok) emitProgress(dependencies, input.journeyId, progress);
+        return result;
+      },
+    },
+  };
+  try {
+    const result = await runApplicationPageWalk(walk, input, signal, options);
+    emitTrace(dependencies.trace, result.ok ? {
+      kind: "application_walk_terminal",
+      journeyId: input.journeyId,
+      status: "passed",
+      checkpoint: result.value.checkpoint,
+      completedPages: result.value.completedPages,
+      failure: null,
+      submitActivated: false,
+    } : {
+      kind: "application_walk_terminal",
+      journeyId: input.journeyId,
+      status: "blocked",
+      checkpoint: result.error.checkpoint,
+      completedPages: result.error.completedPages,
+      failure: result.error.failure,
+      submitActivated: false,
+    });
+    return result;
+  } catch (error) {
+    emitTrace(dependencies.trace, {
+      kind: "application_walk_terminal",
+      journeyId: input.journeyId,
+      status: "failed",
+      checkpoint: "unknown",
+      completedPages: 0,
+      failure: null,
+      submitActivated: false,
+    });
+    throw error;
+  }
 }
 
 export type Stage2ApplicationWalkResult =
@@ -51,8 +145,8 @@ export async function runStage2ApplicationWalk(
 ): Promise<Stage2ApplicationWalkResult> {
   let walk: Awaited<ReturnType<typeof runApplicationPageWalk>>;
   try {
-    walk = await runApplicationPageWalk(
-      dependencies.walk,
+    walk = await runObservedApplicationPageWalk(
+      dependencies,
       { journeyId: input.journeyId, stopAfter: input.stopAfter },
       signal,
     );
@@ -121,4 +215,65 @@ export async function runStage2ApplicationWalk(
     return { ok: false, code: "evidence_unavailable" };
   }
   return { ok: true, acceptance };
+}
+
+function emitProgress(
+  dependencies: Pick<Stage2ApplicationWalkDependencies, "laneAcceptances" | "trace">,
+  journeyId: string,
+  progress: ApplicationWalkProgress,
+): void {
+  try {
+    const lanes = dependencies.laneAcceptances.snapshot(progress.checkpoint);
+    const profile = lanes.flatMap((lane) =>
+      lane.checkpoint === "profile_verified" ? lane.verifiedFields : []
+    );
+    const questionnaire = lanes.flatMap((lane) =>
+      lane.checkpoint === "questionnaire_verified" ? lane.answers : []
+    );
+    const includesResume = lanes.some(({ checkpoint }) => checkpoint === "resume_verified");
+    const checks = progress.pageChecks;
+    emitTrace(dependencies.trace, {
+      kind: "application_walk_progress",
+      journeyId,
+      checkpoint: progress.checkpoint,
+      browserPage: progress.browserPage,
+      browserLanes: Object.freeze([...progress.browserLanes]),
+      completedPages: progress.completedPages,
+      requiredFields: checks.reduce((sum, check) => sum + check.requiredFields, 0),
+      verifiedFields: checks.reduce((sum, check) => sum + check.verifiedFields, 0),
+      duplicateRows: checks.reduce((sum, check) => sum + check.duplicateRows, 0),
+      questionTypes: unique([
+        ...(includesResume ? ["attachment"] : []),
+        ...profile.map(({ questionType }) => questionType),
+        ...questionnaire.map(({ questionId }) => String(questionId)),
+      ]),
+      answerTypes: unique([
+        ...(includesResume ? ["file"] : []),
+        ...profile.map(({ answerType }) => answerType),
+      ]),
+      uiBehaviors: unique([
+        ...(includesResume ? ["file_upload"] : []),
+        ...profile.map(({ uiBehavior }) => uiBehavior),
+      ]),
+      provenances: unique([
+        ...(includesResume ? ["resume_verified"] : []),
+        ...profile.map(({ provenance }) => provenance),
+        ...questionnaire.map(({ provenance }) => provenance),
+      ]),
+      submitActivated: false,
+    });
+  } catch {
+    // Diagnostics never change application behavior.
+  }
+}
+
+function unique(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values)].sort());
+}
+
+function emitTrace(
+  trace: Stage2ApplicationWalkDependencies["trace"],
+  event: Stage2ApplicationWalkTraceEvent,
+): void {
+  try { trace?.(Object.freeze(event)); } catch { /* diagnostics never change application behavior */ }
 }

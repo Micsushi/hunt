@@ -101,7 +101,10 @@ import {
   currentProcessStartedAt,
   createStage2ExternalMonitorRuntime,
   type Stage2ExternalMonitorRuntime,
+  type Stage2ExternalMonitorTraceDetails,
 } from "../live/evidence/external-monitor-runtime.ts";
+import type { Stage2ApplicationWalkTraceEvent } from
+  "../live/runner/application-walk.ts";
 import type {
   Stage2RealJourneyLiveRuntimeBinding,
 } from "./s2-production-binding.ts";
@@ -172,8 +175,11 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         accountProofScopeFor(request),
       );
       const acceptances = createApplicationLaneAcceptanceCollector();
-      const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+      const valueFreeTrace: ((event: string, details?: object) => void) | undefined =
+        process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+        ? (event, details) => {
+            process.stderr.write(`${JSON.stringify({ trace: event, ...details })}\n`);
+          }
         : undefined;
       const externalMonitor = options.externalMonitor?.(request) ??
         (options.browser === undefined ? productionExternalMonitor(request, valueFreeTrace) : undefined);
@@ -321,6 +327,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       return Object.freeze({
         walk: Object.freeze({ observer, navigation, handlers, progress }),
         laneAcceptances: acceptances,
+        ...(valueFreeTrace === undefined ? {} : {
+          trace: (event: Stage2ApplicationWalkTraceEvent) => valueFreeTrace(event.kind, event),
+        }),
         account: Object.freeze({
           verify(activeSignal: AbortSignal) {
             if (accountVerification !== undefined) return accountVerification;
@@ -735,7 +744,7 @@ function forbiddenCorpus(
 
 function productionExternalMonitor(
   request: Stage2ApplicationWalkRuntimeBindingRequest,
-  trace?: (event: string) => void,
+  trace?: (event: string, details?: Stage2ExternalMonitorTraceDetails) => void,
 ): Stage2ExternalMonitorRuntime {
   const encoded = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
   const issuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;

@@ -40,6 +40,8 @@ const EMAIL_SIGN_IN_CHOICE_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
 export const WORKDAY_MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
+export const WORKDAY_COMPLETE_SIGN_IN_SELECTOR =
+  'body:has([data-automation-id="email"]:visible):has([data-automation-id="password"]:visible):has([data-automation-id="signInSubmitButton"]:visible):has([data-automation-id="createAccountLink"]:visible)';
 const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
   experience: '[data-automation-id="applyFlowMyExperiencePage"]',
@@ -59,6 +61,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="signInPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
   rule("structural_trait_page_account_entry_v1", WORKDAY_MODERN_SIGN_IN_SELECTOR),
+  rule("structural_trait_page_account_entry_v1", WORKDAY_COMPLETE_SIGN_IN_SELECTOR),
   rule("structural_trait_page_account_entry_v1", EMAIL_SIGN_IN_CHOICE_SELECTOR),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",

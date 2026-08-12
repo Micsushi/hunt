@@ -112,10 +112,28 @@ export interface Stage2ExternalMonitorRuntimeOptions {
   readonly now?: () => string;
   readonly acknowledgementTimeoutMs?: number;
   readonly acknowledgementPollMs?: number;
-  readonly trace?: (event: string) => void;
+  readonly trace?: (event: string, details?: Stage2ExternalMonitorTraceDetails) => void;
   readonly waitForAcknowledgement?: (
     request: Stage2ExternalMonitorRequestBinding,
   ) => Promise<void>;
+}
+
+export interface Stage2ExternalMonitorTraceDetails {
+  readonly chain: "auth" | "application";
+  readonly page: string;
+  readonly moment: string;
+  readonly ordinal: number;
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly failureStage?: string;
+  readonly fieldCount?: number;
+  readonly requiredFieldCount?: number;
+  readonly controlTypes?: readonly string[];
+  readonly questionTypes?: readonly string[];
+  readonly answerTypes?: readonly string[];
+  readonly validationState?: "clear";
+  readonly submitPresent?: boolean;
+  readonly submitActivated: false;
 }
 
 export class Stage2ExternalMonitorRuntime {
@@ -211,30 +229,48 @@ export class Stage2ExternalMonitorRuntime {
     const ordinal = (chain === "auth" ? this.#authOrdinal : this.#applicationOrdinal) + 1;
     if (ordinal > 128 || !validEvent(event) ||
         !this.#legalMoment(chain, pageName, moment, event)) denied();
+    const traceContext = Object.freeze({
+      chain,
+      page: pageName,
+      moment,
+      ordinal,
+      operationId: event.operationId,
+      attempt: event.attempt,
+      submitActivated: false as const,
+    });
+    let failureStage = "capture_started";
+    let taxonomyTrace: Stage2ExternalMonitorTraceDetails = traceContext;
     this.#active = true;
     try {
-      emitMonitorTrace(this.#options.trace, "external_monitor_capture_started");
+      emitMonitorTrace(this.#options.trace, "external_monitor_capture_started", traceContext);
       const root = this.#chainRoot(chain);
       const prefix = `${String(ordinal).padStart(4, "0")}-${pageName}-${moment}`;
       const screenshotFile = `${prefix}.png`;
       const taxonomyFile = `${prefix}.taxonomy.json`;
       const requestFile = `${prefix}.request.json`;
       const ackFile = `${prefix}.ack.json`;
+      failureStage = "url_before_read";
       const urlBefore = await page.url();
-      emitMonitorTrace(this.#options.trace, "external_monitor_url_before_read");
+      emitMonitorTrace(this.#options.trace, "external_monitor_url_before_read", traceContext);
+      failureStage = "screenshot_capture";
       const screenshot = await page.screenshot({ type: "png" });
-      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_received");
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_received", traceContext);
+      failureStage = "screenshot_validation";
       validateStage2MonitorPng(screenshot);
-      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_captured");
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_captured", traceContext);
+      failureStage = "title_capture";
       const title = boundedTitle(await page.title());
-      emitMonitorTrace(this.#options.trace, "external_monitor_title_captured");
+      emitMonitorTrace(this.#options.trace, "external_monitor_title_captured", traceContext);
+      failureStage = "url_after_read";
       const urlAfter = await page.url();
-      emitMonitorTrace(this.#options.trace, "external_monitor_url_after_read");
+      emitMonitorTrace(this.#options.trace, "external_monitor_url_after_read", traceContext);
+      failureStage = "identity_verification";
       const capturedIdentityDigests = identityDigests(
         observedIdentity(urlBefore, urlAfter, this.#options),
         title,
       );
-      emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified");
+      emitMonitorTrace(this.#options.trace, "external_monitor_identity_verified", traceContext);
+      failureStage = "taxonomy_admission";
       const taxonomy = exactTaxonomy({
         schemaVersion: 1,
         evidenceRevision: "s2-monitor-taxonomy-v1",
@@ -246,12 +282,24 @@ export class Stage2ExternalMonitorRuntime {
         ...taxonomyInput,
         privacyScan: "pass",
       });
-      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_admitted");
+      taxonomyTrace = Object.freeze({
+        ...traceContext,
+        fieldCount: taxonomy.fieldCount as number,
+        requiredFieldCount: taxonomy.requiredFieldCount as number,
+        controlTypes: Object.freeze([...(taxonomy.controlTypes as string[])]),
+        questionTypes: Object.freeze([...(taxonomy.questionTypes as string[])]),
+        answerTypes: Object.freeze([...(taxonomy.answerTypes as string[])]),
+        validationState: "clear" as const,
+        submitPresent: taxonomy.submitPresent as boolean,
+      });
+      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_admitted", taxonomyTrace);
+      failureStage = "screenshot_persistence";
       writeBytes(join(root, screenshotFile), screenshot);
-      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_written");
+      emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_written", taxonomyTrace);
+      failureStage = "taxonomy_persistence";
       const taxonomyBytes = jsonBytes(taxonomy);
       writeBytes(join(root, taxonomyFile), taxonomyBytes);
-      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_written");
+      emitMonitorTrace(this.#options.trace, "external_monitor_taxonomy_written", taxonomyTrace);
       const previousAckSha256 = chain === "auth"
         ? this.#previousAuthAck
         : this.#previousApplicationAck;
@@ -284,8 +332,9 @@ export class Stage2ExternalMonitorRuntime {
       } as const;
       const requestBytes = jsonBytes(request);
       const requestPath = join(root, requestFile);
+      failureStage = "request_persistence";
       writeBytes(requestPath, requestBytes);
-      emitMonitorTrace(this.#options.trace, "external_monitor_request_written");
+      emitMonitorTrace(this.#options.trace, "external_monitor_request_written", taxonomyTrace);
       const binding = Object.freeze({
         path: requestPath,
         ordinal,
@@ -295,7 +344,8 @@ export class Stage2ExternalMonitorRuntime {
         attempt: event.attempt,
         sha256: digest(requestBytes),
       });
-      emitMonitorTrace(this.#options.trace, "external_monitor_evidence_published");
+      emitMonitorTrace(this.#options.trace, "external_monitor_evidence_published", taxonomyTrace);
+      failureStage = "acknowledgement_wait";
       if (this.#options.waitForAcknowledgement !== undefined) {
         await this.#options.waitForAcknowledgement(binding);
       } else {
@@ -314,8 +364,9 @@ export class Stage2ExternalMonitorRuntime {
         this.#options.processOwnerPid,
         this.#options.processOwnerStartedAt,
       )) denied();
+      failureStage = "acknowledgement_validation";
       const ackSha256 = validateAck(root, ackFile, request, binding.sha256);
-      emitMonitorTrace(this.#options.trace, "external_monitor_acknowledged");
+      emitMonitorTrace(this.#options.trace, "external_monitor_acknowledged", taxonomyTrace);
       if (chain === "auth") {
         this.#authOrdinal = ordinal;
         this.#previousAuthAck = ackSha256;
@@ -325,7 +376,10 @@ export class Stage2ExternalMonitorRuntime {
       }
       this.#commitMoment(chain, pageName, moment, event);
     } catch (error) {
-      emitMonitorTrace(this.#options.trace, "external_monitor_capture_failed");
+      emitMonitorTrace(this.#options.trace, "external_monitor_capture_failed", Object.freeze({
+        ...taxonomyTrace,
+        failureStage,
+      }));
       this.close();
       throw error;
     } finally {
@@ -730,10 +784,11 @@ function validateOptions(options: Stage2ExternalMonitorRuntimeOptions): Stage2Ex
 }
 
 function emitMonitorTrace(
-  trace: ((event: string) => void) | undefined,
+  trace: Stage2ExternalMonitorRuntimeOptions["trace"],
   event: string,
+  details: Stage2ExternalMonitorTraceDetails,
 ): void {
-  try { trace?.(event); } catch { /* diagnostics never change monitor behavior */ }
+  try { trace?.(event, details); } catch { /* diagnostics never change monitor behavior */ }
 }
 
 function validEvent(value: Stage2MonitorLifecycleEvent): boolean {
@@ -897,7 +952,9 @@ function count(value: unknown): boolean {
 
 function stringArray(value: unknown): boolean {
   return Array.isArray(value) && value.length >= 1 && value.length <= 16 &&
-    new Set(value).size === value.length && value.every((item) => typeof item === "string");
+    new Set(value).size === value.length && value.every((item) =>
+      typeof item === "string" && /^[a-z][a-z0-9_.-]{0,63}$/u.test(item)
+    );
 }
 
 function canonicalTimestamp(value: string): string {

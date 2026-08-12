@@ -18,6 +18,7 @@ export function normalizeCatalogText(text: string): string {
     .normalize("NFKC")
     .toLowerCase()
     .replace(/\s*\(required\)(?:\s*[\p{P}\p{S}])*\s*$/u, "")
+    .replace(/(?<!\bnot)\s+required(?:\s*\*)?\s*$/u, "")
     .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();

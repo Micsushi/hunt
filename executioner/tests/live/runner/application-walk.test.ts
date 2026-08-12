@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   runStage2ApplicationWalk,
   type ApplicationWalkAcceptanceWriter,
+  type Stage2ApplicationWalkTraceEvent,
 } from "../../../src/live/runner/application-walk.ts";
 import { dependenciesFor, truth } from "../../integration/s2-application-walk/fakes.ts";
 import { walkFixture } from "../../integration/s2-application-walk/fixtures.ts";
@@ -55,6 +56,7 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
 
 test("returns only the sanitized page failure after guaranteed cleanup", async () => {
   const calls: string[] = [];
+  const trace: Stage2ApplicationWalkTraceEvent[] = [];
   const result = await runStage2ApplicationWalk(input(), {
     walk: dependenciesFor([truth("profile"), {
       ...truth("profile"),
@@ -81,6 +83,7 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
         calls.push("write");
       },
     },
+    trace: (event) => trace.push(event),
   }, new AbortController().signal);
 
   assert.equal(result.ok, false);
@@ -92,6 +95,62 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
   ]);
   assert.equal(calls.includes("cleanup"), true);
   assert.equal(calls.includes("write"), false);
+  assert.deepEqual(trace.map(({ kind }) => kind), [
+    "application_walk_started",
+    "application_walk_terminal",
+  ]);
+  const terminal = trace.at(-1);
+  assert.equal(terminal?.kind, "application_walk_terminal");
+  if (terminal?.kind !== "application_walk_terminal") return;
+  assert.equal(terminal.status, "blocked");
+  assert.equal(terminal.failure?.classifier, "required_field_gate");
+  assert.equal(terminal.failure?.primitive, "required_field_verification");
+  assert.equal(terminal.failure?.unknownLayer, "required_field");
+  assert.equal(terminal.submitActivated, false);
+});
+
+test("traces value-free page progress with question, answer, UI, and provenance summaries", async () => {
+  const trace: Stage2ApplicationWalkTraceEvent[] = [];
+  const calls: string[] = [];
+  const result = await runStage2ApplicationWalk({ ...input(), stopAfter: "profile_verified" }, {
+    walk: dependenciesFor([truth("profile"), truth("profile")], calls),
+    laneAcceptances: {
+      snapshot() {
+        return [{
+          schemaVersion: 1,
+          checkpoint: "profile_verified",
+          pageType: "profile",
+          verifiedFields: [{
+            fieldId: "identity.given_name",
+            questionType: "identity",
+            answerType: "text",
+            uiBehavior: "text",
+            uiVariant: "workday_text_v1",
+            provenance: "owner_provided",
+          }],
+          ownedDuplicateRows: 0,
+          independentlyVerified: true,
+          submitActivated: false,
+          privacyScan: "pass",
+        }] as never;
+      },
+    },
+    cleanup: { async close() { return true; } },
+    evidence: { async write() {} },
+    trace: (event) => trace.push(event),
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  const progress = trace.find(({ kind }) => kind === "application_walk_progress");
+  assert.equal(progress?.kind, "application_walk_progress");
+  if (progress?.kind !== "application_walk_progress") return;
+  assert.deepEqual(progress.questionTypes, ["identity"]);
+  assert.deepEqual(progress.answerTypes, ["text"]);
+  assert.deepEqual(progress.uiBehaviors, ["text"]);
+  assert.deepEqual(progress.provenances, ["owner_provided"]);
+  assert.equal(progress.requiredFields, 1);
+  assert.equal(progress.verifiedFields, 1);
+  assert.equal(progress.submitActivated, false);
 });
 
 function input() {

@@ -16,6 +16,7 @@ import {
   readStage2ExternalMonitorObservation,
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
+  type Stage2ExternalMonitorTraceDetails,
   writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
@@ -317,6 +318,7 @@ test("external monitor rejects incomplete or malformed taxonomy arrays before ev
     { ...base, controlTypes: ["text", "text"] },
     { ...base, controlTypes: Array.from({ length: 17 }, (_, index) => `type_${index}`) },
     { ...base, controlTypes: ["text", 1] },
+    { ...base, questionTypes: ["raw label text"] },
   ];
   for (const [index, malformed] of cases.entries()) {
     const root = mkdtempSync(join(tmpdir(), `hunt-s2-external-monitor-taxonomy-${index}-`));
@@ -379,13 +381,17 @@ test("external monitor rejects fabricated, missing, duplicate, and unsafe job ro
 test("external monitor traces the exact capture boundary without changing behavior", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-trace-"));
   const trace: string[] = [];
+  const details: Stage2ExternalMonitorTraceDetails[] = [];
   try {
     const runtime = createStage2ExternalMonitorRuntime({
       ...binding,
       evidenceRoot: root,
       runtimeRoot: root,
       now: ordinalClock(),
-      trace: (event) => trace.push(event),
+      trace: (event, detail) => {
+        trace.push(event);
+        if (detail !== undefined) details.push(detail);
+      },
       waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
         runtimeRoot: root,
         evidenceRoot: root,
@@ -415,6 +421,26 @@ test("external monitor traces the exact capture boundary without changing behavi
       "external_monitor_evidence_published",
       "external_monitor_acknowledged",
     ]);
+    assert.equal(details.length, trace.length);
+    assert.deepEqual(details[0], {
+      chain: "auth",
+      page: "account_entry",
+      moment: "before_mutation",
+      ordinal: 1,
+      operationId: "operation_capture_trace_0001",
+      attempt: 1,
+      submitActivated: false,
+    });
+    assert.deepEqual(details.at(-1), {
+      ...details[0],
+      fieldCount: 2,
+      requiredFieldCount: 2,
+      controlTypes: ["text"],
+      questionTypes: ["identity"],
+      answerTypes: ["text"],
+      validationState: "clear",
+      submitPresent: false,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -654,12 +680,16 @@ test("external monitor rechecks exact liveness after a pending independent ACK",
 test("external monitor distinguishes a screenshot call failure from PNG rejection", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-screenshot-failure-"));
   const trace: string[] = [];
+  const details: Stage2ExternalMonitorTraceDetails[] = [];
   try {
     const runtime = createStage2ExternalMonitorRuntime({
       ...binding,
       evidenceRoot: root,
       runtimeRoot: root,
-      trace: (event) => trace.push(event),
+      trace: (event, detail) => {
+        trace.push(event);
+        if (detail !== undefined) details.push(detail);
+      },
       waitForAcknowledgement: async () => assert.fail("screenshot failure reached ACK"),
     });
     await assert.rejects(
@@ -678,6 +708,8 @@ test("external monitor distinguishes a screenshot call failure from PNG rejectio
       "external_monitor_url_before_read",
       "external_monitor_capture_failed",
     ]);
+    assert.equal(details.at(-1)?.failureStage, "screenshot_capture");
+    assert.equal(details.at(-1)?.submitActivated, false);
     assert.deepEqual(readdirSync(join(root, "auth-monitor")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });

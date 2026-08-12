@@ -117,6 +117,20 @@ bytes to Node. The command writes only the preallocated opaque account handle,
 rechecks its record ACL and metadata, and prints a value-free result. It does
 not contact Workday or Gmail.
 
+For a fresh run that reuses the already approved pinned account source, call the
+same provisioner with the protected source path and its current digest:
+
+```powershell
+$accountSource = 'C:\private\hunt-account.env'
+$accountSourceSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $accountSource).Hash.ToLowerInvariant()
+npm run provision:s2-account -- --config C:\absolute\external\owner-inputs.json --env-source $accountSource --sha256 $accountSourceSha
+```
+
+This path opens no credential dialog. The trusted Windows child verifies the
+exact source bytes, extracts only the two pinned account keys, and emits only
+journey-scoped DPAPI ciphertext. The plaintext values never enter Node,
+arguments, output, or the new run storage.
+
 ### Account-access acceptance slice
 
 After the accepted browser navigation capability is integrated, run the
@@ -571,6 +585,16 @@ records either one exact Gmail candidate consumed or a credential sign-in that
 was independently re-observed at `application_ready`; it never reports one as
 the other. Both proofs require cleanup, privacy, no retained message body, and
 `submitActivated: false`.
+
+Set `HUNT_C3_VALUE_FREE_ACCOUNT_TRACE=1` on a protected live runner to stream
+JSON diagnostics to stderr. Monitor records include only the governed chain,
+page, moment, ordinal, opaque operation ID, attempt, sanitized control/question/
+answer taxonomy, Submit safety state, and a fixed failure stage. Application
+walk records add verified page counts, canonical type/provenance summaries, and
+the terminal blocker owner, classifier, primitive, and unknown layer. They do
+not include labels, options, applicant values, credentials, URLs, DOM, paths,
+or screenshots. Keep the redirected stderr file inside the run's protected
+transient storage and remove it with the run artifacts.
 
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.

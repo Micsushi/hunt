@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PlaywrightPostingNavigationAdapter } from "../../../src/browser/playwright-live/private/playwright-posting-navigation.ts";
+import { WORKDAY_COMPLETE_SIGN_IN_SELECTOR } from "../../../src/browser/playwright-live/private/workday-structural-catalog.ts";
 
 test("production adapter resolves each closed Workday transition semantically", async () => {
   for (const [action, role, name] of [
@@ -23,6 +24,21 @@ test("production adapter resolves each closed Workday transition semantically", 
     await adapter.activate(page, action);
     assert.deepEqual(page.clicked, [`${role}:${name}`]);
   }
+});
+
+test("posting navigation declines an exact cookie banner before Apply", async () => {
+  const page = new SemanticPage({
+    "button:Decline": locator(),
+    "button:Apply": locator(),
+  });
+  const adapter = new PlaywrightPostingNavigationAdapter();
+
+  await adapter.activate(page, "start_application");
+
+  assert.deepEqual(page.clicked, ["button:Decline", "button:Apply"]);
+  assert.deepEqual(page.hiddenWaits, [
+    { key: "button:Decline", state: "hidden", timeout: 5_000 },
+  ]);
 });
 
 test("account Sign In falls back to one exact text control when no semantic role exists", async () => {
@@ -156,7 +172,7 @@ test("Sign in with email waits for a credential or application destination", asy
   assert.equal(page.destinationWaits, 1);
 });
 
-test("account Sign In waits for the exact modern page owner, not a partially hydrated email field", async () => {
+test("account Sign In also admits a complete wrapper-independent credential form", async () => {
   const modernSelector =
     '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
   const page = new SemanticPage({ "text:Sign In": locator() });
@@ -165,7 +181,11 @@ test("account Sign In waits for the exact modern page owner, not a partially hyd
   await adapter.activate(page, "account_sign_in");
 
   assert.equal(page.destinationQueries[0]?.includes(modernSelector), true);
-  assert.equal(page.destinationQueries[0]?.includes('[data-automation-id="email"]'), false);
+  assert.equal(page.destinationQueries[0]?.includes(WORKDAY_COMPLETE_SIGN_IN_SELECTOR), true);
+  assert.equal(
+    page.destinationQueries[0]?.split(", ").includes('[data-automation-id="email"]'),
+    false,
+  );
 });
 
 test("Apply Manually accepts an admitted destination opened in a popup", async () => {
@@ -192,6 +212,11 @@ test("Apply Manually accepts an admitted destination opened in a popup", async (
 
 class SemanticPage {
   readonly clicked: string[] = [];
+  readonly hiddenWaits: Array<{
+    readonly key: string;
+    readonly state: "hidden";
+    readonly timeout: number;
+  }> = [];
   readonly destinationQueries: string[] = [];
   readonly destinationWaitArguments: Array<{
     readonly state: "attached" | "visible";
@@ -222,6 +247,17 @@ class SemanticPage {
         this.#effectStarted = true;
         this.clicked.push(key);
       },
+      waitFor: async (waitOptions) => {
+        if (waitOptions.state === "hidden") {
+          this.hiddenWaits.push({
+            key,
+            state: "hidden",
+            timeout: waitOptions.timeout,
+          });
+          return;
+        }
+        await item.waitFor(waitOptions);
+      },
     };
   }
   getByText(text: string): LocatorState {
@@ -241,8 +277,12 @@ class SemanticPage {
     return {
       ...item,
       waitFor: async (options) => {
+        if (options.state === "hidden") throw new Error("destination hidden");
         this.destinationWaits += 1;
-        this.destinationWaitArguments.push(options);
+        this.destinationWaitArguments.push({
+          state: options.state === "attached" ? "attached" : "visible",
+          timeout: options.timeout,
+        });
         if (!this.#destinationAvailable) throw new Error("destination absent");
       },
     };
@@ -266,7 +306,7 @@ interface LocatorState {
   nth(index: number): LocatorState;
   first(): LocatorState;
   waitFor(options: {
-    readonly state: "attached" | "visible";
+    readonly state: "attached" | "hidden" | "visible";
     readonly timeout: number;
   }): Promise<void>;
 }
@@ -312,7 +352,11 @@ function absentLocator(
     nth() { return this; },
     first() { return this; },
     waitFor: async (options) => {
-      waits.push(options);
+      if (options.state === "hidden") throw new Error("not hidden");
+      waits.push({
+        state: options.state === "attached" ? "attached" : "visible",
+        timeout: options.timeout,
+      });
       throw new Error("not visible before timeout");
     },
   };
