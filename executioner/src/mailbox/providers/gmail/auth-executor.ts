@@ -21,6 +21,14 @@ import {
   type GmailProviderFailureCode,
 } from "./http-parser.ts";
 import { GmailHttpClient } from "./http-client.ts";
+import {
+  GmailImapClient,
+  GmailImapFailure,
+} from "./private/imap-client.ts";
+import {
+  parseSealedGmailBundle,
+  SealedGmailAuthorizationFailure,
+} from "./private/sealed-authorization.ts";
 import { GmailRawArtifactVault } from "./private/raw-artifact-vault.ts";
 
 type SenderPolicyId = LiveIdentifier<"sender_policy">;
@@ -98,6 +106,7 @@ export interface GmailApiAuthExecutorOptions {
   readonly binding: GmailBinding;
   readonly resolver: GmailAuthorizationResolver;
   readonly httpClient: GmailHttpClient;
+  readonly imapClient?: GmailImapClient;
   readonly rawVault: GmailRawArtifactVault;
   readonly artifactRegistry: SafeArtifactAdmission;
   readonly approvedPolicy: GmailApprovedPolicyCapability;
@@ -122,16 +131,22 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
         signal,
         async (authorization) => {
           return this.#options.approvedPolicy.use(async (approvedPolicy) => {
-            const authority = parseSealedBundle(
+            const authority = parseSealedGmailBundle(
               authorization,
               this.#options.binding,
               approvedPolicy,
             );
-            const messages = await this.#options.httpClient.query(
-              authority,
-              { notBefore: request.notBefore, notAfter: request.notAfter },
-              signal,
-            );
+            const messages = authority.kind === "imap"
+              ? await (this.#options.imapClient ?? new GmailImapClient()).query(
+                authority,
+                { notBefore: request.notBefore, notAfter: request.notAfter },
+                signal,
+              )
+              : await this.#options.httpClient.query(
+                authority,
+                { notBefore: request.notBefore, notAfter: request.notAfter },
+                signal,
+              );
             const candidates = messages.map((message) => {
               const verificationHandle = this.#options.createHandle();
               const expiresAt = new Date(
@@ -216,7 +231,9 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
         },
       );
     } catch (error) {
-      return error instanceof GmailProviderFailure
+      return error instanceof GmailProviderFailure ||
+          error instanceof GmailImapFailure ||
+          error instanceof SealedGmailAuthorizationFailure
         ? failure(error.code)
         : failure("gmail_network_unavailable");
     }
@@ -251,100 +268,6 @@ function validSourceRequest(
     sameTarget(request.target, binding.target) &&
     request.notBefore === binding.notBefore &&
     request.notAfter === binding.notAfter;
-}
-
-interface SealedGmailBundle {
-  readonly accessValue: string;
-  readonly companyName: string;
-  readonly recipientAddress: string;
-  readonly verificationHost: string;
-  readonly verificationTtlSeconds: number;
-}
-
-function parseSealedBundle(
-  bytes: Readonly<Uint8Array>,
-  binding: GmailBinding,
-  approvedPolicy: {
-    readonly host: Readonly<Uint8Array>;
-    readonly tenant: Readonly<Uint8Array>;
-  },
-): SealedGmailBundle {
-  let value: unknown;
-  try {
-    value = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
-  } catch {
-    throw new GmailProviderFailure("gmail_auth_denied");
-  }
-  if (!record(value)) throw new GmailProviderFailure("gmail_auth_denied");
-  const exactKeys = [
-    "accessValue",
-    "companyName",
-    "format",
-    "journeyId",
-    "recipientAddress",
-    "recipientBindingId",
-    "scope",
-    "senderPolicyId",
-    "target",
-    "verificationHost",
-    "verificationTenant",
-    "verificationTtlSeconds",
-  ];
-  if (
-    JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(exactKeys) ||
-    value.format !== "gmail-oauth-bundle-v2" ||
-    value.scope !== "https://www.googleapis.com/auth/gmail.readonly" ||
-    typeof value.accessValue !== "string" ||
-    value.accessValue.length < 1 ||
-    value.accessValue.length > 4_096 ||
-    typeof value.recipientAddress !== "string" ||
-    !email(value.recipientAddress) ||
-    typeof value.companyName !== "string" ||
-    !company(value.companyName) ||
-    typeof value.verificationHost !== "string" ||
-    !host(value.verificationHost) ||
-    typeof value.verificationTenant !== "string" ||
-    !tenant(value.verificationTenant) ||
-    !Number.isSafeInteger(value.verificationTtlSeconds) ||
-    Number(value.verificationTtlSeconds) < 60 ||
-    Number(value.verificationTtlSeconds) > 86_400
-  ) {
-    throw new GmailProviderFailure("gmail_auth_denied");
-  }
-  if (
-    value.journeyId !== binding.journeyId ||
-    value.recipientBindingId !== binding.recipientBindingId ||
-    value.senderPolicyId !== binding.senderPolicyId ||
-    !sameTarget(value.target, binding.target)
-  ) {
-    throw new GmailProviderFailure("mailbox_query_invalid");
-  }
-  let approvedHost: string;
-  let approvedTenant: string;
-  try {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    approvedHost = decoder.decode(approvedPolicy.host);
-    approvedTenant = decoder.decode(approvedPolicy.tenant);
-  } catch {
-    throw new GmailProviderFailure("mailbox_query_invalid");
-  }
-  if (
-    !host(approvedHost) ||
-    !tenant(approvedTenant) ||
-    value.verificationHost !== approvedHost ||
-    value.verificationTenant !== approvedTenant
-  ) {
-    throw new GmailProviderFailure("mailbox_query_invalid");
-  }
-  return {
-    accessValue: value.accessValue,
-    companyName: value.companyName,
-    recipientAddress: value.recipientAddress,
-    verificationHost: value.verificationHost,
-    verificationTtlSeconds: Number(value.verificationTtlSeconds),
-  };
 }
 
 function admitRequest(
@@ -398,32 +321,6 @@ function sameTarget(value: unknown, expected: TargetIdentityV1): boolean {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function email(value: string): boolean {
-  return value === value.toLowerCase() &&
-    value.length <= 254 &&
-    /^[^\s@]+@[^\s@]+$/u.test(value);
-}
-
-function company(value: string): boolean {
-  return value.length >= 1 &&
-    value.length <= 200 &&
-    value === value.trim() &&
-    !/[\p{Cc}]/u.test(value);
-}
-
-function host(value: string): boolean {
-  return value === value.toLowerCase() &&
-    value.length <= 253 &&
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value);
-}
-
-function tenant(value: string): boolean {
-  return value === value.toLowerCase() &&
-    value.length >= 1 &&
-    value.length <= 253 &&
-    /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(value);
 }
 
 function cancelled() {
