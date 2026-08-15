@@ -142,6 +142,54 @@ test("an existing account signs in once and completes only after re-observation"
   assert.equal(navigator.calls.length, 0);
 });
 
+test("sign-in completion reconciles a bounded transient Workday shell", async () => {
+  const credential = createCredentialMutationAdapterFake({
+    mutate: {
+      ok: true,
+      value: {
+        kind: "application_ready",
+        attemptedFields: ["email", "password"],
+      },
+    },
+  });
+  const values = [
+    {
+      kind: "classified_account",
+      state: { kind: "existing_account" },
+    },
+    {
+      kind: "classification_stopped",
+      outcome: "workday_page_unknown",
+    },
+    {
+      kind: "classified_account",
+      state: { kind: "application_ready" },
+    },
+  ] as const;
+  let index = 0;
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: createMailboxProviderFake().port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: {
+      async observe() {
+        const value = values[Math.min(index, values.length - 1)]!;
+        index += 1;
+        return { ok: true, value } as never;
+      },
+    },
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(
+    result.ok && result.value.kind === "account_ready" && result.value.path,
+    "reused_account",
+  );
+  assert.equal(index, 3);
+});
+
 test("an uncertain sign-in effect recovers from an independently observed ready page", async () => {
   const credential = createCredentialMutationAdapterFake({
     mutate: { ok: false, error: { code: "credential_effect_uncertain", retryable: false } },
@@ -299,12 +347,13 @@ test("failed, cancelled, or malformed verification-email requests never poll Gma
 
 test("fresh-create submits create first even when Workday initially shows sign-in", async () => {
   const credential = privateCredential(
+    { kind: "create_account_required", attemptedFields: ["email", "password"] },
     { kind: "verification_required", attemptedFields: ["email", "password"] },
   );
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
   const artifacts = createVerificationArtifactFake();
   const navigator = createPrivilegedVerificationNavigatorFake();
-  const accountState = observer("existing_account", "application_ready");
+  const accountState = observer("existing_account", "create_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     verificationEmail: verificationEmailRequester().port,
@@ -321,21 +370,25 @@ test("fresh-create submits create first even when Workday initially shows sign-i
 
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
-    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["create_account"],
+    credential.calls.map(({ request }) => ({
+      mode: (request as { readonly mode: string }).mode,
+      operationId: (request as { readonly operationId: string }).operationId,
+    })),
+    [
+      { mode: "create_account", operationId: input().operations.initialCredentialMutation },
+      { mode: "create_account", operationId: input().operations.createCredentialMutation },
+    ],
   );
   assert.equal(mailbox.calls.length, 1);
   assert.equal(navigator.calls.length, 1);
 });
 
 test("sign-in intent submits sign-in from a create-account page and never creates", async () => {
-  const credential = createCredentialMutationAdapterFake({
-    mutate: {
-      ok: true,
-      value: { kind: "application_ready", attemptedFields: ["email", "password"] },
-    },
-  });
-  const accountState = observer("create_account", "application_ready");
+  const credential = privateCredential(
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
+  const accountState = observer("create_account", "existing_account", "application_ready");
   const lifecycle = new AccountVerificationLifecycle({
     credentialMutation: credential.port,
     mailbox: createMailboxProviderFake().port,
@@ -348,8 +401,14 @@ test("sign-in intent submits sign-in from a create-account page and never create
 
   assert.equal(result.ok && result.value.kind, "account_ready");
   assert.deepEqual(
-    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["sign_in"],
+    credential.calls.map(({ request }) => ({
+      mode: (request as { readonly mode: string }).mode,
+      operationId: (request as { readonly operationId: string }).operationId,
+    })),
+    [
+      { mode: "sign_in", operationId: input().operations.initialCredentialMutation },
+      { mode: "sign_in", operationId: input().operations.accountExistsSignIn },
+    ],
   );
 });
 
@@ -588,21 +647,17 @@ test("post-navigation existing-account state signs in and is reclassified", asyn
 });
 
 test("post-navigation create-account state switches to sign-in and is reclassified", async () => {
-  const credential = createCredentialMutationAdapterFake({
-    mutate: {
-      ok: true,
-      value: {
-        kind: "application_ready",
-        attemptedFields: ["email", "password"],
-      },
-    },
-  });
+  const credential = privateCredential(
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
   const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
   const artifacts = createVerificationArtifactFake();
   const navigator = createPrivilegedVerificationNavigatorFake();
   const accountState = observer(
     "verification_required",
     "create_account",
+    "existing_account",
     "application_ready",
   );
   const events: string[] = [];
@@ -624,16 +679,24 @@ test("post-navigation create-account state switches to sign-in and is reclassifi
       mode: (request as { readonly mode: string }).mode,
       operationId: (request as { readonly operationId: string }).operationId,
     })),
-    [{
-      mode: "sign_in",
-      operationId: input().operations.postVerificationSignIn,
-    }],
+    [
+      {
+        mode: "sign_in",
+        operationId: input().operations.postVerificationSignIn,
+      },
+      {
+        mode: "sign_in",
+        operationId: input().operations.postVerificationCredentialSubmit,
+      },
+    ],
   );
-  assert.equal(accountState.calls.length, 3);
+  assert.equal(accountState.calls.length, 4);
   assert.deepEqual(events, [
     "lifecycle_page_verification_required",
     "lifecycle_action_verification_link",
     "lifecycle_page_create_account",
+    "lifecycle_action_sign_in",
+    "lifecycle_page_sign_in",
     "lifecycle_action_sign_in",
     "lifecycle_page_application_ready",
   ]);

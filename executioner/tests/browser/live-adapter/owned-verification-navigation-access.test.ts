@@ -55,8 +55,10 @@ test("external monitor ACK blocks verification navigation and binds its actual d
     ["account_entry", "before_navigation", { operationId: request.operationId, attempt: 1 }],
     ["application_ready", "transition", { operationId: request.operationId, attempt: 1 }],
   ]);
-  assert.equal(records[0]?.[0], harness.page);
-  assert.equal(records[1]?.[0], harness.page);
+  assert.notEqual(records[0]?.[0], harness.page);
+  assert.notEqual(records[1]?.[0], harness.page);
+  assert.equal(typeof (records[0]?.[0] as { screenshot?: unknown })?.screenshot, "function");
+  assert.equal(typeof (records[1]?.[0] as { screenshot?: unknown })?.screenshot, "function");
 });
 
 test("owned verification navigation admits one byte-only Workday target", async () => {

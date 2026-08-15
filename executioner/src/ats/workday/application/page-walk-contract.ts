@@ -19,7 +19,8 @@ export const applicationCheckpoints = [
 export const maximumApplicationPageVisits = 8;
 export const WORKDAY_APPLICATION_PAGE_SELECTORS = Object.freeze({
   myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
-  experience: '[data-automation-id="applyFlowMyExperiencePage"]',
+  experience:
+    '[data-automation-id="applyFlowMyExperiencePage"], [data-automation-id="applyFlowMyExpPage"]',
   primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
@@ -238,7 +239,7 @@ export function applicationNextPages(
   return page === "questionnaire"
     ? ["questionnaire", "pre_review"]
     : page === "profile"
-      ? ["resume", "questionnaire", "pre_review"]
+      ? ["profile", "resume", "questionnaire", "pre_review"]
       : ["profile", "questionnaire", "pre_review"];
 }
 
@@ -248,6 +249,13 @@ export function isAllowedApplicationTransition(
   visited: readonly ApplicationHandlerPage[] = [],
 ): boolean {
   if (!applicationNextPages(from).includes(to)) return false;
+  // Workday can expose My Information and My Experience as two distinct
+  // physical roots that both belong to the profile handler lane. Admit that
+  // exact two-step lane once; the browser adapter separately requires a root
+  // or semantic transition, so ordinary DOM churn is not enough.
+  if (from === "profile" && to === "profile") {
+    return visited.filter((page) => page === "profile").length === 1;
+  }
   if (from === "resume" && to === "profile") return true;
   return to === "questionnaire" || to === "pre_review" || !visited.includes(to);
 }
@@ -266,7 +274,11 @@ export function isValidApplicationPageSequence(
     ) return false;
     if (
       page !== "questionnaire" && visited.includes(page) &&
-      !(page === "profile" && previous === "resume")
+      !(page === "profile" && (
+        previous === "resume" ||
+        (previous === "profile" &&
+          visited.filter((visitedPage) => visitedPage === "profile").length === 1)
+      ))
     ) return false;
     visited.push(page);
   }

@@ -67,6 +67,27 @@ test("questionnaire binding owns every admitted visible Workday question root", 
   }
 });
 
+test("questionnaire binding gives unknown questions stable value-free target identities", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <fieldset><legend>Tenant-specific question</legend>
+          <label><input type="radio" name="tenant" value="yes">Yes</label>
+          <label><input type="radio" name="tenant" value="no">No</label>
+        </fieldset>
+      </main>
+    `);
+    await bindQuestionnaireTargets(page, "questionnaire-unknown-fixture" as never);
+    const token = await page.locator("fieldset").getAttribute("data-hunt-target-token");
+    assert.match(token ?? "", /^target-workday-[a-f0-9]{8}-1$/u);
+    assert.doesNotMatch(token ?? "", /tenant|question/u);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a profile preflight owner-input block remains a deterministic page failure before mutation", async () => {
   const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-runtime-"));
   const browser = await chromium.launch({ headless: true });
@@ -223,6 +244,339 @@ test("a profile block after a commit remains browser-effect uncertain", async ()
   } finally {
     runtime.dispose();
     await context.close();
+    await browser.close();
+  }
+});
+
+test("each profile field mutation has its own before and readback monitor pair", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label></main></body></html>`);
+  let nextOperation = 0;
+  const monitored: { readonly moment: string; readonly operationId: string }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      ownerSources: {
+        profilePlan: {
+          pageType: "profile",
+          fields: [
+            {
+              fieldId: "identity.given_name",
+              questionType: "identity",
+              answerType: "text",
+              answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+            },
+            {
+              fieldId: "identity.family_name",
+              questionType: "identity",
+              answerType: "text",
+              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
+            },
+          ],
+          repeatables: [],
+        },
+        sensitiveValues: ["Ada", "Lovelace"],
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => {
+      nextOperation += 1;
+      return generatedOperationId(`operation_profile_monitor_${nextOperation.toString().padStart(8, "0")}`);
+    },
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: {
+      async auth() {},
+      async application(_page, _pageName, moment, taxonomy, event) {
+        monitored.push({ moment, operationId: event.operationId });
+        assert.deepEqual(taxonomy.questionTypes, ["identity"]);
+        assert.equal(taxonomy.submitPresent, false);
+      },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_profile_monitor_01"),
+    sessionId: "live_session_profile_monitor_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_profile_monitor_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  const runOperation = generatedOperationId("operation_profile_monitor_run_01");
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_profile_monitor_01"),
+      operationId: runOperation,
+      sessionId: "live_session_profile_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_profile",
+      input: { attempt: 1, pageId: "page-profile" } as never,
+    }, new AbortController().signal);
+
+    assert.equal((result as { ok: boolean }).ok, true);
+    assert.deepEqual(
+      monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),
+      ["state_observed"],
+    );
+    const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
+    const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
+    assert.equal(operations.length, 2);
+    for (const operationId of operations) {
+      assert.deepEqual(
+        fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
+        ["before_mutation", "after_readback"],
+      );
+    }
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("each questionnaire field mutation has its own before and readback monitor pair", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage"><label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label></main></body></html>`);
+  const artifact = resumeArtifact();
+  const intent = createWorkdayResumeFileIntent({
+    artifactId: artifact.resumeId,
+    artifact,
+    fileType: "pdf",
+  });
+  if (!intent.ok) throw new Error("resume fixture invalid");
+  let nextOperation = 0;
+  const monitored: { readonly moment: string; readonly operationId: string }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      owner: { revisionId: "revision_questionnaire_monitor" },
+      ownerSources: {
+        resumeIntent: intent.value,
+        profileId: upstreamProfileId("profile-questionnaire-monitor"),
+        profileRevision: 1,
+        profileQuery: {
+          async query() {
+            return { ok: true as const, value: { kind: "profile_answer_missing" as const } };
+          },
+        },
+        narrative: createConfiguredNarrativeProvider({
+          revision: "narrative-questionnaire-monitor-v1",
+          template: "Exact configured interest statement.",
+        }),
+        sensitiveValues: ["Exact configured interest statement."],
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => {
+      nextOperation += 1;
+      return generatedOperationId(`operation_questionnaire_monitor_${nextOperation.toString().padStart(8, "0")}`);
+    },
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: {
+      async auth() {},
+      async application(_page, _pageName, moment, taxonomy, event) {
+        monitored.push({ moment, operationId: event.operationId });
+        assert.deepEqual(taxonomy.questionTypes, ["narrative"]);
+        assert.equal(taxonomy.submitPresent, false);
+      },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_questionnaire_monitor_01"),
+    sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_questionnaire_monitor_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  const runOperation = generatedOperationId("operation_questionnaire_monitor_run_01");
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: runOperation,
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-questionnaire" } as never,
+    }, new AbortController().signal);
+
+    assert.equal((result as { ok: boolean }).ok, true);
+    assert.equal(await page.locator("textarea").inputValue(), "Exact configured interest statement.");
+    assert.deepEqual(
+      monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),
+      ["state_observed"],
+    );
+    const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
+    const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
+    assert.equal(operations.length, 1);
+    assert.deepEqual(
+      fieldEvents.filter(({ operationId }) => operationId === operations[0]).map(({ moment }) => moment),
+      ["before_mutation", "after_readback"],
+    );
+  } finally {
+    runtime.dispose();
+    disposeResumeArtifact(artifact);
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("application taxonomy reports real numeric structure and rejects validation or Submit drift", async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const scenario of [
+      {
+        name: "numeric questionnaire",
+        body: '<body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage"><label>Years of experience<input type="number"></label></main></body>',
+        denied: false,
+        expected: {
+          fieldCount: 1,
+          requiredFieldCount: 0,
+          controlTypes: ["number"],
+          answerTypes: ["number"],
+          questionTypes: ["employment"],
+        },
+      },
+      {
+        name: "My Experience component taxonomy",
+        body: `<body data-hunt-application-page="resume"><main data-automation-id="applyFlowMyExpPage">
+          <h1>My Experience</h1>
+          <section><h2>Work Experience</h2>
+            <label>Job Title *<input required></label><label>Company *<input required></label><label>Location<input></label>
+            <label>I currently work here<input type="checkbox"></label>
+            <input role="spinbutton" data-automation-id="dateSectionMonth-input"><input placeholder="YYYY">
+            <input role="spinbutton" data-automation-id="dateSectionMonth-input"><input placeholder="YYYY">
+            <textarea aria-label="Role Description"></textarea><button>Add Another</button>
+          </section>
+          <section><h2>Education</h2>
+            <label>School or University *<input required></label>
+            <div data-automation-id="formField-degree">Degree *<button aria-haspopup="listbox">Select One</button></div>
+            <button data-automation-id="sourcePrompt">Field of Study</button>
+            <label>Overall Result (GPA)<input type="number"></label>
+            <input placeholder="YYYY"><input placeholder="YYYY"><button>Add Another</button>
+          </section>
+          <section><h2>Languages</h2><button>Add</button></section>
+          <section><h2>Skills</h2><button data-automation-id="sourcePrompt">Type to Add Skills</button></section>
+          <section><h2>Resume/CV</h2><label>Upload a file *<input type="file" required></label></section>
+          <section><h2>Websites</h2><button>Add</button></section>
+          <section><h2>Social Network URLs</h2><label>Please provide your LinkedIn profile<input></label></section>
+        </main></body>`,
+        denied: false,
+        expected: {
+          fieldCount: 18,
+          requiredFieldCount: 5,
+          controlTypes: [
+            "text", "checkbox", "month", "year", "textarea", "select", "search_select",
+            "number", "file_upload", "repeatable",
+          ],
+          answerTypes: [
+            "text", "boolean", "month", "year", "single_select", "multi_select", "number",
+            "file", "url",
+          ],
+          questionTypes: [
+            "employment", "education", "language", "skill", "attachment", "website",
+            "social_network",
+          ],
+        },
+      },
+      {
+        name: "visible validation error",
+        body: '<body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input aria-invalid="true"></label><div role="alert">Required</div></main></body>',
+        denied: true,
+        expected: undefined,
+      },
+      {
+        name: "unexpected Submit outside Review",
+        body: '<body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input></label><button>Submit application</button></main></body>',
+        denied: true,
+        expected: undefined,
+      },
+      {
+        name: "missing Submit on Review",
+        body: '<body data-hunt-application-page="pre_review"><div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"></main></body>',
+        denied: true,
+        expected: undefined,
+      },
+    ] as const) await t.test(scenario.name, async () => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent(`<!doctype html><html data-hunt-page-id="page-taxonomy" data-hunt-submit-activated="false">${scenario.body}</html>`);
+      let monitorCalls = 0;
+      const taxonomies: {
+        readonly fieldCount: number;
+        readonly requiredFieldCount: number;
+        readonly controlTypes: readonly string[];
+        readonly answerTypes: readonly string[];
+        readonly questionTypes: readonly string[];
+      }[] = [];
+      const runtime = new OwnedWorkdayApplicationRuntime({
+        request: {} as never,
+        acceptances: { record() {} },
+        nextOperationId: () => generatedOperationId("operation_taxonomy_next_0001"),
+        timeoutMs: 1_000,
+        initialReviewExpected: [],
+        externalMonitor: {
+          async auth() {},
+          async application(_page, _pageName, _moment, taxonomy) {
+            monitorCalls += 1;
+            taxonomies.push(taxonomy);
+          },
+        },
+        authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+        now: () => "2026-08-05T12:00:00.000Z",
+      });
+      runtime.bindSession({
+        schemaVersion: 1,
+        journeyId: journeyId("journey_taxonomy_monitor_01"),
+        sessionId: "live_session_taxonomy_monitor_01" as LiveSessionId,
+        profileLeaseId: "profile_lease_taxonomy_monitor_01" as ProfileLeaseId,
+        target: {} as never,
+        leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+      });
+      const run = () => runtime.run(page as never, {
+        schemaVersion: 1,
+        journeyId: journeyId("journey_taxonomy_monitor_01"),
+        operationId: generatedOperationId("operation_taxonomy_monitor_0001"),
+        sessionId: "live_session_taxonomy_monitor_01" as LiveSessionId,
+        target: {} as never,
+        now: "2026-08-05T12:00:00.000Z",
+      }, { kind: "inspect_recovery" }, new AbortController().signal);
+      try {
+        if (scenario.denied) {
+          await assert.rejects(run, /application monitor taxonomy denied/u);
+          assert.equal(monitorCalls, 0);
+        } else {
+          const result = await run();
+          assert.equal((result as { ok: boolean }).ok, true);
+          assert.equal(monitorCalls, 1);
+          assert.equal(taxonomies[0]?.fieldCount, scenario.expected?.fieldCount);
+          assert.equal(
+            taxonomies[0]?.requiredFieldCount,
+            scenario.expected?.requiredFieldCount,
+          );
+          assert.deepEqual(taxonomies[0]?.controlTypes, scenario.expected?.controlTypes);
+          assert.deepEqual(taxonomies[0]?.answerTypes, scenario.expected?.answerTypes);
+          assert.deepEqual(taxonomies[0]?.questionTypes, scenario.expected?.questionTypes);
+        }
+      } finally {
+        runtime.dispose();
+        await context.close();
+      }
+    });
+  } finally {
     await browser.close();
   }
 });
@@ -426,7 +780,10 @@ test("application authority expiring during ACK permits no reconcile, navigation
 
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { createConfiguredNarrativeProvider } from "../../../src/ats/workday/application/questions/index.ts";
-import { createWorkdayResumeFileIntent } from "../../../src/ats/workday/application/resume/index.ts";
+import {
+  createWorkdayResumeFileIntent,
+  workdayResumeUploadFileName,
+} from "../../../src/ats/workday/application/resume/index.ts";
 import { createStage2PlaywrightLiveRuntimeBinding } from "../../../src/acceptance/s2-playwright-runtime.ts";
 import {
   captureResumeArtifact,
@@ -555,6 +912,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     fileType: "pdf",
   });
   if (!intent.ok) throw new Error("resume fixture invalid");
+  const resumeFileName = workdayResumeUploadFileName(intent.value);
   let operation = 0;
   const nextOperationId = () => generatedOperationId(
     `operation_${(++operation).toString().padStart(16, "0")}`,
@@ -676,11 +1034,11 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     await row.evaluate((node) => { node.removeAttribute("data-hunt-review-field-id"); });
     await assert.rejects(() => runtime.review.capture(new AbortController().signal));
     const resumeRow = reviewRoot.locator("section").first();
-    await resumeRow.evaluate((node) => {
+    await resumeRow.evaluate((node, fileName) => {
       node.removeAttribute("data-hunt-review-field-id");
       node.setAttribute("data-automation-id", "formField-s1-field-resume");
-      node.innerHTML = '<span>Resume</span><span>resume.pdf</span>';
-    });
+      node.innerHTML = `<span>Resume</span><span>${fileName}</span>`;
+    }, resumeFileName);
     await row.evaluate((node) => {
       node.setAttribute("data-automation-id", "formField-s1-field-interest");
       node.innerHTML = '<span>Brief interest statement</span><span>Exact configured interest statement.</span>';
@@ -692,7 +1050,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     });
     await row.locator("span").nth(1).evaluate((node) => { node.textContent = "resume.pdf"; });
     await assert.rejects(() => runtime.review.capture(new AbortController().signal));
-    await resumeRow.locator("span").nth(1).evaluate((node) => { node.textContent = "resume.pdf"; });
+    await resumeRow.locator("span").nth(1).evaluate((node, fileName) => { node.textContent = fileName; }, resumeFileName);
     await row.locator("span").nth(1).evaluate((node) => {
       node.textContent = "Exact configured interest statement.";
     });
@@ -701,11 +1059,11 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       node.setAttribute("data-hunt-review-field-id", "s1-field-interest");
       node.textContent = "Exact configured interest statement.";
     });
-    await resumeRow.evaluate((node) => {
+    await resumeRow.evaluate((node, fileName) => {
       node.removeAttribute("data-automation-id");
       node.setAttribute("data-hunt-review-field-id", "s1-field-resume");
-      node.textContent = "resume.pdf";
-    });
+      node.textContent = fileName;
+    }, resumeFileName);
     await reviewRoot.evaluate((root) => {
       const extra = document.createElement("section");
       extra.setAttribute("data-hunt-review-field-id", "unknown-extra-field");
@@ -1168,6 +1526,26 @@ test("Review expected-field grammar matches every accepted field identifier shap
       rowIdentity: `formField-${fieldId}`,
       valueSha256,
     }), false, fieldId);
+  }
+});
+
+test("Review expected-field grammar accepts every persisted answer provenance", () => {
+  const valueSha256 = "a".repeat(64);
+  for (const provenance of [
+    "owner_provided",
+    "resume_verified",
+    "configured_template",
+    "generated_default",
+    "journey_derived",
+    "reviewed_catalog",
+    "visible_option",
+  ]) {
+    assert.equal(isReviewExpectedField({
+      fieldId: "address.country",
+      provenance,
+      rowIdentity: "formField-address.country",
+      valueSha256,
+    }), true, provenance);
   }
 });
 

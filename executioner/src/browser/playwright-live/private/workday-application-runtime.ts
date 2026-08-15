@@ -9,6 +9,7 @@ import { PlaywrightWorkdayApplicationPage } from
 import {
   completeWorkdayProfilePage,
   PlaywrightWorkdayProfilePage,
+  type ProfilePageSnapshot,
   type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
 import { createQuestionnairePageHandler } from
@@ -18,6 +19,7 @@ import {
   createWorkdayResumeUploadDriver,
   createWorkdayResumeUploadHandler,
   createWorkdayResumeVerifier,
+  workdayResumeUploadFileName,
 } from "../../../ats/workday/application/resume/index.ts";
 import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
@@ -36,6 +38,8 @@ import {
   type BrowserPageId,
   type BrowserSessionId,
   type FieldId,
+  type FieldDriver,
+  type FieldVerifier,
   type OperationId,
 } from "../../../contracts/index.ts";
 import type {
@@ -62,10 +66,151 @@ import { createProfileFieldLearningCapture } from
 import { createSafetyGuard } from "../../../safety/guards.ts";
 import type { OwnedApplicationOperation } from "./application-page-types.ts";
 import type { OwnedApplicationPageRequest } from "./application-page-types.ts";
-import type { ExternalMonitorPort } from "./external-monitor-port.ts";
+import type { ExternalMonitorPage, ExternalMonitorPort } from "./external-monitor-port.ts";
+import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 import type { PersistentPage } from "./types.ts";
 
 const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
+
+export function applicationReadyMonitorPage(
+  page: PersistentPage,
+): ExternalMonitorPage {
+  const owned = page as unknown as ExternalMonitorPage & {
+    locator(selector: string): {
+      count(): Promise<number>;
+      nth(index: number): { innerText(): Promise<string> };
+    };
+  };
+  const valueFree = valueFreeExternalMonitorPage(page);
+  return Object.freeze({
+    screenshot: valueFree.screenshot,
+    url: () => owned.url(),
+    title: async () => {
+      for (const [selector, title] of applicationReadyRoots) {
+        if (await owned.locator(selector).count() === 1) return title;
+      }
+      for (const selector of [
+        applicationReadyHeadingSelectors,
+        "h1:visible, h2:visible",
+        '[data-automation-id="progressBarActiveStep"]:visible',
+      ]) {
+        const candidates = owned.locator(selector);
+        for (let index = 0; index < await candidates.count(); index += 1) {
+          const value = (await candidates.nth(index).innerText()).normalize("NFC")
+            .replace(/\s+/gu, " ").trim();
+          if (applicationReadyTitles.has(value)) return value;
+        }
+      }
+      return owned.title();
+    },
+  });
+}
+
+const applicationReadyRoots = [
+  ['[data-automation-id="applyFlowMyInfoPage"]:visible', "My Information"],
+  ['[data-automation-id="applyFlowMyExperiencePage"]:visible', "My Experience"],
+  ['[data-automation-id="applyFlowMyExpPage"]:visible', "My Experience"],
+  ['[data-automation-id="applyFlowApplicationQuestionsPage"]:visible', "Application Questions"],
+  ['[data-automation-id="applyFlowVoluntaryDisclosuresPage"]:visible', "Voluntary Disclosures"],
+  ['[data-automation-id="applyFlowReviewPage"]:visible', "Review"],
+] as const;
+
+const applicationReadyHeadingSelectors = [
+  '[data-automation-id="applyFlowMyInfoPage"] h1:visible',
+  '[data-automation-id="applyFlowMyInfoPage"] h2:visible',
+  '[data-automation-id="applyFlowMyExperiencePage"] h1:visible',
+  '[data-automation-id="applyFlowMyExperiencePage"] h2:visible',
+  '[data-automation-id="applyFlowMyExpPage"] h1:visible',
+  '[data-automation-id="applyFlowMyExpPage"] h2:visible',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"] h1:visible',
+  '[data-automation-id="applyFlowApplicationQuestionsPage"] h2:visible',
+  '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h1:visible',
+  '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h2:visible',
+  '[data-automation-id="applyFlowReviewPage"] h1:visible',
+  '[data-automation-id="applyFlowReviewPage"] h2:visible',
+].join(", ");
+
+const applicationReadyTitles = new Set<string>(applicationReadyRoots.map(([, title]) => title));
+
+async function waitForApplicationReadyPage(
+  page: PersistentPage,
+): Promise<ProfilePageSnapshot> {
+  const owned = page as unknown as Page;
+  const profile = new PlaywrightWorkdayProfilePage(owned, { pageType: "profile" });
+  const minimumFieldCount = /^https:\/\//u.test(owned.url()) ? 15 : 5;
+  const deadline = Date.now() + 30_000;
+  let previousCount = -1;
+  let stableSamples = 0;
+  while (Date.now() < deadline) {
+    try {
+      const observed = await profile.inspect(AbortSignal.any([]));
+      const fieldCount = observed.controls.length +
+        observed.rows.reduce((count, row) => count + row.controls.length, 0);
+      const profileRoot = owned.locator('[data-automation-id="applyFlowMyInfoPage"]:visible');
+      const hasPageHeading = await owned.getByRole("heading", {
+        name: /^My Information$/iu,
+      }).count() === 1;
+      const hasContinue = await owned.getByRole("button", {
+        name: /^Save and Continue$/iu,
+      }).count() === 1;
+      stableSamples = await profileRoot.count() === 1 && hasPageHeading && hasContinue &&
+          fieldCount >= minimumFieldCount && fieldCount === previousCount
+        ? stableSamples + 1
+        : 0;
+      previousCount = fieldCount;
+      if (stableSamples >= 2) return observed;
+    } catch {
+      stableSamples = 0;
+      previousCount = -1;
+    }
+    await owned.waitForTimeout(100);
+  }
+  throw new TypeError("application-ready page did not settle");
+}
+
+export async function applicationReadyMonitorTaxonomy(
+  page: PersistentPage,
+): Promise<import("./external-monitor-port.ts").ExternalMonitorTaxonomy> {
+  const owned = page as unknown as Page;
+  const observed = await waitForApplicationReadyPage(page);
+  const controls = [
+    ...observed.controls,
+    ...observed.rows.flatMap(({ controls: rowControls }) => rowControls),
+  ];
+  const [submitCount, submitActivated] = await Promise.all([
+    owned.getByRole("button", { name: /^Submit(?: application)?$/iu }).count(),
+    owned.locator("html").getAttribute("data-hunt-submit-activated")
+      .then((value) => value === "true"),
+  ]);
+  if (controls.length < 1 || submitCount !== 0 || submitActivated) {
+    throw new TypeError("application-ready monitor taxonomy denied");
+  }
+  return Object.freeze({
+    fieldCount: controls.length,
+    requiredFieldCount: controls.filter(({ required }) => required).length,
+    controlTypes: Object.freeze(unique(controls.map(({ uiBehavior }) => uiBehavior))),
+    questionTypes: Object.freeze(unique(controls.map(({ fieldId }) => monitorQuestionType(fieldId)))),
+    answerTypes: Object.freeze(unique(controls.map(({ uiBehavior }) =>
+      uiBehavior === "search_select" || uiBehavior === "radio_group" ? "option" :
+      uiBehavior === "checkbox" ? "boolean" : uiBehavior
+    ))),
+    validationState: "clear" as const,
+    submitPresent: false,
+    submitActivated: false as const,
+  });
+}
+
+function monitorQuestionType(fieldId: string): string {
+  if (fieldId === "source.how_did_you_hear") return "application_source";
+  if (fieldId === "employment.previously_worked_for_organization") return "prior_employment";
+  if (fieldId.startsWith("skills.")) return "skill";
+  const prefix = fieldId.split(".", 1)[0];
+  return prefix === undefined || prefix === "unknown" ? "unknown" : prefix;
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
 
 export interface ReviewExpectedField {
   readonly fieldId: string;
@@ -174,7 +319,10 @@ export class OwnedWorkdayApplicationRuntime {
           signal,
         );
         this.#assertAuthorized(signal);
-        const advanced = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).next(
+        const advanced = await new PlaywrightWorkdayApplicationPage(page, {
+          timeoutMs: this.#timeoutMs,
+          navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
+        }).next(
           input, signal,
         );
         if (advanced.ok) {
@@ -207,28 +355,42 @@ export class OwnedWorkdayApplicationRuntime {
         this.#assertAuthorized(signal);
         const resumePage = createPlaywrightWorkdayResumePage(page);
         const result = await createWorkdayResumeUploadHandler({
-          driver: createWorkdayResumeUploadDriver(resumePage, { timeoutMs: this.#timeoutMs }),
-          verifier: createWorkdayResumeVerifier(resumePage, { maxAttempts: 20, intervalMs: 50 }),
+          driver: createWorkdayResumeUploadDriver(resumePage, {
+            timeoutMs: this.#timeoutMs,
+            trace: this.#trace,
+          }),
+          verifier: createWorkdayResumeVerifier(resumePage, {
+            maxAttempts: 20,
+            intervalMs: 50,
+            trace: this.#trace,
+          }),
           replaceExisting: true,
+          emit: (event) => this.#trace?.("resume_upload_event", { kind: event.kind }),
         }).upload(request.ownerSources.resumeIntent, signal);
         if (!result.ok) throw new TypeError("resume reconciliation denied");
         this.#acceptances.record(result.value);
-        this.#recordReviewExpectation("s1-field-resume", "resume_verified", "resume.pdf");
-        if (await this.#monitorPageForLane(page, "resume") !== monitorPageName) {
-          throw new TypeError("resume reconciliation page drift denied");
-        }
+        this.#recordReviewExpectation(
+          "s1-field-resume",
+          "resume_verified",
+          workdayResumeUploadFileName(request.ownerSources.resumeIntent),
+        );
+        this.#trace?.("resume_upload_after_readback_monitor_started", {
+          page: monitorPageName,
+        });
         await this.#monitor(
           page, monitorPageName, "after_readback", ownedRequest.operationId, monitorAttempt, signal,
         );
+        this.#trace?.("resume_upload_after_readback_monitor_succeeded", {
+          page: monitorPageName,
+        });
         this.#assertAuthorized(signal);
         return verified("resume", "resume_verified", input.pageId);
       }
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
         const monitorPageName = await this.#monitorPageForLane(page, "profile");
-        const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
         await this.#monitor(
-          page, monitorPageName, "before_mutation", ownedRequest.operationId, monitorAttempt, signal,
+          page, monitorPageName, "state_observed", ownedRequest.operationId, 1, signal,
         );
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
@@ -238,17 +400,50 @@ export class OwnedWorkdayApplicationRuntime {
         });
         const profilePage: WorkdayProfilePagePort = {
           inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),
-          commit: (commit, innerSignal) => {
+          commit: async (commit, innerSignal) => {
             mutationAttempted = true;
-            return playwrightProfilePage.commit(commit, innerSignal);
+            const operationId = this.#nextOperationId();
+            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
+            await this.#monitor(
+              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            const committed = await playwrightProfilePage.commit(commit, innerSignal);
+            await this.#monitor(
+              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            return committed;
           },
-          addOwnedRow: (section, innerSignal) => {
+          addOwnedRow: async (section, innerSignal) => {
             mutationAttempted = true;
-            return playwrightProfilePage.addOwnedRow(section, innerSignal);
+            const operationId = this.#nextOperationId();
+            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
+            await this.#monitor(
+              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            const added = await playwrightProfilePage.addOwnedRow(section, innerSignal);
+            await this.#monitor(
+              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            return added;
           },
-          removeOwnedRow: (section, rowId, innerSignal) => {
+          removeOwnedRow: async (section, rowId, innerSignal) => {
             mutationAttempted = true;
-            return playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
+            const operationId = this.#nextOperationId();
+            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
+            await this.#monitor(
+              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            const removed = await playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
+            await this.#monitor(
+              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
+            );
+            this.#assertAuthorized(innerSignal);
+            return removed;
           },
           interaction: (controlId) => playwrightProfilePage.interaction(controlId),
         };
@@ -256,6 +451,9 @@ export class OwnedWorkdayApplicationRuntime {
           page: profilePage,
           plan: request.ownerSources.profilePlan,
           root: request.owner?.roots?.evidence?.path,
+          fileName: monitorPageName === "profile"
+            ? "profile-field-learning.json"
+            : "profile-field-learning-02.json",
           sensitiveValues: request.ownerSources.sensitiveValues,
         });
         let learningSha256: string | null = null;
@@ -316,22 +514,18 @@ export class OwnedWorkdayApplicationRuntime {
         if (await this.#monitorPageForLane(page, "profile") !== monitorPageName) {
           throw new TypeError("profile reconciliation page drift denied");
         }
-        await this.#monitor(
-          page, monitorPageName, "after_readback", ownedRequest.operationId, monitorAttempt, signal,
-        );
         this.#assertAuthorized(signal);
         return verified("profile", "profile_verified", input.pageId);
       }
       case "reconcile_questionnaire": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0];
         const monitorPageName = await this.#monitorPageForLane(page, "questionnaire");
-        const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
         await this.#monitor(
           page,
           monitorPageName,
-          "before_mutation",
+          "state_observed",
           ownedRequest.operationId,
-          monitorAttempt,
+          1,
           signal,
         );
         this.#assertAuthorized(signal);
@@ -340,19 +534,12 @@ export class OwnedWorkdayApplicationRuntime {
           input,
           request,
           session,
+          monitorPageName,
           signal,
         );
         if (await this.#monitorPageForLane(page, "questionnaire") !== monitorPageName) {
           throw new TypeError("questionnaire reconciliation page drift denied");
         }
-        await this.#monitor(
-          page,
-          monitorPageName,
-          "after_readback",
-          ownedRequest.operationId,
-          monitorAttempt,
-          signal,
-        );
         this.#assertAuthorized(signal);
         return result;
       }
@@ -393,15 +580,16 @@ export class OwnedWorkdayApplicationRuntime {
       case "review_expectations":
         return Object.freeze([...this.#reviewExpected.values()]);
       case "monitor_auth_state": {
-        const observed = await new PlaywrightWorkdayApplicationPage(
+        const observed = await waitForApplicationObservation(
           page,
-          { timeoutMs: this.#timeoutMs },
-        ).observe(signal);
+          Math.max(this.#timeoutMs, 90_000),
+          signal,
+        );
         if (!observed.ok || observed.value.submitActivated || this.#externalMonitor === undefined) {
           throw new TypeError("account monitor state denied");
         }
         await this.#externalMonitor.auth(
-          page,
+          applicationMonitorPage(page, monitorPage(observed.value.page)),
           "application_ready",
           "state_observed",
           await monitorTaxonomy(page, monitorPage(observed.value.page)),
@@ -412,6 +600,10 @@ export class OwnedWorkdayApplicationRuntime {
       }
       case "capture_review": {
         this.#assertAuthorized(signal);
+        const questionLearningSha256 = request.questionLearning?.write() ?? null;
+        this.#trace?.("question_answer_learning_sealed", {
+          present: questionLearningSha256 !== null,
+        });
         const application = await new PlaywrightWorkdayApplicationPage(
           page,
           { timeoutMs: this.#timeoutMs },
@@ -460,7 +652,7 @@ export class OwnedWorkdayApplicationRuntime {
   ): Promise<void> {
     if (this.#externalMonitor === undefined) return;
     await this.#externalMonitor.application(
-      page,
+      applicationMonitorPage(page, pageName),
       pageName,
       moment,
       await monitorTaxonomy(page, pageName),
@@ -512,6 +704,7 @@ export class OwnedWorkdayApplicationRuntime {
     input: Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
     request: Stage2ApplicationWalkRuntimeBindingRequest,
     session: LiveBrowserSessionV1,
+    monitorPageName: "resume" | "profile" | "questionnaire",
     signal: AbortSignal,
   ): Promise<unknown> {
     await bindQuestionnaireTargets(page, input.pageId);
@@ -528,14 +721,50 @@ export class OwnedWorkdayApplicationRuntime {
         { kind: "workday", page: "questionnaire" }, discoverFields(observed.value.targets),
       );
       const facts = structuralObservations(snapshot.fields, request.owner.revisionId);
+      const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
+      const semanticVerifier = createFieldVerifier(semantic);
+      const monitoredAttempts = new Map<string, number>();
+      const driver: FieldDriver = Object.freeze({
+        drive: async (
+          driveRequest: Parameters<FieldDriver["drive"]>[0],
+          innerSignal: AbortSignal,
+        ) => {
+          const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
+          monitoredAttempts.set(driveRequest.operationId, attempt);
+          await this.#monitor(
+            page, monitorPageName, "before_mutation", driveRequest.operationId, attempt, innerSignal,
+          );
+          this.#assertAuthorized(innerSignal);
+          return semanticDriver.drive(driveRequest, innerSignal);
+        },
+      });
+      const verifier: FieldVerifier = Object.freeze({
+        verify: async (
+          verificationRequest: Parameters<FieldVerifier["verify"]>[0],
+          innerSignal: AbortSignal,
+        ) => {
+          const verified = await semanticVerifier.verify(verificationRequest, innerSignal);
+          const operationId = verificationRequest.receipt.operationId;
+          const attempt = monitoredAttempts.get(operationId);
+          if (attempt === undefined) throw new TypeError("questionnaire monitor binding unavailable");
+          await this.#monitor(
+            page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
+          );
+          this.#assertAuthorized(innerSignal);
+          monitoredAttempts.delete(operationId);
+          return verified;
+        },
+      });
+      const questionLearning = request.questionLearning;
       const questionnaire = createQuestionnairePageHandler({
         profileQuery: request.ownerSources.profileQuery,
-        driver: createFieldDriver(semantic, createSafetyGuard()),
-        verifier: createFieldVerifier(semantic),
+        driver,
+        verifier,
         narrative: request.ownerSources.narrative,
         nextOperationId: this.#nextOperationId,
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
+        recordAnswer: questionLearning?.record,
       });
       const completed = await questionnaire.complete({
         journeyId: session.journeyId,
@@ -606,23 +835,32 @@ export class OwnedWorkdayApplicationRuntime {
 
   #recordProfileReviewExpectations(
     request: Stage2ApplicationWalkRuntimeBindingRequest,
-    verifiedFields: readonly { readonly fieldId: string; readonly provenance: string }[],
+    verifiedFields: readonly {
+      readonly fieldId: string;
+      readonly provenance: string;
+      readonly rowKey?: string;
+    }[],
   ): void {
-    const plans = [
-      ...request.ownerSources.profilePlan.fields,
-      ...request.ownerSources.profilePlan.repeatables.flatMap(({ rows }) =>
-        rows.flatMap(({ fields }) => fields)
-      ),
-    ];
+    const scalarPlans = request.ownerSources.profilePlan.fields;
+    const repeatablePlans = request.ownerSources.profilePlan.repeatables.flatMap(({ rows }) =>
+      rows.map(({ rowKey, fields }) => ({ rowKey, fields }))
+    );
     for (const verifiedField of verifiedFields) {
-      const candidates = plans.filter(({ fieldId: planned }) => planned === verifiedField.fieldId);
+      const candidates = verifiedField.rowKey === undefined
+        ? scalarPlans.filter(({ fieldId }) => fieldId === verifiedField.fieldId)
+        : repeatablePlans
+          .filter(({ rowKey }) => rowKey === verifiedField.rowKey)
+          .flatMap(({ fields }) => fields)
+          .filter(({ fieldId }) => fieldId === verifiedField.fieldId);
       if (candidates.length !== 1 || candidates[0]?.answer.kind !== "answered") {
         throw new TypeError("profile review truth unavailable");
       }
       const plan = candidates[0];
       if (plan.answer.kind !== "answered") throw new TypeError("profile review truth unavailable");
       this.#recordReviewExpectation(
-        verifiedField.fieldId,
+        verifiedField.rowKey === undefined
+          ? verifiedField.fieldId
+          : repeatableReviewFieldId(verifiedField.rowKey, verifiedField.fieldId),
         verifiedField.provenance,
         plan.optionMapping?.visibleOption ?? plan.answer.value,
       );
@@ -644,6 +882,51 @@ export class OwnedWorkdayApplicationRuntime {
       valueSha256: createHash("sha256").update(normalized, "utf8").digest("hex"),
     }));
   }
+
+}
+
+function repeatableReviewFieldId(rowKey: string, fieldIdValue: string): string {
+  const digest = createHash("sha256").update(rowKey, "utf8").digest("hex").slice(0, 16);
+  const candidate = `repeatable.${digest}.${fieldIdValue}`;
+  if (!isAcceptedFieldId(candidate)) throw new TypeError("repeatable review field identity denied");
+  return candidate;
+}
+
+async function waitForApplicationObservation(
+  page: Page,
+  timeoutMs: number,
+  signal: AbortSignal,
+) {
+  const startedAt = Date.now();
+  const deadline = Date.now() + timeoutMs;
+  const reloadAt = startedAt + Math.min(30_000, Math.floor(timeoutMs / 2));
+  let reloaded = false;
+  let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  while (!latest.ok && Date.now() < deadline) {
+    if (signal.aborted) return latest;
+    if (!reloaded && Date.now() >= reloadAt &&
+        await page.locator('[data-automation-id="applyFlowPage"]:visible').count() === 1) {
+      reloaded = true;
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        try {
+          process.stderr.write(`${JSON.stringify({
+            applicationStateRecovery: "owned_shell_reload_started",
+          })}\n`);
+        } catch {}
+      }
+      await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        try {
+          process.stderr.write(`${JSON.stringify({
+            applicationStateRecovery: "owned_shell_reload_completed",
+          })}\n`);
+        } catch {}
+      }
+    }
+    await page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+    latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  }
+  return latest;
 }
 
 function reviewReadbackValue(readback: BrowserReadback): string | undefined {
@@ -663,46 +946,390 @@ function monitorPage(
   return page === "pre_review" ? "review" : page;
 }
 
+function applicationMonitorPage(
+  page: Page,
+  pageName: "resume" | "profile" | "questionnaire" | "review",
+): ExternalMonitorPage {
+  if (pageName === "profile") {
+    return applicationReadyMonitorPage(page as unknown as PersistentPage);
+  }
+  return valueFreeExternalMonitorPage(page as unknown as PersistentPage, async () => {
+      const roots = pageName === "resume"
+          ? [
+              '[data-automation-id="applyFlowMyExperiencePage"]',
+              '[data-automation-id="applyFlowMyExpPage"]',
+            ]
+          : pageName === "review"
+            ? ['[data-automation-id="applyFlowReviewPage"]']
+            : [
+                '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
+                '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
+                '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+                '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+              ];
+      for (const selector of [
+        roots.flatMap((root) => [`${root} h1:visible`, `${root} h2:visible`]).join(", "),
+        "h1:visible, h2:visible",
+        '[data-automation-id="progressBarActiveStep"]:visible',
+      ]) {
+        const candidates = page.locator(selector);
+        for (let index = 0; index < await candidates.count(); index += 1) {
+          const value = normalizeReviewValue(await candidates.nth(index).innerText());
+          if (monitorTitles(pageName).has(value)) return value;
+        }
+      }
+      return page.title();
+  });
+}
+
+function monitorTitles(
+  pageName: "resume" | "profile" | "questionnaire" | "review",
+): ReadonlySet<string> {
+  if (pageName === "profile") return new Set(["My Information"]);
+  if (pageName === "resume") return new Set(["My Experience"]);
+  if (pageName === "review") return new Set(["Review"]);
+  return new Set(["Application Questions", "Voluntary Disclosures"]);
+}
+
 async function monitorTaxonomy(
   page: Page,
   pageName: "resume" | "profile" | "questionnaire" | "review",
 ) {
+  if (pageName === "profile" &&
+      await page.locator("html[data-hunt-page-id]").count() === 0) {
+    return applicationReadyMonitorTaxonomy(page as unknown as PersistentPage);
+  }
   const selectors = [
-    ["text", 'input:not([type]), input[type="text"], input[type="email"], input[type="tel"]'],
-    ["textarea", "textarea"],
-    ["select", "select, [role=combobox]"],
-    ["radio", 'input[type="radio"], [role=radio]'],
-    ["checkbox", 'input[type="checkbox"], [role=checkbox]'],
-    ["date", 'input[type="date"]'],
-    ["file_upload", 'input[type="file"]'],
+    ["text", 'input:not([type]):visible, input[type="text"]:visible, input[type="email"]:visible'],
+    ["phone", 'input[type="tel"]:visible'],
+    ["number", 'input[type="number"]:visible'],
+    ["textarea", "textarea:visible"],
+    ["select", "select:visible, [role=combobox]:visible"],
+    ["radio", 'input[type="radio"]:visible, [role=radio]:visible'],
+    ["checkbox", 'input[type="checkbox"]:visible, [role=checkbox]:visible'],
+    ["date", 'input[type="date"]:visible, [data-automation-id="dateSection"]:visible'],
+    ["file_upload", 'input[type="file"]:visible'],
   ] as const;
   const counts = await Promise.all(selectors.map(async ([type, selector]) =>
     [type, await page.locator(selector).count()] as const
   ));
-  const controlTypes = counts.filter(([, count]) => count > 0).map(([type]) => type);
-  const fieldCount = counts.reduce((sum, [, count]) => sum + count, 0);
-  const requiredFieldCount = await page.locator(
-    'input[required], textarea[required], select[required], [aria-required="true"]',
+  const experience = pageName === "resume" && await page.locator(
+      '[data-automation-id="applyFlowMyExperiencePage"]:visible, ' +
+        '[data-automation-id="applyFlowMyExpPage"]:visible',
+    ).count() === 1
+    ? await monitorExperienceTaxonomy(page)
+    : undefined;
+  const controlTypes = experience?.controlTypes ??
+    counts.filter(([, count]) => count > 0).map(([type]) => type);
+  const fieldCount = experience?.fieldCount ??
+    counts.reduce((sum, [, count]) => sum + count, 0);
+  const requiredFieldCount = experience?.requiredFieldCount ?? await page.locator(
+    'input[required]:visible, textarea[required]:visible, select[required]:visible, [aria-required="true"]:visible',
   ).count();
-  const answerTypes = new Set<string>();
-  for (const [type, count] of counts) {
-    if (count === 0) continue;
-    if (type === "radio" || type === "select") answerTypes.add("single_select");
-    else if (type === "checkbox") answerTypes.add("boolean");
-    else if (type === "date") answerTypes.add("date");
-    else if (type === "file_upload") answerTypes.add("file");
-    else answerTypes.add("text");
+  const answerTypes = experience === undefined
+    ? new Set<string>()
+    : new Set(experience.answerTypes);
+  if (experience === undefined) {
+    for (const [type, count] of counts) {
+      if (count === 0) continue;
+      if (type === "radio" || type === "select") answerTypes.add("single_select");
+      else if (type === "checkbox") answerTypes.add("boolean");
+      else if (type === "date") answerTypes.add("date");
+      else if (type === "file_upload") answerTypes.add("file");
+      else if (type === "number") answerTypes.add("number");
+      else answerTypes.add("text");
+    }
+  }
+  const [validationErrorCount, submitCount, submitActivated, questionTypes] = await Promise.all([
+    page.locator(
+      '[aria-invalid="true"]:visible, [data-automation-id*="error" i]:visible, ' +
+        '[role="alert"][class*="error" i]:visible',
+    ).count(),
+    page.getByRole("button", { name: workdayReviewSignatures.finalSubmitName }).count(),
+    page.locator("html").getAttribute("data-hunt-submit-activated")
+      .then((value) => value === "true"),
+    experience === undefined
+      ? monitorQuestionTypes(page, pageName)
+      : Promise.resolve(experience.questionTypes),
+  ]);
+  if (
+    validationErrorCount !== 0 ||
+    submitActivated ||
+    (submitCount === 1) !== (pageName === "review") ||
+    submitCount > 1
+  ) {
+    throw new TypeError("application monitor taxonomy denied");
   }
   return Object.freeze({
     fieldCount,
     requiredFieldCount: Math.min(requiredFieldCount, fieldCount),
     controlTypes: Object.freeze(controlTypes.length === 0 ? ["text"] : controlTypes),
-    questionTypes: Object.freeze([pageName === "resume" ? "attachment" : "unknown"]),
+    questionTypes,
     answerTypes: Object.freeze(answerTypes.size === 0 ? ["text"] : [...answerTypes]),
     validationState: "clear" as const,
-    submitPresent: pageName === "review",
+    submitPresent: submitCount === 1,
     submitActivated: false as const,
   });
+}
+
+async function monitorExperienceTaxonomy(page: Page): Promise<{
+  readonly fieldCount: number;
+  readonly requiredFieldCount: number;
+  readonly controlTypes: readonly string[];
+  readonly questionTypes: readonly string[];
+  readonly answerTypes: readonly string[];
+}> {
+  const read = async () => await page.evaluate(() => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    const roots = [
+      ...document.querySelectorAll<HTMLElement>(
+        '[data-automation-id="applyFlowMyExperiencePage"], ' +
+          '[data-automation-id="applyFlowMyExpPage"]',
+      ),
+    ].filter(visible);
+    if (roots.length !== 1) return null;
+    const root = roots[0]!;
+    const candidates = [...new Set(root.querySelectorAll<HTMLElement>(
+      'input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
+        'button[aria-haspopup="listbox"], button[aria-haspopup="true"], ' +
+        'button[data-automation-id="sourcePrompt"]',
+    ))].filter((control) => {
+      if (control instanceof HTMLInputElement && control.type === "file") {
+        return !control.disabled && control.getAttribute("aria-disabled") !== "true";
+      }
+      return visible(control) && !control.hasAttribute("disabled") &&
+        control.getAttribute("aria-disabled") !== "true";
+    });
+    const labels = (control: HTMLElement): string => {
+      const values: string[] = [];
+      if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
+          control instanceof HTMLSelectElement) {
+        for (const label of control.labels ?? []) values.push(normalize(label.textContent));
+      }
+      const id = control.id;
+      if (id !== "") {
+        for (const label of document.querySelectorAll<HTMLLabelElement>("label[for]")) {
+          if (label.htmlFor === id) values.push(normalize(label.textContent));
+        }
+      }
+      const owner = control.closest<HTMLElement>('[data-automation-id^="formField-"]');
+      if (owner !== null) values.push(normalize(owner.textContent));
+      values.push(normalize(control.getAttribute("aria-label")));
+      return values.filter(Boolean).join(" ");
+    };
+    const controlTypes = new Set<string>();
+    const answerTypes = new Set<string>();
+    const diagnostics: {
+      readonly automationId: string;
+      readonly id: string;
+      readonly name: string;
+      readonly placeholder: string;
+      readonly label: string;
+      readonly ownerAutomationIds: readonly string[];
+      readonly tag: string;
+      readonly inputType: string;
+      readonly role: string;
+      readonly classifiedType: string;
+      readonly required: boolean;
+    }[] = [];
+    let requiredFieldCount = 0;
+    for (const control of candidates) {
+      const label = labels(control);
+      const automationId = control.getAttribute("data-automation-id") ?? "";
+      const placeholder = control.getAttribute("placeholder") ?? "";
+      const type = control instanceof HTMLInputElement ? control.type : "";
+      const isRequired =
+        control.hasAttribute("required") || control.getAttribute("aria-required") === "true" ||
+        /\*/u.test(label);
+      if (isRequired) requiredFieldCount += 1;
+      let classifiedType: string;
+      if (type === "file") {
+        controlTypes.add("file_upload");
+        answerTypes.add("file");
+        classifiedType = "file_upload";
+      } else if (type === "checkbox" || control.getAttribute("role") === "checkbox") {
+        controlTypes.add("checkbox");
+        answerTypes.add("boolean");
+        classifiedType = "checkbox";
+      } else if (control instanceof HTMLTextAreaElement) {
+        controlTypes.add("textarea");
+        answerTypes.add("text");
+        classifiedType = "textarea";
+      } else if (automationId === "dateSectionMonth-input") {
+        controlTypes.add("month");
+        answerTypes.add("month");
+        classifiedType = "month";
+      } else if (
+        control instanceof HTMLInputElement && type === "text" &&
+        (/YYYY/iu.test(placeholder) || /(?:^|--|[-_])(?:year|startDate|endDate|firstYear|lastYear)/iu.test(
+          automationId,
+        ) || /\b(?:Year|Actual or Expected)\b/iu.test(label))
+      ) {
+        controlTypes.add("year");
+        answerTypes.add("year");
+        classifiedType = "year";
+      } else if (/Overall Result|GPA/iu.test(label) || type === "number") {
+        controlTypes.add("number");
+        answerTypes.add("number");
+        classifiedType = "number";
+      } else if (/LinkedIn|Social Network URL|Website/iu.test(label)) {
+        controlTypes.add("text");
+        answerTypes.add("url");
+        classifiedType = "text_url";
+      } else if (
+        control.getAttribute("role") === "combobox" || automationId === "sourcePrompt" ||
+        control.closest(
+          '[data-automation-id="multiSelectContainer"], ' +
+            '[data-automation-id="multiselectInputContainer"]',
+        ) !== null
+      ) {
+        controlTypes.add("search_select");
+        answerTypes.add("multi_select");
+        classifiedType = "search_select";
+      } else if (
+        control instanceof HTMLSelectElement || control.hasAttribute("aria-haspopup")
+      ) {
+        controlTypes.add("select");
+        answerTypes.add("single_select");
+        classifiedType = "select";
+      } else {
+        controlTypes.add("text");
+        answerTypes.add("text");
+        classifiedType = "text";
+      }
+      const ownerAutomationIds: string[] = [];
+      let owner = control.parentElement;
+      while (owner !== null && ownerAutomationIds.length < 6) {
+        const ownerAutomationId = owner.getAttribute("data-automation-id");
+        if (ownerAutomationId !== null && ownerAutomationId !== "") {
+          ownerAutomationIds.push(ownerAutomationId);
+        }
+        owner = owner.parentElement;
+      }
+      diagnostics.push({
+        automationId,
+        id: control.id,
+        name: control.getAttribute("name") ?? "",
+        placeholder,
+        label: label.slice(0, 160),
+        ownerAutomationIds,
+        tag: control.tagName.toLowerCase(),
+        inputType: type,
+        role: control.getAttribute("role") ?? "",
+        classifiedType,
+        required: isRequired,
+      });
+    }
+    const rootText = normalize(root.textContent);
+    const questionTypes = [
+      [/Work Experience/iu, "employment"],
+      [/Education/iu, "education"],
+      [/Languages/iu, "language"],
+      [/Skills/iu, "skill"],
+      [/Resume\s*\/\s*CV/iu, "attachment"],
+      [/Websites/iu, "website"],
+      [/Social Network URLs/iu, "social_network"],
+    ].flatMap(([pattern, category]) =>
+      (pattern as RegExp).test(rootText) ? [category as string] : []
+    );
+    const repeatableActions = [...root.querySelectorAll<HTMLElement>("button")].filter((button) =>
+      visible(button) && /^(?:Add Another|Add)$/iu.test(normalize(button.textContent))
+    );
+    if (repeatableActions.length > 0) controlTypes.add("repeatable");
+    return {
+      fieldCount: candidates.length,
+      requiredFieldCount,
+      controlTypes: [...controlTypes],
+      questionTypes,
+      answerTypes: [...answerTypes],
+      diagnostics,
+    };
+  });
+  let result = await read();
+  // Workday can finish painting the full Experience page one render pass
+  // before every below-the-fold Education control is discoverable. Sample a
+  // short bounded window and retain one whole, maximal structural snapshot;
+  // never merge counts or types from different DOM states.
+  for (let sample = 1; sample < 4; sample += 1) {
+    await page.waitForTimeout(250);
+    const candidate = await read();
+    if (
+      candidate !== null &&
+      (result === null || candidate.fieldCount > result.fieldCount ||
+        (candidate.fieldCount === result.fieldCount &&
+          candidate.requiredFieldCount > result.requiredFieldCount))
+    ) result = candidate;
+  }
+  if (
+    result === null || result.fieldCount < 1 || result.requiredFieldCount < 1 ||
+    result.requiredFieldCount > result.fieldCount || result.controlTypes.length < 1 ||
+    result.questionTypes.length < 1 || result.answerTypes.length < 1
+  ) throw new TypeError("application monitor taxonomy denied");
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    try {
+      process.stderr.write(`${JSON.stringify({
+        applicationExperienceTaxonomyDiagnostics: result.diagnostics,
+      })}\n`);
+    } catch {}
+  }
+  return Object.freeze({
+    fieldCount: result.fieldCount,
+    requiredFieldCount: result.requiredFieldCount,
+    controlTypes: Object.freeze(result.controlTypes),
+    questionTypes: Object.freeze(result.questionTypes),
+    answerTypes: Object.freeze(result.answerTypes),
+  });
+}
+
+async function monitorQuestionTypes(
+  page: Page,
+  pageName: "resume" | "profile" | "questionnaire" | "review",
+): Promise<readonly string[]> {
+  if (pageName === "resume") return Object.freeze(["attachment"]);
+  const observed = await page.evaluate(() => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
+    const categories = new Set<string>();
+    const controls = [...document.querySelectorAll<HTMLElement>(
+      'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"]',
+    )];
+    for (const control of controls) {
+      if (control.getClientRects().length === 0) continue;
+      const field = control.closest('[data-automation-id="formField"]');
+      const nativeLabel = control instanceof HTMLInputElement ||
+          control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
+        ? control.labels?.[0]?.textContent
+        : undefined;
+      const label = normalize(
+        control.getAttribute("aria-label") ??
+        field?.querySelector("label, legend")?.textContent ??
+        nativeLabel ??
+        control.getAttribute("placeholder"),
+      );
+      if (/\b(?:race|ethnicity|gender|veteran|disability|demographic)\b/u.test(label)) categories.add("demographic");
+      else if (/\b(?:authorized|authorization|sponsor|sponsorship|work permit)\b/u.test(label)) categories.add("authorization");
+      else if (/\b(?:consent|certify|terms|conditions|agreement|privacy)\b/u.test(label)) categories.add("legal");
+      else if (/\b(?:salary|compensation|pay|rate)\b/u.test(label)) categories.add("compensation");
+      else if (/\b(?:available|availability|start date|relocate|travel)\b/u.test(label)) categories.add("availability");
+      else if (/\b(?:school|degree|education|university|college)\b/u.test(label)) categories.add("education");
+      else if (/\b(?:employer|employment|employee|worked|experience|job title|skill)\b/u.test(label)) categories.add("employment");
+      else if (/\b(?:phone|email|address|city|state|province|country|postal|zip)\b/u.test(label)) categories.add("contact");
+      else if (/\b(?:first name|last name|given name|family name|preferred name)\b/u.test(label)) categories.add("identity");
+      else if (/\b(?:resume|cv|attachment|upload)\b/u.test(label)) categories.add("attachment");
+      else if (/\b(?:describe|interest|cover letter|additional information)\b/u.test(label)) categories.add("narrative");
+      else categories.add("unknown");
+    }
+    return [...categories].sort();
+  });
+  return Object.freeze(observed.length === 0 ? ["unknown"] : observed);
 }
 
 async function captureIndependentReviewFields(
@@ -800,7 +1427,8 @@ export function isReviewExpectedField(value: unknown): value is ReviewExpectedFi
       ["fieldId", "provenance", "rowIdentity", "valueSha256"].sort().join("|") &&
     typeof field.fieldId === "string" && isAcceptedFieldId(field.fieldId) &&
     typeof field.provenance === "string" && new Set([
-      "owner_provided", "resume_verified", "configured_template", "reviewed_catalog", "visible_option",
+      "owner_provided", "resume_verified", "configured_template", "generated_default",
+      "journey_derived", "reviewed_catalog", "visible_option",
     ]).has(field.provenance) &&
     field.rowIdentity === `formField-${field.fieldId}` && isStableRowIdentity(field.rowIdentity) &&
     typeof field.valueSha256 === "string" && /^[0-9a-f]{64}$/u.test(field.valueSha256);
@@ -906,6 +1534,15 @@ export async function bindQuestionnaireTargets(
     const controls = roots[0]!.querySelectorAll<HTMLElement>(
       'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
     );
+    const identities = new Map<string, number>();
+    const hash = (value: string) => {
+      let state = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        state ^= value.charCodeAt(index);
+        state = Math.imul(state, 16777619);
+      }
+      return (state >>> 0).toString(16).padStart(8, "0");
+    };
     let index = 0;
     for (const control of controls) {
       if (control instanceof HTMLInputElement && control.type === "radio" &&
@@ -932,7 +1569,22 @@ export async function bindQuestionnaireTargets(
         "Country": "target-s1-field-country",
         "Available start date": "target-s1-field-start-date",
       };
-      control.setAttribute("data-hunt-target-token", reviewed[label] ?? `target-unreviewed-${index}`);
+      const identity = [
+        label,
+        control.tagName,
+        control.getAttribute("type") ?? "",
+        control.getAttribute("role") ?? "",
+        control.getAttribute("data-automation-id") ?? "",
+        control.id,
+        control.getAttribute("name") ?? "",
+      ].join("\u0000");
+      const identityHash = hash(identity);
+      const occurrence = (identities.get(identityHash) ?? 0) + 1;
+      identities.set(identityHash, occurrence);
+      control.setAttribute(
+        "data-hunt-target-token",
+        reviewed[label] ?? `target-workday-${identityHash}-${occurrence}`,
+      );
       index += 1;
     }
     return index > 0 && index <= 128;

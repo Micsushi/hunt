@@ -130,6 +130,30 @@ function fieldFromTarget(
   });
 }
 
+function dynamicFieldFromTarget(target: BrowserTargetObservation): FieldObservation {
+  const behavior = classifyUiBehavior(target.control);
+  const fieldSuffix = target.token.startsWith("target-")
+    ? target.token.slice("target-".length)
+    : target.token;
+  const labels = target.control.kind === "select"
+    ? target.control.options
+    : (target as BrowserTargetObservation & {
+        readonly options?: readonly ReturnType<typeof boundedText>[];
+      }).options ?? [];
+  return Object.freeze({
+    fieldId: fieldId(`field-${fieldSuffix}`),
+    target: target.token,
+    label: boundedText(target.name),
+    required: target.required,
+    behavior,
+    options: Object.freeze(labels.map((label, index) => Object.freeze({
+      id: optionId(`option-${fieldSuffix}-${index + 1}`),
+      label: boundedText(label),
+    }))),
+    state: readSemanticState(behavior, target.state, target.readback),
+  });
+}
+
 export function discoverFields(
   targets: readonly BrowserTargetObservation[],
 ): readonly FieldObservation[] {
@@ -146,8 +170,12 @@ export function discoverFields(
       (!target.state.enabled || !target.state.actionable)
     ) continue;
     const row = catalog.get(target.token);
-    if (row === undefined) throw new UnsupportedTargetError("unsupported target coordinate");
-    fields.push(fieldFromTarget(target, row));
+    if (row === undefined) {
+      if (!target.token.startsWith("target-workday-")) {
+        throw new UnsupportedTargetError("unsupported target coordinate");
+      }
+      fields.push(dynamicFieldFromTarget(target));
+    } else fields.push(fieldFromTarget(target, row));
   }
   return Object.freeze(fields.sort((left, right) =>
     left.fieldId < right.fieldId ? -1 : left.fieldId > right.fieldId ? 1 : 0

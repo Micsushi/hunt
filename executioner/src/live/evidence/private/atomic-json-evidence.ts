@@ -38,7 +38,9 @@ export interface AtomicJsonEvidenceRequest {
     | "s2-acceptance-manifest.json"
     | "storage-manifest.json"
     | "disposal-audit.json"
-    | "profile-field-learning.json";
+    | "profile-field-learning.json"
+    | "profile-field-learning-02.json"
+    | "question-answer-learning.json";
 }
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): string {
@@ -54,7 +56,9 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): str
   }, 2);
   const payload = Buffer.from(`${serialized}\n`, "utf8");
   const sha256 = createHash("sha256").update(payload).digest("hex");
-  const maxBytes = request.fileName === "profile-field-learning.json"
+  const maxBytes = request.fileName === "profile-field-learning.json" ||
+      request.fileName === "profile-field-learning-02.json" ||
+      request.fileName === "question-answer-learning.json"
     ? MAX_PROFILE_FIELD_LEARNING_BYTES
     : request.fileName === "diagnostics.json"
       ? MAX_DIAGNOSTICS_BYTES

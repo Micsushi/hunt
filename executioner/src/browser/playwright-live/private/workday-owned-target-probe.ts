@@ -245,7 +245,7 @@ function parseWorkdayTarget(value: string): ParsedWorkdayTarget | undefined {
     const jobRoute = jobBoundary >= 0 ? segments.slice(jobBoundary + 1) : [];
     const postings = jobRoute.flatMap((segment) => {
       const matched = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
-      return matched === null ? [] : [matched[1]!];
+      return matched === null ? [] : [matched[1]!.toUpperCase()];
     });
     const postingIndex = jobRoute.findIndex((segment) =>
       /_[A-Za-z0-9-]{2,64}$/u.test(segment)

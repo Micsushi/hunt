@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   disposeResumeArtifact,
   useResumeArtifactUpload,
@@ -33,7 +35,10 @@ const handledResumeArtifacts = new WeakSet<object>();
 
 export function createWorkdayResumeUploadDriver(
   page: WorkdayResumePage,
-  options: { readonly timeoutMs?: number } = {},
+  options: {
+    readonly timeoutMs?: number;
+    readonly trace?: (event: string, details?: object) => void;
+  } = {},
 ): WorkdayResumeUploadDriver {
   const timeoutMs = options.timeoutMs ?? 5_000;
   const driver: WorkdayResumeUploadDriver = {
@@ -45,6 +50,10 @@ export function createWorkdayResumeUploadDriver(
       try {
         const inputCount = await input.count();
         const itemCount = await items.count();
+        safeTrace(options.trace, "resume_upload_driver_preflight", {
+          inputCount,
+          itemCount,
+        });
         if (inputCount !== 1 || itemCount > 1) {
           return failure("resume_page_invalid");
         }
@@ -75,16 +84,19 @@ export function createWorkdayResumeUploadDriver(
             replacedExisting = true;
           }
           if (signal.aborted) return failure("operation_cancelled");
+          safeTrace(options.trace, "resume_upload_set_input_started");
           await input.setInputFiles({
-            name: "resume.pdf",
+            name: workdayResumeUploadFileName(intent),
             mimeType,
             buffer: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
           }, { timeout: timeoutMs });
+          safeTrace(options.trace, "resume_upload_set_input_succeeded");
           return {
             ok: true,
             value: { attempted: true, replacedExisting },
           };
         } catch {
+          safeTrace(options.trace, "resume_upload_set_input_failed");
           return failure("resume_upload_failed");
         }
       });
@@ -95,7 +107,11 @@ export function createWorkdayResumeUploadDriver(
 
 export function createWorkdayResumeVerifier(
   page: WorkdayResumePage,
-  options: { readonly maxAttempts?: number; readonly intervalMs?: number } = {},
+  options: {
+    readonly maxAttempts?: number;
+    readonly intervalMs?: number;
+    readonly trace?: (event: string, details?: object) => void;
+  } = {},
 ): WorkdayResumeVerifier {
   const maxAttempts = options.maxAttempts ?? 20;
   const intervalMs = options.intervalMs ?? 250;
@@ -110,7 +126,11 @@ export function createWorkdayResumeVerifier(
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (signal.aborted) return failure("operation_cancelled");
         try {
-          last = await inspectOnce(page, intent);
+          last = await inspectOnce(page, intent, options.trace);
+          safeTrace(options.trace, "resume_upload_verifier_result", {
+            kind: last.kind,
+            attempt: attempt + 1,
+          });
         } catch {
           last = { kind: "unavailable" };
         }
@@ -225,6 +245,7 @@ export function createWorkdayResumeUploadHandler(options: {
 async function inspectOnce(
   page: WorkdayResumePage,
   intent: WorkdayResumeFileIntent,
+  trace?: (event: string, details?: object) => void,
 ): Promise<WorkdayResumeObservation> {
   const input = page.locator(selectors.input);
   const items = page.locator(selectors.item);
@@ -279,13 +300,62 @@ async function inspectOnce(
       mimeType,
     },
   );
-  if (!identityResult(identity)) return { kind: "unavailable" };
+  if (!identityResult(identity)) {
+    safeTrace(trace, "resume_upload_verifier_observed", {
+      inputCount,
+      itemCount,
+      successCount,
+      removeCount,
+      errorCount,
+      requiredErrorVisible,
+      identityResultValid: false,
+    });
+    return { kind: "unavailable" };
+  }
+  safeTrace(trace, "resume_upload_verifier_observed", {
+    inputCount,
+    itemCount,
+    successCount,
+    removeCount,
+    errorCount,
+    requiredErrorVisible,
+    identityResultValid: true,
+    inputFileCount: identity.fileCount,
+    identityMatches: identity.identityMatches,
+  });
   if (identity.fileCount > 1 || identity.fileCount < 0) return { kind: "ambiguous" };
   if (identity.fileCount === 0 && itemCount === 0 && successCount === 0 &&
       removeCount === 0) return { kind: "empty" };
-  if (identity.fileCount === 0) return itemCount === 1
-    ? { kind: "existing" }
-    : { kind: "unavailable" };
+  if (identity.fileCount === 0 && itemCount === 1) {
+    const item = await inspectUploadedItem(items, workdayResumeUploadFileName(intent));
+    safeTrace(trace, "resume_upload_item_observed", {
+      identityResultValid: item.valid,
+      identityMatches: item.identityMatches,
+      requiredErrorVisible,
+      itemVisible: item.visible,
+      itemBusy: item.busy,
+      removeCount,
+      buttonCount: item.buttonCount,
+      progressCount: item.progressCount,
+    });
+    if (!item.valid || !item.visible || item.busy || item.progressCount > 0) {
+      return { kind: "unavailable" };
+    }
+    if (!item.identityMatches) return { kind: "different" };
+    if (requiredErrorVisible) return { kind: "unavailable" };
+    return {
+      kind: "verified",
+      browserState: Object.freeze({
+        variant: "workday_resume_file_upload_v1",
+        inputCardinality: 1,
+        uploadedFileCount: 1,
+        uploadComplete: true,
+        requiredErrorVisible: false,
+        removeControlCardinality: removeCount === 1 ? 1 : 0,
+      }),
+    };
+  }
+  if (identity.fileCount === 0) return { kind: "unavailable" };
   if (itemCount !== 1 || successCount !== 1 || removeCount !== 1 ||
       requiredErrorVisible) return { kind: "unavailable" };
   if (!identity.identityMatches) return { kind: "different" };
@@ -300,6 +370,61 @@ async function inspectOnce(
       removeControlCardinality: 1,
     }),
   };
+}
+
+async function inspectUploadedItem(
+  item: WorkdayResumeLocator,
+  expectedFileName: string,
+): Promise<{
+  readonly valid: boolean;
+  readonly identityMatches: boolean;
+  readonly visible: boolean;
+  readonly busy: boolean;
+  readonly buttonCount: number;
+  readonly progressCount: number;
+}> {
+  try {
+    const [visible, state] = await Promise.all([
+      item.isVisible === undefined ? Promise.resolve(true) : item.isVisible(),
+      item.evaluate((element: HTMLElement, expected: string) => {
+        const text = (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+        const progressCount = element.querySelectorAll(
+          '[role="progressbar"], [aria-busy="true"], [data-automation-id*="progress" i], [data-automation-id*="uploading" i]',
+        ).length;
+        return {
+          identityMatches: text.includes(expected),
+          busy: element.getAttribute("aria-busy") === "true",
+          buttonCount: element.querySelectorAll("button").length,
+          progressCount,
+        };
+      }, expectedFileName),
+    ]);
+    if (!uploadedItemResult(state)) {
+      return { valid: false, identityMatches: false, visible, busy: false, buttonCount: 0, progressCount: 0 };
+    }
+    return { valid: true, visible, ...state };
+  } catch {
+    return { valid: false, identityMatches: false, visible: false, busy: false, buttonCount: 0, progressCount: 0 };
+  }
+}
+
+function uploadedItemResult(value: unknown): value is {
+  readonly identityMatches: boolean;
+  readonly busy: boolean;
+  readonly buttonCount: number;
+  readonly progressCount: number;
+} {
+  return typeof value === "object" && value !== null &&
+    Object.keys(value).length === 4 &&
+    typeof (value as { identityMatches?: unknown }).identityMatches === "boolean" &&
+    typeof (value as { busy?: unknown }).busy === "boolean" &&
+    Number.isInteger((value as { buttonCount?: unknown }).buttonCount) &&
+    Number.isInteger((value as { progressCount?: unknown }).progressCount);
+}
+
+export function workdayResumeUploadFileName(intent: WorkdayResumeFileIntent): string {
+  const token = createHash("sha256").update(intent.artifactId, "utf8").digest("hex").slice(0, 16);
+  return `resume-${token}.pdf`;
 }
 
 function validIntent(value: unknown): value is WorkdayResumeFileIntent {
@@ -349,6 +474,18 @@ function safeEmit(
     }));
   } catch {
     // Observability cannot change browser or verification truth.
+  }
+}
+
+function safeTrace(
+  trace: ((event: string, details?: object) => void) | undefined,
+  event: string,
+  details?: object,
+): void {
+  try {
+    trace?.(event, details);
+  } catch {
+    // Diagnostics never change browser behavior or verification truth.
   }
 }
 

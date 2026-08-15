@@ -3,8 +3,11 @@ import { isAbsolute, normalize, relative, resolve } from "node:path";
 
 import {
   bootstrapS2GmailAuthorization,
+  forgetS2LocalGmailRefreshGrant,
   type GmailBootstrapOptions,
   type GmailBootstrapResult,
+  type GmailGrantLocalForgetOptions,
+  type GmailGrantLocalForgetResult,
   type GmailGrantRevocationOptions,
   type GmailGrantRevocationResult,
   revokeS2GmailRefreshGrant,
@@ -36,9 +39,23 @@ export type GmailGrantRevokeOperation = (
   signal: AbortSignal,
 ) => Promise<GmailGrantRevocationResult>;
 
+export type GmailGrantLocalForgetOperation = (
+  owner: unknown,
+  bootstrap: unknown,
+  context: GmailGrantLocalForgetOptions,
+  signal: AbortSignal,
+) => Promise<GmailGrantLocalForgetResult>;
+
 export interface GmailGrantRevokeCliOptions {
   readonly forbiddenRoots: readonly string[];
   readonly operation?: GmailGrantRevokeOperation;
+  readonly now?: () => string;
+  readonly signal?: AbortSignal;
+}
+
+export interface GmailGrantLocalForgetCliOptions {
+  readonly forbiddenRoots: readonly string[];
+  readonly operation?: GmailGrantLocalForgetOperation;
   readonly now?: () => string;
   readonly signal?: AbortSignal;
 }
@@ -66,6 +83,21 @@ export async function runS2GmailGrantRevokeCli(
   const loaded = await loadInvocation(arguments_, environment, options);
   if (loaded === null) return inputFailure();
   return (options.operation ?? revokeS2GmailRefreshGrant)(
+    loaded.owner,
+    loaded.bootstrap,
+    loaded.context,
+    options.signal ?? new AbortController().signal,
+  );
+}
+
+export async function runS2GmailGrantLocalForgetCli(
+  arguments_: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+  options: GmailGrantLocalForgetCliOptions,
+): Promise<GmailGrantLocalForgetResult> {
+  const loaded = await loadInvocation(arguments_, environment, options);
+  if (loaded === null) return inputFailure();
+  return (options.operation ?? forgetS2LocalGmailRefreshGrant)(
     loaded.owner,
     loaded.bootstrap,
     loaded.context,

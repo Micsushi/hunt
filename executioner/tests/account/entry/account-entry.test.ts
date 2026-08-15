@@ -420,19 +420,31 @@ test("secret metadata admission preserves exact invalid, expired, forbidden, and
   }
 });
 
-test("fresh-create switches semantically, reclassifies, and keeps confirmation internal", async () => {
+test("fresh-create switches and submits through two independently classified operations", async () => {
   const fixture = accountFixture([
     "existing_account",
+    "create_account",
     "create_account",
     "verification_required",
   ]);
   const events: string[] = [];
-  const result = await createAccountEntryCredentialMutationAdapter({
+  const adapter = createAccountEntryCredentialMutationAdapter({
     ...fixture.dependencies,
     trace: (event) => events.push(event),
-  })
-    .mutate(request("create_account"), new AbortController().signal);
+  });
+  const switched = await adapter.lifecycle.mutate(
+    request("create_account"),
+    new AbortController().signal,
+  );
+  const result = await adapter.lifecycle.mutate({
+    ...request("create_account"),
+    operationId: "operation_account_entry_0002" as never,
+  }, new AbortController().signal);
 
+  assert.deepEqual(switched, {
+    ok: true,
+    value: { kind: "create_account_required", attemptedFields: ["email", "password"] },
+  });
   assert.deepEqual(result, {
     ok: true,
     value: {
@@ -458,7 +470,7 @@ test("fresh-create switches semantically, reclassifies, and keeps confirmation i
     "inspectAction:submit_create_account",
     "activate:submit_create_account",
   ]);
-  assert.equal(fixture.classificationCalls, 3);
+  assert.equal(fixture.classificationCalls, 4);
   assert.equal(fixture.resolverCalls, 1);
   assert.deepEqual(events.slice(0, 3), [
     "initial_state_existing_account",
@@ -499,19 +511,32 @@ test("create-account that reaches sign-in reports the next required page", async
   );
 });
 
-test("sign-in traces its semantic switch from an initial create page", async () => {
+test("sign-in switches and submits through two independently classified operations", async () => {
   const fixture = accountFixture([
     "create_account",
+    "existing_account",
     "existing_account",
     "verification_required",
   ]);
   const events: string[] = [];
 
-  const result = await createAccountEntryCredentialMutationAdapter({
+  const adapter = createAccountEntryCredentialMutationAdapter({
     ...fixture.dependencies,
     trace: (event) => events.push(event),
-  }).mutate(request("sign_in"), new AbortController().signal);
+  });
+  const switched = await adapter.lifecycle.mutate(
+    request("sign_in"),
+    new AbortController().signal,
+  );
+  const result = await adapter.lifecycle.mutate({
+    ...request("sign_in"),
+    operationId: "operation_account_entry_0002" as never,
+  }, new AbortController().signal);
 
+  assert.deepEqual(switched, {
+    ok: true,
+    value: { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+  });
   assert.equal(result.ok && result.value.kind, "verification_required");
   assert.deepEqual(fixture.operations, [
     "inspectAction:show_sign_in",

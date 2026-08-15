@@ -102,6 +102,44 @@ test("admits derived source-select and owner-backed prior-worker radio mechanics
   }
 });
 
+test("admits the observed Workday v2 text, search-select, and phone variants", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const acceptance = {
+    ...baseline,
+    laneAcceptances: [{
+      ...profile,
+      verifiedFields: [
+        { ...profile.verifiedFields[0]!, uiVariant: "workday_text_v2" },
+        {
+          fieldId: "address.region",
+          questionType: "address" as const,
+          answerType: "option" as const,
+          uiBehavior: "search_select" as const,
+          uiVariant: "workday_search_select_v2",
+          provenance: "generated_default" as const,
+          optionMappingProvenance: "visible_option" as const,
+        },
+        {
+          fieldId: "phone.number",
+          questionType: "phone" as const,
+          answerType: "phone" as const,
+          uiBehavior: "phone" as const,
+          uiVariant: "workday_phone_v2",
+          provenance: "generated_default" as const,
+        },
+      ],
+    }, ...baseline.laneAcceptances.slice(1)],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-v2-ui-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", async () => {
   const cases = [
     { ...packet(), submitActivated: true },

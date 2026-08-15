@@ -1819,6 +1819,14 @@ export interface GmailRefreshGrantRevokeRequest {
   readonly installedClientConfigPath: string;
 }
 
+export interface GmailRefreshGrantLocalForgetRequest {
+  readonly accountMetadata: Readonly<Uint8Array>;
+  readonly accountCiphertext: Readonly<Uint8Array>;
+  readonly recipientBindingId: string;
+  readonly clientId: string;
+  readonly installedClientConfigPath: string;
+}
+
 export interface WindowsGmailRefreshGrantRevokerOptions {
   readonly process?: InteractiveGmailOAuthProcess;
   readonly executable?: string;
@@ -1850,6 +1858,35 @@ export class WindowsGmailRefreshGrantRevoker {
       } finally {
         framed.fill(0);
       }
+    } catch (error) {
+      if (recognized(error)) throw error;
+      throw new Error(signal.aborted ? "Gmail OAuth cancelled" : "Gmail OAuth sealing failed");
+    } finally {
+      sections.fill(0);
+    }
+  }
+}
+
+export class WindowsGmailRefreshGrantLocalForgetter {
+  readonly #process: InteractiveGmailOAuthProcess;
+
+  constructor(options: WindowsGmailRefreshGrantRevokerOptions = {}) {
+    this.#process = options.process ?? new PowerShellInteractiveGmailOAuthProcess({
+      executable: options.executable,
+      maxOutputBytes: 6,
+      timeoutMs: options.timeoutMs ?? 10_000,
+      windowsHide: true,
+    });
+  }
+
+  async forget(
+    request: GmailRefreshGrantLocalForgetRequest,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) throw new Error("Gmail OAuth cancelled");
+    const sections = encodeLocalForgetSections(request);
+    try {
+      await this.#process.reconcile(sections);
     } catch (error) {
       if (recognized(error)) throw error;
       throw new Error(signal.aborted ? "Gmail OAuth cancelled" : "Gmail OAuth sealing failed");
@@ -2100,6 +2137,36 @@ function encodeReconcileSections(request: GmailOAuthSealRequest): Buffer {
     Buffer.from(request.clientId, "utf8"),
     Buffer.from(request.installedClientConfigPath, "utf8"),
     Buffer.from(request.binding.recipientBindingId, "utf8"),
+  ];
+  try {
+    if (values.some((value) => value.byteLength < 1 || value.byteLength > DEFAULT_BOUND)) {
+      throw new Error("Gmail OAuth reconciliation failed");
+    }
+    const output = Buffer.allocUnsafe(
+      6 + values.reduce((sum, value) => sum + 4 + value.byteLength, 0),
+    );
+    RECONCILE_INPUT_MAGIC.copy(output, 0);
+    output.writeUInt8(1, 4);
+    output.writeUInt8(values.length, 5);
+    let offset = 6;
+    for (const value of values) {
+      output.writeUInt32LE(value.byteLength, offset);
+      value.copy(output, offset + 4);
+      offset += 4 + value.byteLength;
+    }
+    return output;
+  } finally {
+    for (const value of values) value.fill(0);
+  }
+}
+
+function encodeLocalForgetSections(request: GmailRefreshGrantLocalForgetRequest): Buffer {
+  const values = [
+    Buffer.from(request.accountMetadata),
+    Buffer.from(request.accountCiphertext),
+    Buffer.from(request.clientId, "utf8"),
+    Buffer.from(request.installedClientConfigPath, "utf8"),
+    Buffer.from(request.recipientBindingId, "utf8"),
   ];
   try {
     if (values.some((value) => value.byteLength < 1 || value.byteLength > DEFAULT_BOUND)) {

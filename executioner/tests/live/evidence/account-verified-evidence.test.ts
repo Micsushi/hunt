@@ -80,3 +80,19 @@ test("account-verified evidence admits the exact credential sign-in proof tuple"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("account-verified evidence admits the exact observed application-state proof tuple", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-application-state-"));
+  try {
+    const acceptance = {
+      ...packet(),
+      verificationProof: "application_state_observed" as const,
+      provider: "workday-state" as const,
+      consumedCandidateCount: 0 as const,
+    };
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: [] });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

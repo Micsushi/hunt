@@ -103,7 +103,7 @@ function workdayTargetIdentity(value: string): string {
   ]);
 }
 
-function parseCsvRecords(text: string): string[][] {
+export function parseCsvRecords(text: string): string[][] {
   const records: string[][] = [];
   let record: string[] = [];
   let value = "";

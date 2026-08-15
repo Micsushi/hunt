@@ -599,15 +599,20 @@ transient storage and remove it with the run artifacts.
 Tests use Node's built-in runner. Components may depend on shared contracts but
 not on peer implementations or C3 v2 source.
 
-## Public Workday test catalogs
+## Public ATS test catalogs
 
-The repository root has two current Workday test CSVs:
+The repository root has four current ATS-specific test catalogs:
 
 - `wd_test_jobs.csv` contains exactly 100 unique companies and one public job
-  per company. Each row was browser-verified through the Workday application
-  entry on 2026-08-05 and stops before account or form interaction.
+  per company. Each page and visible title was browser-verified on 2026-08-15.
+- `greenhouse_test_jobs.csv`, `lever_test_jobs.csv`, and
+  `ashby_test_jobs.csv` each contain exactly 100 unique current postings from
+  one official public ATS feed. Every hosted URL returned HTTP 200 on
+  2026-08-15. These are URL catalogs, not application-flow evidence.
 - `wd_test_jobs_stale.csv` contains 10 previously verified closed jobs. Use it
   only for stale, removed, and not-found behavior.
+
+All verification stops before account or form interaction.
 
 These live URL catalogs are independent of the accepted offline `WD40` corpus.
 The historical bytes used to validate that frozen manifest are retained as the

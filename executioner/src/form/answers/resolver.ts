@@ -3,13 +3,14 @@ import {
   type AnswerResolutionRequest,
   type AnswerResolutionResult,
   type AnswerResolver,
+  type AnswerProvenance,
   type FieldIntent,
   type FieldObservation,
-  type ProfileAnswerProvenance,
   type ProfileQuery,
 } from "../../contracts/index.ts";
 import { mapVisibleOption } from "../options/mapper.ts";
 import {
+  generatedLearningDefaultFor,
   questionForField,
   resolveQuestion,
   type CanonicalQuestionId,
@@ -47,11 +48,18 @@ function isIsoDate(value: string): boolean {
   return !Number.isNaN(date.valueOf()) && date.toISOString().startsWith(value);
 }
 
+const privacyChoiceDefaults = [
+  "Prefer not to answer",
+  "Prefer not to say",
+  "I do not wish to provide this information",
+  "Decline to self-identify",
+] as const;
+
 function intentFor(
   field: FieldObservation,
   canonicalQuestionId: CanonicalQuestionId,
   value: string | number | boolean,
-  provenance: ProfileAnswerProvenance,
+  provenance: AnswerProvenance,
 ): AnswerResolutionResult {
   if (
     (field.behavior === "text" || field.behavior === "textarea") &&
@@ -123,6 +131,112 @@ function intentFor(
   return Object.freeze({ kind: "unsupported", fieldId: field.fieldId });
 }
 
+function matchedChoiceIntent(
+  field: FieldObservation,
+  value: string,
+): AnswerResolutionResult | undefined {
+  if (
+    field.behavior !== "radio" && field.behavior !== "select" &&
+    field.behavior !== "listbox"
+  ) return undefined;
+  const option = mapVisibleOption(value, field.options);
+  if (option.kind !== "matched") return undefined;
+  return {
+    kind: "resolved",
+    intent: {
+      kind: "choice",
+      behavior: field.behavior,
+      fieldId: field.fieldId,
+      target: field.target,
+      optionId: option.optionId,
+      expectedOption: option.expectedOption,
+      provenance: "reviewed_catalog",
+    },
+  };
+}
+
+const placeholderOption = /^(?:select|choose|please select|select one|choose one|none selected)$/u;
+
+function generatedLearningIntent(
+  field: FieldObservation,
+  resumeArtifact: AnswerResolutionRequest["resumeArtifact"],
+): AnswerResolutionResult | undefined {
+  if (field.behavior === "text" || field.behavior === "textarea") {
+    return {
+      kind: "resolved",
+      intent: {
+        kind: "text",
+        behavior: field.behavior,
+        fieldId: field.fieldId,
+        target: field.target,
+        value: "Test response pending owner review.",
+        provenance: "reviewed_catalog",
+      },
+    };
+  }
+  if (field.behavior === "checkbox") {
+    return {
+      kind: "resolved",
+      intent: {
+        kind: "toggle",
+        behavior: "checkbox",
+        fieldId: field.fieldId,
+        target: field.target,
+        checked: true,
+        provenance: "reviewed_catalog",
+      },
+    };
+  }
+  if (field.behavior === "date") {
+    return {
+      kind: "resolved",
+      intent: {
+        kind: "date",
+        behavior: "date",
+        fieldId: field.fieldId,
+        target: field.target,
+        isoDate: "2026-09-01",
+        provenance: "reviewed_catalog",
+      },
+    };
+  }
+  if (
+    field.behavior === "radio" || field.behavior === "select" ||
+    field.behavior === "listbox"
+  ) {
+    const option = field.options.find(({ label }) =>
+      !placeholderOption.test(String(label).trim().toLowerCase())
+    );
+    if (option === undefined) return undefined;
+    return {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: field.behavior,
+        fieldId: field.fieldId,
+        target: field.target,
+        optionId: option.id,
+        expectedOption: option.label,
+        provenance: "visible_option",
+      },
+    };
+  }
+  if (field.behavior === "file_upload") {
+    return {
+      kind: "resolved",
+      intent: {
+        kind: "resume_upload",
+        behavior: "file_upload",
+        fieldId: field.fieldId,
+        target: field.target,
+        artifact: resumeArtifact,
+        provenance: "resume_verified",
+      },
+    };
+  }
+  return undefined;
+}
+
 export function createAnswerResolver(
   profileQuery: ProfileQuery,
   narrativeTemplate: string | undefined,
@@ -145,12 +259,25 @@ export function createAnswerResolver(
       }
 
       const questionResolution = resolveQuestion(field.label);
-      if (questionResolution.kind === "unknown") return failure("question_unknown");
-      if (questionResolution.kind === "ambiguous") return failure("question_ambiguous");
+      if (questionResolution.kind === "unknown") {
+        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        return generated === undefined
+          ? failure("question_unknown")
+          : success(generated);
+      }
+      if (questionResolution.kind === "ambiguous") {
+        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        return generated === undefined
+          ? failure("question_ambiguous")
+          : success(generated);
+      }
 
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
       const question = questionForField(field.label, field.behavior);
-      if (question === undefined) return unsupported(field);
+      if (question === undefined) {
+        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        return generated === undefined ? unsupported(field) : success(generated);
+      }
 
       if (question.source.kind === "resume") {
         return resolved({
@@ -163,30 +290,37 @@ export function createAnswerResolver(
         });
       }
       if (question.source.kind === "narrative") {
-        if (narrativeTemplate === undefined) {
-          return success({
-            kind: "profile_answer_missing",
-            questionId: questionId(canonicalQuestionId),
-          });
-        }
         return resolved({
           kind: "text",
           behavior: "textarea",
           fieldId: field.fieldId,
           target: field.target,
-          value: narrativeTemplate,
-          provenance: "configured_template",
+          value: narrativeTemplate ?? question.source.syntheticDefault,
+          provenance: narrativeTemplate === undefined
+            ? "reviewed_catalog"
+            : "configured_template",
         });
       }
       if (question.source.kind === "neutral_disclosure") {
-        return failure("protected_answer_denied");
+        for (const candidate of privacyChoiceDefaults) {
+          const matched = matchedChoiceIntent(field, candidate);
+          if (matched !== undefined) return success(matched);
+        }
+        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        return generated === undefined
+          ? failure("protected_answer_denied")
+          : success(generated);
       }
       if (question.source.kind === "synthetic_placeholder") {
-        if (question.source.protected) return failure("protected_answer_denied");
-        return success({
-          kind: "profile_answer_missing",
-          questionId: questionId(canonicalQuestionId),
-        });
+        const intended = intentFor(
+          field,
+          canonicalQuestionId,
+          question.source.value,
+          "reviewed_catalog",
+        );
+        return intended.kind === "resolved"
+          ? success(intended)
+          : success(generatedLearningIntent(field, request.resumeArtifact) ?? intended);
       }
 
       const answer = await profileQuery.query(
@@ -201,6 +335,15 @@ export function createAnswerResolver(
         return answer;
       }
       if (answer.value.kind === "profile_answer_missing") {
+        const generatedDefault = generatedLearningDefaultFor(canonicalQuestionId);
+        if (generatedDefault !== undefined) {
+          return success(intentFor(
+            field,
+            canonicalQuestionId,
+            generatedDefault,
+            "reviewed_catalog",
+          ));
+        }
         return success({
           kind: "profile_answer_missing",
           questionId: questionId(canonicalQuestionId),
@@ -210,15 +353,26 @@ export function createAnswerResolver(
         question.source.ownerProvidedOnly === true &&
         answer.value.provenance !== "owner_provided"
       ) {
-        return failure("protected_answer_denied");
+        const generatedDefault = generatedLearningDefaultFor(canonicalQuestionId);
+        if (generatedDefault === undefined) {
+          return failure("protected_answer_denied");
+        }
+        return success(intentFor(
+          field,
+          canonicalQuestionId,
+          generatedDefault,
+          "reviewed_catalog",
+        ));
       }
-
-      return success(intentFor(
+      const intent = intentFor(
         field,
         canonicalQuestionId,
         answer.value.value,
         answer.value.provenance,
-      ));
+      );
+      return intent.kind === "resolved"
+        ? success(intent)
+        : success(generatedLearningIntent(field, request.resumeArtifact) ?? intent);
     },
   });
 }

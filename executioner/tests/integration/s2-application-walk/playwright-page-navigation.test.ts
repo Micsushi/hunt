@@ -22,6 +22,7 @@ test("observes each exact Workday application root and rejects unknown roots", a
     const cases = [
       ["applyFlowMyInfoPage", "profile", "My Information"],
       ["applyFlowMyExperiencePage", "profile", "Experience"],
+      ["applyFlowMyExpPage", "profile", "My Experience"],
       ["applyFlowPrimaryQuestionsPage", "questionnaire", "Primary Questions"],
       ["applyFlowPrimaryQuestionnairePage", "questionnaire", "Primary Questionnaire"],
       ["applyFlowApplicationQuestionsPage", "questionnaire", "Application Questions"],
@@ -67,6 +68,26 @@ test("observation ignores hidden duplicate roots but rejects two visible roots",
   });
 });
 
+test("observation treats nested Workday roots as components of one physical state", async () => {
+  await withPage(async (page) => {
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <input type="file" required data-hunt-field-id="resume-artifact"
+          data-automation-id="file-upload-input-ref">
+        <section data-automation-id="applyFlowMyExperiencePage">
+          <input required data-hunt-field-id="experience-company" value="ready">
+        </section>
+      </main>
+    `);
+
+    const observed = await application.observe(new AbortController().signal);
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    assert.equal(observed.ok && observed.value.page, "resume");
+    assert.deepEqual(observed.ok && observed.value.lanes, ["resume", "profile"]);
+  });
+});
+
 test("navigation selects the only visible enabled Next clone", async () => {
   await withPage(async (page) => {
     await page.setContent(`
@@ -85,6 +106,227 @@ test("navigation selects the only visible enabled Next clone", async () => {
     `);
     const result = await application(page).next(request("profile", ["questionnaire"]), signal());
     assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation selects Workday Save and Continue from the sticky footer", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <label>First name Required <input value="Lane"></label>
+      </main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.body.innerHTML = '<main data-automation-id="applyFlowMyExperiencePage"><label><input required value="ready"></label></main>';
+        });
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation tolerates a bounded Workday loading page before the destination", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.body.innerHTML = '<main data-automation-id="applyFlowLoadingPage"></main>';
+          setTimeout(() => {
+            document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          }, 150);
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 500,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation waits for the sticky footer to remount before clicking", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+      <footer id="footer"></footer>
+      <script>
+        setTimeout(() => {
+          document.querySelector('#footer').innerHTML = '<button id="next">Save and Continue</button>';
+          document.querySelector('#next').addEventListener('click', () => {
+            document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          });
+        }, 150);
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 500,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation keeps ownership through Workday's hidden-root loading composite", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main id="source" data-automation-id="applyFlowMyInfoPage">
+        <input required value="ready">
+      </main>
+      <main id="loading" hidden style="height:10px" data-automation-id="applyFlowLoadingPage"></main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        const nativeRects = Element.prototype.getClientRects;
+        let scheduled = false;
+        Element.prototype.getClientRects = function() {
+          const value = nativeRects.call(this);
+          if (!scheduled && this.id === 'source') {
+            scheduled = true;
+            queueMicrotask(() => {
+              document.querySelector('#source').hidden = true;
+              document.querySelector('#loading').hidden = false;
+            });
+          }
+          return value;
+        };
+        document.querySelector('#next').addEventListener('click', () => {
+          document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+        });
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation atomically activates the admitted sticky button that detaches on click", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main id="source" data-automation-id="applyFlowMyInfoPage">
+        <input required value="ready">
+      </main>
+      <main id="loading" hidden style="height:10px" data-automation-id="applyFlowLoadingPage"></main>
+      <footer id="footer"><button id="next">Save and Continue</button></footer>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.querySelector('#source').hidden = true;
+          document.querySelector('#loading').hidden = false;
+          document.querySelector('#footer').remove();
+          setTimeout(() => {
+            document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          }, 100);
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 500,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation never activates a final Submit inserted during footer replacement", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        window.name = 'submit-untouched';
+        document.querySelector('#next').addEventListener('click', () => {
+          document.body.innerHTML = '<main data-automation-id="applyFlowReviewPage"><button id="submit">Submit Application</button></main>';
+          document.querySelector('#submit').addEventListener('click', () => { window.name = 'submit-activated'; });
+        });
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["pre_review"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+    assert.equal(await page.evaluate(() => window.name), "submit-untouched");
+  });
+});
+
+test("navigation reloads one owned loading stall and verifies the persisted destination", async () => {
+  await withPage(async (page) => {
+    await page.addInitScript(() => {
+      if (window.name !== "saved-destination-experience") return;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+      });
+    });
+    await page.setContent(`
+      <div data-automation-id="applyFlowPage">
+        <main id="source" data-automation-id="applyFlowMyInfoPage">
+          <input required value="ready">
+        </main>
+        <main id="loading" hidden style="height:10px" data-automation-id="applyFlowLoadingPage"></main>
+        <footer><button id="next">Save and Continue</button></footer>
+      </div>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'saved-destination-experience';
+          document.querySelector('#source').remove();
+          document.querySelector('#loading').hidden = false;
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 150,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
+test("navigation rejects a transient destination that falls back into loading", async () => {
+  await withPage(async (page) => {
+    await page.addInitScript(() => {
+      if (window.name !== "saved-after-transient-experience") return;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+      });
+    });
+    await page.setContent(`
+      <div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+        <footer><button id="next">Save and Continue</button></footer>
+      </div>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'saved-after-transient-experience';
+          document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          setTimeout(() => {
+            document.body.innerHTML = '<div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowLoadingPage"></main></div>';
+          }, 300);
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 1_500,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.error.code, "browser_effect_uncertain");
+  });
+});
+
+test("navigation rejects duplicate actionable sticky-footer controls", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+      <footer><button>Save and Continue</button><button>Save and Continue</button></footer>
+    `);
+    const result = await application(page, 100).next(request("profile", ["profile"]), signal());
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.error.code, "navigation_uncertain");
   });
 });
 
@@ -299,7 +541,65 @@ test("accessible Not Required labels remain optional", async () => {
   });
 });
 
+test("required Workday listbox buttons use non-placeholder visible text as verification", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-region">
+          <span data-automation-id="required"></span>
+          <button id="region" role="combobox" aria-haspopup="listbox">Alberta</button>
+        </div>
+        <div data-automation-id="formField-device">
+          <span data-automation-id="required"></span>
+          <button id="device" role="combobox" aria-haspopup="listbox">Select One</button>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [
+      { fieldId: "region", page: "profile", verification: "verified" },
+      { fieldId: "device", page: "profile", verification: "unverified" },
+    ]);
+  });
+});
+
+test("required Workday radio groups and tokenized comboboxes verify their committed state", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div id="previousWorker--candidateIsPreviousWorker" aria-required="true">
+          <label><input hidden type="radio" name="previous" checked>No</label>
+          <label><input hidden type="radio" name="previous">Yes</label>
+        </div>
+        <div data-automation-id="formField-country-phone-code">
+          <div data-automation-id="country-phone-code-owner">
+            <span data-automation-id="selectedItem">Canada (+1)</span>
+            <input id="phoneNumber--countryPhoneCode" aria-required="true">
+          </div>
+          <span data-automation-id="selectedItem">Unrelated outer token</span>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [
+      {
+        fieldId: "previousWorker--candidateIsPreviousWorker",
+        page: "profile",
+        verification: "verified",
+      },
+      {
+        fieldId: "phoneNumber--countryPhoneCode",
+        page: "profile",
+        verification: "verified",
+      },
+    ]);
+  });
+});
+
 test("the physical My Information then My Experience lane sequence is valid", () => {
+  assert.equal(isAllowedApplicationTransition("profile", "profile", ["profile"]), true);
+  assert.equal(isValidApplicationPageSequence(["profile", "profile"]), true);
+  assert.equal(isValidApplicationPageSequence(["profile", "profile", "profile"]), false);
   assert.equal(isAllowedApplicationTransition("resume", "profile", ["profile", "resume"]), true);
   assert.equal(isValidApplicationPageSequence(["profile", "resume", "profile"]), true);
   assert.equal(isValidApplicationPageSequence(["profile", "resume", "profile", "resume"]), false);

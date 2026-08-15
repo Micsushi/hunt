@@ -1,8 +1,18 @@
-const CANADIAN_REGIONS = new Set([
-  "ab", "alberta", "bc", "british columbia", "mb", "manitoba", "nb",
-  "new brunswick", "newfoundland and labrador", "nl", "northwest territories",
-  "nova scotia", "ns", "nt", "nu", "nunavut", "on", "ontario", "pe",
-  "prince edward island", "qc", "quebec", "saskatchewan", "sk", "yt", "yukon",
+const CANADIAN_REGIONS = new Map([
+  ["ab", "Alberta"], ["alberta", "Alberta"],
+  ["bc", "British Columbia"], ["british columbia", "British Columbia"],
+  ["mb", "Manitoba"], ["manitoba", "Manitoba"],
+  ["nb", "New Brunswick"], ["new brunswick", "New Brunswick"],
+  ["nl", "Newfoundland and Labrador"],
+  ["newfoundland and labrador", "Newfoundland and Labrador"],
+  ["nt", "Northwest Territories"], ["northwest territories", "Northwest Territories"],
+  ["ns", "Nova Scotia"], ["nova scotia", "Nova Scotia"],
+  ["nu", "Nunavut"], ["nunavut", "Nunavut"],
+  ["on", "Ontario"], ["ontario", "Ontario"],
+  ["pe", "Prince Edward Island"], ["prince edward island", "Prince Edward Island"],
+  ["qc", "Quebec"], ["quebec", "Quebec"],
+  ["sk", "Saskatchewan"], ["saskatchewan", "Saskatchewan"],
+  ["yt", "Yukon"], ["yukon", "Yukon"],
 ]);
 
 export interface DerivedProfileCountry {
@@ -27,8 +37,7 @@ export function deriveProfileCountry(
 ): DerivedProfileCountry | undefined {
   const fact = uniqueTextFact(facts, "region");
   if (fact === undefined) return undefined;
-  const region = fact.value.normalize("NFC").replace(/\s+/gu, " ").trim()
-    .toLocaleLowerCase("en-US");
+  const region = normalizeRegion(fact.value);
   return CANADIAN_REGIONS.has(region)
     ? Object.freeze({ canonicalValue: "CA", visibleOption: "Canada" })
     : undefined;
@@ -70,6 +79,7 @@ export function withDerivedProfileCountry(
   addTextFact(additions, planned, facts, "city", "address.city", "address");
   const region = uniqueTextFact(facts, "region");
   if (region !== undefined && !planned.has("address.region")) {
+    const visibleOption = CANADIAN_REGIONS.get(normalizeRegion(region.value)) ?? region.value;
     additions.push({
       fieldId: "address.region",
       questionType: "address",
@@ -77,7 +87,7 @@ export function withDerivedProfileCountry(
       answer: { kind: "answered", value: region.value, provenance: region.provenance },
       optionMapping: {
         canonicalValue: region.value,
-        visibleOption: region.value,
+        visibleOption,
         provenance: "visible_option",
       },
     });
@@ -87,6 +97,11 @@ export function withDerivedProfileCountry(
     ...(plan as Record<string, unknown>),
     fields: [...fields, ...additions],
   };
+}
+
+function normalizeRegion(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim()
+    .toLocaleLowerCase("en-US");
 }
 
 function addTextFact(

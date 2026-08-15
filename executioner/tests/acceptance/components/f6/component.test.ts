@@ -204,7 +204,7 @@ test("resolver preserves all F4 errors byte-for-byte without throwing", async ()
   }
 });
 
-test("protected controls accept only owner-provided facts", async () => {
+test("protected controls replace non-owner facts with learning defaults", async () => {
   const cases = [
     ["Available start date", "date", "2026-09-01"],
     ["Are you authorized to work in this location?", "radio", true],
@@ -220,25 +220,44 @@ test("protected controls accept only owner-provided facts", async () => {
         provenance,
       };
       const profile = createProfileQueryFake({ query: { ok: true, value: answer } });
+      const options = behavior === "radio" || behavior === "select"
+        ? [
+            { id: optionId("yes"), label: boundedText("Yes") },
+            { id: optionId("no"), label: boundedText("No") },
+          ]
+        : [];
       const result = await createAnswerResolver(profile.port, "Narrative.").resolve(
-        request(field(label, behavior)),
+        request(field(label, behavior, options)),
         new AbortController().signal,
       );
-      assert.deepEqual(result, {
-        ok: false,
-        error: { code: "protected_answer_denied", retryable: false },
-      });
+      assert.equal(result.ok && result.value.kind, "resolved");
+      if (result.ok && result.value.kind === "resolved") {
+        assert.equal(result.value.intent.provenance, "reviewed_catalog");
+      }
     }
   }
 });
 
-test("factual outcomes stay successful and preserve their exact identifiers", async () => {
+test("unresolved and unmatched facts become explicit learning intents", async () => {
   const missing = createAnswerResolver(createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   }).port, "Narrative.");
   assert.deepEqual(
     await missing.resolve(request(field("Given name")), new AbortController().signal),
-    { ok: true, value: { kind: "profile_answer_missing", questionId: "s1-question-given-name" } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "text",
+          behavior: "text",
+          fieldId: "s1-field-given-name",
+          target: "target-acceptance",
+          value: "Test",
+          provenance: "reviewed_catalog",
+        },
+      },
+    },
   );
 
   const answered = createProfileQueryFake({
@@ -256,7 +275,21 @@ test("factual outcomes stay successful and preserve their exact identifiers", as
       ])),
       new AbortController().signal,
     ),
-    { ok: true, value: { kind: "option_no_match", questionId: "s1-question-work-authorization" } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "choice",
+          behavior: "radio",
+          fieldId: "s1-field-given-name",
+          target: "target-acceptance",
+          optionId: "no",
+          expectedOption: "No",
+          provenance: "visible_option",
+        },
+      },
+    },
   );
   assert.deepEqual(
     await resolver.resolve(
@@ -266,7 +299,21 @@ test("factual outcomes stay successful and preserve their exact identifiers", as
       ])),
       new AbortController().signal,
     ),
-    { ok: true, value: { kind: "option_ambiguous", questionId: "s1-question-work-authorization" } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "choice",
+          behavior: "radio",
+          fieldId: "s1-field-given-name",
+          target: "target-acceptance",
+          optionId: "yes",
+          expectedOption: "Yes",
+          provenance: "visible_option",
+        },
+      },
+    },
   );
   assert.deepEqual(
     await resolver.resolve(
@@ -277,7 +324,20 @@ test("factual outcomes stay successful and preserve their exact identifiers", as
   );
   assert.deepEqual(
     await resolver.resolve(request(field("Unreviewed")), new AbortController().signal),
-    { ok: false, error: { code: "question_unknown", retryable: false } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "text",
+          behavior: "text",
+          fieldId: "s1-field-given-name",
+          target: "target-acceptance",
+          value: "Test response pending owner review.",
+          provenance: "reviewed_catalog",
+        },
+      },
+    },
   );
 });
 

@@ -2,6 +2,7 @@ import type { ProfileAnswerProvenance } from "../../../../contracts/index.ts";
 
 export type ProfileFieldAnswerProvenance =
   | ProfileAnswerProvenance
+  | "generated_default"
   | "journey_derived";
 
 export const profilePageTypes = ["profile", "contact"] as const;
@@ -11,6 +12,7 @@ export const profileRepeatableSections = [
   "experience",
   "education",
   "skills",
+  "websites",
 ] as const;
 export type ProfileRepeatableSection = (typeof profileRepeatableSections)[number];
 
@@ -20,16 +22,38 @@ export type ProfileQuestionType =
   | "phone"
   | "application_source"
   | "prior_employment"
+  | "employment"
   | "experience"
   | "education"
-  | "skill";
-export type ProfileCanonicalAnswerType = "text" | "phone" | "date" | "option";
+  | "skill"
+  | "language"
+  | "website"
+  | "social_network";
+export type ProfileCanonicalAnswerType =
+  | "text"
+  | "phone"
+  | "date"
+  | "month"
+  | "year"
+  | "number"
+  | "url"
+  | "boolean"
+  | "option"
+  | "single_select"
+  | "multi_select";
 export type ProfileUiBehavior =
   | "checkbox"
   | "file"
   | "text"
+  | "textarea"
   | "phone"
   | "date"
+  | "month"
+  | "year"
+  | "number"
+  | "url"
+  | "select"
+  | "multi_select"
   | "search_select"
   | "radio_group";
 
@@ -91,6 +115,7 @@ export interface ProfilePageSnapshot {
   readonly pageType: ProfilePageType;
   readonly controls: readonly ProfileControlSnapshot[];
   readonly rows: readonly ProfileRowSnapshot[];
+  readonly repeatableSections?: readonly ProfileRepeatableSection[];
 }
 
 export interface ProfileCommitRequest {

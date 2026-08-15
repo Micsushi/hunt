@@ -61,6 +61,7 @@ export function createAccountEntryCredentialMutationAdapter(
           (settled.value.kind === "account_absent" ||
             settled.value.kind === "account_exists" ||
             settled.value.kind === "sign_in_required" ||
+            settled.value.kind === "create_account_required" ||
             settled.value.kind === "navigation_required")
         ) return failure("credential_mutation_denied");
         return settled as Awaited<ReturnType<CredentialMutationAdapter["mutate"]>>;
@@ -144,6 +145,13 @@ async function mutateOnce(
         } else {
           emit(dependencies, "account_mode_switched_to_create_account");
         }
+        result = {
+          kind: request.mode === "sign_in"
+            ? "sign_in_required"
+            : "create_account_required",
+          attemptedFields: ["email", "password"],
+        };
+        return;
       }
 
       const fields = request.mode === "sign_in"

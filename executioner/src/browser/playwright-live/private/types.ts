@@ -5,6 +5,7 @@ import type {
 import type { SemanticAccountPageAdapter } from "./account-page-types.ts";
 import type { SemanticPostingNavigationAdapter } from "./account-navigation-types.ts";
 import type { SemanticVerificationNavigationAdapter } from "./verification-navigation-types.ts";
+import type { SemanticSessionControlAdapter } from "./session-control-types.ts";
 
 export interface PersistentBrowserRuntimeValues {
   readonly targetUrl: string;
@@ -115,6 +116,9 @@ export interface PlaywrightPersistentBrowserSessionOptions {
     event: import("./account-navigation-types.ts").PostingNavigationSessionTraceEvent,
   ) => void;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
+  readonly sessionControl?: SemanticSessionControlAdapter;
+  readonly browserMode?: "persistent" | "private_test";
+  readonly logoutOnCloseForTesting?: boolean;
   readonly applicationRuntime?: import("./workday-application-runtime.ts").OwnedWorkdayApplicationRuntimeOptions;
   readonly externalMonitor?: import("./external-monitor-port.ts").ExternalMonitorPort;
   readonly inspectionHoldBeforeCleanup?: () => Promise<void>;

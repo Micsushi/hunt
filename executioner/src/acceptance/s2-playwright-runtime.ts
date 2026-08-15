@@ -52,6 +52,8 @@ import {
   type OperationId,
 } from "../contracts/index.ts";
 import type { SemanticPageSnapshot } from "../contracts/index.ts";
+import { createValueFreeRunTrace } from
+  "../live/evidence/value-free-run-trace.ts";
 import type {
   LiveBrowserSessionV1,
   LivePortResult,
@@ -147,12 +149,13 @@ export interface Stage2PlaywrightRuntimeOptions {
   readonly externalMonitor?: (
     request: Stage2ApplicationWalkRuntimeBindingRequest,
   ) => Stage2ExternalMonitorRuntime;
+  readonly monitorAuthentication?: boolean;
 }
 
 export function createStage2PlaywrightLiveRuntimeBinding(
   options: Stage2PlaywrightRuntimeOptions = {},
 ): Stage2RealJourneyLiveRuntimeBinding {
-  const timeoutMs = options.timeoutMs ?? 30_000;
+  const timeoutMs = options.timeoutMs ?? 90_000;
   const now = options.now ?? (() => new Date().toISOString());
   const nextOperationId = options.nextOperationId ?? operationId;
   return Object.freeze({
@@ -177,12 +180,13 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       const acceptances = createApplicationLaneAcceptanceCollector();
       const valueFreeTrace: ((event: string, details?: object) => void) | undefined =
         process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-        ? (event, details) => {
-            process.stderr.write(`${JSON.stringify({ trace: event, ...details })}\n`);
-          }
+        ? createValueFreeRunTrace(request.owner.roots.evidence.path)
         : undefined;
       const externalMonitor = options.externalMonitor?.(request) ??
         (options.browser === undefined ? productionExternalMonitor(request, valueFreeTrace) : undefined);
+      const accountExternalMonitor = options.monitorAuthentication === false
+        ? undefined
+        : externalMonitor;
       const applicationRuntime: OwnedWorkdayApplicationRuntimeOptions = Object.freeze({
         request,
         acceptances,
@@ -195,7 +199,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         trace: valueFreeTrace,
       });
       let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
-      const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      const inspectionHold = externalMonitor === undefined &&
+          process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
         ? createOperatorMonitorInspectionHold({
           runtimeRoot: request.owner.roots.runtime.path,
           evidenceRoot: request.owner.roots.evidence.path,
@@ -215,7 +220,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             binding: request.ownerBinding,
             timeoutMs,
             applicationRuntime,
-            externalMonitor,
+            externalMonitor: accountExternalMonitor,
             accountTrace: valueFreeTrace,
             inspectionHold,
           }));
@@ -227,10 +232,12 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           target,
         }, signal);
       } catch (error) {
+        valueFreeTrace?.("runtime_browser_open_failed", { stage: "exception" });
         externalMonitor?.close();
         throw error;
       }
       if (!opened.ok) {
+        valueFreeTrace?.("runtime_browser_open_failed", { code: opened.error.code });
         externalMonitor?.close();
         throw new TypeError("Playwright runtime binding denied");
       }
@@ -625,6 +632,9 @@ function isAccountProof(
   ) || (
     proof.verificationProof === "credential_sign_in" &&
     proof.provider === "workday-auth" && proof.consumedCandidateCount === 0
+  ) || (
+    proof.verificationProof === "application_state_observed" &&
+    proof.provider === "workday-state" && proof.consumedCandidateCount === 0
   );
   return proof.schemaVersion === 1 &&
     proof.proofRevision === "s2-account-session-proof-v1" && proof.status === "unsealed" &&

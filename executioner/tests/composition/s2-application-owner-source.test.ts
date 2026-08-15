@@ -297,6 +297,45 @@ test("admits only the application source and exact region-derived country as jou
   }
 });
 
+test("admits explicit generated defaults without promoting them to owner facts", async () => {
+  const fixture = ownerFixture();
+  try {
+    writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
+    const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profilePlan.fields.push(
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        questionType: "prior_employment",
+        answerType: "option",
+        answer: { kind: "answered", value: "false", provenance: "generated_default" },
+        optionMapping: {
+          canonicalValue: "false",
+          visibleOption: "No",
+          provenance: "visible_option",
+        },
+      },
+      {
+        fieldId: "identity.has_preferred_name",
+        questionType: "identity",
+        answerType: "boolean",
+        answer: { kind: "answered", value: "false", provenance: "generated_default" },
+      },
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    }).resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+    assert.deepEqual(resolved.profilePlan.fields.slice(-2).map(({ answer }) => answer), [
+      { kind: "answered", value: "false", provenance: "generated_default" },
+      { kind: "answered", value: "false", provenance: "generated_default" },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("admits a contact email field only when it matches the authoritative email fact", async () => {
   const fixture = ownerFixture();
   try {

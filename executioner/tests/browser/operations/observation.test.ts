@@ -19,6 +19,7 @@ test("observes bounded structural controls without exposing selectors or handles
       <label>Given name <input required data-hunt-target-token="target-given-name"></label>
       <label>Cover letter <textarea data-hunt-target-token="target-cover-letter">hello</textarea></label>
       <label>Start date <input type="date" value="2026-08-01" data-hunt-target-token="target-start-date"></label>
+      <label>Years of experience <input type="number" value="5" data-hunt-target-token="target-years"></label>
       <fieldset data-field-id="s1-field-work-authorization" data-hunt-target-token="target-s1-field-work-authorization" data-question-id="s1-question-work-authorization" data-question-label="Are you authorized to work in this location?">
         <legend>Are you authorized to work in this location?</legend>
         <label><input data-option-id="s1-option-work-authorization-yes" name="workAuthorization" required type="radio" value="yes" checked>Yes</label>
@@ -36,11 +37,12 @@ test("observes bounded structural controls without exposing selectors or handles
     const observed = await provider.observe(started.value, new AbortController().signal);
     if (!observed.ok) throw new Error(`observe failed: ${observed.error.code}`);
     assert.equal(observed.value.pageId, "page-profile");
-    assert.equal(observed.value.targets.length, 10);
+    assert.equal(observed.value.targets.length, 11);
     const byName = new Map<string, (typeof observed.value.targets)[number]>(observed.value.targets.map((target) => [target.name, target]));
     assert.deepEqual(byName.get("Given name")?.control, { kind: "text", element: "input" });
     assert.deepEqual(byName.get("Cover letter")?.control, { kind: "text", element: "textarea" });
     assert.deepEqual(byName.get("Start date")?.control, { kind: "date", element: "input" });
+    assert.deepEqual(byName.get("Years of experience")?.control, { kind: "text", element: "input" });
     const radio = byName.get("Are you authorized to work in this location?");
     assert.equal(radio?.token, "target-s1-field-work-authorization");
     assert.deepEqual(radio?.control, {
@@ -112,6 +114,31 @@ test("rejects overbound structural strings and readbacks without fabricating pre
       }
     }
   } finally {
+    await browser.close();
+  }
+});
+
+test("does not expose plural selection controls as singular mutation targets", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("cccccccccccccccc") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <label>Skills <select multiple data-hunt-target-token="target-skills"><option selected>TypeScript</option><option selected>Python</option></select></label>
+      <div role="listbox" aria-multiselectable="true" aria-label="Locations" data-hunt-target-token="target-locations"><div role="option" aria-selected="true">Denver</div><div role="option" aria-selected="true">Toronto</div></div>
+      <div data-automation-id="formField">
+        <label id="tools-label">Tools</label>
+        <input role="combobox" aria-labelledby="tools-label" aria-controls="tools-options" data-hunt-target-token="target-tools">
+        <div data-automation-id="selectedItem">Git</div><div data-automation-id="selectedItem">Docker</div>
+        <div id="tools-options" role="listbox"><div role="option">Git</div><div role="option">Docker</div></div>
+      </div>
+    `, "page-multi-select") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    assert.deepEqual(observed.value.targets, []);
+  } finally {
+    await context.close();
     await browser.close();
   }
 });

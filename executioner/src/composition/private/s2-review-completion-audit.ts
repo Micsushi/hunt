@@ -24,6 +24,10 @@ import {
 } from "../../live/evidence/application-walk-evidence.ts";
 import { admitProfileFieldLearningEvidence } from
   "../../live/evidence/profile-field-learning.ts";
+import { admitQuestionAnswerLearningEvidence } from
+  "../../live/evidence/question-answer-learning.ts";
+import { readValueFreeRunTrace } from
+  "../../live/evidence/value-free-run-trace.ts";
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import {
@@ -53,6 +57,7 @@ export interface Stage2ReviewCompletionAuditV1 {
   readonly processBinding: "production_bound";
   readonly processAuditSha256: string;
   readonly profileFieldLearningSha256: string | null;
+  readonly questionAnswerLearningSha256: string | null;
   readonly authMonitor: "external_chain_acknowledged";
   readonly monitor: "external_chain_acknowledged";
   readonly monitorClassification: "review_verified";
@@ -96,15 +101,11 @@ export function inspectStage2ReviewCompletion(
     const review = readStage2ReviewAcceptance(root);
     const gate = readStage2AcceptanceManifest(root);
     const application = readApplicationWalk(root);
-    const profileFieldLearningSha256 = profileLearningDigest(application);
-    const learningPath = join(root, "profile-field-learning.json");
-    if (profileFieldLearningSha256 === null) {
-      if (existsSync(learningPath)) denied();
-    } else {
-      const learningBytes = readStableFile(learningPath, 128 * 1024);
-      admitProfileFieldLearningEvidence(JSON.parse(learningBytes.toString("utf8")));
-      if (digest(learningBytes) !== profileFieldLearningSha256) denied();
-    }
+    const tracePath = join(root, "value-free-trace.ndjson");
+    if (!existsSync(tracePath)) denied();
+    validateValueFreeTrace(tracePath, application);
+    const profileFieldLearningSha256 = profileLearningDigest(application, root);
+    const questionAnswerLearningSha256 = questionLearningDigest(application, root);
     const packet = readRealEvidence(root);
     const processAudit = readWindowsProcessAudit(root);
     const processBytes = readStableFile(join(root, "process-audit.json"), 16 * 1024);
@@ -175,6 +176,7 @@ export function inspectStage2ReviewCompletion(
       processBinding: "production_bound",
       processAuditSha256: digest(processBytes),
       profileFieldLearningSha256,
+      questionAnswerLearningSha256,
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -193,18 +195,79 @@ export function inspectStage2ReviewCompletion(
   }
 }
 
-function profileLearningDigest(application: ApplicationWalkAcceptanceV1): string | null {
+function questionLearningDigest(
+  application: ApplicationWalkAcceptanceV1,
+  root: string,
+): string | null {
+  const questionnaires = application.laneAcceptances.filter(
+    (value) => value.checkpoint === "questionnaire_verified",
+  );
+  const path = join(root, "question-answer-learning.json");
+  const expectedAnswers = questionnaires.flatMap(({ answers }) => answers);
+  if (questionnaires.length === 0 || expectedAnswers.length === 0) {
+    if (existsSync(path)) denied();
+    return null;
+  }
+  const bytes = readStableFile(path, 128 * 1024);
+  const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
+  if (
+    learning.questions.length !== expectedAnswers.length ||
+    expectedAnswers.some((answer) => {
+      const matches = learning.questions.filter((question) =>
+        question.fieldId === answer.fieldId &&
+        question.questionId === answer.questionId &&
+        question.provenance === answer.provenance
+      );
+      return matches.length !== 1;
+    })
+  ) denied();
+  return digest(bytes);
+}
+
+function profileLearningDigest(
+  application: ApplicationWalkAcceptanceV1,
+  root: string,
+): string | null {
   const profiles = application.laneAcceptances.filter(
     (value) => value.checkpoint === "profile_verified",
   );
-  if (profiles.length === 0 && application.completedPages === 0) return null;
-  if (profiles.length !== 1) denied();
-  const sha256 = profiles[0]?.checkpoint === "profile_verified"
-    ? profiles[0].profileFieldLearningSha256
-    : undefined;
-  if (sha256 === undefined) return null;
-  if (!/^[0-9a-f]{64}$/u.test(sha256)) denied();
-  return sha256;
+  const paths = [
+    join(root, "profile-field-learning.json"),
+    join(root, "profile-field-learning-02.json"),
+  ];
+  if (profiles.length === 0) {
+    if (paths.some(existsSync)) denied();
+    return null;
+  }
+  if (profiles.length > paths.length) denied();
+  let latest: string | null = null;
+  for (const [index, profile] of profiles.entries()) {
+    if (profile.checkpoint !== "profile_verified") denied();
+    const sha256 = profile.profileFieldLearningSha256;
+    if (sha256 === undefined) {
+      if (existsSync(paths[index]!)) denied();
+      continue;
+    }
+    if (!/^[0-9a-f]{64}$/u.test(sha256)) denied();
+    const learningBytes = readStableFile(paths[index]!, 128 * 1024);
+    admitProfileFieldLearningEvidence(JSON.parse(learningBytes.toString("utf8")));
+    if (digest(learningBytes) !== sha256) denied();
+    latest = sha256;
+  }
+  if (paths.slice(profiles.length).some(existsSync)) denied();
+  return latest;
+}
+
+function validateValueFreeTrace(path: string, application: ApplicationWalkAcceptanceV1): void {
+  const records = readValueFreeRunTrace(path);
+  const started = records.filter(({ event }) => event === "application_walk_started");
+  const terminal = records.filter(({ event }) => event === "application_walk_terminal");
+  if (started.length !== 1 || terminal.length !== 1 ||
+      started[0]?.details.journeyId !== application.journeyId ||
+      terminal[0]?.details.journeyId !== application.journeyId ||
+      terminal[0]?.details.status !== "passed" ||
+      terminal[0]?.details.submitActivated !== false ||
+      records.some(({ details }) => details.submitActivated === true)) denied();
 }
 
 function validateMonitorLedger(

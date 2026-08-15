@@ -6,14 +6,17 @@ import type { OperationId } from "../../src/contracts/index.ts";
 import type {
   LiveBrowserSessionV1,
   LivePortResult,
+  MailboxPollRequest,
   PersistentBrowserErrorCode,
   PersistentBrowserReconcileResult,
+  SecretStore,
 } from "../../src/contracts/live/index.ts";
 import type { RealRunOwnerInputsV1 } from "../../src/live/preflight/types.ts";
 import {
   createAccountVerifiedBindings,
   createBoundAccountStateObserver,
   createCleanupBoundAccountVerifiedLifecycle,
+  createLazyGmailMailbox,
   runSessionBoundAccountVerifiedLifecycle,
 } from "../../src/composition/s2-account-verified-runner.ts";
 import { runStage2AccountVerified } from "../../src/live/runner/account-verified.ts";
@@ -177,6 +180,66 @@ test("session-bound lifecycle preserves factual account blocks without owning se
     "account_session_lifecycle_started",
     "account_session_lifecycle_succeeded",
   ]);
+});
+
+test("Gmail authorization is inspected only when mailbox verification is polled", async () => {
+  const owner = ownerInputs();
+  let inspections = 0;
+  let creations = 0;
+  const secretStore: SecretStore = {
+    async inspect() {
+      inspections += 1;
+      return {
+        ok: true,
+        value: {
+          schemaVersion: 1,
+          handleId: owner.gmailAuthorization.handleId as never,
+          journeyId: owner.journeyId as never,
+          provider: "windows_dpapi_current_user_v1",
+          purpose: "gmail_oauth",
+          consumer: "gmail_auth_executor",
+          issuedAt: owner.approval.approvedAt,
+          expiresAt: owner.gmailAuthorization.expiresAt,
+          state: "active",
+        },
+      };
+    },
+    async revoke() {
+      return { ok: true, value: undefined };
+    },
+  };
+  const mailbox = createLazyGmailMailbox({
+    owner,
+    secretStore,
+    authorization: {
+      signal: new AbortController().signal,
+      current: () => now,
+      dispose() {},
+    },
+    create() {
+      creations += 1;
+      return {
+        async poll() {
+          return {
+            ok: true,
+            value: {
+              provider: "gmail_api_v1",
+              receivedTimeBucket: null,
+              expiresAt: null,
+              candidateCount: 0,
+              verificationHandle: null,
+            },
+          };
+        },
+      };
+    },
+  });
+  assert.deepEqual({ inspections, creations }, { inspections: 0, creations: 0 });
+  const request = createAccountVerifiedBindings(owner, sourceRevision, now, operationIds())
+    .mailboxRequest as MailboxPollRequest;
+  await mailbox.poll(request, new AbortController().signal);
+  await mailbox.poll(request, new AbortController().signal);
+  assert.deepEqual({ inspections, creations }, { inspections: 1, creations: 1 });
 });
 
 test("session-bound coordinator redispatches a classified posting and preserves sign-in proof", async () => {
@@ -686,6 +749,7 @@ function operationIds() {
     requestVerificationEmail: "operation_request_abcdefg" as OperationId,
     navigateVerification: "operation_navigateabcdefg" as OperationId,
     postVerificationSignIn: "operation_signin_abcdefgh" as OperationId,
+    postVerificationCredentialSubmit: "operation_postverify_abcdefgh" as OperationId,
     browserClose: "operation_close_abcdefghijkl" as OperationId,
     mailboxQuery: "mailbox_query_abcdefghijklmnop" as never,
   };

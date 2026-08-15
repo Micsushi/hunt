@@ -42,6 +42,18 @@ browser-truth failures, incomplete required fields, and owned duplicate rows
 spend that shared local budget. The central orchestrator still owns outer
 journey recovery, event IDs, terminalization, and persistence policy.
 
+Question classification first uses exact reviewed labels, then reviewed
+keyword groups that ignore presentation wording such as “what is” or “select
+your.” Keyword matches must resolve to one canonical question; overlapping
+groups remain `question_ambiguous`. `questionAnswerGuide` publishes each
+canonical question's accepted answer type, known choices, and default policy.
+Tenant-specific choices are still discovered from the visible control. During
+the learning campaign, unknown questions, missing owner facts, absent
+privacy-decline choices, and unmatched or ambiguous options receive
+deterministic generated defaults. Choice controls use the first visible
+non-placeholder option. Every such answer is recorded as replacement-required;
+it is test data for reaching Review, not an owner claim.
+
 `stopAfter` supports each verified lane and `pre_review` without advancing
 beyond the requested browser truth. `createApplicationLaneAcceptanceCollector`
 retains only the T1-T3 safe acceptance projections. The cleanup-gated

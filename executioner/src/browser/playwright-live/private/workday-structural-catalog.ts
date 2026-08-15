@@ -45,6 +45,7 @@ export const WORKDAY_COMPLETE_SIGN_IN_SELECTOR =
 const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
   experience: '[data-automation-id="applyFlowMyExperiencePage"]',
+  experienceV2: '[data-automation-id="applyFlowMyExpPage"]',
   primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
@@ -72,6 +73,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_candidate_home_v1", '[data-automation-id="candidateHomePage"]'),
   rule("structural_trait_page_profile_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.myInformation),
   rule("structural_trait_page_profile_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.experience),
+  rule("structural_trait_page_profile_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.experienceV2),
   ...[
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestionnaire,

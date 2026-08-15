@@ -22,6 +22,7 @@ import type {
 } from "./verification-navigation-types.ts";
 import type { ExternalMonitorPort } from "./external-monitor-port.ts";
 import { isStablePostVerificationState } from "./workday-verification-navigation.ts";
+import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 
 interface VerificationOwnershipState {
   readonly page: PersistentPage | undefined;
@@ -190,7 +191,7 @@ export class OwnedVerificationNavigationCoordinator {
     const attempt = (this.#monitorAttempts.get(phase) ?? 0) + 1;
     try {
       await this.#options.externalMonitor.auth(
-        page as never,
+        valueFreeExternalMonitorPage(page),
         phase,
         "before_navigation",
         authMonitorTaxonomy(snapshot),
@@ -218,7 +219,7 @@ export class OwnedVerificationNavigationCoordinator {
         pending.operationId !== request.operationId) return false;
     try {
       await this.#options.externalMonitor.auth(
-        page as never,
+        valueFreeExternalMonitorPage(page),
         phase,
         "transition",
         authMonitorTaxonomy(snapshot),

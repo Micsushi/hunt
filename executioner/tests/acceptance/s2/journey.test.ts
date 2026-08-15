@@ -318,7 +318,7 @@ test("application failure preserves its exact code and completed-page count", as
     ok: false,
     error: {
       checkpoint: "questionnaire",
-      completedPages: 2,
+      completedPages: 4,
       failure: {
         code: "question_unknown",
         retryable: false,
@@ -343,7 +343,7 @@ test("application failure preserves its exact code and completed-page count", as
       schemaVersion: 4,
       journeyId: config.journeyId,
       status: "failed",
-      completedPages: 2,
+      completedPages: 4,
       errorCode: "question_unknown",
     });
   } finally {

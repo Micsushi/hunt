@@ -169,6 +169,8 @@ test("repeatable learning identity survives DOM row reordering", async () => {
         fieldIdentity === "profile.experience.2.experience.company",
     );
     assert.equal(rowA.driverAttempt, "text");
+    assert.equal(rowA.questionCategory, "employment");
+    assert.equal(rowA.answerCategory, "text");
     assert.equal(rowA.mechanics.persistentReadback, "verified_after_rescan");
     assert.equal(rowB.driverAttempt, "none");
   } finally {
@@ -185,6 +187,24 @@ test("unavailable evidence storage is passive", async () => {
   });
   assert.equal((await capture.page.inspect(AbortSignal.any([]))).pageType, "profile");
   assert.equal(capture.write(), null);
+});
+
+test("writes a distinct immutable learning artifact for the second profile state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-second-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort(snapshot(null)),
+    plan: profilePlan(),
+    root,
+    fileName: "profile-field-learning-02.json",
+    sensitiveValues: [],
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    assert.deepEqual(readdirSync(root), ["profile-field-learning-02.json"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("retains the maximum admitted field inventory", async () => {
@@ -571,6 +591,21 @@ function profilePlan(): ProfilePagePlan {
         },
       },
     ],
-    repeatables: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{
+        rowKey: "experience-1",
+        fields: [{
+          fieldId: "experience.company",
+          questionType: "employment",
+          answerType: "text",
+          answer: {
+            kind: "answered",
+            value: "Original",
+            provenance: "resume_verified",
+          },
+        }],
+      }],
+    }],
   };
 }

@@ -147,6 +147,29 @@ test("stops on a missing required fact before browser inspection or mutation", a
   assert.equal(port.commits.length, 0);
 });
 
+test("retries a transient read-only inspection after a committed field", async () => {
+  let failuresRemaining = 1;
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.given_name", "text")],
+    rows: [],
+  }, {
+    inspectFailure: () =>
+      port.commits.length === 1 && port.inspections >= 3 && failuresRemaining-- > 0,
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [field("identity.given_name", "identity", "text", "Ada")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 1);
+  assert.ok(port.inspections >= 4);
+});
+
 for (const missing of [
   {
     fieldId: "source.how_did_you_hear",
@@ -210,6 +233,18 @@ test("unresolved tenant owner inputs do not block a tenant where their controls 
         answer: { kind: "profile_answer_missing" },
       },
     ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("a derived email answer is skipped when the tenant renders email as display-only", async () => {
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [field("contact.email", "identity", "text", "owner-email-redacted")],
     repeatables: [],
   }, port, AbortSignal.any([]));
 
@@ -374,6 +409,72 @@ test("rejects a driver success when fresh visible readback does not match", asyn
   });
   assert.equal(port.commits.length, 1);
   assert.equal(port.inspections, 2);
+});
+
+test("continues after an optional tenant widget rejects its configured default", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("education.field_of_study", "multi_select"),
+      required: false,
+    }],
+    rows: [],
+  }, { ignoreCommits: true });
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [field(
+      "education.field_of_study",
+      "education",
+      "multi_select",
+      '["Computer Science"]',
+      "resume_verified",
+      '["Computer Science"]',
+    )],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 1);
+});
+
+test("continues a repeatable row after an optional tenant widget rejects its default", async () => {
+  const study = field(
+    "education.field_of_study",
+    "education",
+    "multi_select",
+    '["Computer Science"]',
+    "resume_verified",
+    '["Computer Science"]',
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "education",
+      rowId: "existing-education",
+      ownedByC3: false,
+      controls: [{
+        ...control("education.field_of_study", "multi_select"),
+        required: false,
+      }],
+    }],
+    repeatableSections: ["education"],
+  }, { ignoreCommits: true });
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "education",
+      rows: [{ rowKey: "education_1", fields: [study] }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 1);
 });
 
 test("reconciles repeatables without deleting foreign rows or creating duplicates", async () => {
@@ -797,6 +898,129 @@ test("binds heterogeneous repeatable requirements only to each selected row", as
   );
 });
 
+test("reuses one semantic job when the tenant omits an optional subfield", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Analytical Engines", "resume_verified"),
+    field("experience.title", "employment", "text", "Engineer", "resume_verified"),
+    field("experience.location", "employment", "text", "London", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "tenant-job-1",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Analytical Engines"),
+        control("experience.title", "text", "Engineer"),
+      ],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+  assert.equal(port.commits.length, 0);
+});
+
+test("checks a current role and does not invent an end date after Workday removes it", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Current Company", "resume_verified"),
+    field("experience.title", "employment", "text", "Engineer", "resume_verified"),
+    field("experience.current", "employment", "boolean", "true", "resume_verified"),
+    field("experience.end_month", "employment", "month", "12", "resume_verified"),
+    field("experience.end_year", "employment", "year", "2026", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "current-job-1",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Current Company"),
+        control("experience.title", "text", "Engineer"),
+        {
+          ...control(
+            "experience.current",
+            "checkbox",
+            "false",
+            "workday_checkbox_v2",
+          ),
+          required: false,
+        },
+        control("experience.end_month", "month", "11"),
+        control("experience.end_year", "year", "2025"),
+      ],
+    }],
+    repeatableSections: ["experience"],
+  }, {
+    afterCommit: () => {
+      if (port.commits.at(-1)?.controlId !== "control-experience.current") return;
+      port.snapshot = {
+        ...port.snapshot,
+        rows: port.snapshot.rows.map((item) => ({
+          ...item,
+          controls: item.controls.filter(({ fieldId }) =>
+            fieldId !== "experience.end_month" && fieldId !== "experience.end_year"
+          ),
+        })),
+      };
+    },
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-current", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ controlId, value }) => [controlId, value]), [
+    ["control-experience.current", "true"],
+  ]);
+  assert.equal(port.added.length, 0);
+});
+
+test("defers repeatable data when the current UI state has no matching section", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+    repeatableSections: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+});
+
 test("rechecks required controls revealed by a repeatable add before filling the row", async () => {
   const desired = [
     field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
@@ -841,6 +1065,152 @@ test("rechecks required controls revealed by a repeatable add before filling the
   assert.equal(port.removed.length, 0);
 });
 
+test("fills the tenant-provided blank first repeatable row before adding another", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "INVIDI Technologies", "resume_verified"),
+    field("experience.title", "employment", "text", "Software Developer", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      ...row("experience", "workExperience-4", false, desired, true),
+      controls: [
+        ...row("experience", "workExperience-4", false, desired, true).controls,
+        { ...control("experience.current", "checkbox", "false"), required: false },
+      ],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience_1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "INVIDI Technologies",
+    "Software Developer",
+  ]);
+});
+
+test("accepts an unpadded Workday month readback for a zero-padded plan month", async () => {
+  const desired = [
+    field("experience.start_month", "employment", "month", "09", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "workExperience-4",
+      ownedByC3: false,
+      controls: [control("experience.start_month", "month", "9", "workday_month_v1")],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience_1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("routes dedicated social URLs before deduplicated generic website rows", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const genericLinkedin = field(
+    "website.url",
+    "website",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const portfolio = field(
+    "website.url",
+    "website",
+    "url",
+    "https://portfolio.example.com",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("social.linkedin", "text", null, "workday_text_v2"),
+      required: false,
+    }],
+    rows: [],
+    repeatableSections: ["websites"],
+  }, { rowTemplates: { websites: [portfolio] } });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [{
+      section: "websites",
+      rows: [
+        { rowKey: "website-linkedin", fields: [genericLinkedin] },
+        { rowKey: "website-portfolio", fields: [portfolio] },
+      ],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.added, ["websites"]);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://portfolio.example.com",
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
+test("falls back from an absent dedicated social control to a generic website row", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const generic = field(
+    "website.url",
+    "website",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+    repeatableSections: ["websites"],
+  }, { rowTemplates: { websites: [generic] } });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.added, ["websites"]);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
 function row(
   section: ProfileRepeatableSection,
   rowId: string,
@@ -882,6 +1252,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
   readonly #templates: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
   readonly #afterCommit: (() => void) | undefined;
   readonly #afterAdd: (() => void) | undefined;
+  readonly #inspectFailure: (() => boolean) | undefined;
 
   constructor(
     snapshot: ProfilePageSnapshot,
@@ -890,6 +1261,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
       readonly rowTemplates?: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
       readonly afterCommit?: () => void;
       readonly afterAdd?: () => void;
+      readonly inspectFailure?: () => boolean;
     } = {},
   ) {
     this.snapshot = structuredClone(snapshot);
@@ -897,10 +1269,12 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
     this.#templates = options.rowTemplates ?? {};
     this.#afterCommit = options.afterCommit;
     this.#afterAdd = options.afterAdd;
+    this.#inspectFailure = options.inspectFailure;
   }
 
   async inspect(): Promise<ProfilePageSnapshot> {
     this.inspections += 1;
+    if (this.#inspectFailure?.()) throw new TypeError("transient inspect failure");
     return structuredClone(this.snapshot);
   }
 

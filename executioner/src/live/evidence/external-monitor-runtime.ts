@@ -38,7 +38,7 @@ const AUTH_MOMENTS = new Set([
 const APPLICATION_PAGES = new Set([...applicationMonitorPages, "review"]);
 const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
-  "recovery_observed", "review_readback",
+  "state_observed", "recovery_observed", "review_readback",
 ]);
 const POSTING_FREE_MONITOR_PAGES = new Set([
   "apply_choice", "email_sign_in_choice", "account_entry", "verification_required",
@@ -79,7 +79,7 @@ export interface Stage2MonitorTaxonomy {
 }
 
 export interface Stage2MonitorPage {
-  screenshot(options?: { readonly type?: "png" }): Promise<Buffer>;
+  screenshot(options?: { readonly type?: "png"; readonly fullPage?: boolean }): Promise<Buffer>;
   title(): Promise<string>;
   url(): string | Promise<string>;
 }
@@ -232,7 +232,7 @@ export class Stage2ExternalMonitorRuntime {
           this.#options.processOwnerStartedAt,
         )) denied();
     const ordinal = (chain === "auth" ? this.#authOrdinal : this.#applicationOrdinal) + 1;
-    if (ordinal > 128 || !validEvent(event) ||
+    if (ordinal > 512 || !validEvent(event) ||
         !this.#legalMoment(chain, pageName, moment, event)) denied();
     const traceContext = Object.freeze({
       chain,
@@ -258,7 +258,10 @@ export class Stage2ExternalMonitorRuntime {
       const urlBefore = await page.url();
       emitMonitorTrace(this.#options.trace, "external_monitor_url_before_read", traceContext);
       failureStage = "screenshot_capture";
-      const screenshot = await page.screenshot({ type: "png" });
+      const screenshot = await page.screenshot({
+        type: "png",
+        ...(chain === "application" ? { fullPage: true } : {}),
+      });
       emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_received", traceContext);
       failureStage = "screenshot_validation";
       validateStage2MonitorPng(screenshot);
@@ -359,7 +362,7 @@ export class Stage2ExternalMonitorRuntime {
           ackFile,
           request,
           binding.sha256,
-          this.#options.acknowledgementTimeoutMs ?? 180_000,
+          this.#options.acknowledgementTimeoutMs ?? 600_000,
           this.#options.acknowledgementPollMs ?? 250,
         );
       }
@@ -433,7 +436,11 @@ export class Stage2ExternalMonitorRuntime {
     const attemptKey = `${chain}:${page}:${moment}`;
     const current = chain === "auth" ? this.#currentAuthPage : this.#currentApplicationPage;
     return pending === undefined && (current === undefined
-      ? chain === "auth" || page === "review" && moment === "review_readback"
+      ? chain === "auth" ||
+        page === "review" && moment === "review_readback" ||
+        moment === "state_observed" && applicationMonitorPages.includes(
+          page as ApplicationHandlerPage,
+        )
       : current === page) &&
       !used.has(event.operationId) &&
       event.attempt === (this.#attempts.get(attemptKey) ?? 0) + 1 &&
@@ -631,7 +638,7 @@ async function waitForAck(
   timeoutMs: number,
   pollMs: number,
 ): Promise<void> {
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000 ||
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 900_000 ||
       !Number.isInteger(pollMs) || pollMs < 1 || pollMs > 5_000) denied();
   const deadline = Date.now() + timeoutMs;
   while (true) {
@@ -719,7 +726,12 @@ function exactObservedIdentity(
     !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(tenant) ||
     !/^[A-Za-z0-9-]{2,64}$/u.test(value.posting)
   ) ackDenied();
-  return Object.freeze({ host, tenant, posting: value.posting, title: boundedTitle(value.title) });
+  return Object.freeze({
+    host,
+    tenant,
+    posting: value.posting.toUpperCase(),
+    title: boundedTitle(value.title),
+  });
 }
 
 function identityDigestsFromObservation(
@@ -748,7 +760,7 @@ function observedIdentity(
         const segment = decodeURIComponent(rawSegment);
         if (/[\\/]/u.test(segment)) denied();
         const match = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
-        return match === null ? [] : [match[1]!];
+        return match === null ? [] : [match[1]!.toUpperCase()];
       });
     if (
       parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
@@ -802,7 +814,7 @@ function emitMonitorTrace(
 
 function validEvent(value: Stage2MonitorLifecycleEvent): boolean {
   return /^operation_[A-Za-z0-9_-]{16,64}$/u.test(value.operationId) &&
-    Number.isSafeInteger(value.attempt) && value.attempt >= 1 && value.attempt <= 8;
+    Number.isSafeInteger(value.attempt) && value.attempt >= 1 && value.attempt <= 256;
 }
 
 function legalPair(

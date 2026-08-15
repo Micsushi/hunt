@@ -51,11 +51,18 @@ import type {
   ApprovedTargetBinding,
   OwnedTargetInspection,
 } from "./private/types.ts";
+import type { SessionLogoutResult } from "./private/session-control-types.ts";
+import { valueFreeExternalMonitorPage } from
+  "./private/value-free-external-monitor-page.ts";
 import {
+  applicationReadyMonitorPage,
+  applicationReadyMonitorTaxonomy,
   OwnedWorkdayApplicationRuntime,
   type OwnedWorkdayApplicationRuntimeOptions,
 } from
   "./private/workday-application-runtime.ts";
+
+const LOGOUT_TIMEOUT_MS = 60_000;
 
 type RetainedSessionOptions = Omit<
   PlaywrightPersistentBrowserSessionOptions,
@@ -104,6 +111,10 @@ export class PlaywrightPersistentBrowserSession
   >();
   readonly #applicationPageOperations = new Set<string>();
   readonly #applicationSuspendOperations = new Map<string, Promise<ClosePortResult>>();
+  readonly #logoutOperations = new Map<
+    string,
+    { readonly fingerprint: string; readonly result: Promise<LogoutPortResult> }
+  >();
   #applicationPageActive = false;
   readonly #authNavigationAttempts = new Map<string, number>();
 
@@ -116,6 +127,10 @@ export class PlaywrightPersistentBrowserSession
       probe: options.probe,
       timeoutMs: options.timeoutMs,
       externalMonitor: options.externalMonitor,
+      applicationReadyMonitor: {
+        page: applicationReadyMonitorPage,
+        taxonomy: applicationReadyMonitorTaxonomy,
+      },
       trace: options.accountNavigationTrace,
       state: () => ({
         page: this.#page,
@@ -214,7 +229,8 @@ export class PlaywrightPersistentBrowserSession
     }
     try {
       const persisted = await this.#options.profiles.read(runtime.profilePath);
-      const exactMarker = isExactMarker(persisted, request, runtime);
+      const exactMarker = this.#options.browserMode !== "private_test" &&
+        isExactMarker(persisted, request, runtime);
       if (persisted !== undefined && !exactMarker) {
         const removed = await bounded(
           this.#options.profiles.cleanupPartial(runtime.profilePath),
@@ -501,6 +517,46 @@ export class PlaywrightPersistentBrowserSession
     return this.#accountAccess.withAccess(request, signal, use);
   }
 
+  /** Test-only concrete control; the frozen public browser contract is unchanged. */
+  async logoutForTesting(
+    request: PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<LogoutPortResult> {
+    const fingerprint = JSON.stringify(request);
+    const previous = this.#logoutOperations.get(request.operationId);
+    if (previous !== undefined) {
+      return previous.fingerprint === fingerprint
+        ? previous.result
+        : failure("browser_operation_replayed");
+    }
+    const result = this.#logoutOnce(request, signal);
+    this.#logoutOperations.set(request.operationId, { fingerprint, result });
+    return result;
+  }
+
+  async #logoutOnce(
+    request: PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<LogoutPortResult> {
+    if (signal.aborted) return cancelled();
+    if (
+      this.#options.sessionControl === undefined ||
+      this.#page === undefined ||
+      this.#page.isClosed() ||
+      this.#session === undefined ||
+      request.journeyId !== this.#session.journeyId ||
+      request.sessionId !== this.#session.sessionId
+    ) return failure("browser_session_missing");
+    const result = await bounded(
+      this.#options.sessionControl.logout(this.#page),
+      signal,
+      Math.max(this.#options.timeoutMs, LOGOUT_TIMEOUT_MS),
+    );
+    return result.kind === "value"
+      ? { ok: true, value: result.value }
+      : failure("browser_effect_uncertain");
+  }
+
   /** Runs one closed application operation; raw Page authority never leaves this owner. */
   async [ownedApplicationPageAccess](
     request: OwnedApplicationPageRequest,
@@ -685,6 +741,7 @@ export class PlaywrightPersistentBrowserSession
         return this.#stopAfterTargetFact(inspected.value.target);
       }
       const state = classifyWorkdayAccountNavigation(inspected.value.snapshot);
+      this.#emitAccountNavigationTrace(`posting_navigation_state_observed_${state.kind}`);
       if (state.kind === "account_boundary") {
         return { ok: true, value: { kind: "account_boundary" } };
       }
@@ -697,33 +754,11 @@ export class PlaywrightPersistentBrowserSession
       if (state.kind === "job_posting" && transitionCount !== 0) {
         return failure("browser_target_invalid");
       }
-      let action: PostingNavigationAction = state.kind === "job_posting"
-        ? inspected.value.snapshot.traitIds.includes("structural_trait_account_sign_in_v1")
-          ? "account_sign_in"
-          : "start_application"
+      const action: PostingNavigationAction = state.kind === "job_posting"
+        ? "start_application"
         : state.kind === "apply_choice"
           ? "apply_manually"
           : "sign_in_with_email";
-      if (state.kind === "job_posting" && action === "start_application") {
-        const signInControl = await bounded(
-          this.#options.postingNavigation!.inspect(
-            this.#page!,
-            "account_sign_in",
-          ),
-          signal,
-          this.#options.timeoutMs,
-        );
-        if (signInControl.kind === "cancelled") return cancelled();
-        if (signInControl.kind === "timeout") return failure("browser_timeout");
-        if (signInControl.kind === "error") return failure("browser_target_invalid");
-        if (signInControl.value.cardinality > 1) {
-          return failure("browser_target_ambiguous");
-        }
-        if (signInControl.value.cardinality === 1) {
-          if (!signInControl.value.actionable) return failure("browser_target_invalid");
-          action = "account_sign_in";
-        }
-      }
       const control = await bounded(
         this.#options.postingNavigation!.inspect(this.#page!, action),
         signal,
@@ -769,7 +804,7 @@ export class PlaywrightPersistentBrowserSession
       if (this.#options.externalMonitor !== undefined) {
         try {
           await this.#options.externalMonitor.auth(
-            this.#page! as never,
+            valueFreeExternalMonitorPage(this.#page!),
             fromPhase,
             "before_navigation",
             authMonitorTaxonomy(inspected.value.snapshot),
@@ -795,7 +830,6 @@ export class PlaywrightPersistentBrowserSession
           { operationId: monitorOperationId, attempt: monitorAttempt },
         );
         if (activated.kind !== "cancelled") {
-          if (recovered === "retry") continue;
           if (recovered !== undefined) return recovered;
         }
         return this.#uncertainAdvanceFailure();
@@ -821,31 +855,31 @@ export class PlaywrightPersistentBrowserSession
         return this.#stopAfterTargetFact(reconciled.value);
       }
       this.#page = reconciled.value.page;
-      if (this.#options.externalMonitor !== undefined) {
-        const transitioned = await inspectPinnedTarget(
-          this.#page,
-          this.#options.probe,
-          this.#approvedTarget!,
-          request.target,
-          signal,
-          this.#options.timeoutMs,
-        );
-        if (!transitioned.ok) {
-          this.#emitAccountNavigationTrace(
-            `posting_navigation_transition_inspection_failed_${transitioned.error.code}`,
-          );
-          return failure("browser_effect_uncertain");
-        }
+      const transitioned = await inspectPinnedTarget(
+        this.#page,
+        this.#options.probe,
+        this.#approvedTarget!,
+        request.target,
+        signal,
+        this.#options.timeoutMs,
+      );
+      if (!transitioned.ok) {
         this.#emitAccountNavigationTrace(
-          `posting_navigation_transition_inspection_observed_${transitioned.value.target.kind}`,
+          `posting_navigation_transition_inspection_failed_${transitioned.error.code}`,
         );
-        if (transitioned.value.target.kind !== "matched") {
-          return failure("browser_effect_uncertain");
-        }
+        return failure("browser_effect_uncertain");
+      }
+      this.#emitAccountNavigationTrace(
+        `posting_navigation_transition_inspection_observed_${transitioned.value.target.kind}`,
+      );
+      if (transitioned.value.target.kind !== "matched") {
+        return failure("browser_effect_uncertain");
+      }
+      if (this.#options.externalMonitor !== undefined) {
         try {
           this.#emitAccountNavigationTrace("posting_navigation_transition_monitor_started");
           await this.#options.externalMonitor.auth(
-            this.#page as never,
+            valueFreeExternalMonitorPage(this.#page),
             authMonitorPhase(transitioned.value.snapshot),
             "transition",
             authMonitorTaxonomy(transitioned.value.snapshot),
@@ -858,6 +892,15 @@ export class PlaywrightPersistentBrowserSession
           return failure("browser_effect_uncertain");
         }
       }
+      const next = classifyWorkdayAccountNavigation(transitioned.value.snapshot);
+      if (next.kind === "account_boundary") {
+        return { ok: true, value: { kind: "account_boundary" } };
+      }
+      if (next.kind === "ambiguous") return failure("browser_target_ambiguous");
+      if (next.kind === "invalid" || next.kind === state.kind) {
+        return failure("browser_target_invalid");
+      }
+      return { ok: true, value: { kind: "state_transitioned", state: next.kind } };
     }
     const final = await inspectPinnedTarget(
       this.#page!,
@@ -902,7 +945,7 @@ export class PlaywrightPersistentBrowserSession
   }
 
   async #stopAfterTargetFact(
-    fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
+    fact: AccountEntryAdvanceFact,
   ): Promise<AccountEntryAdvancePortResult> {
     if (this.#profilePath === undefined) return failure("browser_profile_cleanup_failed");
     const cleaned = await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
@@ -946,7 +989,7 @@ export class PlaywrightPersistentBrowserSession
     request: AccountEntryAdvanceRequest,
     signal: AbortSignal,
     monitor: { readonly operationId: import("../../contracts/index.ts").OperationId; readonly attempt: number },
-  ): Promise<AccountEntryAdvancePortResult | "retry" | undefined> {
+  ): Promise<AccountEntryAdvancePortResult | undefined> {
     const reconciled = await reconcileOwnedPages(
       this.#context!,
       this.#options.probe,
@@ -975,7 +1018,7 @@ export class PlaywrightPersistentBrowserSession
     if (this.#options.externalMonitor !== undefined) {
       try {
         await this.#options.externalMonitor.auth(
-          this.#page as never,
+          valueFreeExternalMonitorPage(this.#page),
           authMonitorPhase(inspected.value.snapshot),
           "transition",
           authMonitorTaxonomy(inspected.value.snapshot),
@@ -994,7 +1037,10 @@ export class PlaywrightPersistentBrowserSession
       settled.kind !== "ambiguous" &&
       settled.kind !== "invalid" &&
       navigationRank(settled.kind) > navigationRank(previous)
-    ) return "retry";
+    ) return {
+      ok: true,
+      value: { kind: "state_transitioned", state: settled.kind },
+    };
     return undefined;
   }
 
@@ -1048,6 +1094,8 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
+    const logoutPassed = !this.#options.logoutOnCloseForTesting ||
+      await this.#logoutBeforeClose();
     const inspectionPassed = await this.#holdBeforeCleanup(context);
     const contextCleanup = await this.#boundedCleanup(() => context.close());
     const profileCleanup = await this.#boundedCleanup(
@@ -1069,12 +1117,27 @@ export class PlaywrightPersistentBrowserSession
     }
     this.#closedSessionId = closedSession.sessionId;
     this.#closedJourneyId = closedSession.journeyId;
+    if (!logoutPassed) return failure("browser_effect_uncertain");
     if (!inspectionPassed) {
       this.#inspectionFailedSessionId = closedSession.sessionId;
       this.#inspectionFailedJourneyId = closedSession.journeyId;
       return failure("browser_effect_uncertain");
     }
     return { ok: true, value: undefined };
+  }
+
+  async #logoutBeforeClose(): Promise<boolean> {
+    if (
+      this.#options.sessionControl === undefined ||
+      this.#page === undefined ||
+      this.#page.isClosed()
+    ) return false;
+    const result = await bounded(
+      this.#options.sessionControl.logout(this.#page),
+      new AbortController().signal,
+      Math.max(this.#options.timeoutMs, LOGOUT_TIMEOUT_MS),
+    );
+    return result.kind === "value";
   }
 
   async #cleanupFailedOpen(
@@ -1178,6 +1241,7 @@ type OpenPortResult = LivePortResult<
   PersistentBrowserErrorCode
 >;
 type ClosePortResult = LivePortResult<void, PersistentBrowserErrorCode>;
+type LogoutPortResult = LivePortResult<SessionLogoutResult, PersistentBrowserErrorCode>;
 type ReconcilePortResult = LivePortResult<
   PersistentBrowserReconcileResult,
   PersistentBrowserErrorCode
@@ -1196,8 +1260,8 @@ function navigationRank(
 }
 
 function copyAdvanceFact(
-  fact: Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }>,
-): Exclude<AccountEntryAdvanceResult, { readonly kind: "account_boundary" }> {
+  fact: AccountEntryAdvanceFact,
+): AccountEntryAdvanceFact {
   if (fact.kind === "target_mismatch") {
     return Object.freeze({ kind: fact.kind, dimension: fact.dimension });
   }
@@ -1206,5 +1270,10 @@ function copyAdvanceFact(
   }
   return Object.freeze({ kind: "target_ambiguous" });
 }
+
+type AccountEntryAdvanceFact = Exclude<
+  AccountEntryAdvanceResult,
+  { readonly kind: "account_boundary" } | { readonly kind: "state_transitioned" }
+>;
 import { createHash } from "node:crypto";
 import { generatedOperationId } from "../../contracts/index.ts";

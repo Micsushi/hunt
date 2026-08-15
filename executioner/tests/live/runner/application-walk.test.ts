@@ -106,6 +106,10 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
   assert.equal(terminal.failure?.classifier, "required_field_gate");
   assert.equal(terminal.failure?.primitive, "required_field_verification");
   assert.equal(terminal.failure?.unknownLayer, "required_field");
+  assert.equal(terminal.code, "page_incomplete");
+  assert.equal(terminal.classifier, "required_field_gate");
+  assert.equal(terminal.primitive, "required_field_verification");
+  assert.equal(terminal.unknownLayer, "required_field");
   assert.equal(terminal.submitActivated, false);
 });
 

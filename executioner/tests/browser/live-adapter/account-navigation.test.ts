@@ -5,21 +5,61 @@ import { generatedOperationId } from "../../../src/contracts/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/session.ts";
 
-test("concrete session reaches an account boundary through exactly two reclassified effects", async () => {
+test("posting and apply-choice dispatch one reclassified effect per operation", async () => {
   const harness = await openedHarness();
 
-  const result = await harness.provider.advanceToAccountEntry(
+  const posting = await harness.provider.advanceToAccountEntry(
     request(),
     new AbortController().signal,
   );
+  assert.deepEqual(posting, {
+    ok: true,
+    value: { kind: "state_transitioned", state: "apply_choice" },
+  });
+  assert.deepEqual(harness.adapter.actions, ["start_application"]);
+  assert.equal(harness.context.effects, 1);
 
-  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
+  const applyChoice = await harness.provider.advanceToAccountEntry(
+    request("9999999999999999"),
+    new AbortController().signal,
+  );
+  assert.deepEqual(applyChoice, { ok: true, value: { kind: "account_boundary" } });
   assert.deepEqual(harness.adapter.actions, ["start_application", "apply_manually"]);
   assert.equal(harness.context.effects, 2);
-  assert.equal(harness.probeChecks(), 6);
 });
 
-test("a posting with an exact account Sign In enters the verified account route before guest Apply", async () => {
+test("two state transitions receive two independent monitor operation bindings", async () => {
+  const monitor: { readonly moment: string; readonly operationId: string }[] = [];
+  const harness = await openedHarness({
+    externalMonitor: {
+      async auth(_page, _pageName, moment, _taxonomy, event) {
+        monitor.push({ moment, operationId: event.operationId });
+      },
+      async application() {},
+    },
+  });
+
+  assert.equal((await harness.provider.advanceToAccountEntry(
+    request(),
+    new AbortController().signal,
+  )).ok, true);
+  assert.equal((await harness.provider.advanceToAccountEntry(
+    request("9999999999999999"),
+    new AbortController().signal,
+  )).ok, true);
+
+  assert.deepEqual(monitor.map(({ moment }) => moment), [
+    "before_navigation",
+    "transition",
+    "before_navigation",
+    "transition",
+  ]);
+  assert.equal(monitor[0]!.operationId, monitor[1]!.operationId);
+  assert.equal(monitor[2]!.operationId, monitor[3]!.operationId);
+  assert.notEqual(monitor[0]!.operationId, monitor[2]!.operationId);
+});
+
+test("a classified posting clicks Apply even when the header exposes Sign In", async () => {
   const harness = await openedHarness({
     initialTraits: [
       "structural_trait_page_job_posting_v1",
@@ -32,12 +72,15 @@ test("a posting with an exact account Sign In enters the verified account route 
     new AbortController().signal,
   );
 
-  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
-  assert.deepEqual(harness.adapter.actions, ["account_sign_in"]);
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "state_transitioned", state: "apply_choice" },
+  });
+  assert.deepEqual(harness.adapter.actions, ["start_application"]);
   assert.equal(harness.context.effects, 1);
 });
 
-test("a posting semantically discovers exact account Sign In when structural traits omit it", async () => {
+test("a classified posting ignores semantic header Sign In and follows the application route", async () => {
   const harness = await openedHarness({
     semanticAccountSignInFact: { cardinality: 1, actionable: true },
   });
@@ -47,13 +90,19 @@ test("a posting semantically discovers exact account Sign In when structural tra
     new AbortController().signal,
   );
 
-  assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
-  assert.deepEqual(harness.adapter.actions, ["account_sign_in"]);
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "state_transitioned", state: "apply_choice" },
+  });
+  assert.deepEqual(harness.adapter.actions, ["start_application"]);
   assert.equal(harness.context.effects, 1);
 });
 
-test("an email-provider choice reaches the account boundary through one exact extra effect", async () => {
-  const harness = await openedHarness({ emailSignInChoice: true });
+test("an email-provider choice independently reaches the account boundary through one effect", async () => {
+  const harness = await openedHarness({ initialTraits: [
+    "structural_trait_page_account_entry_v1",
+    "structural_trait_navigation_email_sign_in_choice_v1",
+  ] });
 
   const result = await harness.provider.advanceToAccountEntry(
     request(),
@@ -61,12 +110,8 @@ test("an email-provider choice reaches the account boundary through one exact ex
   );
 
   assert.deepEqual(result, { ok: true, value: { kind: "account_boundary" } });
-  assert.deepEqual(harness.adapter.actions, [
-    "start_application",
-    "apply_manually",
-    "sign_in_with_email",
-  ]);
-  assert.equal(harness.context.effects, 3);
+  assert.deepEqual(harness.adapter.actions, ["sign_in_with_email"]);
+  assert.equal(harness.context.effects, 1);
 });
 
 test("an already reached account, verification, or application boundary performs no effect", async () => {
@@ -92,8 +137,12 @@ test("an activation error reconciles an exact application boundary without repea
     activationFailureAfterEffect: "apply_manually",
   });
 
-  const result = await harness.provider.advanceToAccountEntry(
+  assert.deepEqual(await harness.provider.advanceToAccountEntry(
     request(),
+    new AbortController().signal,
+  ), { ok: true, value: { kind: "state_transitioned", state: "apply_choice" } });
+  const result = await harness.provider.advanceToAccountEntry(
+    request("9999999999999999"),
     new AbortController().signal,
   );
 
@@ -274,14 +323,19 @@ test("post-activation reconciliation failure emits its exact value-free primitiv
     { ok: false, error: { code: "browser_effect_uncertain", retryable: false } },
   );
   assert.deepEqual(trace, [
+    "posting_navigation_state_observed_job_posting",
     "posting_navigation_reconcile_failed_browser_target_stale",
   ]);
 });
 
 test("a repeated apply-choice cycle stops before repeating the same effect", async () => {
   const harness = await openedHarness({ remainApplyChoice: true });
-  const result = await harness.provider.advanceToAccountEntry(
+  assert.deepEqual(await harness.provider.advanceToAccountEntry(
     request(),
+    new AbortController().signal,
+  ), { ok: true, value: { kind: "state_transitioned", state: "apply_choice" } });
+  const result = await harness.provider.advanceToAccountEntry(
+    request("9999999999999999"),
     new AbortController().signal,
   );
   assert.deepEqual(result, invalid());
@@ -322,11 +376,11 @@ test("admission and replay bind exact journey, session, target, operation, and t
   }
 });
 
-function request() {
+function request(operationSuffix = "8888888888888888") {
   return {
     schemaVersion: 1 as const,
     journeyId: liveFixtures.journeyId,
-    operationId: generatedOperationId("operation_8888888888888888"),
+    operationId: generatedOperationId(`operation_${operationSuffix}`),
     sessionId: liveFixtures.session.sessionId,
     target: liveFixtures.target,
     now: "2026-08-01T20:00:00.000Z",
@@ -349,6 +403,7 @@ async function openedHarness(options: {
   readonly activationFailureAfterEffect?: "start_application" | "apply_manually" | "sign_in_with_email";
   readonly probeFailureAfterEffect?: boolean;
   readonly accountNavigationTrace?: (event: string) => void;
+  readonly externalMonitor?: import("../../../src/browser/playwright-live/private/external-monitor-port.ts").ExternalMonitorPort;
 } = {}) {
   const context = new FakeContext();
   const profiles = new MemoryProfiles();
@@ -417,6 +472,7 @@ async function openedHarness(options: {
     },
     profiles,
     postingNavigation: adapter,
+    externalMonitor: options.externalMonitor,
     accountNavigationTrace: options.accountNavigationTrace,
     ids: () => liveFixtures.session.sessionId,
     timeoutMs: 100,

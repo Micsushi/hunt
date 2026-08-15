@@ -45,6 +45,42 @@ test("application monitor page catalog matches the page-walk contract", () => {
   assert.deepEqual(applicationMonitorPages, applicationPages);
 });
 
+test("external monitor canonicalizes Workday posting URL case", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-posting-case-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      posting: "R67871",
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentity: {
+          ...observedIdentity(),
+          posting: "r67871",
+        },
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.010Z",
+      }),
+    });
+
+    await runtime.auth(
+      fixturePage(`https://${binding.host}/en-US/Careers/job/Example_r67871`),
+      "job_posting",
+      "before_navigation",
+      taxonomy(),
+      { operationId: "operation_posting_case_0001", attempt: 1 },
+      new AbortController().signal,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("external monitor blocks each auth effect until the exact independent ACK", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-"));
   let release: (() => void) | undefined;
@@ -1008,8 +1044,40 @@ test("application monitor retains the exact mutation, readback, navigation, tran
   }
 });
 
+test("application monitor admits a value-free page-state observation before any mutation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-page-state-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: "safe_to_continue",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+      }),
+    });
+    await runtime.application(
+      fixturePage(),
+      "profile",
+      "state_observed",
+      taxonomy(),
+      { operationId: "operation_profile_state_0001", attempt: 1 },
+      new AbortController().signal,
+    );
+    runtime.close();
+    const files = readdirSync(join(root, "monitor"));
+    assert.equal(files.some((file) => file === "0001-profile-state_observed.ack.json"), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const [name, route, mutationCounts] of [
-  ["Resume-first", ["resume", "profile", "questionnaire"], [1, 1, 1]],
+  ["Resume-first with forty profile mutations", ["resume", "profile", "questionnaire"], [1, 40, 1]],
   ["skipped Resume with repeated Questionnaire", ["profile", "questionnaire", "questionnaire"], [1, 1, 1]],
   ["combined Resume/Profile", ["resume", "questionnaire"], [2, 1]],
 ] as const) {

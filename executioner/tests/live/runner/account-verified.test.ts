@@ -83,9 +83,52 @@ test("account-verified runner accepts an independently re-observed existing-acco
   assert.deepEqual(written, result.acceptance);
 });
 
+test("account-verified runner accepts a fresh-create route that authenticates by sign-in", async () => {
+  const result = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: true,
+      cleanup: "pass",
+      value: {
+        ...verified.value,
+        path: "created_account",
+        verificationCandidateCount: 0,
+        verificationConsumed: false,
+      },
+    }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.acceptance.verificationProof, "credential_sign_in");
+  assert.equal(result.acceptance.provider, "workday-auth");
+  assert.equal(result.acceptance.consumedCandidateCount, 0);
+});
+
+test("an independently observed application page is ready without forcing authentication", async () => {
+  const result = await runStage2AccountVerified(input(), {
+    lifecycle: { run: async () => ({
+      ok: true,
+      cleanup: "pass",
+      value: {
+        ...verified.value,
+        path: "already_ready",
+        verificationCandidateCount: 0,
+        verificationConsumed: false,
+      },
+    }) },
+    evidence: { write: async () => undefined },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.acceptance.verificationProof, "application_state_observed");
+  assert.equal(result.acceptance.provider, "workday-state");
+  assert.equal(result.acceptance.consumedCandidateCount, 0);
+});
+
 test("account-verified runner rejects unproved ready paths and widened successes", async () => {
   for (const value of [
-    { ...verified.value, path: "already_ready", verificationCandidateCount: 0, verificationConsumed: false },
     { ...verified.value, independentlyObserved: false },
     { ...verified.value, verificationCandidateCount: 2 },
     { ...verified.value, verificationConsumed: false },

@@ -48,7 +48,13 @@
       <h2>Education</h2>
       <div class="profile-row" data-automation-id="education-0" data-row-id="education-empty" data-hunt-c3-owned="true">
         <label>School<input required data-automation-id="education-0--school"></label>
-        <label>Degree<input required data-automation-id="education-0--degree"></label>
+        <label>Degree
+          <button required type="button" role="combobox" aria-haspopup="listbox" aria-controls="education-0-degree-options" data-selected-label="" data-automation-id="education-0--degree">Select One</button>
+          <div id="education-0-degree-options" role="listbox" hidden>
+            <div role="option">Mathematics</div>
+            <div role="option">Computer Science</div>
+          </div>
+        </label>
         <label>End Date<input required type="date" data-automation-id="education-0--endDate"></label>
         <button type="button" data-automation-id="delete">Remove</button>
       </div>
@@ -69,7 +75,7 @@
       ],
       education: [
         ["school", "School", "text"],
-        ["degree", "Degree", "text"],
+        ["degree", "Degree", "select"],
         ["endDate", "End Date", "date"],
       ],
       skills: [["name", "Skill", "search_select"]],
@@ -82,9 +88,10 @@
       if (option) {
         const listbox = option.closest('[role="listbox"]');
         const input = listbox?.id ? document.querySelector(`[aria-controls="${listbox.id}"]`) : null;
-        if (input instanceof HTMLInputElement) {
+        if (input instanceof HTMLInputElement || input instanceof HTMLButtonElement) {
           const label = option.textContent.trim();
-          input.value = label;
+          if (input instanceof HTMLInputElement) input.value = label;
+          else input.textContent = label;
           input.setAttribute("data-selected-label", label);
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -110,20 +117,22 @@
       for (const [suffix, labelText, kind] of definitions[section]) {
         const label = document.createElement("label");
         label.append(labelText);
-        const input = document.createElement("input");
-        input.required = true;
+        const input = document.createElement(kind === "select" ? "button" : "input");
+        if (input instanceof HTMLInputElement) input.required = true;
+        else input.setAttribute("aria-required", "true");
         input.setAttribute("data-automation-id", `${rowId}--${suffix}`);
         if (kind === "date") input.type = "date";
-        if (kind === "search_select") {
+        if (kind === "search_select" || kind === "select") {
           const listboxId = `${rowId}-options`;
           input.setAttribute("role", "combobox");
           input.setAttribute("aria-controls", listboxId);
           input.setAttribute("data-selected-label", "");
+          if (input instanceof HTMLButtonElement) input.textContent = "Select One";
           const listbox = document.createElement("div");
           listbox.id = listboxId;
           listbox.setAttribute("role", "listbox");
           listbox.hidden = true;
-          for (const skill of ["TypeScript", "Playwright"]) {
+          for (const skill of kind === "select" ? ["Mathematics", "Computer Science"] : ["TypeScript", "Playwright"]) {
             const item = document.createElement("div");
             item.setAttribute("role", "option");
             item.textContent = skill;
@@ -142,7 +151,7 @@
     });
     document.addEventListener("focusin", (event) => {
       const input = event.target;
-      if (!(input instanceof HTMLInputElement) || input.getAttribute("role") !== "combobox") return;
+      if (!(input instanceof HTMLInputElement || input instanceof HTMLButtonElement) || input.getAttribute("role") !== "combobox") return;
       const listbox = document.getElementById(input.getAttribute("aria-controls"));
       if (listbox) {
         listbox.hidden = false;
@@ -151,7 +160,7 @@
     });
     document.addEventListener("focusout", (event) => {
       const input = event.target;
-      if (!(input instanceof HTMLInputElement) || input.getAttribute("role") !== "combobox") return;
+      if (!(input instanceof HTMLInputElement || input instanceof HTMLButtonElement) || input.getAttribute("role") !== "combobox") return;
       const listbox = document.getElementById(input.getAttribute("aria-controls"));
       setTimeout(() => {
         if (!listbox) return;

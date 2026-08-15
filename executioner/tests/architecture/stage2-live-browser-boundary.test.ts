@@ -4,9 +4,20 @@ import { test } from "node:test";
 
 import { livePortNames } from "../../src/contracts/live/index.ts";
 import {
+  exactTestFlag,
+  privateTestBrowserMode,
   resolveExternalMonitorOperationTimeoutMs,
   resolveLiveInspectionHoldPolicy,
 } from "../../src/browser/playwright-live/factory.ts";
+
+test("private test browser mode is an exact opt-in", () => {
+  assert.equal(privateTestBrowserMode(undefined), "persistent");
+  assert.equal(privateTestBrowserMode("true"), "persistent");
+  assert.equal(privateTestBrowserMode("1"), "private_test");
+  assert.equal(exactTestFlag(undefined), false);
+  assert.equal(exactTestFlag("true"), false);
+  assert.equal(exactTestFlag("1"), true);
+});
 
 test("F1-T2 remains inside F3 ownership and does not widen the frozen live ports", async () => {
   assert.deepEqual(livePortNames, [
@@ -108,8 +119,9 @@ test("live inspection hold is exact opt-in with a bounded operation-timeout floo
 
 test("external monitoring gets a separate bounded application-operation budget", () => {
   assert.equal(resolveExternalMonitorOperationTimeoutMs(false, 30_000), undefined);
-  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 30_000), 390_000);
-  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 420_000), 420_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 30_000), 900_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 420_000), 900_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 1_000_000), 1_000_000);
 });
 
 test("factory wires the private hold without widening the public browser facade", async () => {
@@ -119,6 +131,7 @@ test("factory wires the private hold without widening the public browser facade"
   assert.equal(factory.includes("HUNT_C3_LIVE_INSPECTION_HOLD"), true);
   assert.equal(factory.includes("unsettledInspectionHold"), true);
   assert.match(factory, /applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs/u);
+  assert.match(factory, /applicationRuntime\?\.externalMonitor !== undefined/u);
   assert.match(session, /applicationOperationTimeoutMs \?\? this\.#options\.timeoutMs/u);
   assert.equal(publicFacade.includes("resolveLiveInspectionHoldPolicy"), false);
   assert.equal(publicFacade.includes("unsettledInspectionHold"), false);

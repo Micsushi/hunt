@@ -6,7 +6,9 @@ import test from "node:test";
 
 import {
   bootstrapS2GmailAuthorization,
+  forgetS2LocalGmailRefreshGrant,
   type GmailCiphertextSealer,
+  type GmailRefreshGrantLocalForgetter,
   revokeS2GmailRefreshGrant,
   type GmailRefreshGrantRevoker,
 } from "../../src/composition/s2-gmail-bootstrap.ts";
@@ -17,6 +19,7 @@ import type {
 } from "../../src/live/preflight/private/windows-acl.ts";
 import type {
   GmailOAuthSealRequest,
+  GmailRefreshGrantLocalForgetRequest,
   GmailRefreshGrantRevokeRequest,
 } from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
 import { writeSecretRecord } from "../../src/secrets/windows-dpapi/record.ts";
@@ -73,6 +76,22 @@ class GrantRevoker implements GmailRefreshGrantRevoker {
     this.request = { ...value };
     if (this.#result instanceof Error) throw this.#result;
     return this.#result;
+  }
+}
+
+class GrantForgetter implements GmailRefreshGrantLocalForgetter {
+  calls = 0;
+  liveRequest?: GmailRefreshGrantLocalForgetRequest;
+  request?: GmailRefreshGrantLocalForgetRequest;
+
+  async forget(value: GmailRefreshGrantLocalForgetRequest): Promise<void> {
+    this.calls += 1;
+    this.liveRequest = value;
+    this.request = {
+      ...value,
+      accountMetadata: Uint8Array.from(value.accountMetadata),
+      accountCiphertext: Uint8Array.from(value.accountCiphertext),
+    };
   }
 }
 
@@ -559,6 +578,46 @@ test("revokes or accepts an absent exact Gmail refresh grant through the trusted
     } finally {
       rmSync(record.root, { recursive: true, force: true });
     }
+  }
+});
+
+test("forgets one exact local Gmail grant through the account-bound trusted child", async () => {
+  const record = await fixture();
+  try {
+    const forgetter = new GrantForgetter();
+    const result = await forgetS2LocalGmailRefreshGrant(
+      record.owner,
+      record.bootstrap,
+      {
+        now: NOW,
+        ownerConfigPath: record.ownerConfigPath,
+        bootstrapInputPath: record.bootstrapInputPath,
+        forbiddenRoots: [record.repository],
+        aclAdmission: new AclAdmission(),
+        forgetter,
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(result, {
+      ok: true,
+      value: { schemaVersion: 1, kind: "gmail_refresh_grant_forgotten" },
+    });
+    assert.equal(forgetter.calls, 1);
+    assert.equal(forgetter.request?.clientId, record.bootstrap.desktopClientId);
+    assert.equal(
+      forgetter.request?.installedClientConfigPath,
+      record.installedClientConfigPath,
+    );
+    assert.equal(
+      forgetter.request?.recipientBindingId,
+      record.owner.recipientBindingId,
+    );
+    assert.equal(forgetter.request?.accountMetadata.byteLength !== 0, true);
+    assert.equal(forgetter.request?.accountCiphertext.byteLength !== 0, true);
+    assert.equal(forgetter.liveRequest?.accountMetadata.every((value) => value === 0), true);
+    assert.equal(forgetter.liveRequest?.accountCiphertext.every((value) => value === 0), true);
+  } finally {
+    rmSync(record.root, { recursive: true, force: true });
   }
 });
 

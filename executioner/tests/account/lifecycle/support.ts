@@ -30,6 +30,7 @@ export function lifecycleInput() {
       requestVerificationEmail: operation("request-email"),
       navigateVerification: operation("navigate"),
       postVerificationSignIn: operation("sign-in"),
+      postVerificationCredentialSubmit: operation("post-verification-submit"),
     },
   };
 }

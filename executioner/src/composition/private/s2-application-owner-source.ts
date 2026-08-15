@@ -328,7 +328,7 @@ function validateProfileAuthority(
   for (const value of plan.repeatables) {
     const repeatable = exact(value, ["section", "rows"]);
     if (
-      !new Set(["experience", "education", "skills"]).has(
+      !new Set(["experience", "education", "skills", "websites"]).has(
         repeatable.section as string,
       ) ||
       sections.has(repeatable.section as string) ||
@@ -370,17 +370,21 @@ function validateProfileAuthority(
       !stringMatches(field.fieldId, /^[a-z][a-z0-9_.-]{0,127}$/u) ||
       !new Set([
         "identity", "address", "phone", "application_source", "prior_employment",
-        "experience", "education", "skill",
+        "employment", "experience", "education", "skill", "language", "website",
+        "social_network",
       ])
         .has(field.questionType as string) ||
-      !new Set(["text", "phone", "date", "option"])
+      !new Set([
+        "text", "phone", "date", "month", "year", "number", "url", "boolean",
+        "option", "single_select", "multi_select",
+      ])
         .has(field.answerType as string) ||
       answer.kind !== "answered" ||
       typeof answer.value !== "string" ||
       answer.value.trim() === "" ||
       !browserPlainText.test(answer.value)
     ) denied();
-    if (field.answerType === "option") {
+    if (new Set(["option", "single_select", "multi_select"]).has(field.answerType as string)) {
       const mapping = exact(field.optionMapping, [
         "canonicalValue", "visibleOption", "provenance",
       ]);
@@ -398,6 +402,7 @@ function validateProfileAuthority(
         field.answerType !== ownerInput.answerType ||
         (
           answer.provenance !== "owner_provided" &&
+          answer.provenance !== "generated_default" &&
           !(
             field.fieldId === "source.how_did_you_hear" &&
             answer.provenance === "journey_derived"
@@ -417,6 +422,8 @@ function validateProfileAuthority(
         answer.value !== country.canonicalValue ||
         mapping.visibleOption !== country.visibleOption
       ) denied();
+    } else if (answer.provenance === "generated_default") {
+      // Explicit test-only defaults are recorded for later owner replacement.
     } else if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
       const factId = factByField[field.fieldId];
       const fact = factId === undefined ? undefined : factsById.get(factId);
@@ -424,6 +431,9 @@ function validateProfileAuthority(
         denied();
       }
     } else if (answer.provenance !== "resume_verified") denied();
+    if (field.answerType === "boolean" && !new Set(["true", "false"]).has(answer.value as string)) {
+      denied();
+    }
   }
   return deepFreeze(structuredClone(plan)) as unknown as ProfilePagePlan;
 }

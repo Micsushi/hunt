@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   ContractParseError,
   type AnswerProvenance,
@@ -8,6 +10,8 @@ import {
   type CancellationError,
   type DriverError,
   type FieldDriver,
+  type FieldIntent,
+  type FieldObservation,
   type FieldId,
   type FieldVerifier,
   type GuardRevision,
@@ -32,14 +36,12 @@ import {
 } from "../../../../contracts/live/index.ts";
 import { createAnswerResolver } from "../../../../form/answers/resolver.ts";
 import {
+  generatedLearningDefaultFor,
   questionForField,
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
 import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
-import {
-  resolveActiveListbox,
-  type ActiveListboxEvidence,
-} from "./active-listbox.ts";
+import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
   protectedQuestionCategory,
@@ -145,6 +147,13 @@ export interface QuestionnairePageHandlerDependencies {
     fieldId: FieldId,
     layer: ClassificationLayer,
   ): SanitizedStructuralObservationV1 | undefined;
+  readonly recordAnswer?: (input: {
+    readonly questionId: QuestionId;
+    readonly field: FieldObservation;
+    readonly intent: FieldIntent;
+    readonly protectedCategory: ProtectedQuestionCategory | null;
+    readonly generatedDefault: boolean;
+  }) => void;
 }
 
 export function createQuestionnairePageHandler(
@@ -176,7 +185,7 @@ export function createQuestionnairePageHandler(
 
       const answers: VerifiedQuestionnaireAnswer[] = [];
       for (const field of request.page.fields) {
-        if (!field.required || field.state === "hidden") continue;
+        if (field.state === "hidden") continue;
         const question = resolveQuestion(field.label);
         const category = protectedQuestionCategory(
           field.label,
@@ -186,25 +195,6 @@ export function createQuestionnairePageHandler(
             field.behavior !== "unsupported"
           ? questionForField(field.label, field.behavior)
           : undefined;
-        if (definition?.source.kind === "synthetic_placeholder") {
-          return blocked(
-            definition.source.protected
-              ? "protected_answer_denied"
-              : "profile_answer_missing",
-            field.fieldId,
-            category,
-            undefined,
-            definition.source.placeholderProvenance,
-            definition.source.protected,
-          );
-        }
-        if (
-          question.kind === "resolved" &&
-          question.id === narrativeQuestionId &&
-          configuredNarrative === undefined
-        ) {
-          return blocked("profile_answer_missing", field.fieldId, category);
-        }
         const answer = await resolver.resolve({
           field,
           profileId: request.profileId,
@@ -256,27 +246,21 @@ export function createQuestionnairePageHandler(
             candidate,
           );
         }
-        if (question.kind !== "resolved") {
-          const outcome = question.kind === "ambiguous"
-            ? "question_ambiguous"
-            : "question_unknown";
-          const candidate = candidateFor(
-            dependencies,
-            field.fieldId,
-            "question",
-            outcome,
-          );
-          if (candidate === undefined) return candidateInvalid();
-          return blocked(
-            outcome,
-            field.fieldId,
-            category,
-            candidate,
-          );
-        }
         if (
           category !== null &&
-          answer.value.intent.provenance !== "owner_provided"
+          !new Set<AnswerProvenance>([
+            "owner_provided", "visible_option",
+          ]).has(answer.value.intent.provenance) &&
+          !(
+            answer.value.intent.provenance === "reviewed_catalog" &&
+            definition !== undefined &&
+            (
+              definition.source.kind === "neutral_disclosure" ||
+              definition.source.kind === "synthetic_placeholder" ||
+              question.kind === "resolved" &&
+                generatedLearningDefaultFor(question.id) !== undefined
+            )
+          )
         ) {
           return blocked("protected_answer_denied", field.fieldId, category);
         }
@@ -295,7 +279,12 @@ export function createQuestionnairePageHandler(
           return blocked("answer_intent_mismatch", field.fieldId, category);
         }
 
-        const narrative = dependencies.narrative.resolve(question.id);
+        const resolvedQuestionId = question.kind === "resolved"
+          ? question.id as QuestionId
+          : observedQuestionId(field.label);
+        const narrative = question.kind === "resolved"
+          ? dependencies.narrative.resolve(question.id)
+          : undefined;
         if (
           narrative !== undefined &&
           (answer.value.intent.kind !== "text" ||
@@ -305,26 +294,23 @@ export function createQuestionnairePageHandler(
           return blocked("narrative_template_mismatch", field.fieldId, category);
         }
         if (
+          question.kind === "resolved" &&
+          question.id === narrativeQuestionId &&
+          narrative === undefined &&
+          (
+            definition?.source.kind !== "narrative" ||
+            answer.value.intent.kind !== "text" ||
+            answer.value.intent.provenance !== "reviewed_catalog" ||
+            answer.value.intent.value !== definition.source.syntheticDefault
+          )
+        ) {
+          return blocked("narrative_template_mismatch", field.fieldId, category);
+        }
+        if (
           answer.value.intent.provenance === "configured_template" &&
           narrative === undefined
         ) {
           return blocked("narrative_ineligible", field.fieldId, category);
-        }
-
-        if (answer.value.intent.behavior === "listbox") {
-          const active = request.activeListboxes?.[field.fieldId];
-          const listbox = active === undefined
-            ? { kind: "unavailable" as const }
-            : resolveActiveListbox(active);
-          if (listbox.kind !== "resolved") {
-            return blocked(
-              listbox.kind === "ambiguous"
-                ? "active_listbox_ambiguous"
-                : "active_listbox_unavailable",
-              field.fieldId,
-              category,
-            );
-          }
         }
 
         const driven = await dependencies.driver.drive({
@@ -353,9 +339,20 @@ export function createQuestionnairePageHandler(
           return blocked(code, field.fieldId, category);
         }
 
+        dependencies.recordAnswer?.({
+          questionId: resolvedQuestionId,
+          field,
+          intent: answer.value.intent,
+          protectedCategory: category,
+          generatedDefault:
+            question.kind !== "resolved" ||
+            answer.value.intent.provenance === "reviewed_catalog" ||
+            answer.value.intent.provenance === "visible_option",
+        });
+
         answers.push(Object.freeze({
           fieldId: field.fieldId,
-          questionId: question.id as QuestionId,
+          questionId: resolvedQuestionId,
           provenance: answer.value.intent.provenance,
           protectedCategory: category,
           templateRevision: narrative?.revision ?? null,
@@ -372,6 +369,10 @@ export function createQuestionnairePageHandler(
       };
     },
   });
+}
+
+function observedQuestionId(label: string): QuestionId {
+  return `observed-question-${createHash("sha256").update(label, "utf8").digest("hex").slice(0, 24)}` as QuestionId;
 }
 
 function isPlaceholder(value: string): boolean {

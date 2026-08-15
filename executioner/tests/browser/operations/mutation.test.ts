@@ -47,7 +47,9 @@ async function loopbackPage(body: string): Promise<{
 test("applies admitted desired-state mutations and independently reads them back", async () => {
   const fixture = await loopbackPage(`
     <label>Name <input data-hunt-target-token="target-name"></label><label>Bio <textarea data-hunt-target-token="target-bio"></textarea></label>
+    <label>Years <input type="number" data-hunt-target-token="target-years"></label>
     <label>Date <input type="date" data-hunt-target-token="target-date"></label><label><input type="checkbox" data-hunt-target-token="target-authorized"> Authorized</label>
+    <div data-automation-id="dateSection" aria-label="Composite date" data-hunt-target-token="target-composite-date"><input data-automation-id="dateSectionMonth"><input data-automation-id="dateSectionDay"><input data-automation-id="dateSectionYear"></div>
     <fieldset data-field-id="s1-field-work-authorization" data-hunt-target-token="target-s1-field-work-authorization" data-question-id="s1-question-work-authorization" data-question-label="Are you authorized to work in this location?">
       <legend>Are you authorized to work in this location?</legend>
       <label><input data-option-id="s1-option-work-authorization-yes" name="workAuthorization" required type="radio" value="yes">Yes</label>
@@ -145,7 +147,9 @@ test("applies admitted desired-state mutations and independently reads them back
     const mutations = [
       { mutation: { kind: "set_text", target: token("Name"), text: "Ada" } as const, seed: "1111111111111111" },
       { mutation: { kind: "set_text", target: token("Bio"), text: "Builder" } as const, seed: "2222222222222222" },
+      { mutation: { kind: "set_text", target: token("Years"), text: "5" } as const, seed: "2323232323232323" },
       { mutation: { kind: "set_date", target: token("Date"), isoDate: "2026-08-01" } as const, seed: "3333333333333333" },
+      { mutation: { kind: "set_date", target: token("Composite date"), isoDate: "2026-09-02" } as const, seed: "3434343434343434" },
       { mutation: { kind: "set_checked", target: token("Authorized"), checked: true } as const, seed: "4444444444444444" },
       { mutation: { kind: "select", target: token("Are you authorized to work in this location?"), option: "No" as never } as const, seed: "9999999999999999" },
       { mutation: { kind: "select", target: token("Country"), option: "United States" as never } as const, seed: "5555555555555555" },
@@ -168,7 +172,9 @@ test("applies admitted desired-state mutations and independently reads them back
     const values = new Map<string, (typeof readback.value.targets)[number]["readback"]>(readback.value.targets.map((target) => [target.name, target.readback]));
     assert.deepEqual(values.get("Name"), { kind: "text", value: "Ada" });
     assert.deepEqual(values.get("Bio"), { kind: "text", value: "Builder" });
+    assert.deepEqual(values.get("Years"), { kind: "text", value: "5" });
     assert.deepEqual(values.get("Date"), { kind: "text", value: "2026-08-01" });
+    assert.deepEqual(values.get("Composite date"), { kind: "text", value: "2026-09-02" });
     assert.deepEqual(values.get("Authorized"), { kind: "checked", checked: true });
     assert.deepEqual(values.get("Are you authorized to work in this location?"), { kind: "selected", option: "No" });
     assert.deepEqual(values.get("Country"), { kind: "selected", option: "United States" });

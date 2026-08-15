@@ -1,4 +1,7 @@
-import { parseStage2AcceptanceArgs } from "../src/live/runner/args.ts";
+import {
+  parseStage2AcceptanceArgs,
+  type Stage2AcceptanceArgs,
+} from "../src/live/runner/args.ts";
 import { formatStage2TerminalResult } from "../src/live/runner/terminal.ts";
 
 const controller = new AbortController();
@@ -9,12 +12,7 @@ process.once("SIGTERM", cancel);
 try {
   const args = parseStage2AcceptanceArgs(process.argv.slice(2));
   const result = isApplicationCheckpoint(args.checkpoint)
-    ? await (await import("../src/composition/s2-application-walk-runner.ts"))
-      .runStage2ApplicationWalkFromOwnerConfig({
-        checkpoint: args.checkpoint,
-        configPath: args.configPath,
-        evidenceRoot: args.evidenceRoot,
-      }, controller.signal)
+    ? await runApplicationSlice(args, args.checkpoint, controller.signal)
     : args.checkpoint === "mailbox_candidate"
     ? await (await import("../src/composition/s2-mailbox-candidate-runner.ts"))
       .runStage2MailboxCandidateFromOwnerConfig(args, controller.signal)
@@ -31,6 +29,28 @@ try {
 } finally {
   process.removeListener("SIGINT", cancel);
   process.removeListener("SIGTERM", cancel);
+}
+
+async function runApplicationSlice(
+  args: Stage2AcceptanceArgs,
+  checkpoint:
+    | "resume_verified"
+    | "profile_verified"
+    | "questionnaire_verified"
+    | "pre_review",
+  signal: AbortSignal,
+) {
+  const application = await import("../src/composition/s2-application-walk-runner.ts");
+  const runtime = await import("../src/acceptance/s2-playwright-runtime.ts");
+  return application.runStage2ApplicationWalkFromOwnerConfig({
+      checkpoint,
+      configPath: args.configPath,
+      evidenceRoot: args.evidenceRoot,
+    }, signal, application.createStage2ApplicationWalkProductionBinding({
+      runtime: runtime.createStage2PlaywrightLiveRuntimeBinding({
+        monitorAuthentication: false,
+      }),
+    }));
 }
 
 function isApplicationCheckpoint(

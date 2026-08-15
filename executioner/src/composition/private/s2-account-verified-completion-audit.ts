@@ -15,8 +15,11 @@ export interface Stage2AccountVerifiedCompletionAuditV2 {
   readonly acceptance: "present";
   readonly monitor: "acknowledged";
   readonly monitorClassification: "application_ready";
-  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
-  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly verificationProof:
+    | "gmail_candidate_consumed"
+    | "credential_sign_in"
+    | "application_state_observed";
+  readonly provider: "gmail-api-v1" | "workday-auth" | "workday-state";
   readonly consumedCandidateCount: 0 | 1;
   readonly processCleanup: "pass";
   readonly privacyScan: "pass";
@@ -72,8 +75,11 @@ interface Acceptance {
   readonly sourceRevision: string;
   readonly journeyId: string;
   readonly targetHandleId: string;
-  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
-  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly verificationProof:
+    | "gmail_candidate_consumed"
+    | "credential_sign_in"
+    | "application_state_observed";
+  readonly provider: "gmail-api-v1" | "workday-auth" | "workday-state";
   readonly consumedCandidateCount: 0 | 1;
 }
 
@@ -121,6 +127,9 @@ function validProof(value: Record<string, unknown>): boolean {
   ) || (
     value.verificationProof === "credential_sign_in" &&
     value.provider === "workday-auth" && value.consumedCandidateCount === 0
+  ) || (
+    value.verificationProof === "application_state_observed" &&
+    value.provider === "workday-state" && value.consumedCandidateCount === 0
   );
 }
 

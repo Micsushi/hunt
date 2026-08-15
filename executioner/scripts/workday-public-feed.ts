@@ -218,11 +218,16 @@ function csvCell(value: string): string {
   return /[",\r\n]/u.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
-class ResponseBodyTooLargeError extends Error {}
+export class ResponseBodyTooLargeError extends Error {}
 
-async function readBoundedJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
+export async function readBoundedJson(
+  body: ReadableStream<Uint8Array> | null,
+  maximumBytes = 1_048_576,
+): Promise<unknown> {
   if (!body) throw new TypeError("Workday feed response has no body");
-  const maximumBytes = 1_048_576;
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    throw new TypeError("maximum response body size is invalid");
+  }
   const chunks: Buffer[] = [];
   let bytes = 0;
   const reader = body.getReader();

@@ -15,6 +15,10 @@ import {
   PlaywrightVerificationNavigationAdapter,
   type PlaywrightVerificationNavigationTraceEvent,
 } from "./private/playwright-verification-navigation.ts";
+import {
+  PlaywrightSessionControlAdapter,
+  type PlaywrightSessionControlTraceEvent,
+} from "./private/playwright-session-control.ts";
 import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
 import type { OwnedWorkdayApplicationRuntimeOptions } from
   "./private/workday-application-runtime.ts";
@@ -30,10 +34,13 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly inspectionHold?: () => Promise<void>;
   readonly accountTrace?: (
     event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
-      PlaywrightVerificationNavigationTraceEvent | PostingNavigationSessionTraceEvent,
+      PlaywrightVerificationNavigationTraceEvent | PostingNavigationSessionTraceEvent |
+      PlaywrightSessionControlTraceEvent,
   ) => void;
   readonly applicationRuntime?: OwnedWorkdayApplicationRuntimeOptions;
   readonly externalMonitor?: ExternalMonitorPort;
+  readonly browserMode?: "persistent" | "private_test";
+  readonly logoutOnCloseForTesting?: boolean;
 }
 
 export function createPlaywrightPersistentBrowserSession(
@@ -46,7 +53,9 @@ export function createPlaywrightPersistentBrowserSession(
   const holdAction = options.inspectionHold ?? (inspection.holdMs === 0
     ? undefined
     : () => delay(inspection.holdMs));
-  const inspectionHold = holdAction === undefined ? undefined : oneShot(holdAction);
+  const inspectionHold = holdAction === undefined || options.externalMonitor !== undefined
+    ? undefined
+    : oneShot(holdAction);
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher({ timeoutMs: inspection.timeoutMs }),
@@ -64,23 +73,40 @@ export function createPlaywrightPersistentBrowserSession(
     verificationNavigation: new PlaywrightVerificationNavigationAdapter({
       trace: options.accountTrace,
     }),
+    sessionControl: new PlaywrightSessionControlAdapter({ trace: options.accountTrace }),
+    browserMode: options.browserMode ?? privateTestBrowserMode(
+      process.env.HUNT_C3_PRIVATE_TEST_BROWSER,
+    ),
+    logoutOnCloseForTesting: options.logoutOnCloseForTesting ??
+      exactTestFlag(process.env.HUNT_C3_LOGOUT_AFTER_TEST),
     applicationRuntime: options.applicationRuntime,
     externalMonitor: options.externalMonitor,
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
     timeoutMs: inspection.timeoutMs,
     applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs(
-      options.externalMonitor !== undefined,
+      options.externalMonitor !== undefined ||
+        options.applicationRuntime?.externalMonitor !== undefined,
       inspection.timeoutMs,
     ),
   });
+}
+
+export function privateTestBrowserMode(
+  flag: string | undefined,
+): "persistent" | "private_test" {
+  return flag === "1" ? "private_test" : "persistent";
+}
+
+export function exactTestFlag(flag: string | undefined): boolean {
+  return flag === "1";
 }
 
 export function resolveExternalMonitorOperationTimeoutMs(
   monitored: boolean,
   requestedTimeoutMs: number,
 ): number | undefined {
-  return monitored ? Math.max(requestedTimeoutMs, 390_000) : undefined;
+  return monitored ? Math.max(requestedTimeoutMs, 900_000) : undefined;
 }
 
 export function resolveLiveInspectionHoldPolicy(

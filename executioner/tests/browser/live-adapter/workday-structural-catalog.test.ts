@@ -519,6 +519,7 @@ test("all observed Workday application roots are exact application boundaries", 
   for (const selector of [
     '[data-automation-id="applyFlowMyInfoPage"]',
     '[data-automation-id="applyFlowMyExperiencePage"]',
+    '[data-automation-id="applyFlowMyExpPage"]',
     '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
     '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
     '[data-automation-id="applyFlowApplicationQuestionsPage"]',

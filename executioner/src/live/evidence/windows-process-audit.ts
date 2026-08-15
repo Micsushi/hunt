@@ -119,7 +119,7 @@ function validBoundAudit(value: WindowsProcessAuditV2): boolean {
     Date.parse(value.processExitObservedAt) >= Date.parse(value.processIssuedAt) &&
     Date.parse(value.processExitObservedAt) <= Date.parse(value.checkedAt) &&
     Number.isInteger(value.monitorFileCount) && value.monitorFileCount >= 0 &&
-    value.monitorFileCount <= 1024 && /^[0-9a-f]{64}$/u.test(value.monitorChainSha256);
+    value.monitorFileCount <= 2048 && /^[0-9a-f]{64}$/u.test(value.monitorChainSha256);
 }
 
 function canonicalTimestamp(value: string): boolean {

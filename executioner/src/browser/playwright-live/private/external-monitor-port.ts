@@ -1,5 +1,5 @@
 export interface ExternalMonitorPage {
-  screenshot(options?: { readonly type?: "png" }): Promise<Buffer>;
+  screenshot(options?: { readonly type?: "png"; readonly fullPage?: boolean }): Promise<Buffer>;
   title(): Promise<string>;
   url(): string | Promise<string>;
 }

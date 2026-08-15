@@ -66,6 +66,28 @@ test("live run preparation writes an admitted disposable owner config with the d
   }
 });
 
+test("live run preparation canonicalizes a lowercase Workday posting suffix", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-posting-case-"));
+  try {
+    const prepared = await prepareStage2LiveRun({
+      storageRoot,
+      targetUrl:
+        "https://volarisgroup.wd3.myworkdayjobs.com/assetworks/job/example_r67871",
+      accountMode: "sign_in",
+      now: "2026-08-04T12:00:00.000Z",
+    }, noProtection);
+    const owner = JSON.parse(readFileSync(prepared.ownerConfigPath, "utf8"));
+
+    assert.equal(owner.target.posting, "R67871");
+    assert.equal(admitRealRunPreflight(owner, {
+      now: "2026-08-04T12:00:01.000Z",
+      forbiddenRoots: [process.cwd()],
+    }).ok, true);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("sequential live runs keep recipient identity but rotate all run-scoped authority", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
   try {

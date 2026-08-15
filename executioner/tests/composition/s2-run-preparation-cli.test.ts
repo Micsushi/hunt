@@ -83,7 +83,7 @@ test("run preparation CLI captures protected source paths without raw values on 
         provenance: "visible_option",
       },
     });
-    assert.deepEqual(captured.profilePlan.fields.slice(2), [
+    assert.deepEqual(captured.profilePlan.fields.slice(2, 5), [
       {
         fieldId: "contact.email",
         questionType: "identity",
@@ -120,6 +120,11 @@ test("run preparation CLI captures protected source paths without raw values on 
         },
       },
     ]);
+    const generated = captured.profilePlan.fields.filter(
+      (field: { answer: { provenance?: string } }) =>
+        field.answer.provenance === "generated_default",
+    );
+    assert.deepEqual(generated, []);
     assert.equal(createHash("sha256").update(resume).digest("hex").length, 64);
   } finally {
     resume.fill(0);
@@ -160,6 +165,18 @@ test("profile fact projection preserves planned fields and leaves missing facts 
     },
   ]);
   assert.equal(projected.fields.some(({ fieldId }) => fieldId === "address.region"), false);
+});
+
+test("profile fact projection maps a Canadian region code to its exact visible option", () => {
+  const projected = withDerivedProfileCountry({
+    facts: [{ factId: "region", value: "AB", provenance: "resume_verified" }],
+  }, { pageType: "profile", fields: [], repeatables: [] }) as {
+    fields: Array<{ fieldId: string; answer: { value: string }; optionMapping: { visibleOption: string } }>;
+  };
+
+  const region = projected.fields.find(({ fieldId }) => fieldId === "address.region");
+  assert.equal(region?.answer.value, "AB");
+  assert.equal(region?.optionMapping.visibleOption, "Alberta");
 });
 
 test("run preparation CLI rejects caller-supplied IDs and malformed argument sets", () => {

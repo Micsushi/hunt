@@ -3,7 +3,20 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ApplicationCheckpoint } from "../ats/workday/application/page-walk.ts";
-import { disposeResumeArtifact } from "../contracts/index.ts";
+import {
+  disposeResumeArtifact,
+  type FieldIntent,
+  type FieldObservation,
+  type QuestionId,
+} from "../contracts/index.ts";
+import {
+  s2StableErrorPolicy,
+  type S2StableErrorCode,
+} from "../contracts/s2-common-wire.ts";
+import type { Stage2UnsealedAccountProofResult } from
+  "./s2-account-verified-runner.ts";
+import { createQuestionAnswerLearningCapture } from
+  "../live/evidence/question-answer-learning.ts";
 import type { RealRunRuntimeBinding } from "../live/preflight/private/runtime-binding.ts";
 import {
   createPrivateRealRunAdmission,
@@ -42,6 +55,9 @@ export interface Stage2ApplicationWalkProductionBinding {
   ): Promise<{
     readonly input: Stage2ApplicationWalkInput;
     readonly dependencies: Stage2ApplicationWalkDependencies;
+    readonly account?: {
+      verify(signal: AbortSignal): Promise<Stage2UnsealedAccountProofResult>;
+    };
   }>;
 }
 
@@ -51,13 +67,27 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
   readonly ownerSources: Stage2ApplicationOwnerSources;
   readonly sourceRevision: string;
   readonly configSha256: string;
+  readonly questionLearning?: {
+    record(input: {
+      readonly questionId: QuestionId;
+      readonly field: FieldObservation;
+      readonly intent: FieldIntent;
+      readonly protectedCategory: string | null;
+      readonly generatedDefault: boolean;
+    }): void;
+    write(): string | null;
+  };
 }
 
 export interface Stage2ApplicationWalkRuntimeBinding {
   bind(
     request: Stage2ApplicationWalkRuntimeBindingRequest,
     signal: AbortSignal,
-  ): Promise<Omit<Stage2ApplicationWalkDependencies, "evidence">>;
+  ): Promise<Omit<Stage2ApplicationWalkDependencies, "evidence"> & {
+    readonly account?: {
+      verify(signal: AbortSignal): Promise<Stage2UnsealedAccountProofResult>;
+    };
+  }>;
 }
 
 export interface Stage2ApplicationWalkProductionBindingOptions {
@@ -123,14 +153,19 @@ export function createStage2ApplicationWalkProductionBinding(
         resolvedOwnerSources,
         configPath,
       );
-      let runtime: Omit<Stage2ApplicationWalkDependencies, "evidence">;
+      let runtime: Awaited<ReturnType<Stage2ApplicationWalkRuntimeBinding["bind"]>>;
       try {
+        const questionLearning = createQuestionAnswerLearningCapture({
+          root: owner.roots.evidence.path,
+          sensitiveValues: resolvedOwnerSources.sensitiveValues,
+        });
         runtime = await dependencies.runtime.bind({
           owner,
           ownerBinding: admission.binding,
           ownerSources: resolvedOwnerSources,
           sourceRevision: source.sourceRevision,
           configSha256,
+          questionLearning,
         }, signal);
       } catch {
         disposeOwnerResume(resolvedOwnerSources);
@@ -138,6 +173,7 @@ export function createStage2ApplicationWalkProductionBinding(
         sensitiveValues = undefined;
         throw new TypeError("application binding denied");
       }
+      const { account, ...walkRuntime } = runtime;
       return Object.freeze({
         input: Object.freeze({
           sourceRevision: source.sourceRevision,
@@ -149,7 +185,7 @@ export function createStage2ApplicationWalkProductionBinding(
           stopAfter: options.checkpoint,
         }),
         dependencies: Object.freeze({
-          ...runtime,
+          ...walkRuntime,
           cleanup: Object.freeze({
             async close(
               cleanupSignal: AbortSignal,
@@ -187,6 +223,7 @@ export function createStage2ApplicationWalkProductionBinding(
             },
           }),
         }),
+        ...(account === undefined ? {} : { account }),
       });
     },
   });
@@ -211,17 +248,40 @@ export async function runStage2ApplicationWalkFromOwnerConfig(
   }
   try {
     const resolved = await binding.bind(options, signal);
+    if (resolved.account !== undefined) {
+      const account = await resolved.account.verify(signal);
+      if (!account.ok) {
+        await resolved.dependencies.cleanup.close(new AbortController().signal);
+        return { ok: false, code: stableAccountCode(account.code) };
+      }
+    }
     return await runStage2ApplicationWalk(
       resolved.input,
       resolved.dependencies,
       signal,
     );
-  } catch {
+  } catch (error) {
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      const stage = error instanceof TypeError && error.message === "external monitor process binding denied"
+        ? "external_monitor_process_binding"
+        : error instanceof TypeError && error.message.startsWith("Playwright runtime binding denied:")
+        ? `browser_${error.message.split(":").at(-1)}`
+        : error instanceof TypeError && error.message === "application owner source denied"
+        ? "owner_sources"
+        : "preflight_or_storage";
+      try { process.stderr.write(`${JSON.stringify({ applicationBindingFailure: stage })}\n`); } catch {}
+    }
     return {
       ok: false,
       code: signal.aborted ? "operation_cancelled" : "owner_config_invalid",
     };
   }
+}
+
+function stableAccountCode(value: string): S2StableErrorCode {
+  return Object.hasOwn(s2StableErrorPolicy, value)
+    ? value as S2StableErrorCode
+    : "verification_input_invalid";
 }
 
 function readOwnerConfig(bytes: Buffer): unknown {

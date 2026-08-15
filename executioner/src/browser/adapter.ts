@@ -94,7 +94,10 @@ export async function inspectPage(
       control,
       state: item.state,
       readback,
-    });
+      ...(target.radioOptions === undefined || !target.token.startsWith("target-workday-")
+        ? {}
+        : { options: target.radioOptions }),
+    } as BrowserObservation["targets"][number]);
   }
 
   const url = new URL(page.url());
@@ -391,6 +394,13 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         .map((item) => normalize(item.textContent)).filter(Boolean);
       return popupSelected.length === 1 ? popupSelected[0]! : "";
     };
+    const isMultiSelect = (element: Element): boolean => {
+      if (element instanceof HTMLSelectElement && element.multiple) return true;
+      if (element.getAttribute("aria-multiselectable") === "true") return true;
+      if (ownedListbox(element)?.getAttribute("aria-multiselectable") === "true") return true;
+      const field = element.closest('[data-automation-id="formField"]');
+      return (field?.querySelectorAll('[data-automation-id="selectedItem"]').length ?? 0) > 1;
+    };
     const compositeDateReadback = (element: Element): BrowserReadback => {
       const selectors = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"];
       const controls = selectors.map((id) => [...element.querySelectorAll<HTMLInputElement>(`[data-automation-id="${id}"]`)]);
@@ -425,7 +435,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         readback = compositeDateReadback(element);
         interaction = "composite-date";
       } else if (element.getAttribute("role") === "combobox") {
-        if (ownedListboxId(element) === undefined) return [];
+        if (ownedListboxId(element) === undefined || isMultiSelect(element)) return [];
         const options = [...(ownedListbox(element)?.querySelectorAll("[role=option]") ?? [])]
           .map((option) => normalize(option.textContent)).filter(Boolean) as never[];
         control = { kind: "select", element: "listbox", options };
@@ -454,6 +464,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "text", element: "textarea" };
         readback = element.value.length === 0 ? { kind: "empty" } : { kind: "text", value: element.value as never };
       } else if (element instanceof HTMLSelectElement) {
+        if (isMultiSelect(element)) return [];
         const options = [...element.options].map((option) => normalize(option.text)).filter(Boolean) as never[];
         control = { kind: "select", element: "select", options };
         const selected = element.selectedOptions.length === 1 ? normalize(element.selectedOptions[0]?.text) : "";
@@ -461,6 +472,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       } else if (element instanceof HTMLButtonElement || element.getAttribute("role") === "button") {
         control = { kind: "button", element: "button" };
       } else if (element.getAttribute("role") === "listbox") {
+        if (isMultiSelect(element)) return [];
         const options = [...element.querySelectorAll("[role=option]")].map((option) => normalize(option.textContent)).filter(Boolean) as never[];
         control = { kind: "select", element: "listbox", options };
         const selected = [...element.querySelectorAll("[role=option][aria-selected=true]")];

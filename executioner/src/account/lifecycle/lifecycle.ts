@@ -172,7 +172,13 @@ export class AccountVerificationLifecycle {
         observed.value.state.kind !== "create_account")
     ) return denied();
     return input.accountIntent === "fresh_create"
-      ? this.#create(input, signal)
+      ? this.#create(
+          input,
+          signal,
+          observed.value.state.kind === "existing_account"
+            ? input.operations.initialCredentialMutation
+            : input.operations.createCredentialMutation,
+        )
       : this.#signIn(input, signal);
   }
 
@@ -201,6 +207,16 @@ export class AccountVerificationLifecycle {
       result = parseLifecycleCredentialMutationResult(mutation.value);
     } catch {
       return denied();
+    }
+    if (result.kind === "sign_in_required") {
+      const confirmed = await this.#observe(input, signal);
+      if (!confirmed.ok) return confirmed;
+      if (
+        confirmed.value.kind !== "classified_account" ||
+        confirmed.value.state.kind !== "existing_account" ||
+        confirmed.value.state.accountFact !== undefined
+      ) return denied();
+      return this.#signInAfterCreate(input, signal, "reused_account");
     }
     if (result.kind === "manual_intervention") {
       return blocked("account_access", {
@@ -231,12 +247,13 @@ export class AccountVerificationLifecycle {
   async #create(
     input: AccountLifecycleInput,
     signal: AbortSignal,
+    operationId: AccountLifecycleInput["operationId"] = input.operations.createCredentialMutation,
   ): Promise<AccountLifecycleResult> {
     const mutation = await this.#credentialMutation(
       input,
       signal,
       "create_account",
-      input.operations.createCredentialMutation,
+      operationId,
     );
     if (!mutation.ok) {
       return this.#recoverCredentialEffect(
@@ -253,6 +270,17 @@ export class AccountVerificationLifecycle {
       result = parseLifecycleCredentialMutationResult(mutation.value);
     } catch {
       return denied();
+    }
+    if (result.kind === "create_account_required") {
+      if (operationId === input.operations.createCredentialMutation) return denied();
+      const confirmed = await this.#observe(input, signal);
+      if (!confirmed.ok) return confirmed;
+      if (
+        confirmed.value.kind !== "classified_account" ||
+        confirmed.value.state.kind !== "create_account" ||
+        confirmed.value.state.accountFact !== undefined
+      ) return denied();
+      return this.#create(input, signal, input.operations.createCredentialMutation);
     }
     if (result.kind === "manual_intervention") {
       return blocked("account_access", {
@@ -374,11 +402,22 @@ export class AccountVerificationLifecycle {
     signal: AbortSignal,
     path: "reused_account" | "created_account",
   ): Promise<AccountLifecycleResult> {
-    const confirmed = await this.#observe(input, signal);
-    if (!confirmed.ok) return confirmed;
-    return confirmed.value.kind === "classified_account" &&
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const confirmed = await this.#observe(input, signal);
+      if (!confirmed.ok) return confirmed;
+      if (
+        confirmed.value.kind === "classified_account" &&
         confirmed.value.state.kind === "application_ready"
-      ? ready(path, 0, false)
+      ) return ready(path, 0, false);
+      const transientWorkdayShell = confirmed.value.kind === "classification_stopped" &&
+        (confirmed.value.outcome === "workday_page_unknown" ||
+          confirmed.value.outcome === "workday_page_ambiguous");
+      if (!transientWorkdayShell || signal.aborted) return denied();
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+    return signal.aborted
+      ? { ok: false, error: liveCoordinatorError("operation_cancelled") }
       : denied();
   }
 
@@ -479,7 +518,7 @@ export class AccountVerificationLifecycle {
       confirmed.value.state.kind !== "existing_account" &&
       confirmed.value.state.kind !== "create_account"
     ) return denied();
-    const signedIn = await this.#credentialMutation(
+    let signedIn = await this.#credentialMutation(
       input,
       signal,
       "sign_in",
@@ -496,7 +535,33 @@ export class AccountVerificationLifecycle {
       );
     }
     try {
-      const result = parseLifecycleCredentialMutationResult(signedIn.value);
+      let result = parseLifecycleCredentialMutationResult(signedIn.value);
+      if (result.kind === "sign_in_required") {
+        const signInPage = await this.#observe(input, signal);
+        if (!signInPage.ok) return signInPage;
+        if (
+          signInPage.value.kind !== "classified_account" ||
+          signInPage.value.state.kind !== "existing_account" ||
+          signInPage.value.state.accountFact !== undefined
+        ) return denied();
+        signedIn = await this.#credentialMutation(
+          input,
+          signal,
+          "sign_in",
+          input.operations.postVerificationCredentialSubmit,
+        );
+        if (!signedIn.ok) {
+          return this.#recoverCredentialEffect(
+            input,
+            signal,
+            signedIn,
+            "verified_account",
+            1,
+            true,
+          );
+        }
+        result = parseLifecycleCredentialMutationResult(signedIn.value);
+      }
       if (result.kind === "manual_intervention") {
         return blocked("account_access", {
           kind: "manual_intervention",
@@ -645,9 +710,10 @@ function parseLifecycleCredentialMutationResult(
       readonly attemptedFields?: unknown;
     };
     if (
-      (candidate.kind === "account_absent" ||
-        candidate.kind === "account_exists" ||
-        candidate.kind === "sign_in_required") &&
+        (candidate.kind === "account_absent" ||
+          candidate.kind === "account_exists" ||
+          candidate.kind === "sign_in_required" ||
+          candidate.kind === "create_account_required") &&
       exactAttemptedFields(candidate.attemptedFields)
     ) {
       return {

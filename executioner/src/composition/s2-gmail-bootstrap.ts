@@ -24,8 +24,10 @@ import {
 } from "../secrets/windows-dpapi/record.ts";
 import { ExactSealedGmailCustodian } from "../secrets/windows-dpapi/private/exact-sealed-gmail-custodian.ts";
 import {
+  WindowsGmailRefreshGrantLocalForgetter,
   WindowsGmailRefreshGrantRevoker,
   WindowsInteractiveGmailOAuthSealer,
+  type GmailRefreshGrantLocalForgetRequest,
   type GmailRefreshGrantRevokeRequest,
   type GmailOAuthSealRequest,
 } from "../secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
@@ -44,6 +46,13 @@ export interface GmailRefreshGrantRevoker {
     request: GmailRefreshGrantRevokeRequest,
     signal: AbortSignal,
   ): Promise<"revoked" | "absent">;
+}
+
+export interface GmailRefreshGrantLocalForgetter {
+  forget(
+    request: GmailRefreshGrantLocalForgetRequest,
+    signal: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface GmailBootstrapOptions {
@@ -66,6 +75,10 @@ export interface GmailGrantRevocationOptions {
     admit(paths: WindowsAclAdmissionPaths): WindowsAclAdmissionResult;
   };
   readonly revoker?: GmailRefreshGrantRevoker;
+}
+
+export interface GmailGrantLocalForgetOptions extends GmailOperationOptions {
+  readonly forgetter?: GmailRefreshGrantLocalForgetter;
 }
 
 export type GmailBootstrapErrorCode =
@@ -112,6 +125,16 @@ export type GmailGrantRevocationResult =
       readonly value: {
         readonly schemaVersion: 1;
         readonly kind: "gmail_refresh_grant_revoked" | "gmail_refresh_grant_absent";
+      };
+    }
+  | { readonly ok: false; readonly error: { readonly code: GmailBootstrapErrorCode } };
+
+export type GmailGrantLocalForgetResult =
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly schemaVersion: 1;
+        readonly kind: "gmail_refresh_grant_forgotten";
       };
     }
   | { readonly ok: false; readonly error: { readonly code: GmailBootstrapErrorCode } };
@@ -448,6 +471,38 @@ export async function revokeS2GmailRefreshGrant(
       kind: outcome === "revoked"
         ? "gmail_refresh_grant_revoked"
         : "gmail_refresh_grant_absent",
+    }),
+  });
+}
+
+export async function forgetS2LocalGmailRefreshGrant(
+  ownerValue: unknown,
+  bootstrapValue: unknown,
+  options: GmailGrantLocalForgetOptions,
+  signal: AbortSignal,
+): Promise<GmailGrantLocalForgetResult> {
+  if (signal.aborted) return failure("operation_cancelled");
+  const admission = await admitGmailOperation(ownerValue, bootstrapValue, options);
+  if (!admission.ok) return failure(admission.code);
+  const { owner, bootstrap, installedClientConfigPath, account } = admission.value;
+  try {
+    await (options.forgetter ?? new WindowsGmailRefreshGrantLocalForgetter()).forget({
+      accountMetadata: account.metadataBytes,
+      accountCiphertext: account.sealedBytes,
+      recipientBindingId: owner.recipientBindingId,
+      clientId: bootstrap.desktopClientId,
+      installedClientConfigPath,
+    }, signal);
+  } catch (error) {
+    return failure(sealerError(error, signal));
+  } finally {
+    clearRecord(account);
+  }
+  return Object.freeze({
+    ok: true,
+    value: Object.freeze({
+      schemaVersion: 1,
+      kind: "gmail_refresh_grant_forgotten",
     }),
   });
 }

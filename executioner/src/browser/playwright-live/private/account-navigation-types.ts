@@ -33,6 +33,10 @@ export interface AccountEntryAdvanceRequest {
 
 export type AccountEntryAdvanceResult =
   | { readonly kind: "account_boundary" }
+  | {
+      readonly kind: "state_transitioned";
+      readonly state: "job_posting" | "apply_choice" | "email_sign_in_choice";
+    }
   | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
   | { readonly kind: "target_ambiguous" }
   | {
@@ -49,6 +53,7 @@ type PostingNavigationObservedKind = "matched" | AccountEntryAdvanceResult["kind
 type PostingNavigationFailureCode = PersistentBrowserErrorCode | "operation_cancelled";
 
 export type PostingNavigationSessionTraceEvent =
+  | `posting_navigation_state_observed_${WorkdayAccountNavigationTraceState}`
   | `posting_navigation_reconcile_failed_${PostingNavigationFailureCode}`
   | `posting_navigation_reconcile_observed_${PostingNavigationObservedKind}`
   | `posting_navigation_transition_inspection_failed_${PostingNavigationFailureCode}`
@@ -62,4 +67,13 @@ export type PostingNavigationSessionTraceEvent =
   | `account_post_submit_inspection_observed_${PostingNavigationObservedKind}`
   | "account_post_submit_monitor_started"
   | "account_post_submit_monitor_succeeded"
-  | "account_post_submit_monitor_failed";
+  | "account_post_submit_monitor_failed"
+  | "account_post_submit_monitor_transition_retry";
+
+type WorkdayAccountNavigationTraceState =
+  | "job_posting"
+  | "apply_choice"
+  | "email_sign_in_choice"
+  | "account_boundary"
+  | "ambiguous"
+  | "invalid";

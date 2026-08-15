@@ -122,6 +122,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
         'input[type="text"][id^="source--"][role="combobox"]',
         'input[type="search"][id^="source--"][role="combobox"]',
         'button[type="button"][id^="source--"][role="combobox"]',
+        'button[type="button"][id^="source--"][aria-haspopup="listbox"]',
       ].join(", "),
       uiBehavior: "search_select",
       uiVariant: "workday_source_select_v1",
@@ -133,6 +134,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiVariant: "workday_previous_worker_radio_v1",
     },
     v2Text("identity.given_name", "name--legalName--firstName"),
+    v2Text("identity.middle_name", "name--legalName--middleName"),
     v2Text("identity.family_name", "name--legalName--lastName"),
     {
       fieldId: "identity.has_preferred_name",
@@ -141,13 +143,19 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiVariant: "workday_checkbox_v2",
     },
     v2Text("address.line1", "address--addressLine1"),
+    v2Text("address.line2", "address--addressLine2"),
     v2Text("address.city", "address--city"),
     v2Search("address.country", "country--country"),
     v2Search("address.region", "address--countryRegion"),
     v2Text("address.postal_code", "address--postalCode"),
     v2Text("contact.email", "emailAddress--emailAddress"),
     v2Search("phone.device_type", "phoneNumber--phoneType"),
-    v2Text("phone.country_code", "phoneNumber--countryPhoneCode"),
+    {
+      fieldId: "phone.country_code",
+      selector: 'input[id="phoneNumber--countryPhoneCode"]',
+      uiBehavior: "search_select",
+      uiVariant: "workday_search_select_v2",
+    },
     {
       fieldId: "phone.number",
       selector: 'input[id="phoneNumber--phoneNumber"]',
@@ -155,6 +163,32 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiVariant: "workday_phone_v2",
     },
     v2Text("phone.extension", "phoneNumber--extension"),
+    {
+      fieldId: "skills.values",
+      selector: 'input[id="skills--skills"]',
+      uiBehavior: "multi_select",
+      uiVariant: "workday_multi_select_v1",
+    },
+    v2Text("social.linkedin", "socialNetworkAccounts--linkedInAccount"),
+    {
+      fieldId: "social.github",
+      selector: [
+        '[id="socialNetworkAccounts--githubAccount"]',
+        '[id="socialNetworkAccounts--github"]',
+      ].join(", "),
+      uiBehavior: "text",
+      uiVariant: "workday_text_v2",
+    },
+    {
+      fieldId: "website.portfolio",
+      selector: [
+        '[id="socialNetworkAccounts--portfolioAccount"]',
+        '[id="socialNetworkAccounts--portfolio"]',
+        '[id="socialNetworkAccounts--portfolioURL"]',
+      ].join(", "),
+      uiBehavior: "text",
+      uiVariant: "workday_text_v2",
+    },
   ]);
 
 interface RepeatableFieldCatalogEntry {
@@ -162,6 +196,7 @@ interface RepeatableFieldCatalogEntry {
   readonly suffix: string;
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
+  readonly indexed?: boolean;
 }
 
 export interface ProfileRepeatableCatalogEntry {
@@ -179,11 +214,24 @@ const repeatableText = (fieldId: string, suffix: string): RepeatableFieldCatalog
   uiVariant: "workday_text_v1",
 });
 
-const repeatableDate = (fieldId: string, suffix: string): RepeatableFieldCatalogEntry => ({
+const repeatable = (
+  fieldId: string,
+  suffix: string,
+  uiBehavior: ProfileUiBehavior,
+  uiVariant: string,
+): RepeatableFieldCatalogEntry => ({ fieldId, suffix, uiBehavior, uiVariant });
+
+const legacyRepeatable = (
+  fieldId: string,
+  suffix: string,
+  uiBehavior: ProfileUiBehavior,
+  uiVariant: string,
+): RepeatableFieldCatalogEntry => ({
   fieldId,
   suffix,
-  uiBehavior: "date",
-  uiVariant: "workday_date_v1",
+  uiBehavior,
+  uiVariant,
+  indexed: false,
 });
 
 export const profileRepeatableCatalog: readonly ProfileRepeatableCatalogEntry[] =
@@ -195,10 +243,18 @@ export const profileRepeatableCatalog: readonly ProfileRepeatableCatalogEntry[] 
         '[data-row-id], [data-automation-id^="workExperience-"]:not([data-automation-id*="--"])',
       addSelector: '[data-automation-id="addWorkExperience"]',
       fields: [
-        repeatableText("experience.company", "company"),
+        repeatableText("experience.company", "companyName"),
+        legacyRepeatable("experience.company", "company", "text", "workday_text_v1"),
         repeatableText("experience.title", "jobTitle"),
-        repeatableDate("experience.start_date", "startDate"),
-        repeatableDate("experience.end_date", "endDate"),
+        repeatableText("experience.location", "location"),
+        repeatable("experience.current", "currentlyWorkHere", "checkbox", "workday_checkbox_v2"),
+        repeatable("experience.start_month", "startDate-dateSectionMonth-input", "month", "workday_month_v1"),
+        repeatable("experience.start_year", "startDate-dateSectionYear-input", "year", "workday_year_v1"),
+        repeatable("experience.end_month", "endDate-dateSectionMonth-input", "month", "workday_month_v1"),
+        repeatable("experience.end_year", "endDate-dateSectionYear-input", "year", "workday_year_v1"),
+        repeatable("experience.description", "roleDescription", "textarea", "workday_textarea_v1"),
+        legacyRepeatable("experience.start_date", "startDate", "date", "workday_date_v1"),
+        legacyRepeatable("experience.end_date", "endDate", "date", "workday_date_v1"),
       ],
     },
     {
@@ -208,11 +264,15 @@ export const profileRepeatableCatalog: readonly ProfileRepeatableCatalogEntry[] 
         '[data-row-id], [data-automation-id^="education-"]:not([data-automation-id*="--"])',
       addSelector: '[data-automation-id="addEducation"]',
       fields: [
-        repeatableText("education.school", "school"),
-        repeatableText("education.degree", "degree"),
-        repeatableText("education.field_of_study", "fieldOfStudy"),
-        repeatableDate("education.start_date", "startDate"),
-        repeatableDate("education.end_date", "endDate"),
+        repeatableText("education.school", "schoolName"),
+        legacyRepeatable("education.school", "school", "text", "workday_text_v1"),
+        repeatable("education.degree", "degree", "select", "workday_select_v1"),
+        repeatable("education.field_of_study", "fieldOfStudy", "multi_select", "workday_multi_select_v1"),
+        repeatable("education.gpa", "gradeAverage", "number", "workday_number_v1"),
+        repeatable("education.start_year", "firstYearAttended-dateSectionYear-input", "year", "workday_year_v1"),
+        repeatable("education.end_year", "lastYearAttended-dateSectionYear-input", "year", "workday_year_v1"),
+        legacyRepeatable("education.start_date", "startDate", "date", "workday_date_v1"),
+        legacyRepeatable("education.end_date", "endDate", "date", "workday_date_v1"),
       ],
     },
     {
@@ -227,5 +287,22 @@ export const profileRepeatableCatalog: readonly ProfileRepeatableCatalogEntry[] 
         uiBehavior: "search_select",
         uiVariant: "workday_search_select_v1",
       }],
+    },
+    {
+      section: "websites",
+      sectionSelector: [
+        '[data-automation-id="websitesSection"]',
+        '[data-automation-id="websiteSection"]',
+      ].join(", "),
+      rowSelector: [
+        '[data-row-id]',
+        '[data-automation-id^="websites-"]:not([data-automation-id*="--"])',
+        '[data-automation-id^="website-"]:not([data-automation-id*="--"])',
+      ].join(", "),
+      addSelector: '[data-automation-id="addWebsite"]',
+      fields: [
+        repeatableText("website.url", "website"),
+        repeatableText("website.url", "url"),
+      ],
     },
   ]);

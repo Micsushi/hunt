@@ -335,7 +335,12 @@ function admittedTarget(value: string): {
       !decodedPath.includes("/job/") || decodedPath.includes("//") ||
       decodedPath.split("/").includes("..") || posting === undefined
     ) denied();
-    return Object.freeze({ url: value, host, tenant: hostMatch[1]!, posting });
+    return Object.freeze({
+      url: value,
+      host,
+      tenant: hostMatch[1]!,
+      posting: posting.toUpperCase(),
+    });
   } catch {
     return denied();
   }

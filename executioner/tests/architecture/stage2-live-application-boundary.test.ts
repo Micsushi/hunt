@@ -90,6 +90,9 @@ test("the live CLI routes the outer gate into the bound F3-to-Review composition
     "utf8",
   );
   assert.match(slice, /s2-application-walk-runner/u);
+  assert.match(slice, /createStage2ApplicationWalkProductionBinding/u);
+  assert.match(slice, /createStage2PlaywrightLiveRuntimeBinding/u);
+  assert.match(slice, /runStage2ApplicationWalkFromOwnerConfig\([\s\S]*signal,[\s\S]*createStage2ApplicationWalkProductionBinding/u);
 });
 
 test("the standalone F3 slice fails closed without an explicitly injected binding", async () => {

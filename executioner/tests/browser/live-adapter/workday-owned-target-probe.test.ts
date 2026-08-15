@@ -197,6 +197,24 @@ test("a target contradiction revokes posting-free lineage for that page", async 
   );
 });
 
+test("production probe treats Workday posting URL case as canonical", async () => {
+  const result = await new WorkdayOwnedTargetProbe().inspect(
+    new ProbePage(
+      "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/job/Example_r12345",
+    ),
+    expected,
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, owned(
+    { kind: "matched" },
+    [
+      "structural_trait_ats_workday_family_v1",
+      "structural_trait_page_job_posting_v1",
+    ],
+  ));
+});
+
 test("a transient posting-free snapshot preserves exact lineage for a settled descendant", async () => {
   const probe = new WorkdayOwnedTargetProbe();
   const page = new ProbePage(

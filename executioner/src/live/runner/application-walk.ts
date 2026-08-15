@@ -71,6 +71,10 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly checkpoint: string;
       readonly completedPages: number;
       readonly failure: ApplicationWalkFailurePacket | null;
+      readonly code?: string;
+      readonly classifier?: string;
+      readonly primitive?: string;
+      readonly unknownLayer?: string;
       readonly submitActivated: false;
     };
 
@@ -113,6 +117,10 @@ export async function runObservedApplicationPageWalk(
       checkpoint: result.error.checkpoint,
       completedPages: result.error.completedPages,
       failure: result.error.failure,
+      code: result.error.failure.code,
+      classifier: result.error.failure.classifier,
+      primitive: result.error.failure.primitive,
+      unknownLayer: result.error.failure.unknownLayer,
       submitActivated: false,
     });
     return result;

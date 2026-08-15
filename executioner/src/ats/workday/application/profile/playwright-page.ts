@@ -47,7 +47,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #timeoutMs: number;
   readonly #controls = new Map<string, ResolvedControl>();
   readonly #interactions = new Map<string, MutableInteraction>();
+  #selectionDiagnosticOrdinal = 0;
   readonly #unknownControlOrdinals = new Map<string, number>();
+  readonly #ownedIndexedRows = new Set<string>();
   #nextUnknownControlOrdinal = 1;
 
   constructor(page: Page, options: PlaywrightWorkdayProfilePageOptions) {
@@ -62,20 +64,44 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
     for (const entry of profileScalarControlCatalog) {
-      controls.push(...await this.#inspectControls(entry, profile.locator(entry.selector)));
+      try {
+        controls.push(...await this.#inspectControls(entry, profile.locator(entry.selector)));
+      } catch (error) {
+        profileInspectionFailure(`scalar.${entry.fieldId}`, error);
+        throw error;
+      }
     }
     const rows: ProfileRowSnapshot[] = [];
+    const repeatableSections: ProfileRepeatableSection[] = [];
     for (const entry of profileRepeatableCatalog) {
-      const section = profile.locator(entry.sectionSelector);
-      const sections = await visibleLocators(section);
-      if (sections.length > 1) throw new TypeError("ambiguous Workday repeatable section");
-      if (sections.length === 0) continue;
-      const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
-      for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
+      try {
+        const section = profile.locator(entry.sectionSelector);
+        const sections = await visibleLocators(section);
+        if (sections.length > 1) throw new TypeError("ambiguous Workday repeatable section");
+        if (sections.length === 0) {
+          const indexed = await this.#inspectIndexedRows(entry, profile);
+          if (indexed.length > 0) {
+            repeatableSections.push(entry.section);
+            rows.push(...indexed);
+          }
+          continue;
+        }
+        repeatableSections.push(entry.section);
+        const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
+        for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
+      } catch (error) {
+        profileInspectionFailure(`repeatable.${entry.section}`, error);
+        throw error;
+      }
     }
-    controls.push(...await this.#inspectUnknownControls(profile));
+    try {
+      controls.push(...await this.#inspectUnknownControls(profile));
+    } catch (error) {
+      profileInspectionFailure("unknown_controls", error);
+      throw error;
+    }
     abort(signal);
-    return { pageType: this.#pageType, controls, rows };
+    return { pageType: this.#pageType, controls, rows, repeatableSections };
   }
 
   async commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void> {
@@ -86,22 +112,55 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     const interaction = emptyInteraction(request.uiBehavior);
     this.#interactions.set(request.controlId, interaction);
-    if (request.uiBehavior === "search_select") {
-      await this.#selectSearchOption(
-        resolved.locator,
-        request.value,
-        resolved.uiVariant,
-        interaction,
+    if (request.uiBehavior === "multi_select") {
+      const options = parseOptionList(request.value);
+      for (const option of options) {
+        if (await selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
+        await this.#selectSearchOption(resolved.locator, option, interaction, "multi_select");
+      }
+      interaction.backingValueCommitted = exactOptionListReadback(
+        await readback(resolved.locator, "multi_select"),
+        options,
       );
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday multi-select value did not commit");
+      }
+    } else if (request.uiBehavior === "search_select" || request.uiBehavior === "select") {
+      if (
+        request.uiBehavior === "select" &&
+        await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)
+      ) {
+        await this.#selectNativeOption(resolved.locator, request.value, interaction);
+      } else {
+        await this.#selectSearchOption(resolved.locator, request.value, interaction, request.uiBehavior);
+      }
     } else if (request.uiBehavior === "radio_group") {
       await this.#selectRadioOption(resolved.locator, request.value, interaction);
+    } else if (request.uiBehavior === "checkbox") {
+      const checked = request.value === "true";
+      if (request.value !== "true" && request.value !== "false") {
+        throw new TypeError("Workday checkbox value is invalid");
+      }
+      if (await resolved.locator.isChecked() !== checked) {
+        await resolved.locator.click({ timeout: this.#timeoutMs });
+      }
+      await resolved.locator.blur({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
+      interaction.backingValueCommitted = await resolved.locator.isChecked() === checked;
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday checkbox value did not commit");
+      }
     } else {
       await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       await resolved.locator.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
-      interaction.backingValueCommitted = normalize(
-        await readback(resolved.locator, request.uiBehavior) ?? "",
-      ) === normalize(request.value);
+      interaction.backingValueCommitted = scalarReadbackMatches(
+        request.uiBehavior,
+        await readback(resolved.locator, request.uiBehavior),
+        request.value,
+      );
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
         throw new TypeError("Workday profile value did not commit");
@@ -123,7 +182,29 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   ): Promise<string> {
     abort(signal);
     const entry = repeatableEntry(section);
-    const container = await exactVisible(this.#page.locator(entry.sectionSelector));
+    const containers = await visibleLocators(this.#page.locator(entry.sectionSelector));
+    if (containers.length === 0 && (section === "experience" || section === "education")) {
+      const before = new Set(await this.#indexedRowIds(entry));
+      const buttons = await visibleLocators(this.#page.getByRole("button", {
+        name: "Add Another",
+        exact: true,
+      }));
+      if (buttons.length !== 2) throw new TypeError("Workday indexed repeatable action is ambiguous");
+      await buttons[section === "experience" ? 0 : 1]!.click({ timeout: this.#timeoutMs });
+      const deadline = Date.now() + this.#timeoutMs;
+      while (Date.now() < deadline) {
+        const added = (await this.#indexedRowIds(entry)).filter((rowId) => !before.has(rowId));
+        if (added.length === 1) {
+          this.#ownedIndexedRows.add(added[0]!);
+          return added[0]!;
+        }
+        if (added.length > 1) throw new TypeError("ambiguous indexed Workday row addition");
+        await this.#page.waitForTimeout(25);
+      }
+      throw new TypeError("indexed Workday row did not become visible");
+    }
+    if (containers.length !== 1) throw new TypeError("ambiguous Workday repeatable section");
+    const container = containers[0]!;
     const before = new Set(await this.#rowIds(entry, container));
     const add = await exactVisible(container.locator(entry.addSelector));
     await add.click({ timeout: this.#timeoutMs });
@@ -142,6 +223,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   ): Promise<void> {
     abort(signal);
     const entry = repeatableEntry(section);
+    if (this.#ownedIndexedRows.has(rowIdentifier)) {
+      throw new TypeError("indexed Workday row removal is not yet admitted");
+    }
     const container = await exactVisible(this.#page.locator(entry.sectionSelector));
     const row = await this.#findRow(entry, container, rowIdentifier);
     if (await row.getAttribute("data-hunt-c3-owned") !== "true") {
@@ -158,6 +242,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       this.#page.locator([
         '[data-automation-id="applyFlowMyInfoPage"]',
         '[data-automation-id="applyFlowMyExperiencePage"]',
+        '[data-automation-id="applyFlowMyExpPage"]',
       ].join(", ")),
     );
     const declared = await this.#page.locator("body").getAttribute(
@@ -237,6 +322,47 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     };
   }
 
+  async #inspectIndexedRows(
+    entry: ProfileRepeatableCatalogEntry,
+    profile: Locator,
+  ): Promise<ProfileRowSnapshot[]> {
+    if (entry.section !== "experience" && entry.section !== "education") return [];
+    const prefix = entry.section === "experience" ? "workExperience-" : "education-";
+    const rowIds = await this.#indexedRowIds(entry);
+    const rows: ProfileRowSnapshot[] = [];
+    for (const identifier of rowIds) {
+      const controls: ProfileControlSnapshot[] = [];
+      for (const field of entry.fields) {
+        if (field.indexed === false) continue;
+        controls.push(...await this.#inspectControls({
+          fieldId: field.fieldId,
+          selector: "",
+          uiBehavior: field.uiBehavior,
+          uiVariant: field.uiVariant,
+        }, profile.locator(`[id="${identifier}--${field.suffix}"]`), identifier));
+      }
+      rows.push({
+        section: entry.section,
+        rowId: identifier,
+        ownedByC3: this.#ownedIndexedRows.has(identifier),
+        controls,
+      });
+    }
+    return rows.filter(({ rowId }) => rowId.startsWith(prefix));
+  }
+
+  async #indexedRowIds(entry: ProfileRepeatableCatalogEntry): Promise<string[]> {
+    if (entry.section !== "experience" && entry.section !== "education") return [];
+    const prefix = entry.section === "experience" ? "workExperience-" : "education-";
+    const ids = await this.#page.locator(`[id^="${prefix}"][id*="--"]`).evaluateAll((elements) =>
+      elements.flatMap((element) => {
+        const split = element.id.indexOf("--");
+        return split > 0 ? [element.id.slice(0, split)] : [];
+      })
+    );
+    return [...new Set(ids)].sort();
+  }
+
   async #inspectUnknownControls(
     profile: Locator,
   ): Promise<ProfileControlSnapshot[]> {
@@ -251,6 +377,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       repeatables: profileRepeatableCatalog.map((entry) => ({
         sectionSelector: entry.sectionSelector,
         rowSelector: entry.rowSelector,
+        idPrefix: entry.section === "experience" ? "workExperience-" :
+          entry.section === "education" ? "education-" :
+          entry.section === "skills" ? "skills-" : "website-",
         suffixes: entry.fields.map(({ suffix }) => suffix),
       })),
     };
@@ -271,6 +400,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           )
         ) return true;
         return reviewed.repeatables.some((entry) => {
+          if (element.id.startsWith(entry.idPrefix) && entry.suffixes.some((suffix) =>
+            element.id.endsWith(`--${suffix}`)
+          )) return true;
           const section = element.closest(entry.sectionSelector);
           const row = element.closest(entry.rowSelector);
           return section !== null && row !== null && section.contains(row) &&
@@ -281,6 +413,43 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }, catalog);
       if (admitted) continue;
       unreviewed.push({ candidate, machineKey: await unknownMachineKey(candidate) });
+    }
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1" && unreviewed.length > 0) {
+      try {
+        const diagnostics = await Promise.all(unreviewed.map(async ({ candidate, machineKey }) =>
+          await candidate.evaluate((element, key) => {
+            const labels = element instanceof HTMLInputElement ||
+                element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement
+              ? [...element.labels ?? []].map((label) => label.textContent ?? "")
+              : [];
+            const ownerAutomationIds: string[] = [];
+            let owner = element.parentElement;
+            while (owner !== null && ownerAutomationIds.length < 6) {
+              const automationId = owner.getAttribute("data-automation-id");
+              if (automationId !== null && automationId !== "") ownerAutomationIds.push(automationId);
+              owner = owner.parentElement;
+            }
+            const bounded = (value: string | null): string =>
+              (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim().slice(0, 160);
+            return {
+              machineKey: key,
+              id: bounded(element.id),
+              name: bounded(element.getAttribute("name")),
+              automationId: bounded(element.getAttribute("data-automation-id")),
+              tag: element.tagName.toLocaleLowerCase("en-US"),
+              inputType: element instanceof HTMLInputElement ? element.type : "",
+              role: bounded(element.getAttribute("role")),
+              placeholder: bounded(element.getAttribute("placeholder")),
+              label: bounded([
+                element.getAttribute("aria-label") ?? "",
+                ...labels,
+              ].join(" ")),
+              ownerAutomationIds,
+            };
+          }, machineKey)
+        ));
+        process.stderr.write(`${JSON.stringify({ applicationUnknownProfileControlDiagnostics: diagnostics })}\n`);
+      } catch {}
     }
     const keyCounts = new Map<string, number>();
     for (const { machineKey } of unreviewed) {
@@ -316,37 +485,390 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #selectSearchOption(
     control: Locator,
     value: string,
-    uiVariant: string,
     interaction: MutableInteraction,
+    behavior: "search_select" | "select" | "multi_select",
   ): Promise<void> {
     await control.click({ timeout: this.#timeoutMs });
-    if (await control.evaluate((element) =>
+    await this.#captureSelectionDiagnostic("clicked", behavior);
+    const editable = await control.evaluate((element) =>
       (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
       !element.readOnly
-    )) await control.fill(value, { timeout: this.#timeoutMs });
+    );
+    if (editable) await control.fill(value, { timeout: this.#timeoutMs });
+    await this.#captureSelectionDiagnostic("typed", behavior);
+    if (editable && behavior === "multi_select") {
+      await control.press("Enter", { timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(250);
+      await this.#captureSelectionDiagnostic("search-submitted", behavior);
+      if (await selectionReadbackIncludes(control, behavior, value)) {
+        interaction.popupBound = false;
+        interaction.optionFocused = false;
+        interaction.optionActivated = true;
+        interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
+        interaction.visibleOptionCount = 0;
+        interaction.selectedOptionOrdinal = 0;
+        interaction.backingValueCommitted = true;
+        interaction.validationCleared = await validationCleared(control);
+        if (!interaction.validationCleared) {
+          throw new TypeError("Workday submitted multi-select validation did not clear");
+        }
+        return;
+      }
+      if (await this.#selectSubmittedMultiSelectOption(control, value, interaction)) return;
+    }
     const relationship = await control.getAttribute("aria-controls") ??
       await control.getAttribute("aria-owns");
-    if (relationship === null || relationship.trim().split(/\s+/u).length !== 1) {
+    selectionDiagnostic("relationship_observed", behavior, {
+      relationshipCount: relationship?.trim().split(/\s+/u).filter(Boolean).length ?? 0,
+      editable,
+    });
+    const relationshipIds = relationship?.trim().split(/\s+/u).filter(Boolean) ?? [];
+    if (relationshipIds.length > 1) {
       throw new TypeError("Workday listbox ownership is unavailable or ambiguous");
     }
-    const listboxes = this.#page.locator(`#${cssIdentifier(relationship.trim())}`);
-    const listbox = await this.#waitForExactVisible(listboxes);
-    interaction.popupBound = true;
-    const selected = await this.#waitForSelectableLeaf(listbox, value, uiVariant);
-    interaction.visibleOptionCount = selected.visibleOptionCount;
-    interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
-    interaction.optionFocused = await selected.option.evaluate((element) =>
-      element.ownerDocument.activeElement === element
+    const fallbackScope = relationshipIds.length === 0;
+    if (fallbackScope) {
+      const field = control.locator(
+        'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
+      );
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        try {
+          const structures = await field.locator(
+            'button, [role="button"], [data-automation-id], svg',
+          ).evaluateAll((elements) => elements.slice(0, 64).map((element) => ({
+            tag: element.tagName.toLocaleLowerCase("en-US"),
+            automationId: element.getAttribute("data-automation-id") ?? "",
+            role: element.getAttribute("role") ?? "",
+            ariaLabel: (element.getAttribute("aria-label") ?? "").slice(0, 80),
+            visible: getComputedStyle(element).display !== "none" &&
+              getComputedStyle(element).visibility !== "hidden" &&
+              element.getClientRects().length > 0,
+          })));
+          process.stderr.write(`${JSON.stringify({
+            profileSelectionOwnedStructures: structures,
+          })}\n`);
+        } catch {}
+      }
+      if (behavior === "select") {
+        const scope = await field.count() === 1 ? field : this.#page.locator("body");
+        const selected = await this.#waitForSelectableLeaf(scope, value);
+        await this.#captureSelectionDiagnostic("option-found", behavior);
+        interaction.popupBound = false;
+        interaction.visibleOptionCount = selected.visibleOptionCount;
+        interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
+        interaction.optionFocused = await selected.option.evaluate((element) =>
+          element.ownerDocument.activeElement === element
+        );
+        await selected.option.click({ timeout: this.#timeoutMs });
+        interaction.optionActivated = true;
+        await control.blur({ timeout: this.#timeoutMs });
+        await this.#page.waitForTimeout(25);
+        interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
+        interaction.backingValueCommitted = await selectionReadbackIncludes(
+          control,
+          behavior,
+          value,
+        );
+        interaction.validationCleared = await validationCleared(control);
+        if (
+          !interaction.popupClosed || !interaction.backingValueCommitted ||
+          !interaction.validationCleared
+        ) throw new TypeError("Workday unowned select value did not commit");
+        return;
+      }
+      if (behavior === "multi_select") {
+        if (editable) {
+          await control.fill("", { timeout: this.#timeoutMs });
+          await control.click({ timeout: this.#timeoutMs });
+          await this.#page.waitForTimeout(100);
+          if (await this.#selectPromptCatalogOption(control, value, interaction)) return;
+        }
+        const promptWrappers = await visibleLocators(field.locator(
+          '[data-automation-id="responsiveMonikerPrompt"]',
+        ));
+        const searchButtons = await visibleLocators(field.locator(
+          '[data-automation-id="promptSearchButton"]',
+        ));
+        const activators = promptWrappers.length === 1 ? promptWrappers : searchButtons;
+        if (activators.length === 1) {
+          const activator = activators[0]!;
+          const glyphs = await visibleLocators(activator.locator("svg"));
+          if (glyphs.length > 1) {
+            throw new TypeError("Workday prompt multi-select glyph is ambiguous");
+          }
+          if (glyphs.length === 1) {
+            const target = await glyphs[0]!.evaluate((glyph) => {
+              const rect = glyph.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const hit = document.elementFromPoint(x, y);
+              return rect.width > 0 && rect.height > 0 &&
+                  hit !== null && (hit === glyph || glyph.contains(hit))
+                ? { x, y }
+                : null;
+            });
+            if (target === null) {
+              throw new TypeError("Workday prompt multi-select glyph is not actionable");
+            }
+            await this.#page.mouse.click(target.x, target.y);
+          } else {
+            await activator.click({ timeout: this.#timeoutMs });
+          }
+          await this.#page.waitForTimeout(100);
+          await this.#captureSelectionDiagnostic("prompt-requested", behavior);
+          if (editable) {
+            await control.fill("", { timeout: this.#timeoutMs });
+            await control.pressSequentially(value, {
+              delay: 10,
+              timeout: this.#timeoutMs,
+            });
+            await this.#page.waitForTimeout(500);
+            await this.#captureSelectionDiagnostic("prompt-typed", behavior);
+          }
+          const promptOptions = await visibleLocators(this.#page.locator([
+            '[role="option"]',
+            '[data-automation-id="promptOption"]',
+            '[data-automation-id="promptLeafNode"]',
+          ].join(", ")));
+          const exactPromptOptions: Locator[] = [];
+          for (const option of promptOptions.slice(0, 64)) {
+            if (normalize(await option.innerText()) === normalize(value)) {
+              exactPromptOptions.push(option);
+            }
+          }
+          if (exactPromptOptions.length > 1) {
+            throw new TypeError("Workday prompt multi-select option is ambiguous");
+          }
+          const selected = exactPromptOptions.length === 1
+            ? {
+                option: exactPromptOptions[0]!,
+                visibleOptionCount: promptOptions.length,
+                selectedOptionOrdinal: promptOptions.indexOf(exactPromptOptions[0]!) + 1,
+              }
+            : undefined;
+          if (selected === undefined) {
+            const delimiters = ["Enter", "Tab", ","] as const;
+            for (const [index, delimiter] of delimiters.entries()) {
+              if (index > 0) {
+                await control.click({ timeout: this.#timeoutMs });
+                await control.fill("", { timeout: this.#timeoutMs });
+                await control.pressSequentially(value, {
+                  delay: 10,
+                  timeout: this.#timeoutMs,
+                });
+              }
+              if (delimiter === ",") {
+                await control.pressSequentially(delimiter, {
+                  timeout: this.#timeoutMs,
+                });
+              } else {
+                await control.press(delimiter, { timeout: this.#timeoutMs });
+              }
+              await this.#page.waitForTimeout(250);
+              await this.#captureSelectionDiagnostic(
+                `prompt-delimiter-${delimiter.toLocaleLowerCase("en-US")}`,
+                behavior,
+              );
+              if (await selectionReadbackIncludes(control, behavior, value)) {
+                interaction.popupBound = false;
+                interaction.visibleOptionCount = 0;
+                interaction.selectedOptionOrdinal = 0;
+                interaction.optionFocused = false;
+                interaction.optionActivated = true;
+                interaction.popupClosed = true;
+                interaction.backingValueCommitted = true;
+                interaction.validationCleared = await validationCleared(control);
+                if (!interaction.validationCleared) {
+                  throw new TypeError("Workday prompt free-entry validation did not clear");
+                }
+                return;
+              }
+            }
+            throw new TypeError("Workday prompt multi-select option is unavailable");
+          }
+          interaction.popupBound = false;
+          interaction.visibleOptionCount = selected.visibleOptionCount;
+          interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
+          interaction.optionFocused = await selected.option.evaluate((element) =>
+            element.ownerDocument.activeElement === element
+          );
+          await selected.option.click({ timeout: this.#timeoutMs });
+          interaction.optionActivated = true;
+          await this.#page.waitForTimeout(100);
+          interaction.popupClosed = true;
+          interaction.backingValueCommitted = await selectionReadbackIncludes(
+            control,
+            behavior,
+            value,
+          );
+          interaction.validationCleared = await validationCleared(control);
+          if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+            throw new TypeError("Workday prompt multi-select value did not commit");
+          }
+          return;
+        }
+        if (activators.length > 1) {
+          throw new TypeError("Workday prompt multi-select activator is ambiguous");
+        }
+      }
+      if (editable) {
+        await control.fill("", { timeout: this.#timeoutMs });
+        await control.pressSequentially(value, { delay: 10, timeout: this.#timeoutMs });
+      }
+      await control.focus({ timeout: this.#timeoutMs });
+      await control.press("Enter", { timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(250);
+      await this.#captureSelectionDiagnostic("free-entry-committed", behavior);
+      interaction.popupBound = false;
+      interaction.optionFocused = false;
+      interaction.optionActivated = true;
+      interaction.popupClosed = true;
+      interaction.visibleOptionCount = 0;
+      interaction.selectedOptionOrdinal = 0;
+      interaction.backingValueCommitted = await selectionReadbackIncludes(
+        control,
+        behavior,
+        value,
+      );
+      interaction.validationCleared = await validationCleared(control);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError(
+          "Workday listbox ownership is unavailable and free-entry selection did not commit",
+        );
+      }
+      return;
+    }
+    const listbox = await this.#waitForExactVisible(
+      this.#page.locator(`#${cssIdentifier(relationshipIds[0]!)}`),
     );
-    await selected.option.click({ timeout: this.#timeoutMs });
-    interaction.optionActivated = true;
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      try {
+        const candidates = await listbox.locator("*").evaluateAll((elements) =>
+          elements.flatMap((element) => {
+            const style = getComputedStyle(element);
+            if (
+              style.display === "none" || style.visibility === "hidden" ||
+              element.getClientRects().length === 0
+            ) return [];
+            const text = (element.textContent ?? "").normalize("NFC")
+              .replace(/\s+/gu, " ").trim();
+            if (text === "" || [...element.children].some((child) =>
+              (child.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim() === text
+            )) return [];
+            return [{
+              tag: element.tagName.toLocaleLowerCase("en-US"),
+              role: element.getAttribute("role") ?? "",
+              automationId: element.getAttribute("data-automation-id") ?? "",
+              text: text.slice(0, 160),
+            }];
+          }).slice(0, 64)
+        );
+        process.stderr.write(`${JSON.stringify({
+          profileSelectionVisibleLeafDiagnostics: {
+            relationshipId: relationshipIds[0],
+            candidates,
+          },
+        })}\n`);
+      } catch {}
+    }
+    const expandedCategories = new Set<string>();
+    interaction.popupBound = true;
+    if (
+      await control.getAttribute("id") === "phoneNumber--phoneType" &&
+      !await hasExactSelectableCandidate(listbox, value)
+    ) {
+      await this.#selectV2PhoneType(control, listbox, value, interaction);
+      return;
+    }
+    try {
+      const selected = await this.#waitForSelectableLeaf(
+        listbox,
+        value,
+        expandedCategories,
+        !fallbackScope,
+      );
+      await this.#captureSelectionDiagnostic("option-found", behavior);
+      interaction.visibleOptionCount = selected.visibleOptionCount;
+      interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
+      interaction.optionFocused = await selected.option.evaluate((element) =>
+        element.ownerDocument.activeElement === element
+      );
+      await selected.option.click({ timeout: this.#timeoutMs });
+      interaction.optionActivated = true;
+    } catch {
+      // `fill` has already entered the query for editable Workday comboboxes.
+      // Re-typing appended the same query (for example `PythonPython`) and made
+      // an otherwise valid typeahead result impossible to match exactly.
+      if (editable) await control.fill(value, { timeout: this.#timeoutMs });
+      else await this.#page.keyboard.type(value);
+      await this.#page.waitForTimeout(100);
+      await this.#captureSelectionDiagnostic("fallback-typed", behavior);
+      const activeId = await control.getAttribute("aria-activedescendant") ??
+        await listbox.getAttribute("aria-activedescendant");
+      interaction.optionFocused = activeId !== null;
+      const revealed = await this.#waitForSelectableLeaf(
+        listbox,
+        value,
+        expandedCategories,
+        !fallbackScope,
+      )
+        .catch(() => undefined);
+      const active = activeId === null
+        ? undefined
+        : await exactActiveOption(this.#page, activeId, value);
+      if (revealed !== undefined) {
+        interaction.visibleOptionCount = revealed.visibleOptionCount;
+        interaction.selectedOptionOrdinal = revealed.selectedOptionOrdinal;
+        await revealed.option.click({ timeout: this.#timeoutMs });
+      } else if (active === undefined) {
+        await this.#page.keyboard.press("Enter");
+      } else {
+        await active.click({ timeout: this.#timeoutMs });
+      }
+      interaction.optionActivated = true;
+      await this.#page.waitForTimeout(100);
+      if (
+        !await selectionReadbackIncludes(control, behavior, value) &&
+        await selectionPopupVisible(listbox, fallbackScope)
+      ) {
+        const nested = await this.#waitForSelectableLeaf(
+          listbox,
+          value,
+          expandedCategories,
+          !fallbackScope,
+        )
+          .catch(() => undefined);
+        if (nested !== undefined) {
+          interaction.visibleOptionCount = nested.visibleOptionCount;
+          interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
+          await nested.option.click({ timeout: this.#timeoutMs });
+          await this.#page.waitForTimeout(100);
+        }
+      }
+      if (!await selectionReadbackIncludes(control, behavior, value)) {
+        selectionDiagnostic("selection_uncommitted", behavior, {
+          listboxVisible: await selectionPopupVisible(listbox, fallbackScope),
+          activeDescendantPresent: activeId !== null,
+        });
+        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+      }
+    }
     await control.blur({ timeout: this.#timeoutMs });
     await this.#page.waitForTimeout(25);
-    interaction.popupClosed = !await listbox.isVisible() &&
+    const closeDeadline = Date.now() + Math.min(this.#timeoutMs, 1_000);
+    while (
+      Date.now() < closeDeadline &&
+      (await selectionPopupVisible(listbox, fallbackScope) ||
+        await control.getAttribute("aria-expanded") === "true")
+    ) {
+      // Workday leaves focus on the selected listbox option. A locator-local
+      // press can retarget focus to the combobox and fail to dismiss the popup.
+      await this.#page.keyboard.press("Escape");
+      await this.#page.waitForTimeout(100);
+    }
+    interaction.popupClosed = !await selectionPopupVisible(listbox, fallbackScope) &&
       await control.getAttribute("aria-expanded") !== "true";
-    interaction.backingValueCommitted = normalize(
-      await readback(control, "search_select") ?? "",
-    ) === normalize(value);
+    interaction.backingValueCommitted = await selectionReadbackIncludes(control, behavior, value);
     interaction.validationCleared = await validationCleared(control);
     if (!interaction.popupClosed) {
       throw new TypeError("Workday selection popup remained open");
@@ -357,6 +879,232 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (!interaction.validationCleared) {
       throw new TypeError("Workday selection validation did not clear");
     }
+  }
+
+  async #selectSubmittedMultiSelectOption(
+    control: Locator,
+    value: string,
+    interaction: MutableInteraction,
+  ): Promise<boolean> {
+    const acceptedLabels = equivalentOptionLabels(value);
+    const visibleOptions = await visibleLocators(this.#page.locator('[role="option"]'));
+    const exact: Locator[] = [];
+    for (const option of visibleOptions.slice(0, 128)) {
+      if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
+    }
+    if (exact.length === 0) return false;
+    if (exact.length > 1) {
+      throw new TypeError("Workday submitted multi-select option is ambiguous");
+    }
+
+    const option = exact[0]!;
+    const inputs = await visibleLocators(option.locator(
+      'input[type="radio"], [role="radio"], input[type="checkbox"], [role="checkbox"]',
+    ));
+    if (inputs.length > 1) {
+      throw new TypeError("Workday submitted multi-select option control is ambiguous");
+    }
+    interaction.popupBound = false;
+    interaction.visibleOptionCount = visibleOptions.length;
+    interaction.selectedOptionOrdinal = visibleOptions.indexOf(option) + 1;
+    interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
+    await (inputs[0] ?? option).click({ timeout: this.#timeoutMs });
+    interaction.optionActivated = true;
+    await this.#page.waitForTimeout(100);
+    await this.#page.keyboard.press("Escape");
+    await this.#page.waitForTimeout(25);
+    interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
+    interaction.backingValueCommitted = await selectionReadbackIncludes(
+      control,
+      "multi_select",
+      value,
+    );
+    interaction.validationCleared = await validationCleared(control);
+    if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+      throw new TypeError("Workday submitted multi-select option did not commit");
+    }
+    return true;
+  }
+
+  async #selectPromptCatalogOption(
+    control: Locator,
+    value: string,
+    interaction: MutableInteraction,
+  ): Promise<boolean> {
+    const options = this.#page.locator('[role="option"]:visible');
+    const initial = await visibleLocators(options);
+    const scopes: Locator[] = [];
+    for (const option of initial) {
+      if (/^(?:partial list \(first 500 entries\)|all)$/u.test(normalize(await option.innerText()))) {
+        scopes.push(option);
+      }
+    }
+    if (scopes.length === 0) return false;
+    const all = await exactNormalizedOption(scopes, "All");
+    await all.click({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(100);
+    await control.click({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(100);
+
+    const acceptedLabels = equivalentOptionLabels(value);
+    let visibleOptionCount = 0;
+    for (let ordinal = 1; ordinal <= 2048; ordinal += 1) {
+      const candidates: Locator[] = [];
+      for (const option of await visibleLocators(options)) {
+        const label = normalize(await option.innerText());
+        if (!/^(?:partial list \(first 500 entries\)|all)$/u.test(label)) {
+          candidates.push(option);
+        }
+      }
+      visibleOptionCount = Math.max(visibleOptionCount, candidates.length);
+      const exact: Locator[] = [];
+      for (const option of candidates) {
+        if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
+      }
+      if (exact.length > 1) {
+        throw new TypeError("Workday prompt catalog option is ambiguous");
+      }
+      if (exact.length === 1) {
+        const option = exact[0]!;
+        interaction.popupBound = false;
+        interaction.visibleOptionCount = visibleOptionCount;
+        interaction.selectedOptionOrdinal = ordinal;
+        interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
+        const radios = await visibleLocators(option.locator(
+          'input[type="radio"], [role="radio"]',
+        ));
+        if (radios.length > 1) {
+          throw new TypeError("Workday prompt catalog radio is ambiguous");
+        }
+        await (radios[0] ?? option).click({ timeout: this.#timeoutMs });
+        interaction.optionActivated = true;
+        await this.#page.waitForTimeout(100);
+        interaction.popupClosed = (await visibleLocators(options)).length === 0;
+        interaction.backingValueCommitted = await selectionReadbackIncludes(
+          control,
+          "multi_select",
+          value,
+        );
+        interaction.validationCleared = await validationCleared(control);
+        if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+          throw new TypeError("Workday prompt catalog value did not commit");
+        }
+        return true;
+      }
+      await control.press("ArrowDown", { timeout: this.#timeoutMs });
+      if (ordinal % 32 === 0) await this.#page.waitForTimeout(25);
+    }
+    throw new TypeError("Workday prompt catalog option is unavailable");
+  }
+
+  async #selectNativeOption(
+    control: Locator,
+    value: string,
+    interaction: MutableInteraction,
+  ): Promise<void> {
+    const options = await control.evaluate((element) => {
+      if (!(element instanceof HTMLSelectElement)) return null;
+      return [...element.options].map((option, index) => ({
+        index,
+        label: (option.label || option.textContent || "").replace(/\s+/gu, " ").trim(),
+        disabled: option.disabled,
+      }));
+    });
+    if (options === null) throw new TypeError("Workday native select is unavailable");
+    const matches = options.filter((option) =>
+      !option.disabled && normalize(option.label) === normalize(value)
+    );
+    if (matches.length !== 1) {
+      throw new TypeError("Workday native select option is missing or ambiguous");
+    }
+    await control.selectOption({ index: matches[0]!.index }, { timeout: this.#timeoutMs });
+    await control.blur({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(25);
+    interaction.popupBound = false;
+    interaction.optionFocused = false;
+    interaction.optionActivated = true;
+    interaction.popupClosed = true;
+    interaction.visibleOptionCount = options.filter(({ disabled }) => !disabled).length;
+    interaction.selectedOptionOrdinal = matches[0]!.index + 1;
+    interaction.backingValueCommitted = await selectionReadbackIncludes(control, "select", value);
+    interaction.validationCleared = await validationCleared(control);
+    if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+      throw new TypeError("Workday native select value did not commit");
+    }
+  }
+
+  async #captureSelectionDiagnostic(
+    stage: string,
+    behavior: "search_select" | "select" | "multi_select",
+  ): Promise<void> {
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+    selectionDiagnostic(stage, behavior, {});
+    const root = process.env.HUNT_C3_TRANSIENT_DIAGNOSTIC_ROOT;
+    if (root === undefined || root === "") return;
+    this.#selectionDiagnosticOrdinal += 1;
+    try {
+      await this.#page.screenshot({
+        path: `${root}\\profile-selection-${String(this.#selectionDiagnosticOrdinal).padStart(3, "0")}-${stage}.png`,
+        fullPage: true,
+      });
+    } catch {
+      selectionDiagnostic("screenshot_failed", "multi_select", {});
+    }
+  }
+
+  async #selectV2PhoneType(
+    control: Locator,
+    listbox: Locator,
+    value: string,
+    interaction: MutableInteraction,
+  ): Promise<void> {
+    await this.#page.keyboard.type(value);
+    await this.#page.waitForTimeout(100);
+    const activeId = await control.getAttribute("aria-activedescendant") ??
+      await listbox.getAttribute("aria-activedescendant");
+    interaction.optionFocused = activeId !== null;
+    const active = activeId === null
+      ? undefined
+      : await exactActiveOption(this.#page, activeId, value);
+    if (await hasExactSelectableCandidate(listbox, value)) {
+      const selected = await this.#waitForSelectableLeaf(listbox, value);
+      interaction.visibleOptionCount = selected.visibleOptionCount;
+      interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
+      await selected.option.click({ timeout: this.#timeoutMs });
+    } else if (active !== undefined) {
+      await active.click({ timeout: this.#timeoutMs });
+    } else {
+      await this.#page.keyboard.press("Enter");
+    }
+    interaction.optionActivated = true;
+    await this.#page.waitForTimeout(100);
+    for (const key of ["Enter", "Space"] as const) {
+      if (normalize(await readback(control, "search_select") ?? "") === normalize(value)) {
+        break;
+      }
+      await this.#page.keyboard.press(key);
+      await this.#page.waitForTimeout(100);
+    }
+    if (
+      normalize(await readback(control, "search_select") ?? "") !== normalize(value) &&
+      await listbox.isVisible() && await hasExactSelectableCandidate(listbox, value)
+    ) {
+      const nested = await this.#waitForSelectableLeaf(listbox, value);
+      interaction.visibleOptionCount = nested.visibleOptionCount;
+      interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
+      await nested.option.click({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(100);
+    }
+    interaction.popupClosed = !await listbox.isVisible() &&
+      await control.getAttribute("aria-expanded") !== "true";
+    interaction.backingValueCommitted = normalize(
+      await readback(control, "search_select") ?? "",
+    ) === normalize(value);
+    interaction.validationCleared = await validationCleared(control);
+    if (
+      !interaction.popupClosed || !interaction.backingValueCommitted ||
+      !interaction.validationCleared
+    ) throw new TypeError("Workday selection did not commit");
   }
 
   async #waitForExactVisible(locator: Locator): Promise<Locator> {
@@ -375,7 +1123,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #waitForSelectableLeaf(
     listbox: Locator,
     value: string,
-    uiVariant: string,
+    expandedCategories = new Set<string>(),
+    allowTextLeaves = true,
   ): Promise<{
     readonly option: Locator;
     readonly visibleOptionCount: number;
@@ -383,25 +1132,31 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   }> {
     const deadline = Date.now() + this.#timeoutMs;
     while (Date.now() < deadline) {
-      const candidates = await visibleLocators(listbox.getByRole("option"));
+      const pool = listbox.locator([
+        '[role="option"]:visible',
+        '[data-automation-id="promptOption"]:visible',
+        '[data-automation-id="promptLeafNode"]:visible',
+      ].join(", "));
+      const candidates = await selectableCandidateSnapshot(pool);
       const leaves: Locator[] = [];
-      for (const option of candidates) {
-        const automationId = await option.getAttribute("data-automation-id");
-        if (
-          (uiVariant === "workday_source_select_v1"
-            ? automationId !== "promptLeafNode"
-            : automationId === "promptCategory") ||
-          await option.getAttribute("aria-disabled") === "true"
-        ) continue;
+      const categories: Locator[] = [];
+      const leafLabels: (readonly string[])[] = [];
+      for (const candidate of candidates) {
+        const option = pool.nth(candidate.index);
+        if (candidate.automationId === "promptCategory") {
+          categories.push(option);
+          continue;
+        }
         leaves.push(option);
+        leafLabels.push(candidate.labels);
       }
       if (leaves.length > 64) {
         throw new TypeError("Workday selectable leaf is missing or ambiguous");
       }
       const exact: { readonly option: Locator; readonly ordinal: number }[] = [];
-      for (const [index, option] of leaves.entries()) {
-        if (normalize(await option.innerText()) === normalize(value)) {
-          exact.push({ option, ordinal: index + 1 });
+      for (const [index, labels] of leafLabels.entries()) {
+        if (labels.some((label) => normalize(label) === normalize(value))) {
+          exact.push({ option: leaves[index]!, ordinal: index + 1 });
         }
       }
       if (exact.length === 1) return {
@@ -411,6 +1166,24 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       };
       if (exact.length > 1) {
         throw new TypeError("Workday selectable leaf is missing or ambiguous");
+      }
+      const textLeaves = allowTextLeaves
+        ? await exactVisibleTextLeaves(listbox, value)
+        : [];
+      if (textLeaves.length === 1) return {
+        option: textLeaves[0]!,
+        visibleOptionCount: Math.max(leaves.length, textLeaves.length),
+        selectedOptionOrdinal: 1,
+      };
+      if (textLeaves.length > 1) {
+        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+      }
+      const category = await expandableCategory(categories, value, expandedCategories);
+      if (category !== undefined) {
+        expandedCategories.add(category.key);
+        await category.option.click({ timeout: this.#timeoutMs });
+        await this.#page.waitForTimeout(25);
+        continue;
       }
       await this.#page.waitForTimeout(25);
     }
@@ -487,6 +1260,122 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   }
 }
 
+function profileInspectionFailure(stage: string, error: unknown): void {
+  process.stderr.write(`${JSON.stringify({
+    applicationProfileInspectionFailed: {
+      stage,
+      error: error instanceof Error ? error.message : "unknown",
+    },
+  })}\n`);
+}
+
+async function expandableCategory(
+  categories: readonly Locator[],
+  value: string,
+  expanded: ReadonlySet<string>,
+): Promise<{ readonly key: string; readonly option: Locator } | undefined> {
+  const available: { readonly key: string; readonly label: string; readonly option: Locator }[] = [];
+  for (const option of categories) {
+    const label = normalize(await option.innerText());
+    const key = [
+      await option.getAttribute("id") ?? "",
+      await option.getAttribute("data-value") ?? "",
+      label,
+    ].join("\u0000");
+    if (!expanded.has(key)) available.push({ key, label, option });
+  }
+  if (available.length > 16) {
+    throw new TypeError("Workday selectable category is missing or ambiguous");
+  }
+  const target = normalize(value);
+  const related = available.filter(({ label }) =>
+    target === label || target.startsWith(`${label}:`)
+  );
+  const matches = related.length === 0 && available.length === 1 ? available : related;
+  if (matches.length !== 1) return undefined;
+  return { key: matches[0]!.key, option: matches[0]!.option };
+}
+
+async function exactVisibleTextLeaves(listbox: Locator, value: string): Promise<Locator[]> {
+  const descendants = listbox.locator("*");
+  const indexes = await descendants.evaluateAll((elements, expected) => {
+    const normalizeText = (text: string | null): string =>
+      (text ?? "").normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
+        .replace(/\s+/gu, " ").trim()
+        .toLocaleLowerCase("en-US");
+    const target = normalizeText(expected);
+    return elements.flatMap((element, index) => {
+      const style = getComputedStyle(element);
+      if (
+        style.display === "none" || style.visibility === "hidden" ||
+        element.getClientRects().length === 0 ||
+        element.closest('[data-automation-id="promptCategory"]') !== null ||
+        normalizeText(element.textContent) !== target
+      ) return [];
+      const childMatches = [...element.children].some((child) =>
+        normalizeText(child.textContent) === target
+      );
+      return childMatches ? [] : [index];
+    });
+  }, value);
+  return indexes.map((index) => descendants.nth(index));
+}
+
+async function selectableCandidateSnapshot(locator: Locator): Promise<readonly {
+  readonly index: number;
+  readonly automationId: string;
+  readonly labels: readonly string[];
+}[]> {
+  return await locator.evaluateAll((elements) => elements.flatMap((element, index) => {
+    const style = getComputedStyle(element);
+    if (
+      style.display === "none" || style.visibility === "hidden" ||
+      element.getClientRects().length === 0 ||
+      element.getAttribute("aria-disabled") === "true"
+    ) return [];
+    return [{
+      index,
+      automationId: element.getAttribute("data-automation-id") ?? "",
+      labels: [
+        element.getAttribute("aria-label") ?? "",
+        (element as HTMLElement).innerText ?? element.textContent ?? "",
+      ],
+    }];
+  }));
+}
+
+async function hasExactSelectableCandidate(listbox: Locator, value: string): Promise<boolean> {
+  const pool = listbox.locator([
+    '[role="option"]:visible',
+    '[data-automation-id="promptOption"]:visible',
+    '[data-automation-id="promptLeafNode"]:visible',
+  ].join(", "));
+  const candidates = await selectableCandidateSnapshot(pool);
+  if (candidates.some(({ automationId, labels }) =>
+    automationId !== "promptCategory" &&
+    labels.some((label) => normalize(label) === normalize(value))
+  )) return true;
+  return (await exactVisibleTextLeaves(listbox, value)).length === 1;
+}
+
+async function exactActiveOption(
+  page: Page,
+  identifier: string,
+  value: string,
+): Promise<Locator | undefined> {
+  const option = page.locator(`#${cssIdentifier(identifier)}`);
+  if (await option.count() !== 1 || !await option.isVisible()) return undefined;
+  const labels = [
+    await option.getAttribute("aria-label") ?? "",
+    await option.innerText(),
+  ];
+  if (!labels.some((label) => normalize(label) === normalize(value))) return undefined;
+  const actionable = option.locator(
+    'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption" or @data-automation-id="promptLeafNode"][1]',
+  );
+  return await actionable.count() === 1 ? actionable : option;
+}
+
 async function unknownUiBehavior(
   locator: Locator,
 ): Promise<ProfileControlSnapshot["uiBehavior"]> {
@@ -530,7 +1419,10 @@ async function readback(
   locator: Locator,
   behavior: ProfileControlSnapshot["uiBehavior"],
 ): Promise<string | null> {
-  if (behavior !== "search_select") {
+  if (behavior === "checkbox") {
+    return await locator.isChecked() ? "true" : "false";
+  }
+  if (behavior !== "search_select" && behavior !== "select" && behavior !== "multi_select") {
     const value = await locator.inputValue();
     return value === "" ? null : value;
   }
@@ -538,11 +1430,120 @@ async function readback(
   if (ariaValue !== "") return ariaValue;
   const selected = (await locator.getAttribute("data-selected-label"))?.trim() ?? "";
   if (selected !== "") return selected;
+  const nativeSelected = await locator.evaluate((element) => {
+    if (!(element instanceof HTMLSelectElement) || element.selectedOptions.length !== 1) return "";
+    const option = element.selectedOptions[0]!;
+    return (option.label || option.textContent || "").replace(/\s+/gu, " ").trim();
+  });
+  if (nativeSelected !== "" && normalize(nativeSelected) !== "select one") {
+    return nativeSelected;
+  }
+  if (await locator.evaluate((element) => element instanceof HTMLButtonElement)) {
+    const label = (await locator.innerText()).replace(/\s+/gu, " ").trim();
+    if (label !== "" && normalize(label) !== "select one") return label;
+  }
   const field = locator.locator('xpath=ancestor::*[@data-automation-id][1]');
   const pills = await visibleLocators(field.locator('[data-automation-id="selectedItem"]'));
-  if (pills.length !== 1) return null;
-  const label = (await pills[0]!.innerText()).replace(/\s+/gu, " ").trim();
-  return label === "" ? null : label;
+  if (pills.length === 0) return null;
+  const labels = (await Promise.all(pills.map(async (pill) =>
+    (await pill.innerText()).replace(/\s+/gu, " ").trim()
+  ))).filter((label) => label !== "");
+  if (labels.length !== pills.length) return null;
+  return behavior === "multi_select" && labels.length > 1
+    ? JSON.stringify(labels)
+    : labels.length === 1 ? labels[0]! : null;
+}
+
+function scalarReadbackMatches(
+  behavior: ProfileControlSnapshot["uiBehavior"],
+  actual: string | null,
+  expected: string,
+): boolean {
+  if (actual === null) return false;
+  if (behavior === "month") {
+    return /^(?:0?[1-9]|1[0-2])$/u.test(actual) && Number(actual) === Number(expected);
+  }
+  return normalize(actual) === normalize(expected);
+}
+
+function parseOptionList(value: string): readonly string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TypeError("Workday multi-select value must be an exact JSON string list");
+  }
+  if (
+    !Array.isArray(parsed) || parsed.length === 0 || parsed.length > 128 ||
+    parsed.some((item) => typeof item !== "string" || normalize(item) === "")
+  ) throw new TypeError("Workday multi-select value must be an exact JSON string list");
+  const options = parsed.map((item) => item as string);
+  if (new Set(options.map(normalize)).size !== options.length) {
+    throw new TypeError("Workday multi-select value contains duplicate options");
+  }
+  return options;
+}
+
+function optionReadbackList(value: string | null): readonly string[] {
+  if (value === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed as string[];
+    }
+  } catch {}
+  return [value];
+}
+
+async function selectionReadbackIncludes(
+  locator: Locator,
+  behavior: "search_select" | "select" | "multi_select",
+  value: string,
+): Promise<boolean> {
+  const observed = await readback(locator, behavior);
+  return behavior === "multi_select"
+    ? optionReadbackList(observed).some((option) => equivalentOption(option, value))
+    : normalize(observed ?? "") === normalize(value);
+}
+
+function exactOptionListReadback(
+  readbackValue: string | null,
+  expected: readonly string[],
+): boolean {
+  const actual = optionReadbackList(readbackValue);
+  if (actual.length !== expected.length) return false;
+  const remaining = [...expected];
+  for (const value of actual) {
+    const index = remaining.findIndex((candidate) => equivalentOption(value, candidate));
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return remaining.length === 0;
+}
+
+function equivalentOption(left: string, right: string): boolean {
+  return equivalentOptionLabels(left).has(normalize(right));
+}
+
+function equivalentOptionLabels(value: string): ReadonlySet<string> {
+  const normalized = normalize(value);
+  return new Set(normalized === "computer science"
+    ? [normalized, "computer and information science"]
+    : normalized === "computer and information science"
+      ? [normalized, "computer science"]
+      : [normalized]);
+}
+
+async function exactNormalizedOption(
+  options: readonly Locator[],
+  expected: string,
+): Promise<Locator> {
+  const matches: Locator[] = [];
+  for (const option of options) {
+    if (normalize(await option.innerText()) === normalize(expected)) matches.push(option);
+  }
+  if (matches.length !== 1) throw new TypeError("Workday prompt scope is ambiguous");
+  return matches[0]!;
 }
 
 async function radioReadback(radios: readonly Locator[]): Promise<string | null> {
@@ -585,9 +1586,21 @@ async function required(
         element.closest(`[role="${role}"]`)?.getAttribute("aria-required") === "true",
       compositeRole,
     );
+  const fieldMarkerRequired = await locator.evaluate((element) => {
+    const field = element.closest(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    if (field === null) return false;
+    if (field.querySelector(
+      '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+    ) !== null) return true;
+    return [...field.querySelectorAll("legend, label")].some((candidate) =>
+      /\*\s*$/u.test(candidate.textContent ?? "")
+    );
+  });
   return await locator.getAttribute("required") !== null ||
     await locator.getAttribute("aria-required") === "true" ||
-    accessibleRequired || compositeRequired;
+    accessibleRequired || compositeRequired || fieldMarkerRequired;
 }
 
 async function validationCleared(locator: Locator): Promise<boolean> {
@@ -608,6 +1621,18 @@ async function visibleLocators(locator: Locator): Promise<Locator[]> {
     if (await item.isVisible()) matches.push(item);
   }
   return matches;
+}
+
+async function selectionPopupVisible(
+  scope: Locator,
+  fallbackScope: boolean,
+): Promise<boolean> {
+  if (!fallbackScope) return await scope.isVisible();
+  return (await selectableCandidateSnapshot(scope.locator([
+    '[role="option"]:visible',
+    '[data-automation-id="promptOption"]:visible',
+    '[data-automation-id="promptLeafNode"]:visible',
+  ].join(", ")))).length > 0;
 }
 
 async function exactVisible(locator: Locator): Promise<Locator> {
@@ -639,15 +1664,33 @@ function cssIdentifier(value: string): string {
 }
 
 function normalize(value: string): string {
-  return value.normalize("NFC").replace(/\s+/gu, " ").trim()
+  return value.normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
+    .replace(/\s+/gu, " ").trim()
     .toLocaleLowerCase("en-US");
+}
+
+function selectionDiagnostic(
+  stage: string,
+  behavior: "search_select" | "select" | "multi_select",
+  details: Readonly<Record<string, boolean | number>>,
+): void {
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+  try {
+    process.stderr.write(`${JSON.stringify({
+      profileSelectionStage: stage,
+      behavior,
+      ...details,
+    })}\n`);
+  } catch {}
 }
 
 function emptyInteraction(
   behavior: ProfileControlSnapshot["uiBehavior"],
 ): MutableInteraction {
-  const choice = behavior === "search_select" || behavior === "radio_group";
-  const popup = behavior === "search_select";
+  const choice = behavior === "search_select" || behavior === "select" ||
+    behavior === "multi_select" || behavior === "radio_group";
+  const popup = behavior === "search_select" || behavior === "select" ||
+    behavior === "multi_select";
   return {
     popupBound: popup ? false : null,
     optionFocused: popup ? false : null,

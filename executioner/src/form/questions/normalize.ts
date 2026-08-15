@@ -50,6 +50,45 @@ export function resolveCatalogText<I extends string>(
   });
 }
 
+const questionBoilerplate = new Set([
+  "a", "an", "and", "answer", "are", "choose", "did", "do", "does", "enter",
+  "for", "from", "have", "has", "i", "in", "indicate", "is", "of", "on",
+  "or", "please", "provide", "question", "s", "select", "tell", "the", "this",
+  "to", "us", "what", "which", "will", "you", "your",
+]);
+
+export function normalizedQuestionKeywords(text: string): ReadonlySet<string> {
+  return new Set(
+    normalizeCatalogText(text).split(" ").filter((token) =>
+      token.length > 0 && !questionBoilerplate.has(token)
+    ),
+  );
+}
+
+export function resolveCatalogKeywords<I extends string>(
+  entries: readonly {
+    readonly id: I;
+    readonly keywordGroups: readonly (readonly string[])[];
+  }[],
+  text: string,
+): CatalogResolution<I> {
+  const keywords = normalizedQuestionKeywords(text);
+  const ids = Object.freeze([
+    ...new Set(entries.filter(({ keywordGroups }) =>
+      keywordGroups.some((group) =>
+        group.length > 0 && group.every((keyword) => keywords.has(keyword))
+      )
+    ).map(({ id }) => id)),
+  ]);
+  if (ids.length === 0) return Object.freeze({ kind: "unknown" });
+  if (ids.length > 1) return Object.freeze({ kind: "ambiguous", ids });
+  return Object.freeze({
+    kind: "resolved",
+    id: ids[0] as I,
+    provenance: "reviewed_catalog",
+  });
+}
+
 export function assertCatalogHasNoCollisions<I extends string>(
   entries: readonly ReviewedCatalogEntry<I>[],
 ): void {

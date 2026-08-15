@@ -24,8 +24,11 @@ export interface AccountVerifiedAcceptance {
   readonly targetHandleId: string;
   readonly accountState: "application_ready";
   readonly independentlyObservedVerifiedState: true;
-  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
-  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly verificationProof:
+    | "gmail_candidate_consumed"
+    | "credential_sign_in"
+    | "application_state_observed";
+  readonly provider: "gmail-api-v1" | "workday-auth" | "workday-state";
   readonly consumedCandidateCount: 0 | 1;
   readonly messageBodyRetained: false;
   readonly submitActivated: false;
@@ -35,7 +38,7 @@ export interface AccountVerifiedAcceptance {
 
 export interface AccountVerifiedLifecycleSuccess {
   readonly kind: "account_ready";
-  readonly path: "already_ready" | "reused_account" | "verified_account";
+  readonly path: "already_ready" | "reused_account" | "created_account" | "verified_account";
   readonly independentlyObserved: boolean;
   readonly verificationCandidateCount: number;
   readonly verificationConsumed: boolean;
@@ -144,6 +147,16 @@ function exactVerified(value: unknown): Pick<
     keys[4] === "verificationConsumed" &&
     value.kind === "account_ready" && value.independentlyObserved === true)) return null;
   if (
+    value.path === "already_ready" &&
+    value.verificationCandidateCount === 0 && value.verificationConsumed === false
+  ) {
+    return Object.freeze({
+      verificationProof: "application_state_observed",
+      provider: "workday-state",
+      consumedCandidateCount: 0,
+    });
+  }
+  if (
     value.path === "verified_account" &&
     value.verificationCandidateCount === 1 && value.verificationConsumed === true
   ) {
@@ -154,7 +167,7 @@ function exactVerified(value: unknown): Pick<
     });
   }
   if (
-    value.path === "reused_account" &&
+    (value.path === "reused_account" || value.path === "created_account") &&
     value.verificationCandidateCount === 0 && value.verificationConsumed === false
   ) {
     return Object.freeze({

@@ -15,13 +15,18 @@ import {
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 const uiTypes = new Set([
-  "checkbox", "file", "text", "phone", "date", "search_select", "radio_group",
+  "checkbox", "file", "text", "textarea", "phone", "date", "month", "year",
+  "number", "url", "select", "multi_select", "search_select", "radio_group",
 ]);
 const questionCategories = new Set([
   "identity", "address", "phone", "application_source", "prior_employment",
-  "experience", "education", "skill", "unknown",
+  "employment", "experience", "education", "skill", "language", "website",
+  "social_network", "unknown",
 ]);
-const answerCategories = new Set(["text", "phone", "date", "option", "unknown"]);
+const answerCategories = new Set([
+  "text", "phone", "date", "month", "year", "number", "url", "boolean",
+  "option", "single_select", "multi_select", "unknown",
+]);
 const optionMappings = new Set([
   "not_applicable", "owner_visible_option", "unresolved", "visible_exact", "approved_alias",
 ]);
@@ -29,7 +34,8 @@ const prefillDispositions = new Set([
   "already_correct", "blank", "conflict", "needs_owner_input",
 ]);
 const driverAttempts = new Set([
-  "none", "text", "phone", "date", "search_select", "radio_group",
+  "none", "text", "textarea", "phone", "date", "month", "year", "number", "url",
+  "checkbox", "select", "multi_select", "search_select", "radio_group",
 ]);
 const mechanicStatuses = new Set(["not_applicable", "not_observed", "observed"]);
 const persistentReadbacks = new Set([
@@ -94,6 +100,7 @@ export function createProfileFieldLearningCapture(input: {
   readonly page: WorkdayProfilePagePort;
   readonly plan: ProfilePagePlan;
   readonly root?: string;
+  readonly fileName?: "profile-field-learning.json" | "profile-field-learning-02.json";
   readonly sensitiveValues: readonly string[];
 }): ProfileFieldLearningCapture {
   const records = new Map<string, MutableRecord>();
@@ -167,9 +174,14 @@ export function createProfileFieldLearningCapture(input: {
           }),
           sensitiveValues: input.sensitiveValues,
           label: "profile-field-learning",
-          fileName: "profile-field-learning.json",
+          fileName: input.fileName ?? "profile-field-learning.json",
         });
-      } catch {
+      } catch (error) {
+        if ((input.root ?? "") !== "") {
+          process.stderr.write(`${JSON.stringify({
+            profileFieldLearningWriteFailed: error instanceof Error ? error.message : "unknown",
+          })}\n`);
+        }
         return null;
       }
     },
@@ -188,14 +200,16 @@ export function admitProfileFieldLearningEvidence(
   ) denied();
   const identities = new Set<string>();
   for (const field of value.fields) {
+    if (!validFieldIdentity(field.fieldIdentity)) denied("field_identity");
+    if (!validIdentityBinding(field)) {
+      denied(`identity_binding:${field.fieldIdentity}:${field.uiType}:${field.uiVariant}`);
+    }
     if (
       !exactKeys(field, [
         "fieldIdentity", "uiType", "uiVariant", "questionCategory",
         "answerCategory", "required", "visibleOptionIds", "selectedOptionId",
         "optionMapping", "prefillDisposition", "driverAttempt", "mechanics",
       ]) ||
-      !validFieldIdentity(field.fieldIdentity) ||
-      !validIdentityBinding(field) ||
       identities.has(field.fieldIdentity) ||
       !uiTypes.has(field.uiType) ||
       !reviewedUiVariants.has(field.uiVariant) ||
@@ -267,9 +281,9 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
   if (repeatable === null) return false;
   const section = repeatable[1] as "experience" | "education" | "skills";
   const catalog = profileRepeatableCatalog.find((entry) => entry.section === section);
-  const binding = catalog?.fields.find(({ fieldId }) => fieldId === repeatable[2]);
-  return binding !== undefined &&
-    field.uiType === binding.uiBehavior && field.uiVariant === binding.uiVariant;
+  return catalog?.fields.some(({ fieldId, uiBehavior, uiVariant }) =>
+    fieldId === repeatable[2] && field.uiType === uiBehavior && field.uiVariant === uiVariant
+  ) === true;
 }
 
 function sameMechanics(
@@ -442,8 +456,10 @@ function mechanicStatus(value: boolean | null): string {
 function emptyMechanics(
   behavior: ProfileControlSnapshot["uiBehavior"],
 ): MutableRecord["mechanics"] {
-  const choice = behavior === "search_select" || behavior === "radio_group";
-  const popup = behavior === "search_select";
+  const choice = behavior === "search_select" || behavior === "select" ||
+    behavior === "multi_select" || behavior === "radio_group";
+  const popup = behavior === "search_select" || behavior === "select" ||
+    behavior === "multi_select";
   return {
     popupBound: popup ? "not_observed" : "not_applicable",
     optionFocused: popup ? "not_observed" : "not_applicable",
@@ -472,8 +488,10 @@ function exactMechanics(value: unknown): value is ProfileFieldMechanicsV1 {
 }
 
 function validMechanicsRelations(field: ProfileFieldLearningRecordV1): boolean {
-  const choice = field.uiType === "search_select" || field.uiType === "radio_group";
-  const popup = field.uiType === "search_select";
+  const choice = field.uiType === "search_select" || field.uiType === "select" ||
+    field.uiType === "multi_select" || field.uiType === "radio_group";
+  const popup = field.uiType === "search_select" || field.uiType === "select" ||
+    field.uiType === "multi_select";
   if (
     field.driverAttempt !== "none" && field.driverAttempt !== field.uiType ||
     field.driverAttempt === "none" &&
@@ -497,7 +515,9 @@ function validMechanicsRelations(field: ProfileFieldLearningRecordV1): boolean {
 
 function optionMapping(plan: ProfileFieldPlan | undefined): string {
   if (plan === undefined) return "unresolved";
-  if (plan.answerType !== "option") return "not_applicable";
+  if (!new Set(["option", "single_select", "multi_select"]).has(plan.answerType)) {
+    return "not_applicable";
+  }
   return plan.optionMapping === undefined ? "unresolved" : "owner_visible_option";
 }
 
@@ -526,7 +546,25 @@ function sameCategories(left: ProfileFieldPlan, right: ProfileFieldPlan): boolea
 }
 
 function sameValue(expected: string, actual: string | null): boolean {
-  return actual !== null && normalize(expected) === normalize(actual);
+  if (actual === null) return false;
+  const expectedOptions = optionList(expected);
+  if (expectedOptions === undefined) return normalize(expected) === normalize(actual);
+  const actualOptions = optionList(actual) ?? [actual];
+  if (expectedOptions.length !== actualOptions.length) return false;
+  const remaining = new Set(expectedOptions.map(normalize));
+  return actualOptions.every((value) => remaining.delete(normalize(value))) && remaining.size === 0;
+}
+
+function optionList(value: string): readonly string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.length > 0 &&
+        parsed.every((item) => typeof item === "string" && normalize(item) !== "")
+      ? parsed as string[]
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalize(value: string): string {
@@ -538,6 +576,6 @@ function exactKeys(value: object, expected: readonly string[]): boolean {
   return keys.length === expected.length && expected.every((key, index) => keys[index] === key);
 }
 
-function denied(): never {
-  throw new TypeError("profile field learning evidence denied");
+function denied(reason?: string): never {
+  throw new TypeError(`profile field learning evidence denied${reason === undefined ? "" : `: ${reason}`}`);
 }

@@ -42,6 +42,9 @@ class ResumeFixturePage implements Page {
   uploadedFileCount = 0;
   uploadComplete = false;
   requiredErrorVisible = true;
+  clearInputAfterUpload = false;
+  inputFileCount = 0;
+  uploadedFileName = "";
   bytes = new Uint8Array();
   fileType = "";
 
@@ -53,10 +56,12 @@ class ResumeFixturePage implements Page {
     this.setFile(bytes, "application/pdf");
   }
 
-  setFile(bytes: Uint8Array, fileType: string): void {
+  setFile(bytes: Uint8Array, fileType: string, fileName = "resume.pdf"): void {
     this.uploadEffects += 1;
     this.bytes = Uint8Array.from(bytes);
     this.fileType = fileType;
+    this.inputFileCount = this.clearInputAfterUpload ? 0 : 1;
+    this.uploadedFileName = fileName;
     this.uploadedFileCount = 1;
     this.uploadComplete = true;
     this.requiredErrorVisible = false;
@@ -67,6 +72,8 @@ class ResumeFixturePage implements Page {
     this.bytes.fill(0);
     this.bytes = new Uint8Array();
     this.fileType = "";
+    this.inputFileCount = 0;
+    this.uploadedFileName = "";
     this.uploadedFileCount = 0;
     this.uploadComplete = false;
     this.requiredErrorVisible = true;
@@ -87,9 +94,9 @@ class ResumeFixtureLocator {
 
   async count(): Promise<number> {
     if (this.selector.includes("file-upload-input-ref")) return 1;
-    if (this.selector.includes("file-upload-item")) return this.page.uploadedFileCount;
     if (this.selector.includes("file-upload-success")) return this.page.uploadComplete ? 1 : 0;
     if (this.selector.includes("delete-file")) return this.page.uploadedFileCount;
+    if (this.selector.includes("file-upload-item")) return this.page.uploadedFileCount;
     if (this.selector.includes("file-upload-error")) return 1;
     return 0;
   }
@@ -105,16 +112,25 @@ class ResumeFixtureLocator {
   }
 
   async setInputFiles(file: {
+    readonly name: string;
     readonly mimeType: string;
     readonly buffer: Buffer;
   }): Promise<void> {
-    this.page.setFile(file.buffer, file.mimeType);
+    this.page.setFile(file.buffer, file.mimeType, file.name);
   }
 
   async evaluate<Result, Argument>(
     _operation: (element: HTMLElement, argument: Argument) => Result | Promise<Result>,
     argument: Argument,
   ): Promise<Result> {
+    if (this.selector.includes("file-upload-item")) {
+      return {
+        identityMatches: this.page.uploadedFileName === argument,
+        busy: false,
+        buttonCount: 0,
+        progressCount: 0,
+      } as Result;
+    }
     const expected = argument as {
       readonly sha256: string;
       readonly sizeBytes: number;
@@ -122,8 +138,8 @@ class ResumeFixtureLocator {
     };
     const sha256 = createHash("sha256").update(this.page.bytes).digest("hex");
     return {
-      fileCount: this.page.uploadedFileCount,
-      identityMatches: this.page.uploadedFileCount === 1 &&
+      fileCount: this.page.inputFileCount,
+      identityMatches: this.page.inputFileCount === 1 &&
         this.page.bytes.byteLength === expected.sizeBytes &&
         this.page.fileType === expected.mimeType &&
         sha256 === expected.sha256,
@@ -200,6 +216,29 @@ test("uploads and independently identifies the exact selected resume", async () 
 
     const serialized = JSON.stringify({ evidence: result.value, events });
     assert.doesNotMatch(serialized, /synthetic selected resume|\.pdf|[a-f0-9]{64}|path|filename|digest/iu);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("verifies an exact Workday upload item after the native file input clears", async () => {
+  const { browser, page } = await fixture();
+  try {
+    (page as ResumeFixturePage).clearInputAfterUpload = true;
+    const selected = intent("input-clearing selected resume", "resume_aaaaaaaaaaaaaaaa");
+    const result = await createWorkdayResumeUploadHandler({
+      driver: createWorkdayResumeUploadDriver(page),
+      verifier: createWorkdayResumeVerifier(page, { maxAttempts: 3, intervalMs: 0 }),
+      replaceExisting: true,
+    }).upload(selected.intent, new AbortController().signal);
+
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.value.browserState.uploadComplete, true);
+      assert.equal(result.value.browserState.removeControlCardinality, 1);
+    }
+    assert.equal((page as ResumeFixturePage).inputFileCount, 0);
+    assert.equal((page as ResumeFixturePage).uploadedFileCount, 1);
   } finally {
     await browser.close();
   }

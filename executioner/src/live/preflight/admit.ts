@@ -320,10 +320,11 @@ function validTarget(target: UnknownRecord): boolean {
       match?.[1] === target.tenant.toLowerCase() &&
       target.tenant === target.tenant.toLowerCase() &&
       /^[A-Za-z0-9-]{2,64}$/u.test(target.posting) &&
+      target.posting === target.posting.toUpperCase() &&
       decodedPath.includes("/job/") &&
       !decodedPath.includes("//") &&
       !decodedPath.split("/").includes("..") &&
-      finalSegment.endsWith(`_${target.posting}`)
+      finalSegment.toUpperCase().endsWith(`_${target.posting}`)
     );
   } catch {
     return false;

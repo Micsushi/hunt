@@ -92,7 +92,7 @@ test("Windows process audit bounds dynamic monitor ledgers", () => {
       jobCloseApplied: true,
       membersObservedBeforeClose: 2,
       membersAliveAfterClose: 0,
-      monitorFileCount: 1025,
+      monitorFileCount: 2049,
       monitorChainSha256: "c".repeat(64),
       checkedAt: "2026-08-10T12:01:00.000Z",
     }));

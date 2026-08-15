@@ -36,6 +36,7 @@ import {
 test("production binding resolves opaque owner sources without value leakage", async () => {
   const fixture = liveFixture();
   let runtimeCalls = 0;
+  let accountCalls = 0;
   try {
     const collector = createApplicationLaneAcceptanceCollector();
     const runtime: Stage2ApplicationWalkRuntimeBinding = {
@@ -115,6 +116,12 @@ test("production binding resolves opaque owner sources without value leakage", a
             progress: { async record() { return { ok: true as const, value: undefined }; } },
           },
           laneAcceptances: collector,
+          account: {
+            async verify() {
+              accountCalls += 1;
+              return { ok: true as const, proof: {} as never };
+            },
+          },
           cleanup: { async close() { return true; } },
         };
       },
@@ -137,6 +144,7 @@ test("production binding resolves opaque owner sources without value leakage", a
 
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(runtimeCalls, 1);
+    assert.equal(accountCalls, 1);
     const written = readFileSync(join(fixture.evidenceRoot, "application-walk-acceptance.json"), "utf8");
     assert.doesNotMatch(written, /Ada|dependable systems|application-profile|application-resume|sha256|[a-f0-9]{64}/u);
     const ownerConfig = readFileSync(fixture.configPath, "utf8");

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  boundedText,
   browserTargetToken,
 } from "../../../src/contracts/index.ts";
 import { requiredFieldFlowCases } from "../../../src/testing/contracts/field-flow-cases.ts";
@@ -71,6 +72,50 @@ test("unknown and duplicate target coordinates fail without deriving an ID", () 
     UnsupportedTargetError,
   );
   assert.throws(() => discoverFields([given, given]), /duplicate browser target/u);
+});
+
+test("value-free Workday target identities admit tenant-specific radio options", () => {
+  const given = target(requiredFieldFlowCases[0]);
+  const fields = discoverFields([{
+    ...given,
+    token: browserTargetToken("target-workday-a1b2c3d4-1"),
+    name: boundedText("Tenant-specific question"),
+    control: {
+      kind: "choice",
+      element: "input",
+      choice: "radio",
+      group: boundedText("Tenant-specific question"),
+      checked: false,
+    },
+    readback: { kind: "selected", option: null },
+    options: [boundedText("Yes"), boundedText("No")],
+  } as ReturnType<typeof target> & { readonly options: readonly ReturnType<typeof boundedText>[] }]);
+
+  assert.deepEqual(fields, [{
+    fieldId: "field-workday-a1b2c3d4-1",
+    target: "target-workday-a1b2c3d4-1",
+    label: "Tenant-specific question",
+    required: true,
+    behavior: "radio",
+    options: [
+      { id: "option-workday-a1b2c3d4-1-1", label: "Yes" },
+      { id: "option-workday-a1b2c3d4-1-2", label: "No" },
+    ],
+    state: "empty",
+  }]);
+});
+
+test("tenant numeric controls use the frozen text mutation primitive", () => {
+  const given = target(requiredFieldFlowCases[0]);
+  const fields = discoverFields([{
+    ...given,
+    token: browserTargetToken("target-workday-number-1"),
+    name: boundedText("Years of Relevant Experience"),
+    control: { kind: "text", element: "input" },
+    readback: { kind: "text", value: boundedText("5") },
+  }]);
+  assert.equal(fields[0]?.behavior, "text");
+  assert.equal(fields[0]?.state, "populated");
 });
 
 test("semantic snapshots sort, freeze, and leave the source array untouched", () => {

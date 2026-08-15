@@ -1,15 +1,68 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { chromium } from "playwright";
 
 import { generatedOperationId } from "../../../src/contracts/index.ts";
 import type { LiveSessionId } from "../../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
-import { authMonitorPhase } from
+import {
+  authMonitorPhase,
+} from
   "../../../src/browser/playwright-live/private/owned-account-page-coordinator.ts";
+import {
+  applicationReadyMonitorPage,
+  applicationReadyMonitorTaxonomy,
+} from
+  "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 import type { Stage2ExternalMonitorRuntime } from
   "../../../src/live/evidence/external-monitor-runtime.ts";
+
+test("application-ready monitoring reports the visible first-page heading and discovered controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<!doctype html><html data-hunt-submit-activated="false"><body>
+      <div data-automation-id="progressBarActiveStep">My Information My Experience Application Questions</div>
+      <main data-automation-id="applyFlowMyInfoPage">
+        <h2>My Information</h2>
+        <div data-automation-id="formField-source"><label>How Did You Hear About Us?*</label>
+          <button id="source--1" type="button" role="combobox" aria-haspopup="listbox">Select One</button>
+        </div>
+        <div data-automation-id="formField-previous-worker"><fieldset><legend>Worked here before?*</legend>
+          <input type="radio" name="candidateIsPreviousWorker" value="yes">
+          <input type="radio" name="candidateIsPreviousWorker" value="no">
+        </fieldset></div>
+        <div data-automation-id="formField-country"><label>Country*</label>
+          <button id="country--country" role="combobox" aria-haspopup="listbox">Canada</button>
+        </div>
+        <div data-automation-id="formField-first-name"><label>First Name*</label>
+          <input id="name--legalName--firstName" type="text">
+        </div>
+        <div data-automation-id="formField-last-name"><label>Last Name*</label>
+          <input id="name--legalName--lastName" type="text">
+        </div>
+        <button type="button">Save and Continue</button>
+      </main>
+    </body></html>`);
+
+    assert.equal(await applicationReadyMonitorPage(page as never).title(), "My Information");
+    assert.deepEqual(await applicationReadyMonitorTaxonomy(page as never), {
+      fieldCount: 5,
+      requiredFieldCount: 5,
+      controlTypes: ["search_select", "radio_group", "text"],
+      questionTypes: ["application_source", "prior_employment", "identity", "address"],
+      answerTypes: ["option", "text"],
+      validationState: "clear",
+      submitPresent: false,
+      submitActivated: false,
+    });
+  } finally {
+    await page.close();
+    await browser.close();
+  }
+});
 
 test("external monitor ACK blocks account mutation and binds the same owned page through readback", async () => {
   const context = new FakeContext();
@@ -59,8 +112,9 @@ test("external monitor ACK blocks account mutation and binds the same owned page
     ["account_entry", "before_mutation", { operationId: request.operationId, attempt: 1 }],
     ["account_entry", "after_readback", { operationId: request.operationId, attempt: 1 }],
   ]);
-  assert.equal(records[0]?.[0], context.page);
-  assert.equal(records[1]?.[0], context.page);
+  assert.notEqual(records[0]?.[0], context.page);
+  assert.notEqual(records[1]?.[0], context.page);
+  assert.equal(typeof records[0]?.[0].screenshot, "function");
 });
 
 test("external monitoring retries exact ownership through a bounded post-submit transition", async () => {
@@ -112,6 +166,57 @@ test("external monitoring retries exact ownership through a bounded post-submit 
     "account_post_submit_monitor_started",
     "account_post_submit_monitor_succeeded",
   ]);
+});
+
+test("post-submit monitoring retries when capture races into a newly classified page", async () => {
+  const context = new FakeContext();
+  const semantic = new FakeSemanticAccountPage();
+  let monitorCalls = 0;
+  let inspectionsAfterFailedMonitor = 0;
+  const phases: string[] = [];
+  const traces: string[] = [];
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: {
+      async inspect() {
+        if (monitorCalls === 0) return ownedAccountEntry();
+        inspectionsAfterFailedMonitor += 1;
+        return inspectionsAfterFailedMonitor < 3
+          ? ownedAccountEntry()
+          : ownedApplicationReady();
+      },
+    },
+    profiles: new MemoryProfiles(),
+    accountPage: semantic,
+    externalMonitor: {
+      async auth(_page, phase, moment) {
+        if (moment !== "after_readback") return;
+        phases.push(phase);
+        monitorCalls += 1;
+        if (monitorCalls === 1) throw new Error("page changed during capture");
+      },
+      async application() {},
+    },
+    accountNavigationTrace: (event) => traces.push(event),
+    ids: () => liveFixtures.session.sessionId as LiveSessionId,
+    timeoutMs: 500,
+  });
+  const opened = await provider.open(openRequest(), AbortSignal.any([]));
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.withOwnedAccountPageAccess(
+    accessRequest(opened.value.session.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      assert.deepEqual(await access.activate("submit_sign_in"), { ok: true, value: undefined });
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.deepEqual(phases, ["account_entry", "application_ready"]);
+  assert.equal(traces.includes("account_post_submit_monitor_transition_retry"), true);
 });
 
 test("auth monitoring reports a visible sign-in overlay before its backing application page", () => {
@@ -895,6 +1000,17 @@ function ownedAccountEntry() {
         "structural_trait_page_account_entry_v1",
         "structural_trait_account_create_v1",
       ],
+    },
+  };
+}
+
+function ownedApplicationReady() {
+  const value = ownedMatched();
+  return {
+    ...value,
+    snapshot: {
+      ...value.snapshot,
+      traitIds: ["structural_trait_page_profile_step_v1"],
     },
   };
 }

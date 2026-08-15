@@ -6,13 +6,20 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  runS2GmailGrantLocalForgetCli,
   runS2GmailGrantRevokeCli,
+  type GmailGrantLocalForgetOperation,
   type GmailGrantRevokeOperation,
 } from "../../src/composition/s2-gmail-bootstrap-cli.ts";
 
 const success = {
   ok: true,
   value: { schemaVersion: 1, kind: "gmail_refresh_grant_revoked" },
+} as const;
+
+const forgetSuccess = {
+  ok: true,
+  value: { schemaVersion: 1, kind: "gmail_refresh_grant_forgotten" },
 } as const;
 
 test("revoke CLI loads exactly two external files and forwards no secret surface", async () => {
@@ -65,6 +72,31 @@ test("revoke CLI rejects private arguments and environment before operation", as
   assert.equal(calls, 0);
 });
 
+test("local-forget CLI keeps the same two-file value-free surface", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-forget-cli-"));
+  try {
+    const ownerPath = join(root, "owner.json");
+    const bootstrapPath = join(root, "gmail.json");
+    await writeFile(ownerPath, '{"schemaVersion":1}');
+    await writeFile(bootstrapPath, '{"schemaVersion":1,"desktopClientId":"safe-client"}');
+    let calls = 0;
+    const operation: GmailGrantLocalForgetOperation = async (_owner, _bootstrap, context) => {
+      calls += 1;
+      assert.equal(context.ownerConfigPath, ownerPath);
+      assert.equal(context.bootstrapInputPath, bootstrapPath);
+      return forgetSuccess;
+    };
+    assert.deepEqual(await runS2GmailGrantLocalForgetCli(
+      ["--config", ownerPath, "--gmail-bootstrap", bootstrapPath],
+      { PATH: "safe" },
+      { forbiddenRoots: [process.cwd()], operation },
+    ), forgetSuccess);
+    assert.equal(calls, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("thin revoke script and package command stay value-free", async () => {
   const privateValue = "sentinel-private-refresh-token";
   const result = spawnSync(
@@ -91,5 +123,9 @@ test("thin revoke script and package command stay value-free", async () => {
   assert.equal(
     packageJson.scripts["revoke:s2-gmail-grant"],
     "node scripts/revoke-s2-gmail-grant.ts",
+  );
+  assert.equal(
+    packageJson.scripts["forget:s2-gmail-grant"],
+    "node scripts/forget-s2-gmail-grant.ts",
   );
 });

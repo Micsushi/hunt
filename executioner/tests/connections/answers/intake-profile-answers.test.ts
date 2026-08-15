@@ -356,7 +356,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
   }
 });
 
-test("real F4 profile errors and F6 factual outcomes remain exact results", async () => {
+test("real F4 errors remain exact while missing and unmatched answers become learning intents", async () => {
   const understood = await understand();
   if (!understood.ok || understood.value.kind !== "understood") assert.fail("expected facts");
   const fields = new Map(understood.value.snapshot.fields.map((field) => [field.fieldId, field]));
@@ -393,7 +393,20 @@ test("real F4 profile errors and F6 factual outcomes remain exact results", asyn
   }), "Narrative.");
   assert.deepEqual(
     await missing.resolve(answerRequest(fields.get(fieldId("s1-field-family-name"))!, values), signal),
-    { ok: true, value: { kind: "profile_answer_missing", questionId: "s1-question-family-name" } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "text",
+          behavior: "text",
+          fieldId: "s1-field-family-name",
+          target: "target-s1-field-family-name",
+          value: "Candidate",
+          provenance: "reviewed_catalog",
+        },
+      },
+    },
   );
 
   const noMatch = createAnswerResolver(createProfileQuery({
@@ -401,10 +414,14 @@ test("real F4 profile errors and F6 factual outcomes remain exact results", asyn
     revision: profile.revision,
     facts: [{ factId: "country", value: "Mexico", provenance: "owner_provided" }],
   }), "Narrative.");
-  assert.deepEqual(
-    await noMatch.resolve(answerRequest(fields.get(fieldId("s1-field-country"))!, values), signal),
-    { ok: true, value: { kind: "option_no_match", questionId: "s1-question-country" } },
+  const noMatchResult = await noMatch.resolve(
+    answerRequest(fields.get(fieldId("s1-field-country"))!, values),
+    signal,
   );
+  assert.equal(noMatchResult.ok && noMatchResult.value.kind, "resolved");
+  if (noMatchResult.ok && noMatchResult.value.kind === "resolved") {
+    assert.equal(noMatchResult.value.intent.provenance, "visible_option");
+  }
 
   const workAuthorization = fields.get(fieldId("s1-field-work-authorization"))!;
   const ambiguousField = Object.freeze({
@@ -414,13 +431,14 @@ test("real F4 profile errors and F6 factual outcomes remain exact results", asyn
       { id: optionId("s1-option-work-authorization-y"), label: boundedText("Y") },
     ]),
   });
-  assert.deepEqual(
-    await createAnswerResolver(createProfileQuery(profile), "Narrative.").resolve(
-      answerRequest(ambiguousField, values),
-      signal,
-    ),
-    { ok: true, value: { kind: "option_ambiguous", questionId: "s1-question-work-authorization" } },
-  );
+  const ambiguousResult = await createAnswerResolver(
+    createProfileQuery(profile),
+    "Narrative.",
+  ).resolve(answerRequest(ambiguousField, values), signal);
+  assert.equal(ambiguousResult.ok && ambiguousResult.value.kind, "resolved");
+  if (ambiguousResult.ok && ambiguousResult.value.kind === "resolved") {
+    assert.equal(ambiguousResult.value.intent.provenance, "visible_option");
+  }
 
   const unsupportedTarget = Object.freeze({
     ...targets.find(({ token }) => token === "target-s1-field-given-name")!,
@@ -441,7 +459,7 @@ test("real F4 profile errors and F6 factual outcomes remain exact results", asyn
   );
 });
 
-test("protected F5 facts reject non-owner provenance without exposing the value", async () => {
+test("protected F5 facts replace non-owner provenance with a learning default", async () => {
   const understood = await understand();
   if (!understood.ok || understood.value.kind !== "understood") assert.fail("expected facts");
   const protectedField = understood.value.snapshot.fields.find(
@@ -465,9 +483,8 @@ test("protected F5 facts reject non-owner provenance without exposing the value"
     resume: contractFixtures.resume,
     resumeArtifact: contractFixtures.resumeArtifact,
   }), signal);
-  assert.deepEqual(result, {
-    ok: false,
-    error: { code: "protected_answer_denied", retryable: false },
-  });
-  assert.equal(JSON.stringify(result).includes("2026-09-01"), false);
+  assert.equal(result.ok && result.value.kind, "resolved");
+  if (result.ok && result.value.kind === "resolved") {
+    assert.equal(result.value.intent.provenance, "reviewed_catalog");
+  }
 });

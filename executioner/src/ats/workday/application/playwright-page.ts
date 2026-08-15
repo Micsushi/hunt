@@ -10,6 +10,7 @@ import {
   type ApplicationWalkDependencies,
 } from "./page-walk-contract.ts";
 export interface PlaywrightWorkdayApplicationPageOptions { readonly timeoutMs?: number;
+  readonly navigationSettleTimeoutMs?: number;
   readonly pageIds?: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>; }
 interface BrowserApplicationSnapshot {
   readonly page: ApplicationPage;
@@ -20,6 +21,19 @@ interface BrowserApplicationSnapshot {
     readonly fieldId: string;
     readonly page?: ApplicationHandlerPage;
     readonly verification: "verified" | "unverified";
+    readonly diagnostic: {
+      readonly tag: string;
+      readonly role: string | null;
+      readonly inputType: string | null;
+      readonly descendantRadioCount: number;
+      readonly descendantCheckedCount: number;
+      readonly fieldOwnerRadioCount: number;
+      readonly fieldOwnerCheckedCount: number;
+      readonly nearestSelectedItemCount: number;
+      readonly fieldOwnerSelectedItemCount: number;
+      readonly inputNonEmpty: boolean;
+      readonly ariaValueNonEmpty: boolean;
+    };
   }[];
   readonly c3OwnedDuplicateRows: number;
   readonly submitActivated: boolean;
@@ -27,17 +41,40 @@ interface BrowserApplicationSnapshot {
   readonly transitionKey: string;
   readonly validationKeys: readonly string[];
 }
+interface BrowserApplicationAmbiguity {
+  readonly ambiguity: readonly {
+    readonly page: "profile" | "experience" | "questionnaire" | "pre_review";
+    readonly contains: readonly number[];
+  }[];
+  readonly structures: readonly {
+    readonly id: string;
+    readonly visible: boolean;
+  }[];
+}
 export class PlaywrightWorkdayApplicationPage {
   readonly #page: Page;
   readonly #timeoutMs: number;
+  readonly #navigationSettleTimeoutMs: number;
   readonly #pageIds: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
   constructor(page: Page, options: PlaywrightWorkdayApplicationPageOptions = {}) {
     this.#page = page;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
+    this.#navigationSettleTimeoutMs = options.navigationSettleTimeoutMs ?? this.#timeoutMs;
     this.#pageIds = options.pageIds ?? {};
   }
   async observe(signal: AbortSignal): Promise<ApplicationPortResult<ApplicationPageTruth>> {
     const snapshot = await this.#readSnapshot(signal);
+    if (snapshot.ok && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      try {
+        process.stderr.write(`${JSON.stringify({
+          applicationRequiredFieldDiagnostics: snapshot.value.requiredFields.map((field) => ({
+            fieldId: field.fieldId,
+            verification: field.verification,
+            ...(field.verification === "verified" ? {} : field.diagnostic),
+          })),
+        })}\n`);
+      } catch {}
+    }
     return snapshot.ok ? { ok: true, value: this.#toTruth(snapshot.value) } : snapshot;
   }
   async next(request: Parameters<ApplicationWalkDependencies["navigation"]["next"]>[0], signal: AbortSignal):
@@ -57,27 +94,84 @@ export class PlaywrightWorkdayApplicationPage {
     ) return failure("navigation_illegal", "navigation");
     let clicked = false;
     try {
-      const action = await singleActionableNext(this.#page, before.value.rootSelector);
+      const action = await this.#waitForActionableNext(before.value.rootSelector, signal);
       if (action === undefined) return failure("navigation_uncertain", "navigation");
-      await action.click({ timeout: this.#timeoutMs });
       clicked = true;
-      const after = await this.#waitForChangedSnapshot(before.value.signature, signal);
+      navigationDiagnostic("action_admitted");
+      // Activate the admitted element itself. Coordinate clicks can drift onto
+      // a final Submit control if Workday remounts the sticky footer between
+      // hit testing and pointer dispatch.
+      try {
+        navigationDiagnostic("hit_test_started");
+        const activated = await action.evaluate((control) => {
+          if (!(control instanceof HTMLButtonElement) || control.disabled ||
+              control.getAttribute("aria-disabled") === "true") return false;
+          const label = (control.innerText || control.textContent || "")
+            .normalize("NFC").replace(/\s+/gu, " ").trim();
+          if (!/^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label)) return false;
+          control.click();
+          return true;
+        });
+        if (!activated) throw new Error("navigation control activation denied");
+        navigationDiagnostic("admitted_control_activated");
+      } catch {
+        navigationDiagnostic("activation_failed");
+        // Destination readback owns the result.
+      }
+      navigationDiagnostic("destination_readback_started");
+      const after = await this.#waitForChangedSnapshot(
+        before.value,
+        signal,
+      );
+      navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
       if (!after.ok) return after;
       const afterTruth = this.#toTruth(after.value);
       if (!request.allowed.includes(afterTruth.page) || afterTruth.submitActivated) {
+        navigationDiagnostic("destination_not_allowed", {
+          beforePage: before.value.page,
+          afterPage: after.value.page,
+          allowedPages: request.allowed,
+          rootChanged: after.value.rootSelector !== before.value.rootSelector,
+          transitionChanged: after.value.transitionKey !== before.value.transitionKey,
+          submitActivated: afterTruth.submitActivated,
+        });
         return failure("navigation_uncertain", "navigation");
       }
       if (hasValidationDowngrade(before.value, after.value)) {
+        navigationDiagnostic("validation_downgrade", {
+          beforePage: before.value.page,
+          afterPage: after.value.page,
+          rootChanged: after.value.rootSelector !== before.value.rootSelector,
+        });
         return failure("page_incomplete", "navigation");
       }
       if (
+        after.value.page === before.value.page &&
+        after.value.rootSelector === before.value.rootSelector &&
         after.value.transitionKey === before.value.transitionKey &&
         after.value.requiredFields.length <= before.value.requiredFields.length
       ) {
+        navigationDiagnostic("semantic_guard_failed", {
+          beforePage: before.value.page,
+          afterPage: after.value.page,
+          rootChanged: false,
+          transitionChanged: false,
+          beforeRequiredCount: before.value.requiredFields.length,
+          afterRequiredCount: after.value.requiredFields.length,
+        });
         return failure("browser_effect_uncertain", "navigation");
       }
+      navigationDiagnostic("navigation_advanced", {
+        beforePage: before.value.page,
+        afterPage: after.value.page,
+        rootChanged: after.value.rootSelector !== before.value.rootSelector,
+        transitionChanged: after.value.transitionKey !== before.value.transitionKey,
+        beforeRequiredCount: before.value.requiredFields.length,
+        afterRequiredCount: after.value.requiredFields.length,
+      });
       return { ok: true, value: { advanced: true } };
     } catch {
+      navigationDiagnostic(clicked ? "navigation_exception_after_admission" : "navigation_exception_before_admission");
       return failure(
         signal.aborted
           ? "operation_cancelled"
@@ -94,9 +188,18 @@ export class PlaywrightWorkdayApplicationPage {
       const snapshot = await this.#page.evaluate(
         readApplicationSnapshot, WORKDAY_APPLICATION_PAGE_SELECTORS,
       );
-      return snapshot === null
-        ? failure("browser_target_ambiguous", "page_type")
-        : { ok: true, value: snapshot };
+      if ("ambiguity" in snapshot) {
+        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+          try {
+            process.stderr.write(`${JSON.stringify({
+              applicationPageAmbiguity: snapshot.ambiguity,
+              applicationPageStructures: snapshot.structures,
+            })}\n`);
+          } catch {}
+        }
+        return failure("browser_target_ambiguous", "page_type");
+      }
+      return { ok: true, value: snapshot };
     } catch {
       return failure(
         signal.aborted ? "operation_cancelled" : "browser_target_stale",
@@ -105,18 +208,131 @@ export class PlaywrightWorkdayApplicationPage {
     }
   }
   async #waitForChangedSnapshot(
-    beforeSignature: string,
+    before: BrowserApplicationSnapshot,
     signal: AbortSignal,
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
-    const deadline = Date.now() + this.#timeoutMs;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const deadline = Date.now() + this.#navigationSettleTimeoutMs;
+      while (Date.now() < deadline) {
+        if (signal.aborted) return failure("operation_cancelled", "none");
+        const after = await this.#readSnapshot(signal);
+        if (
+          after.ok && after.value.signature !== before.signature &&
+          (after.value.page !== before.page ||
+            after.value.rootSelector !== before.rootSelector ||
+            (before.page === "questionnaire" && after.value.page === "questionnaire" &&
+              after.value.transitionKey !== before.transitionKey) ||
+            after.value.requiredFields.length > before.requiredFields.length ||
+            hasValidationDowngrade(before, after.value))
+        ) {
+          const stable = await this.#confirmStableDestination(after.value, signal);
+          if (stable !== undefined) return { ok: true, value: stable };
+          navigationDiagnostic("destination_candidate_unstable", {
+            candidatePage: after.value.page,
+            rootChanged: after.value.rootSelector !== before.rootSelector,
+          });
+        }
+        const remaining = deadline - Date.now();
+        if (remaining > 0) await this.#page.waitForTimeout(Math.min(50, remaining));
+      }
+      if (pass > 0 || signal.aborted) break;
+      const source = this.#page.locator(before.rootSelector);
+      const applicationShell = this.#page.locator(
+        '[data-automation-id="applyFlowPage"]:visible',
+      );
+      const loading = this.#page.locator(
+        '[data-automation-id="applyFlowLoadingPage"]:visible',
+      );
+      const sourceCount = await source.count();
+      if (
+        await applicationShell.count() !== 1 || sourceCount > 1 ||
+        (sourceCount === 1 && await source.isVisible()) ||
+        await loading.count() !== 1
+      ) break;
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        process.stderr.write('{"applicationNavigationRecovery":"owned_loading_reload"}\n');
+      }
+      try {
+        await this.#page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: this.#navigationSettleTimeoutMs,
+        });
+      } catch {
+        break;
+      }
+    }
+    return failure("browser_effect_uncertain", "navigation");
+  }
+  async #confirmStableDestination(
+    candidate: BrowserApplicationSnapshot,
+    signal: AbortSignal,
+  ): Promise<BrowserApplicationSnapshot | undefined> {
+    const deadline = Date.now() + Math.min(1_000, this.#navigationSettleTimeoutMs);
+    let confirmed = candidate;
     while (Date.now() < deadline) {
-      if (signal.aborted) return failure("operation_cancelled", "none");
-      const after = await this.#readSnapshot(signal);
-      if (after.ok && after.value.signature !== beforeSignature) return after;
+      await this.#page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+      if (signal.aborted || await this.#page.locator(
+        '[data-automation-id="applyFlowLoadingPage"]:visible',
+      ).count() !== 0) return undefined;
+      const observed = await this.#readSnapshot(signal);
+      if (
+        !observed.ok ||
+        observed.value.page !== candidate.page ||
+        observed.value.rootSelector !== candidate.rootSelector ||
+        observed.value.transitionKey !== candidate.transitionKey
+      ) return undefined;
+      confirmed = observed.value;
+    }
+    return confirmed;
+  }
+  async #waitForActionableNext(
+    rootSelector: string,
+    signal: AbortSignal,
+  ): Promise<Locator | undefined> {
+    const deadline = Date.now() + this.#navigationSettleTimeoutMs;
+    let probeFailures = 0;
+    while (Date.now() < deadline) {
+      if (signal.aborted) return undefined;
+      try {
+        const action = await singleActionableNext(this.#page, rootSelector);
+        if (action !== undefined) return action;
+      } catch {
+        probeFailures += 1;
+      }
       const remaining = deadline - Date.now();
       if (remaining > 0) await this.#page.waitForTimeout(Math.min(50, remaining));
     }
-    return failure("browser_effect_uncertain", "navigation");
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      try {
+        const root = this.#page.locator(rootSelector);
+        const loading = this.#page.locator(
+          '[data-automation-id="applyFlowLoadingPage"]:visible',
+        );
+        const controls = this.#page.getByRole("button", {
+          name: /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu,
+        });
+        const candidates = [];
+        for (let index = 0; index < await controls.count(); index += 1) {
+          const candidate = controls.nth(index);
+          candidates.push({
+            visible: await candidate.isVisible(),
+            enabled: await candidate.isEnabled(),
+            ariaDisabled: await candidate.getAttribute("aria-disabled"),
+            automationId: await candidate.getAttribute("data-automation-id"),
+          });
+        }
+        process.stderr.write(`${JSON.stringify({
+          applicationNavigationActionDiagnostics: {
+            rootCount: await root.count(),
+            rootVisible: await root.count() === 1 && await root.isVisible(),
+            loadingCount: await loading.count(),
+            probeFailures,
+            candidates,
+          },
+        })}\n`);
+      } catch {}
+    }
+    return undefined;
   }
   #toTruth(snapshot: BrowserApplicationSnapshot): ApplicationPageTruth {
     return Object.freeze({
@@ -138,10 +354,27 @@ export class PlaywrightWorkdayApplicationPage {
     });
   }
 }
+function navigationDiagnostic(
+  event: string,
+  details: Record<string, boolean | number | string | readonly string[]> = {},
+): void {
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+  try {
+    process.stderr.write(`${JSON.stringify({ applicationNavigationStage: event, ...details })}\n`);
+  } catch {}
+}
 async function singleActionableNext(page: Page, rootSelector: string): Promise<Locator | undefined> {
   const root = page.locator(rootSelector);
-  if (await root.count() !== 1 || !await root.isVisible()) return undefined;
-  const controls = root.getByRole("button", {
+  if (await root.count() !== 1) return undefined;
+  const rootVisible = await root.isVisible();
+  if (!rootVisible &&
+      await page.locator('[data-automation-id="applyFlowLoadingPage"]:visible').count() !== 1) {
+    return undefined;
+  }
+  // Workday renders Save and Continue in a sticky application footer that is
+  // a sibling of the physical page root. Validate the root above, then search
+  // the owned page for the one exact non-submit navigation action.
+  const controls = page.getByRole("button", {
     name: /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu,
   });
   const actionable: Locator[] = [];
@@ -177,7 +410,7 @@ function hasValidationDowngrade(
 }
 function readApplicationSnapshot(
   selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS,
-): BrowserApplicationSnapshot | null {
+): BrowserApplicationSnapshot | BrowserApplicationAmbiguity {
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -201,8 +434,30 @@ function readApplicationSnapshot(
       .filter(visible)
       .map((root) => ({ page, root, selector }))
   );
-  if (visibleRoots.length !== 1) return null;
-  const { page: rootPage, root } = visibleRoots[0]!;
+  const physicalRoots = visibleRoots.filter(({ root: candidate }) =>
+    visibleRoots.every(({ root: component }) =>
+      candidate === component || candidate.contains(component)
+    )
+  );
+  if (physicalRoots.length !== 1) {
+    return {
+      ambiguity: visibleRoots.map(({ page, root }, index) => ({
+        page,
+        contains: visibleRoots.flatMap(({ root: component }, componentIndex) =>
+          index !== componentIndex && root.contains(component) ? [componentIndex] : []
+        ),
+      })),
+      structures: [...document.querySelectorAll<HTMLElement>(
+        "[data-automation-id]",
+      )].slice(0, 64).flatMap((element) => {
+        const id = element.getAttribute("data-automation-id") ?? "";
+        return /^[A-Za-z][A-Za-z0-9_-]{0,127}$/u.test(id)
+          ? [{ id, visible: visible(element) }]
+          : [];
+      }),
+    };
+  }
+  const { page: rootPage, root, selector: rootSelector } = physicalRoots[0]!;
   const resumeInputs = [...root.querySelectorAll<HTMLInputElement>(
     'input[type="file"][data-automation-id="file-upload-input-ref"]',
   )].filter((input) => !input.disabled && input.getAttribute("aria-disabled") !== "true");
@@ -297,10 +552,32 @@ function readApplicationSnapshot(
     if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
     if (radioKey !== undefined) seenRadioGroups.add(radioKey);
     let verified = control.getAttribute("aria-invalid") !== "true";
-    const selectedItems = fieldOwner === null ? [] :
+    // Workday renders tokenized combobox selections beside the input inside the
+    // nearest automation-owned ancestor. `closest()` on the control itself can
+    // stop at the input, while the broader form-field owner can contain several
+    // unrelated selected items. Match the profile observer's ancestor semantics.
+    const selectionOwner = control.parentElement?.closest<HTMLElement>(
+      '[data-automation-id]',
+    ) ?? fieldOwner;
+    const selectedItems = selectionOwner === null ? [] :
+      [...selectionOwner.querySelectorAll<HTMLElement>(
+        '[data-automation-id="selectedItem"]',
+      )].filter((item) => visible(item) && text(item.textContent) !== "");
+    const descendantRadios = [...control.querySelectorAll<HTMLElement>(
+      'input[type="radio"], [role="radio"]',
+    )];
+    const fieldOwnerRadios = fieldOwner === null ? [] :
+      [...fieldOwner.querySelectorAll<HTMLElement>(
+        'input[type="radio"], [role="radio"]',
+      )];
+    const isChecked = (radio: HTMLElement): boolean =>
+      radio instanceof HTMLInputElement
+        ? radio.checked
+        : radio.getAttribute("aria-checked") === "true";
+    const fieldOwnerSelectedItems = fieldOwner === null ? [] :
       [...fieldOwner.querySelectorAll<HTMLElement>(
         '[data-automation-id="selectedItem"]',
-    )].filter((item) => visible(item) && text(item.textContent) !== "");
+      )].filter((item) => visible(item) && text(item.textContent) !== "");
     if (input?.type === "file") {
       const visibleFileInputs = [...root.querySelectorAll<HTMLInputElement>(
         'input[type="file"]',
@@ -317,6 +594,11 @@ function readApplicationSnapshot(
       )].filter(visible);
       verified = verified && input.files?.length === 1 &&
         items.length === 1 && successes.length === 1;
+    } else if (descendantRadios.length > 0) {
+      // Workday visually exposes styled labels while keeping the native radio
+      // inputs hidden, and its required group container may omit an ARIA role.
+      // Checked state is authoritative inside the required composite control.
+      verified = verified && descendantRadios.filter(isChecked).length === 1;
     } else if (input?.type === "radio") {
       const radios = input.name === ""
         ? [input]
@@ -330,10 +612,19 @@ function readApplicationSnapshot(
       verified = verified && control.getAttribute("aria-checked") === "true";
     } else if (control instanceof HTMLSelectElement) {
       verified = verified && control.value.trim() !== "";
-    } else if (role === "combobox") {
+    } else if (role === "combobox" || control.matches('button[aria-haspopup="listbox"]')) {
       const value = control instanceof HTMLInputElement ? control.value :
-        control.getAttribute("aria-valuetext") ?? "";
-      verified = verified && (value.trim() !== "" || selectedItems.length === 1);
+        control.getAttribute("aria-valuetext") ?? text(control.textContent);
+      const normalizedValue = text(value).toLocaleLowerCase("en-US");
+      const placeholder = /^(?:select one|select|choose|none)$/u.test(normalizedValue);
+      verified = verified && (
+        normalizedValue !== "" && !placeholder || selectedItems.length === 1
+      );
+    } else if (selectedItems.length === 1) {
+      // Workday's tokenized country-code input is a plain text input with an
+      // intentionally empty backing value. Its one visible nonempty token is the
+      // committed selection even when no combobox role is present.
+      verified = verified && true;
     } else if (
       control instanceof HTMLInputElement ||
       control instanceof HTMLTextAreaElement
@@ -341,8 +632,6 @@ function readApplicationSnapshot(
       verified = verified && control.value.trim() !== "";
     } else if (control.getAttribute("contenteditable") === "true") {
       verified = verified && text(control.textContent) !== "";
-    } else if (control.matches('button[data-automation-id="sourcePrompt"]')) {
-      verified = verified && selectedItems.length === 1;
     } else {
       verified = false;
     }
@@ -359,6 +648,19 @@ function readApplicationSnapshot(
       fieldId: safeId,
       ...(fieldPage === undefined ? {} : { page: fieldPage }),
       verification: verified ? "verified" : "unverified",
+      diagnostic: {
+        tag: control.tagName.toLocaleLowerCase("en-US"),
+        role,
+        inputType: input?.type ?? null,
+        descendantRadioCount: descendantRadios.length,
+        descendantCheckedCount: descendantRadios.filter(isChecked).length,
+        fieldOwnerRadioCount: fieldOwnerRadios.length,
+        fieldOwnerCheckedCount: fieldOwnerRadios.filter(isChecked).length,
+        nearestSelectedItemCount: selectedItems.length,
+        fieldOwnerSelectedItemCount: fieldOwnerSelectedItems.length,
+        inputNonEmpty: input?.value.trim() !== "",
+        ariaValueNonEmpty: text(control.getAttribute("aria-valuetext")) !== "",
+      },
     });
   }
   const fingerprints = new Map<string, number>();
@@ -413,7 +715,7 @@ function readApplicationSnapshot(
   ].join("\u0000");
   const transitionKey = [
     page,
-    visibleRoots[0]!.selector,
+    rootSelector,
     location.href,
     document.body.getAttribute("data-hunt-page-id") ?? "",
     text(activeStep?.textContent),
@@ -421,7 +723,7 @@ function readApplicationSnapshot(
   return {
     page,
     lanes,
-    rootSelector: visibleRoots[0]!.selector,
+    rootSelector,
     pageId: document.body.getAttribute("data-hunt-page-id"),
     requiredFields,
     c3OwnedDuplicateRows: duplicateRows,

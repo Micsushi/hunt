@@ -33,6 +33,7 @@ export * from "./page-walk-contract.ts";
 const classifierSet = new Set<string>(applicationClassifiers);
 const primitiveSet = new Set<string>(applicationPrimitives);
 const unknownLayerSet = new Set<string>(applicationUnknownLayers);
+const navigationLoadingShellTimeoutMs = 60_000;
 
 /**
  * S2-F3-T4 integration seam. T1-T3 implement only their matching handler.
@@ -112,7 +113,11 @@ export async function runApplicationPageWalk(
         signal,
       );
       if (!advanced.ok) return failure("navigation", advanced.error, current.value.page, 1);
-      current = await dependencies.observer.observe(signal);
+      current = await observeDestination(
+        dependencies,
+        from,
+        signal,
+      );
       if (!current.ok) return failure("browser_truth", current.error, from, 1);
       if (
         current.value.submitActivated ||
@@ -232,7 +237,11 @@ export async function runApplicationPageWalk(
       signal,
     );
     if (!advanced.ok) return failure("navigation", advanced.error, physicalPage, 1);
-    current = await dependencies.observer.observe(signal);
+    current = await observeDestination(
+      dependencies,
+      physicalPage,
+      signal,
+    );
     if (!current.ok) return failure("browser_truth", current.error, physicalPage, 1);
     if (
       current.value.submitActivated ||
@@ -338,6 +347,25 @@ export async function runApplicationPageWalk(
         privacyScan: "pass",
       },
     };
+  }
+}
+
+async function observeDestination(
+  dependencies: ApplicationWalkDependencies,
+  from: ApplicationHandlerPage,
+  signal: AbortSignal,
+): Promise<Awaited<ReturnType<ApplicationWalkDependencies["observer"]["observe"]>>> {
+  const deadline = Date.now() + navigationLoadingShellTimeoutMs;
+  while (true) {
+    const observed = await dependencies.observer.observe(signal);
+    if (!observed.ok || observed.value.submitActivated) return observed;
+    const loadingShell = observed.value.page === from &&
+      observed.value.requiredFields.length === 0;
+    if (loadingShell && !signal.aborted && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    return observed;
   }
 }
 

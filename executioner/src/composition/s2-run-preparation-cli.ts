@@ -116,7 +116,8 @@ async function loadApplicationSource(
       typeof value.resumeId !== "string"
     ) invalid();
     const profile = structuredClone(value.profile);
-    const profilePlan = structuredClone(withDerivedProfileCountry(profile, value.profilePlan));
+    const derivedPlan = withDerivedProfileCountry(profile, value.profilePlan);
+    const profilePlan = structuredClone(derivedPlan);
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
     const bytes = Buffer.from(resumeBytes);
     return Object.freeze({

@@ -145,7 +145,11 @@ export interface AccountEntryDependencies {
 export type AccountLifecycleCredentialMutationResult =
   | CredentialMutationResult
   | {
-      readonly kind: "account_absent" | "account_exists" | "sign_in_required";
+      readonly kind:
+        | "account_absent"
+        | "account_exists"
+        | "sign_in_required"
+        | "create_account_required";
       readonly attemptedFields: readonly ["email", "password"];
     }
   | {

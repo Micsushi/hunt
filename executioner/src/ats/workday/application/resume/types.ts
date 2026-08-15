@@ -44,7 +44,7 @@ export interface WorkdayResumeBrowserState {
   readonly uploadedFileCount: 1;
   readonly uploadComplete: true;
   readonly requiredErrorVisible: false;
-  readonly removeControlCardinality: 1;
+  readonly removeControlCardinality: 0 | 1;
 }
 
 export type WorkdayResumeObservation =

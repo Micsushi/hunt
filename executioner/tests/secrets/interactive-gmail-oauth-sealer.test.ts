@@ -10,8 +10,10 @@ import type { TargetIdentityV1 } from "../../src/contracts/live/index.ts";
 import { liveFixtures } from "../../src/testing/live/index.ts";
 
 import {
+  WindowsGmailRefreshGrantLocalForgetter,
   WindowsGmailRefreshGrantRevoker,
   WindowsInteractiveGmailOAuthSealer,
+  type GmailRefreshGrantLocalForgetRequest,
   type GmailRefreshGrantRevokeRequest,
   type InteractiveGmailOAuthProcess,
 } from "../../src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts";
@@ -35,7 +37,10 @@ class ReplyProcess implements InteractiveGmailOAuthProcess {
     return this.#reply;
   }
 
-  async reconcile(): Promise<void> {}
+  async reconcile(input: Uint8Array): Promise<void> {
+    this.input = input;
+    this.capturedInput = Uint8Array.from(input);
+  }
 }
 
 class PersistThenFailProcess implements InteractiveGmailOAuthProcess {
@@ -114,6 +119,14 @@ const revokeRequest: GmailRefreshGrantRevokeRequest = {
     "C:\\Users\\example\\AppData\\Local\\Hunt\\google-installed-client.json",
 };
 
+const forgetRequest: GmailRefreshGrantLocalForgetRequest = {
+  accountMetadata: request.accountMetadata,
+  accountCiphertext: request.accountCiphertext,
+  recipientBindingId: request.binding.recipientBindingId,
+  clientId: request.clientId,
+  installedClientConfigPath: request.installedClientConfigPath,
+};
+
 function revokeFrame(outcome: "absent" | "revoked"): Uint8Array {
   return Uint8Array.from([
     72, 65, 71, 82,
@@ -175,6 +188,25 @@ test("refresh-grant revoker preserves exact value-free child errors", async () =
       new RegExp(message, "u"),
     );
   }
+});
+
+test("local refresh-grant forgetter uses the exact reconciliation frame and clears it", async () => {
+  const process = new ReplyProcess(new Error("unused"));
+  await new WindowsGmailRefreshGrantLocalForgetter({ process }).forget(
+    forgetRequest,
+    new AbortController().signal,
+  );
+  assert.equal(process.input?.every((value) => value === 0), true);
+  const captured = Buffer.from(process.capturedInput ?? []);
+  assert.equal(captured.subarray(0, 4).toString("ascii"), "HAGC");
+  assert.equal(captured[4], 1);
+  assert.equal(captured[5], 5);
+  assert.equal(captured.includes(Buffer.from(forgetRequest.accountMetadata)), true);
+  assert.equal(captured.includes(Buffer.from(forgetRequest.accountCiphertext)), true);
+  assert.equal(captured.includes(Buffer.from(forgetRequest.recipientBindingId)), true);
+  assert.equal(captured.includes(Buffer.from(forgetRequest.clientId)), true);
+  assert.equal(captured.includes(Buffer.from(forgetRequest.installedClientConfigPath)), true);
+  assert.equal(captured.includes(Buffer.from("refresh")), false);
 });
 
 test("trusted helper frames the Gmail bundle for the resolver's exact one-item decoder", async () => {

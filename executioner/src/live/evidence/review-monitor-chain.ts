@@ -11,7 +11,7 @@ import {
 } from "../../ats/workday/application/page-walk-contract.ts";
 import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
 
-const MAX_RECORDS = 128;
+const MAX_RECORDS = 512;
 const AUTH_PAGES = new Set([
   "job_posting", "apply_choice", "email_sign_in_choice", "account_entry",
   "verification_required", "verification_navigation", "sign_in", "application_ready",
@@ -24,19 +24,20 @@ export const applicationMonitorPages = applicationPages;
 const APPLICATION_PAGES = new Set([...applicationMonitorPages, "review"]);
 const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
-  "recovery_observed", "review_readback",
+  "state_observed", "recovery_observed", "review_readback",
 ]);
 const CONTROL_TYPES = new Set([
   "text", "textarea", "select", "radio", "checkbox", "date", "phone", "address",
-  "file_upload", "repeatable",
+  "file_upload", "repeatable", "number", "search_select", "radio_group", "month", "year",
 ]);
 const QUESTION_TYPES = new Set([
   "identity", "contact", "employment", "education", "authorization", "legal",
   "compensation", "availability", "demographic", "narrative", "attachment",
-  "unknown",
+  "language", "skill", "website", "social_network", "unknown",
 ]);
 const ANSWER_TYPES = new Set([
   "text", "boolean", "single_select", "multi_select", "date", "number", "file",
+  "month", "year", "url",
 ]);
 
 export interface Stage2ReviewMonitorChainV1 {
@@ -278,6 +279,8 @@ function validateOperationSequence(
       sameOperationPair(current, operations[index + 1], "transition");
     } else if (phase === "auth" && current.moment === "state_observed") {
       kind = "observation";
+    } else if (phase === "application" && current.moment === "state_observed") {
+      kind = "observation";
     } else if (phase === "application" && current.moment === "recovery_observed") {
       kind = "recovery";
     } else if (phase === "application" && current.moment === "review_readback") {
@@ -317,7 +320,7 @@ function validateAttempts(groups: readonly OperationGroup[]): void {
   for (const group of groups) {
     const key = `${group.fromPage}:${group.kind}`;
     const expected = (attempts.get(key) ?? 0) + 1;
-    if (group.attempt !== expected || group.attempt > 8) denied();
+    if (group.attempt !== expected || group.attempt > 256) denied();
     attempts.set(key, group.attempt);
   }
 }
@@ -337,7 +340,7 @@ function validateApplicationSequence(groups: readonly OperationGroup[]): void {
       if (group.fromPage !== "review" || group.toPage !== "review" || index !== groups.length - 1) {
         denied();
       }
-    } else if (group.fromPage === "review" || group.kind === "observation") {
+    } else if (group.fromPage === "review") {
       denied();
     }
     if (group.kind === "mutation") {
@@ -357,8 +360,9 @@ function validateApplicationSequence(groups: readonly OperationGroup[]): void {
         }
         inspectedCurrent = false;
       }
-    } else if (group.kind === "recovery" && group.toPage !== group.fromPage) {
-      denied();
+    } else if (group.kind === "observation" || group.kind === "recovery") {
+      if (group.toPage !== group.fromPage) denied();
+      inspectedCurrent = true;
     }
     currentPage = group.toPage;
   }
@@ -561,7 +565,7 @@ function enumArray(value: unknown, allowed: ReadonlySet<string>): boolean {
 }
 
 function attempt(value: unknown): boolean {
-  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 8;
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 256;
 }
 
 function opaque(value: unknown, prefix: string): value is string {

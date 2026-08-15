@@ -18,8 +18,13 @@ import type {
   PersistentPage,
   ProfileMarkerV1,
 } from "./types.ts";
-import type { ExternalMonitorPort } from "./external-monitor-port.ts";
+import type {
+  ExternalMonitorPage,
+  ExternalMonitorPort,
+  ExternalMonitorTaxonomy,
+} from "./external-monitor-port.ts";
 import type { PostingNavigationSessionTraceEvent } from "./account-navigation-types.ts";
+import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 
 export interface AccountPageOwnershipState {
   readonly page: PersistentPage | undefined;
@@ -35,6 +40,10 @@ interface OwnedAccountPageCoordinatorOptions {
   readonly state: () => AccountPageOwnershipState;
   readonly invalidate: () => Promise<void>;
   readonly externalMonitor?: Pick<ExternalMonitorPort, "auth">;
+  readonly applicationReadyMonitor?: {
+    readonly page: (page: PersistentPage) => ExternalMonitorPage;
+    readonly taxonomy: (page: PersistentPage) => Promise<ExternalMonitorTaxonomy>;
+  };
   readonly trace?: (event: PostingNavigationSessionTraceEvent) => void;
 }
 
@@ -178,11 +187,16 @@ export class OwnedAccountPageCoordinator {
   ): Promise<boolean> {
     if (this.#options.externalMonitor === undefined) return true;
     try {
+      const applicationReady = phase === "application_ready" && hasMonitorLocators(page)
+        ? this.#options.applicationReadyMonitor
+        : undefined;
       await this.#options.externalMonitor.auth(
-        page as never,
+        applicationReady?.page(page) ?? valueFreeExternalMonitorPage(page),
         phase,
         moment,
-        authMonitorTaxonomy(snapshot),
+        applicationReady === undefined
+          ? authMonitorTaxonomy(snapshot)
+          : await applicationReady.taxonomy(page),
         { operationId, attempt },
         signal,
       );
@@ -224,6 +238,7 @@ export class OwnedAccountPageCoordinator {
     attempt: number,
   ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
     const deadline = Date.now() + this.#options.timeoutMs;
+    let failedMonitorPhase: string | undefined;
     while (Date.now() <= deadline) {
       const current = this.#options.state();
       if (
@@ -248,10 +263,19 @@ export class OwnedAccountPageCoordinator {
         this.#trace(`account_post_submit_inspection_observed_${inspected.value.target.kind}`);
       }
       if (inspected.ok && inspected.value.target.kind === "matched") {
+        const phase = authMonitorPhase(inspected.value.snapshot);
+        if (failedMonitorPhase === phase) {
+          if (Date.now() >= deadline) break;
+          await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+          continue;
+        }
+        if (failedMonitorPhase !== undefined) {
+          this.#trace("account_post_submit_monitor_transition_retry");
+        }
         this.#trace("account_post_submit_monitor_started");
         const monitored = await this.#monitor(
           page,
-          authMonitorPhase(inspected.value.snapshot),
+          phase,
           "after_readback",
           request.operationId,
           attempt,
@@ -261,9 +285,8 @@ export class OwnedAccountPageCoordinator {
         this.#trace(monitored
           ? "account_post_submit_monitor_succeeded"
           : "account_post_submit_monitor_failed");
-        return monitored
-          ? { ok: true, value: undefined }
-          : failure("browser_effect_uncertain");
+        if (monitored) return { ok: true, value: undefined };
+        failedMonitorPhase = phase;
       }
       if (Date.now() >= deadline) break;
       await delay(Math.min(100, Math.max(1, deadline - Date.now())));
@@ -274,6 +297,10 @@ export class OwnedAccountPageCoordinator {
   #trace(event: PostingNavigationSessionTraceEvent): void {
     try { this.#options.trace?.(event); } catch { /* diagnostics never alter behavior */ }
   }
+}
+
+function hasMonitorLocators(page: PersistentPage): boolean {
+  return typeof (page as unknown as { readonly locator?: unknown }).locator === "function";
 }
 
 function delay(milliseconds: number): Promise<void> {

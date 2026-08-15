@@ -15,8 +15,11 @@ export interface AccountVerifiedAcceptanceV2 {
   readonly targetHandleId: string;
   readonly accountState: "application_ready";
   readonly independentlyObservedVerifiedState: true;
-  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
-  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly verificationProof:
+    | "gmail_candidate_consumed"
+    | "credential_sign_in"
+    | "application_state_observed";
+  readonly provider: "gmail-api-v1" | "workday-auth" | "workday-state";
   readonly consumedCandidateCount: 0 | 1;
   readonly messageBodyRetained: false;
   readonly submitActivated: false;
@@ -102,6 +105,9 @@ function validProof(value: AccountVerifiedAcceptanceV2): boolean {
   ) || (
     value.verificationProof === "credential_sign_in" &&
     value.provider === "workday-auth" && value.consumedCandidateCount === 0
+  ) || (
+    value.verificationProof === "application_state_observed" &&
+    value.provider === "workday-state" && value.consumedCandidateCount === 0
   );
 }
 

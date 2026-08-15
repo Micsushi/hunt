@@ -8,6 +8,7 @@ import {
 } from "../../../src/form/questions/normalize.ts";
 import {
   questionCatalog,
+  questionAnswerGuide,
   questionFor,
   questionForField,
   resolveQuestion,
@@ -28,7 +29,7 @@ test("normalization removes only Workday presentation noise", () => {
   }
 });
 
-test("only frozen Workday labels resolve deterministically", () => {
+test("exact and reviewed keyword variants resolve deterministically", () => {
   assert.deepEqual(resolveQuestion("Given Name (Required) *"), {
     kind: "resolved",
     id: "s1-question-given-name",
@@ -39,11 +40,22 @@ test("only frozen Workday labels resolve deterministically", () => {
     id: "s1-question-family-name",
     provenance: "reviewed_catalog",
   });
+  const semanticCases = [
+    ["Legal First Name", "s1-question-given-name"],
+    ["Surname", "s1-question-family-name"],
+    ["Mobile Phone", "s1-question-phone-number"],
+    ["What's your gender?", "workday-question-gender-disclosure"],
+    ["Select your gender", "workday-question-gender-disclosure"],
+  ] as const;
+  for (const [label, id] of semanticCases) {
+    assert.deepEqual(resolveQuestion(label), {
+      kind: "resolved",
+      id,
+      provenance: "reviewed_catalog",
+    });
+  }
   for (const outOfScope of [
-    "Legal First Name",
-    "Surname",
     "Email address",
-    "Mobile Phone",
     "State/Province",
     "ZIP/Postal Code",
     "Current Employer",
@@ -51,6 +63,13 @@ test("only frozen Workday labels resolve deterministically", () => {
   ]) {
     assert.deepEqual(resolveQuestion(outOfScope), { kind: "unknown" });
   }
+  assert.deepEqual(resolveQuestion("Select gender and race"), {
+    kind: "ambiguous",
+    ids: [
+      "workday-question-gender-disclosure",
+      "workday-question-ethnicity-disclosure",
+    ],
+  });
 });
 
 test("normalization removes accessible required suffixes without changing question text", () => {
@@ -127,6 +146,45 @@ test("synthetic placeholders retain explicit source provenance", () => {
   assert.equal(definition.source.protected, false);
 });
 
+test("answer guide exposes types, options, and replacement-required learning defaults", () => {
+  const byId = new Map(questionAnswerGuide.map((entry) => [entry.id, entry]));
+  assert.deepEqual(byId.get("s1-question-work-authorization"), {
+    id: "s1-question-work-authorization",
+    labels: [
+      "Are you authorized to work in this location?",
+      "Are you legally authorized to work in this country?",
+    ],
+    answerTypes: ["single_select"],
+    possibleAnswers: [],
+    defaultPolicy: {
+      kind: "generated_learning_default",
+      value: true,
+      replaceWithOwnerAnswer: true,
+    },
+  });
+  assert.deepEqual(byId.get("workday-question-gender-disclosure"), {
+    id: "workday-question-gender-disclosure",
+    labels: ["Gender", "Gender Identity", "Sex"],
+    answerTypes: ["single_select"],
+    possibleAnswers: [
+      "Prefer not to answer",
+      "Prefer not to say",
+      "I do not wish to provide this information",
+      "Decline to self-identify",
+    ],
+    defaultPolicy: {
+      kind: "privacy_choice_or_first_visible_learning_option",
+      values: [
+        "Prefer not to answer",
+        "Prefer not to say",
+        "I do not wish to provide this information",
+        "Decline to self-identify",
+      ],
+      replaceWithOwnerAnswer: true,
+    },
+  });
+});
+
 test("question catalog is exactly the frozen ten-row S1 matrix", () => {
   assert.deepEqual(questionCatalog.map(({ id, labels, behavior, source }) => ({
     id,
@@ -137,7 +195,7 @@ test("question catalog is exactly the frozen ten-row S1 matrix", () => {
     { id: "s1-question-given-name", labels: ["Given name"], behavior: "text", source: { kind: "profile", factId: "given_name" } },
     { id: "s1-question-family-name", labels: ["Family name"], behavior: "text", source: { kind: "profile", factId: "family_name" } },
     { id: "s1-question-phone-number", labels: ["Phone number"], behavior: "text", source: { kind: "profile", factId: "phone_number" } },
-    { id: "s1-question-configured-narrative", labels: ["Brief interest statement"], behavior: "textarea", source: { kind: "narrative", factId: "configured_narrative" } },
+    { id: "s1-question-configured-narrative", labels: ["Brief interest statement"], behavior: "textarea", source: { kind: "narrative", factId: "configured_narrative", syntheticDefault: "I am interested in this role and available to discuss my qualifications." } },
     { id: "s1-question-work-authorization", labels: ["Are you authorized to work in this location?"], behavior: "radio", source: { kind: "profile", factId: "work_authorization", ownerProvidedOnly: true } },
     { id: "s1-question-age-requirement-met", labels: ["I am at least 18 years of age."], behavior: "checkbox", source: { kind: "profile", factId: "age_requirement_met", ownerProvidedOnly: true } },
     { id: "s1-question-sponsorship-required", labels: ["Will you require sponsorship?"], behavior: "select", source: { kind: "profile", factId: "sponsorship_required", ownerProvidedOnly: true } },

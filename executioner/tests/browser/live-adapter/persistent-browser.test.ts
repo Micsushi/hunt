@@ -65,6 +65,136 @@ test("opens one exact page through an isolated persistent context", async () => 
   assert.deepEqual(findLivePrivacyViolations(result), []);
 });
 
+test("private test mode discards an exact persisted login profile before launch", async () => {
+  const profiles = new MemoryProfiles();
+  profiles.marker = {
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    profileLeaseId: liveFixtures.session.profileLeaseId,
+    sessionId: liveFixtures.session.sessionId,
+    target: liveFixtures.target,
+    admittedAt: liveFixtures.issuedAt,
+    leaseExpiresAt: liveFixtures.expiresAt,
+  };
+  const context = new FakeContext([]);
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    browserMode: "private_test",
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    ids: () => "live_session_private_test_1" as LiveSessionId,
+    timeoutMs: 100,
+  });
+
+  const result = await provider.open(openRequest(), new AbortController().signal);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.value.kind, "opened");
+  assert.equal(profiles.partialCleanupCount, 1);
+  assert.equal(context.newPageCount, 1);
+});
+
+test("test logout control stays bound to the exact owned browser session", async () => {
+  const context = new FakeContext([]);
+  let logoutCalls = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    sessionControl: {
+      async logout() {
+        logoutCalls += 1;
+        return { kind: "signed_out" };
+      },
+    },
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.logoutForTesting({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_logout_test_0001"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, { ok: true, value: { kind: "signed_out" } });
+  assert.equal(logoutCalls, 1);
+});
+
+test("logout-after-test runs before close and never prevents exact cleanup", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  profiles.requireClosed = context;
+  let logoutCalls = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    sessionControl: {
+      async logout() {
+        logoutCalls += 1;
+        return { kind: "signed_out" };
+      },
+    },
+    logoutOnCloseForTesting: true,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_logout_close_0001"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(closed, { ok: true, value: undefined });
+  assert.equal(logoutCalls, 1);
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("logout verification is not cut off by the ordinary browser-operation timeout", async () => {
+  const context = new FakeContext([]);
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    sessionControl: {
+      async logout() {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return { kind: "signed_out" };
+      },
+    },
+    logoutOnCloseForTesting: true,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 20,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_logout_budget_0001"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(closed, { ok: true, value: undefined });
+});
+
 test("a fresh persistent context reuses its sole launch page instead of retaining about:blank", async () => {
   const launchPage = new FakePage();
   const context = new FakeContext([launchPage]);

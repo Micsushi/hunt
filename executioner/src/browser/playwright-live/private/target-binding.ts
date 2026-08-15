@@ -27,7 +27,7 @@ export function bindApprovedTarget(
     ) return undefined;
     return {
       identity,
-      approved: { host, tenant: tenant[1]!, posting: posting[1]! },
+      approved: { host, tenant: tenant[1]!, posting: posting[1]!.toUpperCase() },
     };
   } catch {
     return undefined;

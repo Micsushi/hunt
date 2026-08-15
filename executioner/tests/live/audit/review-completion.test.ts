@@ -26,6 +26,8 @@ import { writeAccountVerifiedEvidence } from "../../../src/live/evidence/account
 import { writeApplicationWalkEvidence } from "../../../src/live/evidence/application-walk-evidence.ts";
 import { admitProfileFieldLearningEvidence } from
   "../../../src/live/evidence/profile-field-learning.ts";
+import { createValueFreeRunTrace } from
+  "../../../src/live/evidence/value-free-run-trace.ts";
 
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 const revisionId = "revision_abcdefghijklmnop";
@@ -62,6 +64,9 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
       profileFieldLearningSha256: digest(readFileSync(
         join(layout.evidenceRoot, "profile-field-learning.json"),
       )),
+      questionAnswerLearningSha256: digest(readFileSync(
+        join(layout.evidenceRoot, "question-answer-learning.json"),
+      )),
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -94,6 +99,87 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
         "real-evidence/summary.json",
       ],
     );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion admits one exact value-free application trace and rejects drift", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-trace-audit-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_reviewtracexxxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256, journeyId, false, false, false);
+    const trace = createValueFreeRunTrace(layout.evidenceRoot, () => undefined);
+    trace("application_walk_started", {
+      journeyId,
+      stopAfter: "pre_review",
+      submitActivated: false,
+    });
+    trace("application_walk_terminal", {
+      journeyId,
+      status: "passed",
+      checkpoint: "pre_review",
+      completedPages: 3,
+      submitActivated: false,
+    });
+    assert.equal(
+      (await auditStage2Completion(layout.evidenceRoot) as { readonly status: string }).status,
+      "pass",
+    );
+
+    const path = join(layout.evidenceRoot, "value-free-trace.ndjson");
+    const text = readFileSync(path, "utf8").replace('"status":"passed"', '"status":"failed"');
+    writeFileSync(path, text);
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion requires the value-free trace", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-trace-required-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_tracerequiredxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    rmSync(join(layout.evidenceRoot, "value-free-trace.ndjson"));
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion admits cumulative learning across repeated questionnaire pages", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-questionnaire-repeat-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_questionrepeatxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(
+      layout.evidenceRoot,
+      configSha256,
+      journeyId,
+      false,
+      false,
+      true,
+      true,
+    );
+    const audit = await auditStage2Completion(layout.evidenceRoot) as { readonly status: string };
+    assert.equal(audit.status, "pass");
+    const learning = JSON.parse(readFileSync(
+      join(layout.evidenceRoot, "question-answer-learning.json"),
+      "utf8",
+    )) as { readonly questions: readonly unknown[] };
+    assert.equal(learning.questions.length, 2);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
@@ -619,6 +705,8 @@ async function writeReviewEvidence(
   packetJourneyId = journeyId,
   skipResume = false,
   directReview = false,
+  writeTrace = true,
+  repeatedQuestionnaire = false,
 ): Promise<void> {
   const learningBytes = Buffer.from(`${JSON.stringify({
     schemaVersion: 1,
@@ -651,6 +739,38 @@ async function writeReviewEvidence(
     writeFileSync(join(root, "profile-field-learning.json"), learningBytes);
   }
   const profileFieldLearningSha256 = digest(learningBytes);
+  if (!directReview) {
+    writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-question-answer-learning-v1",
+      page: "questionnaire",
+      questions: [{
+        questionId: "s1-question-work-authorization",
+        fieldId: "authorization-answer",
+        label: "Are you authorized to work in this location?",
+        required: true,
+        uiType: "radio",
+        answerType: "single_select",
+        possibleAnswers: ["Yes", "No"],
+        chosenAnswer: "owner_answer_applied",
+        strategy: "owner_answer",
+        provenance: "owner_provided",
+        replaceWithOwnerAnswer: false,
+      }, ...(repeatedQuestionnaire ? [{
+        questionId: "observed-question-0123456789abcdef01234567",
+        fieldId: "privacy-answer",
+        label: "Voluntary disclosure preference",
+        required: true,
+        uiType: "select",
+        answerType: "single_select",
+        possibleAnswers: ["Prefer not to answer"],
+        chosenAnswer: "Prefer not to answer",
+        strategy: "privacy_match",
+        provenance: "reviewed_catalog",
+        replaceWithOwnerAnswer: true,
+      }] : [])],
+    }, null, 2)}\n`);
+  }
   await writeAccountVerifiedEvidence({
     root,
     acceptance: {
@@ -677,7 +797,12 @@ async function writeReviewEvidence(
   });
   await writeApplicationWalkEvidence({
     root,
-    acceptance: applicationWalk(profileFieldLearningSha256, skipResume, directReview),
+    acceptance: applicationWalk(
+      profileFieldLearningSha256,
+      skipResume,
+      directReview,
+      repeatedQuestionnaire,
+    ),
     sensitiveValues: [],
   });
   writeStage2ReviewAcceptance(root, reviewAcceptance(configSha256), []);
@@ -724,7 +849,7 @@ async function writeReviewEvidence(
       {
         kind: "required_fields",
         status: "verified",
-        verifiedCount: directReview ? 0 : skipResume ? 2 : 3,
+        verifiedCount: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
       },
       { kind: "review", status: "verified", verifiedCount: 1 },
       { kind: "submit_guard", status: "verified", verifiedCount: 1 },
@@ -749,8 +874,30 @@ async function writeReviewEvidence(
     forbiddenTokens: [],
   });
   writeAuthMonitorChain(root, false, configSha256);
-  writeMonitorChain(root, false, configSha256, skipResume, directReview);
+  writeMonitorChain(
+    root,
+    false,
+    configSha256,
+    skipResume,
+    directReview,
+    repeatedQuestionnaire,
+  );
   writeProcessAudit(root, "2026-08-10T12:01:00.000Z", configSha256);
+  if (writeTrace) {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    trace("application_walk_started", {
+      journeyId,
+      stopAfter: "pre_review",
+      submitActivated: false,
+    });
+    trace("application_walk_terminal", {
+      journeyId,
+      status: "passed",
+      checkpoint: "pre_review",
+      completedPages: directReview ? 1 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+      submitActivated: false,
+    });
+  }
 }
 
 function writeProcessAudit(root: string, checkedAt: string, configSha256: string): void {
@@ -783,11 +930,12 @@ function writeMonitorChain(
   configSha256: string,
   skipResume = false,
   directReview = false,
+  repeatedQuestionnaire = false,
 ): void {
   writeExternalMonitorChain(
     root,
     "monitor",
-    applicationMoments(skipResume, directReview),
+    applicationMoments(skipResume, directReview, repeatedQuestionnaire),
     "review_verified",
     signatureOnly,
     configSha256,
@@ -797,6 +945,7 @@ function writeMonitorChain(
 function applicationMoments(
   skipResume = false,
   directReview = false,
+  repeatedQuestionnaire = false,
 ): Array<readonly [string, string, string, number]> {
   if (directReview) return [
     ["review", "review_readback", "operation_review_readback_01", 1],
@@ -812,7 +961,7 @@ function applicationMoments(
     ["review", "transition", "operation_question_navigation_01", 1],
     ["review", "review_readback", "operation_review_readback_01", 1],
   ];
-  return [
+  const moments: Array<readonly [string, string, string, number]> = [
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],
@@ -824,9 +973,20 @@ function applicationMoments(
     ["questionnaire", "before_mutation", "operation_question_mutation_01", 1],
     ["questionnaire", "after_readback", "operation_question_mutation_01", 1],
     ["questionnaire", "before_navigation", "operation_question_navigation_01", 1],
-    ["review", "transition", "operation_question_navigation_01", 1],
-    ["review", "review_readback", "operation_review_readback_01", 1],
   ];
+  if (repeatedQuestionnaire) {
+    moments.push(
+      ["questionnaire", "transition", "operation_question_navigation_01", 1],
+      ["questionnaire", "before_mutation", "operation_question_mutation_02", 2],
+      ["questionnaire", "after_readback", "operation_question_mutation_02", 2],
+      ["questionnaire", "before_navigation", "operation_question_navigation_02", 2],
+      ["review", "transition", "operation_question_navigation_02", 2],
+    );
+  } else {
+    moments.push(["review", "transition", "operation_question_navigation_01", 1]);
+  }
+  moments.push(["review", "review_readback", "operation_review_readback_01", 1]);
+  return moments;
 }
 
 function writeAuthMonitorChain(root: string, signatureOnly: boolean, configSha256: string): void {
@@ -1040,6 +1200,7 @@ function applicationWalk(
   profileFieldLearningSha256: string,
   skipResume = false,
   directReview = false,
+  repeatedQuestionnaire = false,
 ) {
   const pageChecks = [
     pageCheck("profile", "profile_verified"),
@@ -1051,6 +1212,15 @@ function applicationWalk(
     resumeAcceptance(),
     questionnaireAcceptance(),
   ];
+  if (repeatedQuestionnaire) {
+    pageChecks.push(pageCheck("questionnaire", "questionnaire_verified"));
+    laneAcceptances.push(questionnaireAcceptance(
+      "privacy-answer",
+      "observed-question-0123456789abcdef01234567",
+      "reviewed_catalog",
+      "consent",
+    ));
+  }
   return {
     schemaVersion: 1 as const,
     evidenceRevision: "s2-application-walk-acceptance-v1" as const,
@@ -1061,7 +1231,7 @@ function applicationWalk(
     approvalId,
     journeyId,
     targetHandleId,
-    completedPages: directReview ? 0 : skipResume ? 2 : 3,
+    completedPages: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
     pageChecks: directReview
       ? []
       : skipResume ? [pageChecks[0]!, pageChecks[2]!] : pageChecks,
@@ -1120,15 +1290,20 @@ function resumeAcceptance() {
   };
 }
 
-function questionnaireAcceptance() {
+function questionnaireAcceptance(
+  answerFieldId = "authorization-answer",
+  answerQuestionId = "s1-question-work-authorization",
+  provenance: "owner_provided" | "reviewed_catalog" = "owner_provided",
+  protectedCategory: "authorization" | "consent" = "authorization",
+) {
   return {
     schemaVersion: 1 as const,
     checkpoint: "questionnaire_verified" as const,
     answers: [{
-      fieldId: fieldId("authorization-answer"),
-      questionId: questionId("s1-question-work-authorization"),
-      provenance: "owner_provided" as const,
-      protectedCategory: "authorization" as const,
+      fieldId: fieldId(answerFieldId),
+      questionId: questionId(answerQuestionId),
+      provenance,
+      protectedCategory,
       templateRevision: null,
       verification: "independent" as const,
     }],

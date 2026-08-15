@@ -23,6 +23,12 @@ const reviewedVariants = new Set([
   "workday_phone_v1",
   "workday_phone_v2",
   "workday_date_v1",
+  "workday_month_v1",
+  "workday_year_v1",
+  "workday_number_v1",
+  "workday_textarea_v1",
+  "workday_select_v1",
+  "workday_multi_select_v1",
   "workday_search_select_v1",
   "workday_search_select_v2",
   "workday_source_select_v1",
@@ -32,6 +38,7 @@ const answerProvenances = new Set([
   "owner_provided",
   "resume_verified",
   "configured_template",
+  "generated_default",
   "journey_derived",
 ]);
 const pageTypes = new Set(["profile", "contact"]);
@@ -41,12 +48,19 @@ const questionTypes = new Set([
   "phone",
   "application_source",
   "prior_employment",
+  "employment",
   "experience",
   "education",
   "skill",
+  "language",
+  "website",
+  "social_network",
 ]);
-const answerTypes = new Set(["text", "phone", "date", "option"]);
-const repeatableSections = new Set(["experience", "education", "skills"]);
+const answerTypes = new Set([
+  "text", "phone", "date", "month", "year", "number", "url", "boolean",
+  "option", "single_select", "multi_select",
+]);
+const repeatableSections = new Set(["experience", "education", "skills", "websites"]);
 const optionalOwnerInputIds = new Set(
   profileOwnerInputCatalog.map(({ fieldId }) => fieldId),
 );
@@ -84,37 +98,25 @@ export async function completeWorkdayProfilePage(
   const initial = await inspectAndPreflight(plan, page, signal);
   if (initial.kind === "blocked") return initial;
   let snapshot = initial.snapshot;
+  const effectivePlan = routeSiteAnswers(plan, snapshot);
+  const routedPreflight = validatePlan(effectivePlan) ??
+    preflightSnapshot(effectivePlan, snapshot);
+  if (routedPreflight !== undefined) return routedPreflight;
 
   const cleaned = await cleanOwnedRows(snapshot, page, signal);
   if (cleaned === undefined) return portFailure(signal);
-  const cleanedPreflight = preflightSnapshot(plan, cleaned);
+  const cleanedPreflight = preflightSnapshot(effectivePlan, cleaned);
   if (cleanedPreflight !== undefined) return cleanedPreflight;
   snapshot = cleaned;
 
   const verified: VerifiedProfileField[] = [];
-  for (const item of plan.fields) {
-    if (item.answer.kind === "profile_answer_missing") continue;
+  for (const repeatable of effectivePlan.repeatables) {
     if (
-      optionalOwnerInputIds.has(item.fieldId) &&
-      !snapshot.controls.some(({ fieldId }) => fieldId === item.fieldId)
+      snapshot.repeatableSections !== undefined &&
+      !snapshot.repeatableSections.includes(repeatable.section)
     ) continue;
-    const result = await reconcileField(
-      item,
-      () => page.inspect(signal).then(({ controls }) => controls),
-      snapshot.controls,
-      page,
-      signal,
-    );
-    if (result.kind === "blocked") return result;
-    verified.push(result.field);
-    const refreshed = await inspectAndPreflight(plan, page, signal);
-    if (refreshed.kind === "blocked") return refreshed;
-    snapshot = refreshed.snapshot;
-  }
-
-  for (const repeatable of plan.repeatables) {
     const result = await reconcileSection(
-      plan,
+      effectivePlan,
       repeatable.section,
       repeatable.rows,
       snapshot,
@@ -126,7 +128,41 @@ export async function completeWorkdayProfilePage(
     snapshot = result.snapshot;
   }
 
-  const final = await inspectAndPreflight(plan, page, signal);
+  // Reconcile row-shaped employment and education state before optional
+  // page-level controls such as Skills and LinkedIn. A tenant-specific
+  // optional widget can then fail closed without preventing the required
+  // repeatable rows from being learned and verified first.
+  for (const item of effectivePlan.fields) {
+    if (item.answer.kind === "profile_answer_missing") continue;
+    if (!snapshot.controls.some(({ fieldId }) => fieldId === item.fieldId)) continue;
+    const result = await reconcileField(
+      item,
+      () => page.inspect(signal).then(({ controls }) => controls),
+      snapshot.controls,
+      page,
+      signal,
+    );
+    if (result.kind === "blocked") {
+      const control = snapshot.controls.find(({ fieldId }) => fieldId === item.fieldId);
+      if (
+        control?.required === false &&
+        (result.code === "profile_port_unavailable" ||
+          result.code === "profile_commit_unverified")
+      ) {
+        const refreshed = await inspectAndPreflight(effectivePlan, page, signal);
+        if (refreshed.kind === "blocked") return refreshed;
+        snapshot = refreshed.snapshot;
+        continue;
+      }
+      return result;
+    }
+    verified.push(result.field);
+    const refreshed = await inspectAndPreflight(effectivePlan, page, signal);
+    if (refreshed.kind === "blocked") return refreshed;
+    snapshot = refreshed.snapshot;
+  }
+
+  const final = await inspectAndPreflight(effectivePlan, page, signal);
   if (final.kind === "blocked") return final;
   if (ownedDuplicateCount(final.snapshot.rows) !== 0) {
     return blocked("profile_row_unverified");
@@ -300,9 +336,18 @@ function validField(field: ProfileFieldPlan): boolean {
     normalize(field.answer.value) === ""
   ) return false;
   if (field.answerType === "date" && !validIsoDate(field.answer.value)) return false;
+  if (field.answerType === "month" && !/^(?:0?[1-9]|1[0-2])$/u.test(field.answer.value)) return false;
+  if (field.answerType === "year" && !/^\d{4}$/u.test(field.answer.value)) return false;
+  if (field.answerType === "number" && !Number.isFinite(Number(field.answer.value))) return false;
+  if (field.answerType === "url" && !/^https:\/\//u.test(field.answer.value)) return false;
+  if (field.answerType === "multi_select" && optionList(field.answer.value) === undefined) {
+    return false;
+  }
   if (field.answerType === "phone" && field.answer.value.replace(/\D/gu, "").length < 7) {
     return false;
   }
+  if (field.answerType === "boolean" &&
+      field.answer.value !== "true" && field.answer.value !== "false") return false;
   if (field.answer.provenance === "journey_derived") {
     const source = field.fieldId === "source.how_did_you_hear" &&
       field.questionType === "application_source" && field.answerType === "option";
@@ -310,11 +355,68 @@ function validField(field: ProfileFieldPlan): boolean {
       field.questionType === "address" && field.answerType === "option";
     if (!source && !country) return false;
   }
-  return field.answerType !== "option" || (
+  return !new Set(["option", "single_select", "multi_select"]).has(field.answerType) || (
     field.optionMapping?.provenance === "visible_option" &&
     field.optionMapping.canonicalValue === field.answer.value &&
     normalize(field.optionMapping.visibleOption) !== ""
   );
+}
+
+function routeSiteAnswers(
+  plan: ProfilePagePlan,
+  snapshot: ProfilePageSnapshot,
+): ProfilePagePlan {
+  if (!snapshot.repeatableSections?.includes("websites")) return plan;
+  const visibleDedicated = new Set(snapshot.controls
+    .filter(({ fieldId }) => isDedicatedSiteField(fieldId))
+    .map(({ fieldId }) => fieldId));
+  const dedicatedUrls = new Set(plan.fields.flatMap((field) =>
+    visibleDedicated.has(field.fieldId) && isSiteUrl(field)
+      ? [normalize(visibleValue(field))]
+      : []
+  ));
+  const website = plan.repeatables.find(({ section }) => section === "websites");
+  const routedRows = [...website?.rows ?? []].filter((row) => {
+    const url = row.fields.find(({ fieldId }) => fieldId === "website.url");
+    return url === undefined || !dedicatedUrls.has(normalize(visibleValue(url)));
+  });
+  const moved = plan.fields.filter((field) =>
+    isDedicatedSiteField(field.fieldId) && isSiteUrl(field) &&
+    !visibleDedicated.has(field.fieldId)
+  );
+  for (const field of moved) {
+    const url = normalize(visibleValue(field));
+    if (routedRows.some((row) => row.fields.some((candidate) =>
+      candidate.fieldId === "website.url" && normalize(visibleValue(candidate)) === url
+    ))) continue;
+    routedRows.push({
+      rowKey: `website-route-${routedRows.length + 1}`,
+      fields: [{
+        ...field,
+        fieldId: "website.url",
+        questionType: "website",
+      }],
+    });
+  }
+  return {
+    ...plan,
+    fields: plan.fields.filter((field) =>
+      !moved.some(({ fieldId }) => fieldId === field.fieldId)
+    ),
+    repeatables: [
+      ...plan.repeatables.filter(({ section }) => section !== "websites"),
+      ...(routedRows.length === 0 ? [] : [{ section: "websites" as const, rows: routedRows }]),
+    ],
+  };
+}
+
+function isDedicatedSiteField(fieldId: string): boolean {
+  return fieldId === "social.linkedin" || fieldId === "social.github" ||
+    fieldId === "website.portfolio";
+}
+
+function isSiteUrl(field: ProfileFieldPlan): boolean {
+  return field.answerType === "url" && field.answer.kind === "answered";
 }
 
 async function cleanOwnedRows(
@@ -409,6 +511,10 @@ async function reconcileSection(
     used.add(current.rowId);
     for (const item of desired.fields) {
       const rowId: string = current.rowId;
+      // Repeatable rows are one semantic record made from independent controls.
+      // A tenant may omit an optional subfield (for example Location), and a
+      // current-role checkbox may remove the end-date controls after commit.
+      if (!current.controls.some(({ fieldId }) => fieldId === item.fieldId)) continue;
       const result = await reconcileField(
         item,
         async () => {
@@ -419,7 +525,21 @@ async function reconcileSection(
         page,
         signal,
       );
-      if (result.kind === "blocked") return result;
+      if (result.kind === "blocked") {
+        const control = current.controls.find(({ fieldId }) => fieldId === item.fieldId);
+        if (
+          control?.required === false &&
+          (result.code === "profile_port_unavailable" ||
+            result.code === "profile_commit_unverified")
+        ) {
+          const refreshed = await inspectAndPreflight(plan, page, signal);
+          if (refreshed.kind === "blocked") return refreshed;
+          snapshot = refreshed.snapshot;
+          current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
+          continue;
+        }
+        return result;
+      }
       verified.push({ ...result.field, rowKey: desired.rowKey });
       const refreshed = await inspectAndPreflight(plan, page, signal);
       if (refreshed.kind === "blocked") return refreshed;
@@ -453,6 +573,8 @@ function selectRepeatableRow(
     rowMatches(row, desired)
   ) ?? rows.find((row) =>
     row.section === section && row.ownedByC3 && !used.has(row.rowId)
+  ) ?? rows.find((row) =>
+    row.section === section && !used.has(row.rowId) && actualFingerprint(row.controls) === ""
   );
 }
 
@@ -524,10 +646,19 @@ async function reconcileField(
 function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): boolean {
   return (
     (field.answerType === "text" && control.uiBehavior === "text") ||
+    (field.answerType === "text" && control.uiBehavior === "textarea") ||
     (field.answerType === "phone" && control.uiBehavior === "phone") ||
     (field.answerType === "date" && control.uiBehavior === "date") ||
+    (field.answerType === "month" && control.uiBehavior === "month") ||
+    (field.answerType === "year" && control.uiBehavior === "year") ||
+    (field.answerType === "number" && control.uiBehavior === "number") ||
+    (field.answerType === "url" &&
+      (control.uiBehavior === "url" || control.uiBehavior === "text")) ||
+    (field.answerType === "boolean" && control.uiBehavior === "checkbox") ||
     (field.answerType === "option" &&
-      (control.uiBehavior === "search_select" || control.uiBehavior === "radio_group"))
+      (control.uiBehavior === "search_select" || control.uiBehavior === "radio_group")) ||
+    (field.answerType === "single_select" && control.uiBehavior === "select") ||
+    (field.answerType === "multi_select" && control.uiBehavior === "multi_select")
   );
 }
 
@@ -545,15 +676,72 @@ function readbackMatches(
   if (field.answerType === "phone") {
     return actual.replace(/\D/gu, "") === expected.replace(/\D/gu, "");
   }
+  if (field.answerType === "boolean") {
+    return normalize(actual) === (expected === "true" ? "true" : "false");
+  }
+  if (field.answerType === "month") {
+    return /^(?:0?[1-9]|1[0-2])$/u.test(actual) && Number(actual) === Number(expected);
+  }
+  if (field.answerType === "multi_select") {
+    const actualOptions = optionList(actual) ?? [actual];
+    const expectedOptions = optionList(expected);
+    return expectedOptions !== undefined && sameNormalizedOptions(actualOptions, expectedOptions);
+  }
   return normalize(actual) === normalize(expected);
 }
 
+function optionList(value: string): readonly string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      !Array.isArray(parsed) || parsed.length === 0 || parsed.length > 128 ||
+      parsed.some((item) => typeof item !== "string" || normalize(item) === "")
+    ) return undefined;
+    const normalized = parsed.map((item) => normalize(item as string));
+    return new Set(normalized).size === normalized.length ? parsed as string[] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameNormalizedOptions(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const remaining = [...right];
+  for (const value of left) {
+    const index = remaining.findIndex((candidate) => equivalentOption(value, candidate));
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return remaining.length === 0;
+}
+
+function equivalentOption(left: string, right: string): boolean {
+  const pair = new Set([normalize(left), normalize(right)]);
+  return pair.size === 1 || (
+    pair.size === 2 &&
+    pair.has("computer science") && pair.has("computer and information science")
+  );
+}
+
 function rowMatches(row: ProfileRowSnapshot, desired: readonly ProfileFieldPlan[]): boolean {
-  return desired.every((field) => {
+  const identityIds = row.section === "experience"
+    ? new Set(["experience.company", "experience.title"])
+    : row.section === "education"
+      ? new Set(["education.school", "education.degree"])
+      : row.section === "skills"
+        ? new Set(["skills.name"])
+        : new Set(["website.url"]);
+  const visibleIdentity = desired.flatMap((field) => {
+    if (!identityIds.has(field.fieldId)) return [];
     const controls = row.controls.filter(({ fieldId }) => fieldId === field.fieldId);
-    return controls.length === 1 &&
-      readbackMatches(field, controls[0]!.readback, visibleValue(field));
+    return controls.length === 1 ? [{ field, control: controls[0]! }] : [];
   });
+  return visibleIdentity.length > 0 && visibleIdentity.every(({ field, control }) =>
+    readbackMatches(field, control.readback, visibleValue(field))
+  );
 }
 
 function desiredFingerprint(fields: readonly ProfileFieldPlan[]): string {
@@ -563,7 +751,10 @@ function desiredFingerprint(fields: readonly ProfileFieldPlan[]): string {
 }
 
 function actualFingerprint(controls: readonly ProfileControlSnapshot[]): string {
-  return controls.filter(({ readback }) => readback !== null && normalize(readback) !== "")
+  return controls.filter(({ uiBehavior, readback }) =>
+    readback !== null && normalize(readback) !== "" &&
+    !(uiBehavior === "checkbox" && normalize(readback) === "false")
+  )
     .map(({ fieldId, readback }) => `${fieldId}:${normalize(readback ?? "")}`)
     .sort()
     .join("|");
@@ -589,11 +780,15 @@ async function inspect(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
 ): Promise<ProfilePageSnapshot | undefined> {
-  try {
-    if (signal.aborted) return undefined;
-    return await page.inspect(signal);
-  } catch {
-    return undefined;
+  const deadline = Date.now() + 1_000;
+  while (true) {
+    try {
+      if (signal.aborted) return undefined;
+      return await page.inspect(signal);
+    } catch {
+      if (signal.aborted || Date.now() >= deadline) return undefined;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 }
 

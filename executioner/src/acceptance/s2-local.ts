@@ -60,6 +60,9 @@ export function createLocalStage2AcceptancePorts(
 ): Stage2AcceptanceGatePorts {
   const cwd = resolve(cwdValue);
   const command = dependencies.command ?? new LocalStage2Command();
+  const npmCliPath = process.platform === "win32"
+    ? captureAdmittedNpmCliPath()
+    : undefined;
   const sourceCapture = dependencies.sourceCapture ?? (() => inspectCleanSourceRevision(cwd));
   const configCapture = dependencies.configCapture ?? captureStage2Config;
   const resultRead = dependencies.resultRead ?? readStage2ReviewAcceptance;
@@ -79,7 +82,11 @@ export function createLocalStage2AcceptancePorts(
       );
       if (process.platform === "win32") {
         if (!supportsWindowsIsolatedNodeRuntime(process.versions.node)) return 2;
-        return runWindowsIsolatedStage2Acceptance(args, { signal, runnerPath });
+        return runWindowsIsolatedStage2Acceptance(args, {
+          signal,
+          runnerPath,
+          environment: { ...process.env, HUNT_C3_VALUE_FREE_ACCOUNT_TRACE: "1" },
+        });
       }
       return command.run(
         process.execPath,
@@ -99,7 +106,7 @@ export function createLocalStage2AcceptancePorts(
         try {
           return command.run(
             process.execPath,
-            [admittedNpmCliPath(), "run", "quality"],
+            [requiredNpmCliPath(npmCliPath), "run", "quality"],
             { cwd, signal },
           );
         } catch {
@@ -123,6 +130,19 @@ export function createLocalStage2AcceptancePorts(
       },
     },
   };
+}
+
+function captureAdmittedNpmCliPath(): string | undefined {
+  try {
+    return admittedNpmCliPath();
+  } catch {
+    return undefined;
+  }
+}
+
+function requiredNpmCliPath(value: string | undefined): string {
+  if (value === undefined) return denied("npm executable denied");
+  return value;
 }
 
 function realArguments(args: Stage2RealAcceptanceArgs): readonly string[] {

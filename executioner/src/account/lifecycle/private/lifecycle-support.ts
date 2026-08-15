@@ -185,6 +185,7 @@ export function requestFingerprint(input: AccountLifecycleInput): string {
     input.operations.requestVerificationEmail,
     input.operations.navigateVerification,
     input.operations.postVerificationSignIn,
+    input.operations.postVerificationCredentialSubmit,
   ]);
 }
 

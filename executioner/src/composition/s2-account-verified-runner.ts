@@ -41,6 +41,7 @@ import type {
   LiveIdentifier,
   LiveSessionId,
   LivePortResult,
+  MailboxProvider,
   PersistentBrowserCloseRequest,
   PersistentBrowserErrorCode,
   PersistentBrowserOpenRequest,
@@ -58,6 +59,7 @@ import {
   createBoundedVerificationMailboxPolling,
 } from "../account/lifecycle/mailbox-polling.ts";
 import { writeAccountVerifiedEvidence } from "../live/evidence/account-verified-evidence.ts";
+import { createValueFreeRunTrace } from "../live/evidence/value-free-run-trace.ts";
 import {
   createOperatorMonitorInspectionHold,
 } from "../live/evidence/operator-monitor-ack.ts";
@@ -110,6 +112,7 @@ export interface AccountVerifiedOperationIds {
   readonly requestVerificationEmail: OperationId;
   readonly navigateVerification: OperationId;
   readonly postVerificationSignIn: OperationId;
+  readonly postVerificationCredentialSubmit: OperationId;
   readonly browserClose: OperationId;
   readonly mailboxQuery: LiveIdentifier<"mailbox_query">;
 }
@@ -164,6 +167,7 @@ export function createAccountVerifiedBindings(
       requestVerificationEmail: operations.requestVerificationEmail,
       navigateVerification: operations.navigateVerification,
       postVerificationSignIn: operations.postVerificationSignIn,
+      postVerificationCredentialSubmit: operations.postVerificationCredentialSubmit,
     }),
   });
   const gmail = Object.freeze({
@@ -218,6 +222,10 @@ interface SessionBoundAccountBrowser {
     signal: AbortSignal,
   ): Promise<LivePortResult<
     | { readonly kind: "account_boundary" }
+    | {
+        readonly kind: "state_transitioned";
+        readonly state: "job_posting" | "apply_choice" | "email_sign_in_choice";
+      }
     | { readonly kind: "target_mismatch"; readonly dimension: "host" | "tenant" | "posting" }
     | { readonly kind: "target_ambiguous" }
     | { readonly kind: "posting_unavailable"; readonly reason: "not_found" | "closed" | "removed" | "unavailable" | "maintenance" | "runtime_error" },
@@ -289,7 +297,7 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       Extract<AccountLifecycleResult, { readonly ok: true }>["value"],
       { readonly kind: "navigation_required" }
     > | undefined;
-    for (let transition = 0; transition < 4; transition += 1) {
+    for (let transition = 0; transition < 8; transition += 1) {
       const advanceNow = authorizedEffectNow(options, signal);
       if (advanceNow === null) return sessionFailure("operation_cancelled");
       emitSessionTrace(options.trace, "account_session_advance_started");
@@ -304,6 +312,11 @@ export async function runSessionBoundAccountVerifiedLifecycle(options: {
       if (!advanced.ok) {
         emitSessionTrace(options.trace, "account_session_advance_failed");
         return sessionFailure(advanced.error.code);
+      }
+      if (advanced.value.kind === "state_transitioned") {
+        operationId = `operation_${randomBytes(16).toString("hex")}` as OperationId;
+        emitSessionTrace(options.trace, "account_session_page_redispatch_started");
+        continue;
       }
       if (advanced.value.kind !== "account_boundary") {
         emitSessionTrace(options.trace, "account_session_advance_blocked");
@@ -441,8 +454,11 @@ export interface Stage2UnsealedAccountProofV1 {
   readonly targetHandleId: string;
   readonly accountState: "application_ready";
   readonly independentlyObservedVerifiedState: true;
-  readonly verificationProof: "gmail_candidate_consumed" | "credential_sign_in";
-  readonly provider: "gmail-api-v1" | "workday-auth";
+  readonly verificationProof:
+    | "gmail_candidate_consumed"
+    | "credential_sign_in"
+    | "application_state_observed";
+  readonly provider: "gmail-api-v1" | "workday-auth" | "workday-state";
   readonly consumedCandidateCount: 0 | 1;
   readonly messageBodyRetained: false;
   readonly submitActivated: false;
@@ -487,30 +503,18 @@ export async function runStage2AccountVerifiedInSession(
         forbiddenRoots: [source.repositoryRoot],
         now: liveClock,
       });
-      const [accountInspection, gmailInspection] = await Promise.all([
-        inspectAuthorizedSecret(secretStore, {
-          schemaVersion: 1,
-          journeyId: options.owner.journeyId as never,
-          handleId: options.owner.accountSecret.handleId as SecretHandleId,
-          expectedPurpose: "account_credentials",
-          expectedConsumer: "credential_mutation_adapter",
-        }, authorization),
-        inspectAuthorizedSecret(secretStore, {
-          schemaVersion: 1,
-          journeyId: options.owner.journeyId as never,
-          handleId: options.owner.gmailAuthorization.handleId as SecretHandleId,
-          expectedPurpose: "gmail_oauth",
-          expectedConsumer: "gmail_auth_executor",
-        }, authorization),
-      ]);
+      const accountInspection = await inspectAuthorizedSecret(secretStore, {
+        schemaVersion: 1,
+        journeyId: options.owner.journeyId as never,
+        handleId: options.owner.accountSecret.handleId as SecretHandleId,
+        expectedPurpose: "account_credentials",
+        expectedConsumer: "credential_mutation_adapter",
+      }, authorization);
       if (!accountInspection.ok) return unsealedFailure(accountInspection.error.code);
-      if (!gmailInspection.ok) return unsealedFailure(gmailInspection.error.code);
-      if (!exactAccountMetadata(accountInspection.value, options.owner) ||
-          !exactGmailMetadata(gmailInspection.value, options.owner)) {
+      if (!exactAccountMetadata(accountInspection.value, options.owner)) {
         return unsealedFailure("secret_handle_mismatched");
       }
       const account = accountInspection.value as ActiveAccountSecretHandle;
-      const gmailAuthorization = gmailInspection.value as ActiveGmailSecretHandle;
       const operations = operationIds();
       const bindings = createAccountVerifiedBindings(
         options.owner,
@@ -519,7 +523,7 @@ export async function runStage2AccountVerifiedInSession(
         operations,
       );
       const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-        ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+        ? createValueFreeRunTrace(options.owner.roots.evidence.path)
         : undefined;
       const structural = createPlaywrightLiveEntryStructuralSource(options.browser);
       const classified = createClassifiedAccountObservationSource(
@@ -538,7 +542,11 @@ export async function runStage2AccountVerifiedInSession(
       });
       const rawVault = new GmailRawArtifactVault();
       const artifacts = new GmailSafeArtifactRegistry();
-      const mailbox = createBoundedVerificationMailboxPolling({
+      const mailbox = createLazyGmailMailbox({
+        owner: options.owner,
+        secretStore,
+        authorization,
+        create: (gmailAuthorization) => createBoundedVerificationMailboxPolling({
         clock: liveClock,
         authorizationExpiresAt: options.owner.approval.expiresAt,
         maxDurationMs: 5 * 60_000,
@@ -583,6 +591,7 @@ export async function runStage2AccountVerifiedInSession(
           });
         },
         trace: valueFreeTrace,
+        }),
       });
       const consumer = new GmailAtomicArtifactConsumer({
         rawVault,
@@ -705,30 +714,18 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         forbiddenRoots: [source.repositoryRoot],
         now: liveClock,
       });
-      const [accountInspection, gmailInspection] = await Promise.all([
-        inspectAuthorizedSecret(secretStore, {
-          schemaVersion: 1,
-          journeyId: owner.journeyId as never,
-          handleId: owner.accountSecret.handleId as SecretHandleId,
-          expectedPurpose: "account_credentials",
-          expectedConsumer: "credential_mutation_adapter",
-        }, authorization),
-        inspectAuthorizedSecret(secretStore, {
-          schemaVersion: 1,
-          journeyId: owner.journeyId as never,
-          handleId: owner.gmailAuthorization.handleId as SecretHandleId,
-          expectedPurpose: "gmail_oauth",
-          expectedConsumer: "gmail_auth_executor",
-        }, authorization),
-      ]);
+      const accountInspection = await inspectAuthorizedSecret(secretStore, {
+        schemaVersion: 1,
+        journeyId: owner.journeyId as never,
+        handleId: owner.accountSecret.handleId as SecretHandleId,
+        expectedPurpose: "account_credentials",
+        expectedConsumer: "credential_mutation_adapter",
+      }, authorization);
     if (!accountInspection.ok) return failure(accountInspection.error.code);
-    if (!gmailInspection.ok) return failure(gmailInspection.error.code);
-    if (!exactAccountMetadata(accountInspection.value, owner) ||
-        !exactGmailMetadata(gmailInspection.value, owner)) {
+    if (!exactAccountMetadata(accountInspection.value, owner)) {
       return failure("secret_handle_mismatched");
     }
     const account = accountInspection.value as ActiveAccountSecretHandle;
-    const gmailAuthorization = gmailInspection.value as ActiveGmailSecretHandle;
     const operations = operationIds();
     const bindings = createAccountVerifiedBindings(
       owner,
@@ -737,7 +734,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       operations,
     );
     const valueFreeTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-      ? (event: string) => process.stderr.write(`${JSON.stringify({ trace: event })}\n`)
+      ? createValueFreeRunTrace(owner.roots.evidence.path)
       : undefined;
     const inspectionHold = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
       ? createOperatorMonitorInspectionHold({
@@ -772,7 +769,11 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
     });
     const rawVault = new GmailRawArtifactVault();
     const artifacts = new GmailSafeArtifactRegistry();
-    const mailbox = createBoundedVerificationMailboxPolling({
+    const mailbox = createLazyGmailMailbox({
+      owner,
+      secretStore,
+      authorization,
+      create: (gmailAuthorization) => createBoundedVerificationMailboxPolling({
       clock: liveClock,
       authorizationExpiresAt: owner.approval.expiresAt,
       maxDurationMs: 5 * 60_000,
@@ -817,6 +818,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
         });
       },
       trace: valueFreeTrace,
+      }),
     });
     const consumer = new GmailAtomicArtifactConsumer({
       rawVault,
@@ -1009,6 +1011,38 @@ async function inspectAuthorizedSecret(
 ) {
   if (authorization.current() === null) return cancelledPortResult();
   return store.inspect(request, authorization.signal);
+}
+
+export function createLazyGmailMailbox(options: {
+  readonly owner: RealRunOwnerInputsV1;
+  readonly secretStore: SecretStore;
+  readonly authorization: AuthorizationRuntime;
+  readonly create: (authorization: ActiveGmailSecretHandle) => MailboxProvider;
+}): MailboxProvider {
+  let mailbox: MailboxProvider | undefined;
+  const lazy: MailboxProvider = {
+    async poll(request, signal) {
+      if (mailbox === undefined) {
+        const inspected = await inspectAuthorizedSecret(options.secretStore, {
+          schemaVersion: 1,
+          journeyId: options.owner.journeyId as never,
+          handleId: options.owner.gmailAuthorization.handleId as SecretHandleId,
+          expectedPurpose: "gmail_oauth",
+          expectedConsumer: "gmail_auth_executor",
+        }, options.authorization);
+        if (!inspected.ok) return inspected;
+        if (!exactGmailMetadata(inspected.value, options.owner)) {
+          return {
+            ok: false,
+            error: { code: "secret_handle_mismatched", retryable: false },
+          } as const;
+        }
+        mailbox = options.create(inspected.value as ActiveGmailSecretHandle);
+      }
+      return mailbox.poll(request, signal);
+    },
+  };
+  return Object.freeze(lazy);
 }
 
 export function createAuthorizationBoundLifecycleDependencies(
@@ -1332,6 +1366,7 @@ function operationIds(): AccountVerifiedOperationIds {
     requestVerificationEmail: next(),
     navigateVerification: next(),
     postVerificationSignIn: next(),
+    postVerificationCredentialSubmit: next(),
     browserClose: next(),
     mailboxQuery: `mailbox_query_${randomBytes(16).toString("hex")}` as never,
   });
@@ -1404,6 +1439,14 @@ function unsealedVerified(value: unknown): Pick<
     "kind", "path", "independentlyObserved", "verificationCandidateCount",
     "verificationConsumed",
   ]) || value.kind !== "account_ready" || value.independentlyObserved !== true) return null;
+  if (value.path === "already_ready" && value.verificationCandidateCount === 0 &&
+      value.verificationConsumed === false) {
+    return {
+      verificationProof: "application_state_observed",
+      provider: "workday-state",
+      consumedCandidateCount: 0,
+    };
+  }
   if (value.path === "verified_account" && value.verificationCandidateCount === 1 &&
       value.verificationConsumed === true) {
     return {
@@ -1412,7 +1455,8 @@ function unsealedVerified(value: unknown): Pick<
       consumedCandidateCount: 1,
     };
   }
-  if (value.path === "reused_account" && value.verificationCandidateCount === 0 &&
+  if ((value.path === "reused_account" || value.path === "created_account") &&
+      value.verificationCandidateCount === 0 &&
       value.verificationConsumed === false) {
     return {
       verificationProof: "credential_sign_in",

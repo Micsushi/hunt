@@ -196,7 +196,7 @@ test("walks every application page only after browser-truth verification and sto
     "reconcile:profile:1",
     "observe:profile",
     "progress:profile_verified:1",
-    "next:profile:resume|questionnaire|pre_review",
+    "next:profile:profile|resume|questionnaire|pre_review",
     "observe:resume",
     "reconcile:resume:1",
     "observe:resume",
@@ -485,7 +485,7 @@ test("reobserves browser truth without replaying a verified page effect", async 
     "observe:error",
     "observe:profile",
     "progress:profile_verified:1",
-    "next:profile:resume|questionnaire|pre_review",
+    "next:profile:profile|resume|questionnaire|pre_review",
   ]);
 });
 
@@ -637,6 +637,67 @@ test("failure projection replaces malformed enum values with safe metadata", asy
     attempt: 1,
   });
   assert.doesNotMatch(JSON.stringify(result), /sensitive-value/u);
+});
+
+test("waits through a same-page loading shell after navigation", async () => {
+  const calls: string[] = [];
+  const loading = {
+    ...truth("profile"),
+    requiredFields: [],
+  };
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      loading,
+      truth("resume"), truth("resume"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(calls.filter((call) => call === "observe:profile").length, 3);
+});
+
+test("walks distinct My Information and My Experience profile roots", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("profile"), truth("profile"),
+      truth("questionnaire"), truth("questionnaire"),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["profile", "profile", "questionnaire"],
+  );
+});
+
+test("fills an independently entered application page without forcing earlier pages", async () => {
+  const calls: string[] = [];
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("questionnaire"), truth("questionnaire"), truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.ok && result.value.pageChecks.map(({ page }) => page),
+    ["questionnaire"],
+  );
+  assert.equal(calls.some((call) => call.startsWith("reconcile:profile")), false);
+  assert.equal(calls.some((call) => call.startsWith("reconcile:resume")), false);
 });
 
 test("failure projection preserves bounded synthetic placeholder provenance", async () => {

@@ -28,6 +28,8 @@ import {
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
 import { admitProfileFieldLearningEvidence } from
   "../../live/evidence/profile-field-learning.ts";
+import { admitQuestionAnswerLearningEvidence } from
+  "../../live/evidence/question-answer-learning.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
 import { sweepExpiredVerificationReplayClaims } from "./s2-verification-replay-ledger.ts";
@@ -55,10 +57,13 @@ const REVIEW_RETAINED_FILES = new Set([
   "acceptance.json",
   "application-walk-acceptance.json",
   "completion-audit.json",
+  "profile-field-learning-02.json",
   "profile-field-learning.json",
+  "question-answer-learning.json",
   "process-audit.json",
   "review-acceptance.json",
   "s2-acceptance-manifest.json",
+  "value-free-trace.ndjson",
 ]);
 
 export interface Stage2StoragePath {
@@ -727,7 +732,8 @@ function readOwnerStorageBinding(layout: Stage2RunStorageLayout): {
     if (
       parsed.protocol !== "https:" || parsed.host !== host ||
       host.split(".")[0] !== tenant ||
-      !parsed.pathname.split("/").at(-1)?.endsWith(`_${posting}`)
+      posting !== posting.toUpperCase() ||
+      !parsed.pathname.split("/").at(-1)?.toUpperCase().endsWith(`_${posting}`)
     ) denied("storage finalization denied");
   } catch {
     denied("storage finalization denied");
@@ -768,7 +774,9 @@ function readCompletionAudit(root: string): {
     ((value.verificationProof === "gmail_candidate_consumed" &&
       value.provider === "gmail-api-v1" && value.consumedCandidateCount === 1) ||
     (value.verificationProof === "credential_sign_in" &&
-      value.provider === "workday-auth" && value.consumedCandidateCount === 0)) &&
+      value.provider === "workday-auth" && value.consumedCandidateCount === 0) ||
+    (value.verificationProof === "application_state_observed" &&
+      value.provider === "workday-state" && value.consumedCandidateCount === 0)) &&
     value.messageBodyRetained === false;
   let allowedRootFiles: ReadonlySet<string> = accountAccess
     ? ACCOUNT_ACCESS_RETAINED_FILES
@@ -838,9 +846,17 @@ function retainedFileDigests(
     const path = admittedFile(join(root, file), 12 * 1024 * 1024);
     const bytes = readFileSync(path);
     try {
-      if (file === "profile-field-learning.json") {
+      if (file === "profile-field-learning.json" ||
+          file === "profile-field-learning-02.json") {
         try {
           admitProfileFieldLearningEvidence(JSON.parse(bytes.toString("utf8")));
+        } catch {
+          denied("storage finalization denied");
+        }
+      }
+      if (file === "question-answer-learning.json") {
+        try {
+          admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
         } catch {
           denied("storage finalization denied");
         }

@@ -135,7 +135,8 @@ function validResume(
     value.browserState.uploadedFileCount === 1 &&
     value.browserState.uploadComplete === true &&
     value.browserState.requiredErrorVisible === false &&
-    value.browserState.removeControlCardinality === 1 &&
+    (value.browserState.removeControlCardinality === 0 ||
+      value.browserState.removeControlCardinality === 1) &&
     value.independentlyVerified === true &&
     typeof value.duplicateUploadAvoided === "boolean" &&
     typeof value.replacedExisting === "boolean" &&
@@ -176,20 +177,30 @@ function validProfile(
         /^[a-z][a-z0-9_.-]{0,127}$/u.test(field.fieldId) &&
         new Set([
           "identity", "address", "phone", "application_source", "prior_employment",
-          "experience", "education", "skill",
+          "employment", "experience", "education", "skill", "language", "website",
+          "social_network",
         ])
           .has(field.questionType) &&
-        new Set(["text", "phone", "date", "option"]).has(field.answerType) &&
-        new Set(["text", "phone", "date", "search_select", "radio_group"])
+        new Set([
+          "text", "phone", "date", "month", "year", "number", "url", "boolean",
+          "option", "single_select", "multi_select",
+        ]).has(field.answerType) &&
+        new Set([
+          "text", "textarea", "phone", "date", "month", "year", "number", "url",
+          "checkbox", "select", "multi_select", "search_select", "radio_group",
+        ])
           .has(field.uiBehavior) &&
         new Set([
-          "workday_text_v1", "workday_phone_v1", "workday_date_v1",
-          "workday_search_select_v1",
+          "workday_text_v1", "workday_text_v2", "workday_phone_v1", "workday_phone_v2",
+          "workday_date_v1", "workday_checkbox_v2", "workday_search_select_v1",
+          "workday_month_v1", "workday_year_v1", "workday_number_v1",
+          "workday_textarea_v1", "workday_select_v1", "workday_multi_select_v1",
+          "workday_search_select_v2",
           "workday_source_select_v1", "workday_previous_worker_radio_v1",
         ]).has(field.uiVariant) &&
         new Set([
           "owner_provided", "resume_verified", "configured_template",
-          "journey_derived",
+          "generated_default", "journey_derived",
         ])
           .has(field.provenance) &&
         (field.optionMappingProvenance === undefined ||
@@ -217,7 +228,7 @@ function validQuestionnaire(
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.questionId) &&
       new Set([
         "owner_provided", "resume_verified", "configured_template",
-        "reviewed_catalog", "visible_option",
+        "generated_default", "reviewed_catalog", "visible_option",
       ]).has(answer.provenance) &&
       (answer.protectedCategory === null ||
         new Set(["authorization", "legal", "consent"])

@@ -135,7 +135,7 @@ test("choice mapping uses each frozen row's exact behavior and visible option", 
   }
 });
 
-test("age aliases reject non-owner answers before producing an intent", async () => {
+test("age aliases replace non-owner answers with the learning default", async () => {
   const { resolver } = resolverWith({
     kind: "answered",
     value: true,
@@ -150,12 +150,23 @@ test("age aliases reject non-owner answers before producing an intent", async ()
     request(field("Are you 18 years of age or older?", "radio", options)),
     new AbortController().signal,
   ), {
-    ok: false,
-    error: { code: "protected_answer_denied", retryable: false },
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "radio",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "age-yes",
+        expectedOption: "Yes",
+        provenance: "reviewed_catalog",
+      },
+    },
   });
 });
 
-test("reviewed demographic defaults are denied without querying profile facts", async () => {
+test("semantic demographic variants use only an exact visible privacy choice", async () => {
   const profile = createProfileQueryFake();
   const resolver = createAnswerResolver(profile.port, "Narrative.");
   const options = Object.freeze([
@@ -163,16 +174,27 @@ test("reviewed demographic defaults are denied without querying profile facts", 
   ]);
 
   assert.deepEqual(await resolver.resolve(
-    request(field("Gender", "listbox", options)),
+    request(field("Select your gender", "listbox", options)),
     new AbortController().signal,
   ), {
-    ok: false,
-    error: { code: "protected_answer_denied", retryable: false },
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "listbox",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "gender-neutral",
+        expectedOption: "Prefer not to answer",
+        provenance: "reviewed_catalog",
+      },
+    },
   });
   assert.deepEqual(profile.calls, []);
 });
 
-test("synthetic facts never become owner facts or mutation intents", async () => {
+test("protected placeholders become explicit replacement-required learning intents", async () => {
   const profile = createProfileQueryFake();
   const resolver = createAnswerResolver(profile.port, "Narrative.");
   const yesNo = Object.freeze([
@@ -183,8 +205,19 @@ test("synthetic facts never become owner facts or mutation intents", async () =>
     request(field("Have you ever been employed by QTS Data Centers?", "radio", yesNo)),
     new AbortController().signal,
   ), {
-    ok: false,
-    error: { code: "protected_answer_denied", retryable: false },
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "radio",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "prior-no",
+        expectedOption: "No",
+        provenance: "reviewed_catalog",
+      },
+    },
   });
 
   const sources = Object.freeze([
@@ -196,8 +229,16 @@ test("synthetic facts never become owner facts or mutation intents", async () =>
   ), {
     ok: true,
     value: {
-      kind: "profile_answer_missing",
-      questionId: "workday-placeholder-application-source",
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "source-linkedin",
+        expectedOption: "LinkedIn",
+        provenance: "reviewed_catalog",
+      },
     },
   });
   assert.deepEqual(profile.calls, []);
@@ -218,7 +259,7 @@ test("visible option no-match and ambiguity remain distinct and immutable", () =
   assert.equal(Object.isFrozen(ambiguous), true);
 });
 
-test("missing and protected facts never become holding values", async () => {
+test("missing and non-owner protected facts use deterministic learning defaults", async () => {
   const cases = [
     ["Available start date", "date", "s1-question-earliest-start-date", "2026-09-01"],
     ["Are you authorized to work in this location?", "radio", "s1-question-work-authorization", true],
@@ -227,34 +268,52 @@ test("missing and protected facts never become holding values", async () => {
   ] as const;
 
   for (const [label, behavior, expectedQuestionId, value] of cases) {
+    const options = behavior === "radio" || behavior === "select"
+      ? Object.freeze([
+          { id: optionId(`${expectedQuestionId}-yes`), label: boundedText("Yes") },
+          { id: optionId(`${expectedQuestionId}-no`), label: boundedText("No") },
+        ])
+      : undefined;
     const missing = resolverWith({ kind: "profile_answer_missing" });
-    assert.deepEqual(
-      await missing.resolver.resolve(
-        request(field(label, behavior)),
-        new AbortController().signal,
-      ),
-      {
-        ok: true,
-        value: {
-          kind: "profile_answer_missing",
-          questionId: expectedQuestionId,
-        },
-      },
+    const generated = await missing.resolver.resolve(
+      request(field(label, behavior, options)),
+      new AbortController().signal,
     );
+    assert.equal(generated.ok && generated.value.kind, "resolved");
+    if (generated.ok && generated.value.kind === "resolved") {
+      assert.equal(generated.value.intent.provenance, "reviewed_catalog");
+    }
 
     const unowned = resolverWith({
       kind: "answered",
       value,
       provenance: "resume_verified",
     });
-    assert.deepEqual(
-      await unowned.resolver.resolve(
-        request(field(label, behavior)),
-        new AbortController().signal,
-      ),
-      { ok: false, error: { code: "protected_answer_denied", retryable: false } },
+    const fallback = await unowned.resolver.resolve(
+      request(field(label, behavior, options)),
+      new AbortController().signal,
     );
+    assert.equal(fallback.ok && fallback.value.kind, "resolved");
+    if (fallback.ok && fallback.value.kind === "resolved") {
+      assert.equal(fallback.value.intent.provenance, "reviewed_catalog");
+    }
   }
+});
+
+test("configured narrative falls back to a deterministic generated default", async () => {
+  const profile = createProfileQueryFake();
+  const resolver = createAnswerResolver(profile.port, undefined);
+  const answer = await resolver.resolve(
+    request(field("Brief interest statement", "textarea")),
+    new AbortController().signal,
+  );
+
+  assert.equal(answer.ok, true);
+  assert.equal(answer.ok && answer.value.kind, "resolved");
+  if (answer.ok && answer.value.kind === "resolved") {
+    assert.equal(answer.value.intent.provenance, "reviewed_catalog");
+  }
+  assert.deepEqual(profile.calls, []);
 });
 
 test("configured narrative and selected resume artifact bypass ProfileQuery", async () => {
@@ -287,7 +346,7 @@ test("configured narrative and selected resume artifact bypass ProfileQuery", as
   assert.deepEqual(profile.calls, []);
 });
 
-test("an unresolved narrative blocks only its exact question", async () => {
+test("an unresolved narrative uses its deterministic fallback", async () => {
   const profile = createProfileQueryFake({
     query: {
       ok: true,
@@ -302,8 +361,15 @@ test("an unresolved narrative blocks only its exact question", async () => {
   ), {
     ok: true,
     value: {
-      kind: "profile_answer_missing",
-      questionId: "s1-question-configured-narrative",
+      kind: "resolved",
+      intent: {
+        kind: "text",
+        behavior: "textarea",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        value: "I am interested in this role and available to discuss my qualifications.",
+        provenance: "reviewed_catalog",
+      },
     },
   });
   const name = await resolver.resolve(
@@ -336,7 +402,7 @@ test("every ProfileQuery failure is returned unchanged and never thrown", async 
   }
 });
 
-test("unknown, hidden, ambiguous, unsupported, invalid date, and abort are explicit", async () => {
+test("unknown and invalid fields generate while hidden, ambiguous, unsupported, and abort remain explicit", async () => {
   const { resolver, profile } = resolverWith({
     kind: "answered",
     value: "2026-13-01",
@@ -344,30 +410,89 @@ test("unknown, hidden, ambiguous, unsupported, invalid date, and abort are expli
   });
   const signal = new AbortController().signal;
 
-  assert.deepEqual(await resolver.resolve(request(field("Unreviewed")), signal), {
-    ok: false,
-    error: { code: "question_unknown", retryable: false },
-  });
+  const unknown = await resolver.resolve(request(field("Unreviewed")), signal);
+  assert.equal(unknown.ok && unknown.value.kind, "resolved");
+  if (unknown.ok && unknown.value.kind === "resolved") {
+    assert.equal(unknown.value.intent.provenance, "reviewed_catalog");
+  }
   for (const observed of [
     field("Given name", "unsupported"),
     field("Given name", "text", [], "hidden"),
     field("Given name", "text", [], "ambiguous"),
-    field("Given name", "textarea"),
-    field("Are you at least 18 years of age?", "textarea"),
   ]) {
     assert.deepEqual(await resolver.resolve(request(observed), signal), {
       ok: true,
       value: { kind: "unsupported", fieldId: fieldId("s1-field-given-name") },
     });
   }
-  assert.deepEqual(await resolver.resolve(request(field("Available start date", "date")), signal), {
-    ok: true,
-    value: { kind: "unsupported", fieldId: fieldId("s1-field-given-name") },
-  });
+  for (const observed of [
+    field("Given name", "textarea"),
+    field("Are you at least 18 years of age?", "textarea"),
+    field("Available start date", "date"),
+  ]) {
+    const generated = await resolver.resolve(request(observed), signal);
+    assert.equal(generated.ok && generated.value.kind, "resolved");
+  }
   const callsBeforeAbort = profile.calls.length;
   assert.deepEqual(await resolver.resolve(request(field("Given name")), AbortSignal.abort()), {
     ok: false,
     error: { code: "operation_cancelled", retryable: false },
   });
   assert.equal(profile.calls.length, callsBeforeAbort);
+});
+
+test("unknown choices select the first visible non-placeholder option", async () => {
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const result = await resolver.resolve(request(field(
+    "Unreviewed choice",
+    "select",
+    [
+      { id: optionId("option-placeholder"), label: boundedText("Select One") },
+      { id: optionId("option-first"), label: boundedText("First available") },
+      { id: optionId("option-second"), label: boundedText("Second available") },
+    ],
+  )), new AbortController().signal);
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "option-first",
+        expectedOption: "First available",
+        provenance: "visible_option",
+      },
+    },
+  });
+});
+
+test("known choices fall back to a visible learning option when the owner answer is absent", async () => {
+  const { resolver } = resolverWith({
+    kind: "answered",
+    value: "Not visible",
+    provenance: "owner_provided",
+  });
+  const result = await resolver.resolve(request(field(
+    "Will you require sponsorship?",
+    "select",
+    [{ id: optionId("sponsor-no"), label: boundedText("No") }],
+  )), new AbortController().signal);
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "sponsor-no",
+        expectedOption: "No",
+        provenance: "visible_option",
+      },
+    },
+  });
 });

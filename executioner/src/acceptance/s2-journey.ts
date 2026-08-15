@@ -311,7 +311,8 @@ async function executeBoundJourney(
         );
   }
 
-  if (signal.aborted) return cancelled(invocation.config.journeyId, 3);
+  const completedPages = application.value.completedPages;
+  if (signal.aborted) return cancelled(invocation.config.journeyId, completedPages);
   let review: ReturnType<typeof stopAtVerifiedReview>;
   try {
     const captured = await runtime.review.capture(signal);
@@ -319,12 +320,12 @@ async function executeBoundJourney(
     review = stopAtVerifiedReview({ ...captured.request, structure });
   } catch {
     return signal.aborted
-      ? cancelled(invocation.config.journeyId, 3)
+      ? cancelled(invocation.config.journeyId, completedPages)
       : errorFailure(
           invocation.config.journeyId,
           "review_failed",
           "mcp_internal_error",
-          3,
+          completedPages,
         );
   }
   if (
@@ -338,11 +339,11 @@ async function executeBoundJourney(
       invocation.config.journeyId,
       "review_failed",
       "page_incomplete",
-      3,
+      completedPages,
     );
   }
 
-  if (signal.aborted) return cancelled(invocation.config.journeyId, 3);
+  if (signal.aborted) return cancelled(invocation.config.journeyId, completedPages);
   try {
     const forbiddenTokens = await runtime.privacy.forbiddenTokens(signal);
     if (forbiddenTokens.length === 0) {
@@ -350,7 +351,7 @@ async function executeBoundJourney(
         invocation.config.journeyId,
         "evidence_failed",
         "evidence_unavailable",
-        3,
+        completedPages,
       );
     }
     const resumeVerified = application.value.pageChecks.some(
@@ -419,18 +420,18 @@ async function executeBoundJourney(
     });
   } catch {
     return signal.aborted
-      ? cancelled(invocation.config.journeyId, 3)
+      ? cancelled(invocation.config.journeyId, completedPages)
       : errorFailure(
           invocation.config.journeyId,
           "evidence_failed",
           "mcp_internal_error",
-          3,
+          completedPages,
         );
   }
 
   return {
     ok: true,
-    terminal: reviewTerminal(invocation.config.journeyId),
+    terminal: reviewTerminal(invocation.config.journeyId, completedPages),
     acceptance: Object.freeze({
       schemaVersion: 1,
       evidenceRevision: "s2-review-acceptance-v1",
@@ -549,15 +550,17 @@ function failure<Code extends Stage2RealJourneyFailureCode>(
   return Object.freeze({ ok: false, code, terminal });
 }
 
-function reviewTerminal(journeyId: string): TerminalResultV4 {
+function reviewTerminal(journeyId: string, completedPages: number): TerminalResultV4 {
   return {
     schemaVersion: 4,
     journeyId: journeyId as TerminalResultV4["journeyId"],
     status: "review_reached",
-    completedPages: 3,
+    completedPages: boundedPages(completedPages),
   };
 }
 
 function boundedPages(value: number): number {
-  return Number.isSafeInteger(value) && value >= 0 && value <= 3 ? value : 0;
+  return Number.isSafeInteger(value) && value >= 0 && value <= maximumApplicationPageVisits
+    ? value
+    : 0;
 }

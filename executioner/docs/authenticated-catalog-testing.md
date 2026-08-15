@@ -19,23 +19,40 @@ their immutable external cohorts rather than rewriting the public catalog.
 
 ## Refresh the public catalog
 
-Run the refresh from `executioner` with Node 22.18 or newer. Use a fresh
-protected output root outside the repository:
+Run the refresh from `executioner` with Node 22.18 or newer. By default it
+refreshes the current Workday, Greenhouse, Lever, and Ashby catalogs. It keeps
+each company and board at its existing row count, preserves postings still in
+the official hosted feed, and replaces stale hosted postings from the same
+company board. Workday retains its existing one-company-per-row refresh model.
+Use a fresh protected output root outside the repository:
 
 ```powershell
 node scripts/refresh-public-catalog.ts `
-  --csv ..\wd_test_jobs.csv `
   --output-root C:\absolute\protected\public-catalog-refresh `
   --concurrency 3 `
   --verify
 ```
 
-The command never overwrites `wd_test_jobs.csv`. It publishes a unique,
+Pass `--csv` once or repeatedly to refresh selected files instead:
+
+```powershell
+node scripts/refresh-public-catalog.ts `
+  --csv ..\greenhouse_test_jobs.csv `
+  --csv ..\lever_test_jobs.csv `
+  --output-root C:\absolute\protected\public-catalog-refresh `
+  --verify
+```
+
+The command never overwrites a source CSV. Each catalog publishes a unique,
 immutable run directory containing `candidates.csv`, `verification.jsonl`, and
-a manifest that binds both files and the source catalog by SHA-256. Promote the
+a manifest that binds both files and the source catalog by SHA-256. Promote a
 candidate only after all 100 verifier records match and the manifest digests
-recompute exactly. Keep the source CSV at `unverified_candidate`; record
+recompute exactly. Keep candidates at `unverified_candidate`; record
 authenticated application-entry outcomes only in the external cohort.
+
+`wd_test_jobs_stale.csv` is intentionally excluded because it tests closed-job
+behavior. `other_ats_test_jobs.csv` is historical migration evidence and lacks
+the canonical URLs and board identities needed for safe automated refresh.
 
 ## One-time setup
 
