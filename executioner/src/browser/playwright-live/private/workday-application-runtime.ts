@@ -1463,11 +1463,12 @@ async function monitorQuestionTypes(
           control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
         ? control.labels?.[0]?.textContent
         : undefined;
+      const ownerLabel = field?.querySelector("label, legend")?.textContent;
       const label = normalize(
-        control.getAttribute("aria-label") ??
-        field?.querySelector("label, legend")?.textContent ??
-        nativeLabel ??
-        control.getAttribute("placeholder"),
+        control.getAttribute("aria-haspopup") === "listbox"
+          ? ownerLabel ?? control.getAttribute("aria-label")
+          : control.getAttribute("aria-label") ?? ownerLabel ?? nativeLabel ??
+            control.getAttribute("placeholder"),
       );
       if (/\b(?:race|ethnicity|gender|veteran|disability|demographic)\b/u.test(label)) categories.add("demographic");
       else if (/\b(?:authorized|authorization|sponsor|sponsorship|work permit)\b/u.test(label)) categories.add("authorization");
@@ -1704,7 +1705,13 @@ export async function bindQuestionnaireTargets(
           control.closest("fieldset") !== null) continue;
       const normalize = (value: string | null | undefined) =>
         (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
-      let label = normalize(control.getAttribute("aria-label"));
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      let label = control.getAttribute("aria-haspopup") === "listbox"
+        ? normalize(field?.querySelector("label, legend")?.textContent)
+        : "";
+      if (label === "") label = normalize(control.getAttribute("aria-label"));
       if (label === "" && control instanceof HTMLFieldSetElement) {
         label = normalize(control.querySelector(":scope > legend")?.textContent);
       }

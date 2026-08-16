@@ -344,6 +344,13 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     const normalize = (value: string | null | undefined): string =>
       (value ?? "").replace(/\s+/gu, " ").trim();
     const nameOf = (element: Element): string => {
+      if (element.getAttribute("aria-haspopup") === "listbox") {
+        const fieldLabel = normalize(
+          element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]')
+            ?.querySelector("label, legend")?.textContent,
+        );
+        if (fieldLabel.length > 0) return fieldLabel;
+      }
       const aria = normalize(element.getAttribute("aria-label"));
       if (aria.length > 0) return aria;
       const labelledBy = element.getAttribute("aria-labelledby");

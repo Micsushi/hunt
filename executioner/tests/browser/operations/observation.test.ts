@@ -101,7 +101,7 @@ test("observes a Workday prompt button as a required single-select field", async
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
       <div data-automation-id="formField-authorization">
         <label>Are you authorized to work in the U.S.? <span aria-hidden="true">*</span></label>
-        <button type="button" aria-label="Are you authorized to work in the U.S.? Required" aria-haspopup="listbox" data-hunt-target-token="target-authorization">Yes</button>
+        <button type="button" aria-label="Select One Required" aria-haspopup="listbox" data-hunt-target-token="target-authorization">Yes</button>
         <div hidden>
           <div data-automation-id="promptOption">Yes</div>
           <div data-automation-id="promptOption">No</div>
@@ -114,7 +114,7 @@ test("observes a Workday prompt button as a required single-select field", async
     if (!observed.ok) throw new Error(`observe failed: ${observed.error.code}`);
     assert.deepEqual(observed.value.targets, [{
       token: "target-authorization",
-      name: "Are you authorized to work in the U.S.? Required",
+      name: "Are you authorized to work in the U.S.? *",
       required: true,
       control: { kind: "select", element: "listbox", options: ["Yes", "No"] },
       state: { visibility: "visible", enabled: true, actionable: true },
