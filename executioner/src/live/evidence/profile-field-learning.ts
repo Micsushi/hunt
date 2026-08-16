@@ -58,6 +58,22 @@ const repeatableFields = new Map(
     new Set(fields.map(({ fieldId }) => fieldId)),
   ]),
 );
+const reviewedStructuralStrings = Object.freeze([
+  ...uiTypes,
+  ...questionCategories,
+  ...answerCategories,
+  ...optionMappings,
+  ...prefillDispositions,
+  ...driverAttempts,
+  ...mechanicStatuses,
+  ...persistentReadbacks,
+  ...reviewedUiVariants,
+  ...scalarIdentities,
+  ...profileRepeatableCatalog.flatMap(({ section, fields }) => [
+    section,
+    ...fields.map(({ fieldId }) => fieldId),
+  ]),
+]);
 
 export interface ProfileFieldMechanicsV1 {
   readonly popupBound: string;
@@ -172,7 +188,11 @@ export function createProfileFieldLearningCapture(input: {
             page: "profile",
             fields: [...records.values()].map(freezeRecord),
           }),
-          sensitiveValues: input.sensitiveValues,
+          sensitiveValues: input.sensitiveValues.filter((value) =>
+            value.length < 3 || !reviewedStructuralStrings.some((structural) =>
+              structural.includes(value)
+            )
+          ),
           label: "profile-field-learning",
           fileName: input.fileName ?? "profile-field-learning.json",
         });
@@ -248,9 +268,9 @@ function validFieldIdentity(value: string): boolean {
   ) {
     return true;
   }
-  const match = /^profile\.(experience|education|skills)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(value);
+  const match = /^profile\.(experience|education|skills|websites)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(value);
   if (match === null) return false;
-  const section = match[1] as "experience" | "education" | "skills";
+  const section = match[1] as "experience" | "education" | "skills" | "websites";
   return repeatableFields.get(section)?.has(match[3]!) === true;
 }
 
@@ -275,14 +295,14 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
       field.driverAttempt === "none" &&
       sameMechanics(field.mechanics, expectedMechanics);
   }
-  const repeatable = /^profile\.(experience|education|skills)\.[1-9][0-9]{0,2}\.(.+)$/u.exec(
+  const repeatable = /^profile\.(experience|education|skills|websites)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(
     field.fieldIdentity,
   );
   if (repeatable === null) return false;
-  const section = repeatable[1] as "experience" | "education" | "skills";
+  const section = repeatable[1] as "experience" | "education" | "skills" | "websites";
   const catalog = profileRepeatableCatalog.find((entry) => entry.section === section);
   return catalog?.fields.some(({ fieldId, uiBehavior, uiVariant }) =>
-    fieldId === repeatable[2] && field.uiType === uiBehavior && field.uiVariant === uiVariant
+    fieldId === repeatable[3] && field.uiType === uiBehavior && field.uiVariant === uiVariant
   ) === true;
 }
 

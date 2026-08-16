@@ -207,6 +207,68 @@ test("writes a distinct immutable learning artifact for the second profile state
   }
 });
 
+test("fixed structural vocabulary does not collide with an equal private answer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-structural-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({
+      pageType: "profile",
+      controls: [{
+        controlId: "linkedin-control",
+        fieldId: "social.linkedin",
+        required: false,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v2",
+        readback: null,
+      }],
+      rows: [],
+    }),
+    plan: {
+      pageType: "profile",
+      fields: [{
+        fieldId: "social.linkedin",
+        questionType: "social_network",
+        answerType: "url",
+        answer: { kind: "answered", value: "linkedin", provenance: "generated_default" },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["linkedin"],
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const text = readFileSync(join(root, "profile-field-learning.json"), "utf8");
+    assert.equal(text.includes('"linkedin"'), false);
+    assert.equal(text.includes("profile.social.linkedin"), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("admits reviewed website repeatable identities", () => {
+  const admitted = admitProfileFieldLearningEvidence({
+    schemaVersion: 1,
+    evidenceRevision: "s2-profile-field-learning-v1",
+    page: "profile",
+    fields: [{
+      fieldIdentity: "profile.websites.1.website.url",
+      uiType: "text",
+      uiVariant: "workday_text_v1",
+      questionCategory: "website",
+      answerCategory: "url",
+      required: false,
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "not_applicable",
+      prefillDisposition: "blank",
+      driverAttempt: "none",
+      mechanics: mechanics("text", "not_attempted"),
+    }],
+  });
+  assert.equal(admitted.fields[0]?.fieldIdentity, "profile.websites.1.website.url");
+});
+
 test("retains the maximum admitted field inventory", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-maximum-"));
   const port = new FakeProfilePort({
