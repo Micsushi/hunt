@@ -1242,7 +1242,7 @@ test("a roleless source search input remains a known application-source control"
         <main data-automation-id="applyFlowMyInfoPage">
           <div data-automation-id="formField-source">
             <label for="source--source">How Did You Hear About Us?</label>
-            <input id="source--source" type="text" placeholder="Search" aria-required="true">
+            <input id="source--source" placeholder="Search" aria-required="true">
           </div>
         </main>
       </body>
