@@ -2290,8 +2290,27 @@ test("a failed optional Workday multi-select search leaves no blocking draft tex
               <input id="skills--skills" placeholder="Search">
               <span data-automation-id="promptSearchButton"><svg></svg></span>
             </div>
+            <div id="skills-error" role="alert" hidden>Choose a valid skill</div>
           </div>
         </main>
+        <script>
+          const skill = document.querySelector('#skills--skills');
+          const error = document.querySelector('#skills-error');
+          let resetArmed = false;
+          skill.addEventListener('keydown', (event) => {
+            if (['Enter', 'Tab', ','].includes(event.key)) {
+              skill.setAttribute('aria-invalid', 'true');
+              error.hidden = false;
+            }
+          });
+          skill.addEventListener('input', () => {
+            if (skill.value === ' ') resetArmed = true;
+            if (resetArmed && skill.value === '') {
+              skill.removeAttribute('aria-invalid');
+              error.hidden = true;
+            }
+          });
+        </script>
       </body>
     `);
     const adapter = new PlaywrightWorkdayProfilePage(page, {
@@ -2309,6 +2328,8 @@ test("a failed optional Workday multi-select search leaves no blocking draft tex
     }, AbortSignal.any([])));
 
     assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.notEqual(await page.locator('#skills--skills').getAttribute('aria-invalid'), "true");
+    assert.equal(await page.locator('#skills-error').isVisible(), false);
   } finally {
     await browser.close();
   }

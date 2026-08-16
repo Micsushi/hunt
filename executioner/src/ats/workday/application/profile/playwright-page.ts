@@ -182,12 +182,23 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #resetFailedSelection(control: Locator): Promise<void> {
     try {
       await this.#page.keyboard.press("Escape");
-      if (await control.evaluate((element) =>
+      const editable = await control.evaluate((element) =>
         (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
         !element.readOnly
-      )) await control.fill("", { timeout: this.#timeoutMs });
+      );
+      if (editable) {
+        await control.fill("", { timeout: this.#timeoutMs });
+        if (!await validationCleared(control)) {
+          // A Workday prompt can clear its visible draft before preserving the
+          // invalid state. Force a real controlled-input transition so React
+          // clears that stale optional validation before page navigation.
+          await control.fill(" ", { timeout: this.#timeoutMs });
+          await control.fill("", { timeout: this.#timeoutMs });
+        }
+      }
+      await this.#page.keyboard.press("Escape");
       await control.blur({ timeout: this.#timeoutMs });
-      await this.#page.waitForTimeout(25);
+      await this.#page.waitForTimeout(100);
     } catch {}
   }
 
