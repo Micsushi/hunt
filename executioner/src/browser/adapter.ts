@@ -351,6 +351,11 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         const labelText = normalize(label?.textContent);
         if (labelText.length > 0) return labelText;
       }
+      const workdayLabel = normalize(
+        element.closest('[data-automation-id="formField"]')
+          ?.querySelector("label, legend")?.textContent,
+      );
+      if (workdayLabel.length > 0) return workdayLabel;
       const placeholder = normalize(element.getAttribute("placeholder"));
       if (placeholder.length > 0) return placeholder;
       if (element instanceof HTMLInputElement && (element.type === "button" || element.type === "submit")) {

@@ -76,14 +76,16 @@ test("treats a nonempty aria-invalid Workday draft as needing reconciliation", a
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("edededededededed") });
   try {
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
-      <label>Compensation expectation
+      <div data-automation-id="formField">
+        <label>Compensation expectation</label>
         <textarea required aria-invalid="true" data-hunt-target-token="target-compensation">Existing draft</textarea>
-      </label>
+      </div>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
 
     const observed = await provider.observe(started.value, new AbortController().signal);
     if (!observed.ok) throw new Error(`observe failed: ${observed.error.code}`);
+    assert.equal(observed.value.targets[0]?.name, "Compensation expectation");
     assert.deepEqual(observed.value.targets[0]?.readback, { kind: "empty" });
   } finally {
     await context.close();
