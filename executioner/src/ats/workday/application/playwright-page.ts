@@ -103,6 +103,9 @@ export class PlaywrightWorkdayApplicationPage {
       // hit testing and pointer dispatch.
       try {
         navigationDiagnostic("hit_test_started");
+        // Workday commits focused search/select drafts on blur. Move focus to
+        // the admitted button before activation so its click sees that commit.
+        await action.focus({ timeout: this.#navigationSettleTimeoutMs });
         const activated = await action.evaluate((control) => {
           if (!(control instanceof HTMLButtonElement) || control.disabled ||
               control.getAttribute("aria-disabled") === "true") return false;

@@ -233,6 +233,28 @@ test("navigation atomically activates the admitted sticky button that detaches o
   });
 });
 
+test("navigation commits the focused Workday field before activating the sticky footer", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExpPage">
+        <input id="skills" value="">
+      </main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        let committed = false;
+        document.querySelector('#skills').addEventListener('blur', () => { committed = true; });
+        document.querySelector('#next').addEventListener('click', () => {
+          if (!committed) return;
+          document.body.innerHTML = '<main data-automation-id="applyFlowApplicationQuestionsPage"><input required value="ready"></main>';
+        });
+        document.querySelector('#skills').focus();
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["questionnaire"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
 test("navigation never activates a final Submit inserted during footer replacement", async () => {
   await withPage(async (page) => {
     await page.setContent(`
