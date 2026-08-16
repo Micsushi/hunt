@@ -744,6 +744,19 @@ export class OwnedWorkdayApplicationRuntime {
     signal: AbortSignal,
   ): Promise<unknown> {
     await bindQuestionnaireTargets(page, input.pageId);
+    for (const targetToken of await questionnairePopupHydrationTargets(page)) {
+      const operationId = this.#nextOperationId();
+      const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
+      await this.#monitor(
+        page, monitorPageName, "before_mutation", operationId, attempt, signal,
+      );
+      this.#assertAuthorized(signal);
+      await hydrateQuestionnairePopupOptions(page, targetToken, this.#timeoutMs);
+      await this.#monitor(
+        page, monitorPageName, "after_readback", operationId, attempt, signal,
+      );
+      this.#assertAuthorized(signal);
+    }
     const semanticSessionId = `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
     const semantic = new PlaywrightBrowserSession({
       attached: { page, sessionId: semanticSessionId, pageId: input.pageId },
@@ -1497,7 +1510,7 @@ async function monitorQuestionTypes(
           : control.getAttribute("aria-label") ?? ownerLabel ?? nativeLabel ??
             control.getAttribute("placeholder"),
       );
-      if (/\b(?:race|ethnicity|gender|veteran|disability|demographic)\b/u.test(label)) categories.add("demographic");
+      if (/\b(?:race|ethnicity|gender|hispanic|latino|veteran|military|armed forces|disability|demographic)\b/u.test(label)) categories.add("demographic");
       else if (/\b(?:authorized|authorization|sponsor|sponsorship|work permit)\b/u.test(label)) categories.add("authorization");
       else if (/\b(?:agree|consent|certify|terms|conditions|agreement|privacy)\b/u.test(label)) categories.add("legal");
       else if (/\b(?:salary|compensation|pay|rate)\b/u.test(label)) categories.add("compensation");
@@ -1781,6 +1794,101 @@ export async function bindQuestionnaireTargets(
     return index <= 128;
   }, { declaredPageId: pageId, selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
   if (!result) throw new TypeError("questionnaire control binding denied");
+}
+
+export async function questionnairePopupHydrationTargets(
+  page: Page,
+): Promise<readonly string[]> {
+  return Object.freeze(await page.evaluate(({ selectors }) => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    const roots = [
+      selectors.primaryQuestions,
+      selectors.primaryQuestionnaire,
+      selectors.applicationQuestions,
+      selectors.voluntaryDisclosuresAndSelfIdentify,
+    ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
+      .filter(visible);
+    if (roots.length !== 1) return [];
+    return [...roots[0]!.querySelectorAll<HTMLElement>(
+      'button[aria-haspopup="listbox"][data-hunt-target-token]',
+    )].filter((control) => {
+      if (!visible(control) || control.hasAttribute("disabled") ||
+          control.getAttribute("aria-disabled") === "true" ||
+          control.hasAttribute("data-hunt-popup-options")) return false;
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
+        .flatMap((value) => value?.split(/\s+/u) ?? []);
+      const ownedOptions = ownedIds.flatMap((id) =>
+        [...(document.getElementById(id)?.querySelectorAll(
+          '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+        ) ?? [])]
+      );
+      const fieldOptions = field === null ? [] : [...field.querySelectorAll(
+        '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+      )];
+      return ownedOptions.length === 0 && fieldOptions.length === 0;
+    }).map((control) => control.getAttribute("data-hunt-target-token") ?? "")
+      .filter(Boolean);
+  }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS }));
+}
+
+export async function hydrateQuestionnairePopupOptions(
+  page: Page,
+  targetToken: string,
+  timeoutMs: number,
+): Promise<void> {
+  if (!/^target-[a-z0-9-]{1,120}$/u.test(targetToken)) {
+    throw new TypeError("questionnaire popup target denied");
+  }
+  const target = page.locator(`[data-hunt-target-token="${targetToken}"]`);
+  if (await target.count() !== 1 || !await target.isVisible()) {
+    throw new TypeError("questionnaire popup target unavailable");
+  }
+  const selectedBefore = await popupSelectedValue(target);
+  await target.click({ timeout: timeoutMs });
+  const options = page.locator(
+    '[data-automation-id="promptOption"]:visible, [role="listbox"] [role="option"]:visible',
+  );
+  await options.first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
+  const labels = [...new Set((await options.allInnerTexts())
+    .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
+    .filter(Boolean))];
+  await target.press("Escape", { timeout: timeoutMs });
+  if (labels.length === 0 || labels.length > 128 || labels.some((label) => label.length > 512)) {
+    throw new TypeError("questionnaire popup options denied");
+  }
+  const selectedAfter = await popupSelectedValue(target);
+  if (selectedAfter !== selectedBefore) {
+    throw new TypeError("questionnaire popup hydration changed selection");
+  }
+  await target.evaluate((element, observed) => {
+    element.setAttribute("data-hunt-popup-options", JSON.stringify(observed));
+  }, labels);
+}
+
+async function popupSelectedValue(target: import("playwright").Locator): Promise<string> {
+  return await target.evaluate((element) => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const declared = normalize(element.getAttribute("aria-valuetext"));
+    if (declared !== "") return declared;
+    const field = element.closest(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const selected = [...(field?.querySelectorAll('[data-automation-id="selectedItem"]') ?? [])]
+      .map((item) => normalize(item.textContent)).filter(Boolean);
+    if (selected.length === 1) return selected[0]!;
+    const text = normalize(element.textContent);
+    return /^(?:select|select one|choose|choose one)$/iu.test(text) ? "" : text;
+  });
 }
 
 function structuralObservations(

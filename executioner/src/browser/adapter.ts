@@ -445,10 +445,25 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     };
     const fieldPopupOptions = (element: Element): string[] => {
       const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
-      if (field === null) return [];
-      return [...new Set([...field.querySelectorAll(
-        '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
-      )].map((option) => normalize(option.textContent)).filter(Boolean))];
+      const observed = (() => {
+        const encoded = element.getAttribute("data-hunt-popup-options");
+        if (encoded === null) return [];
+        try {
+          const parsed: unknown = JSON.parse(encoded);
+          return Array.isArray(parsed) && parsed.every((option) => typeof option === "string")
+            ? parsed.map((option) => normalize(option)).filter(Boolean)
+            : [];
+        } catch {
+          return [];
+        }
+      })();
+      if (field === null) return observed;
+      return [...new Set([
+        ...observed,
+        ...[...field.querySelectorAll(
+          '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+        )].map((option) => normalize(option.textContent)).filter(Boolean),
+      ])];
     };
     const isMultiSelect = (element: Element): boolean => {
       if (element instanceof HTMLSelectElement && element.multiple) return true;

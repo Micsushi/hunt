@@ -424,6 +424,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
         if (taxonomy.fieldCount === 4) {
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
+        } else if (taxonomy.fieldCount === 5) {
+          assert.deepEqual(taxonomy.questionTypes, ["demographic", "legal"]);
+          assert.equal(taxonomy.requiredFieldCount, 1);
         } else if (taxonomy.fieldCount === 1) {
           assert.equal(
             taxonomy.questionTypes.includes("legal") || taxonomy.questionTypes.includes("education"),
@@ -482,11 +485,42 @@ test("each questionnaire field mutation has its own before and readback monitor 
     assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-voluntary" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+      <div data-automation-id="formField-gender"><label>What is your gender?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
+      <div data-automation-id="formField-hispanic"><label>Are you Hispanic or Latino?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
+      <div data-automation-id="formField-race"><label>What is your race/ethnicity?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
+      <div data-automation-id="formField-military"><label>Were you ever in the military?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
       <div data-automation-id="formField-termsAndConditions--acceptTermsAndAgreements">
         <p>I had the opportunity to self-identify.</p>
         <p>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span></p>
         <input id="termsAndConditions--acceptTermsAndAgreements" name="termsAndConditions--acceptTermsAndAgreements" type="checkbox">
       </div>
+      <script>
+        const choices = [
+          ['Prefer not to answer', 'Woman', 'Man'],
+          ['No', 'Yes', 'Prefer not to answer'],
+          ['Prefer not to answer', 'Asian', 'White'],
+          ['No', 'Yes', 'Prefer not to answer'],
+        ];
+        let popup;
+        const close = () => { popup?.remove(); popup = undefined; };
+        document.querySelectorAll('button[aria-haspopup="listbox"]').forEach((button, index) => {
+          button.addEventListener('click', () => {
+            close();
+            popup = document.createElement('div');
+            popup.dataset.automationId = 'promptMenu';
+            popup.innerHTML = choices[index].map((choice) => '<div data-automation-id="promptOption">' + choice + '</div>').join('');
+            popup.addEventListener('click', (event) => {
+              const option = event.target.closest('[data-automation-id="promptOption"]');
+              if (option === null) return;
+              button.textContent = option.textContent.trim();
+              button.dataset.committed = 'true';
+              close();
+            });
+            document.body.append(popup);
+          });
+        });
+        document.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+      </script>
     </main></body></html>`);
     const voluntaryOperation = generatedOperationId("operation_questionnaire_voluntary_01");
     const voluntaryResult = await runtime.run(page as never, {
@@ -502,6 +536,13 @@ test("each questionnaire field mutation has its own before and readback monitor 
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(voluntaryResult.ok, true);
     assert.equal(await page.locator("#termsAndConditions--acceptTermsAndAgreements").isChecked(), true);
+    assert.equal(await page.locator('button[data-committed="true"]').count(), 4);
+    assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').allInnerTexts(), [
+      "Prefer not to answer",
+      "Prefer not to answer",
+      "Prefer not to answer",
+      "Prefer not to answer",
+    ]);
     assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === voluntaryOperation)
         .map(({ moment, attempt }) => ({ moment, attempt })),
@@ -512,12 +553,17 @@ test("each questionnaire field mutation has its own before and readback monitor 
       operationId !== runOperation &&
       !fieldEvents.some((event) => event.operationId === operationId)
     );
+    const voluntaryOperations = [...new Set(voluntaryFieldEvents.map(({ operationId }) => operationId))];
+    assert.equal(voluntaryOperations.length, 9);
     assert.deepEqual(
-      voluntaryFieldEvents.map(({ moment, attempt }) => ({ moment, attempt })),
-      [
-        { moment: "before_mutation", attempt: 5 },
-        { moment: "after_readback", attempt: 5 },
-      ],
+      voluntaryOperations.map((operationId) => voluntaryFieldEvents
+        .filter((event) => event.operationId === operationId)
+        .map(({ moment }) => moment)),
+      Array.from({ length: 9 }, () => ["before_mutation", "after_readback"]),
+    );
+    assert.deepEqual(
+      [...new Set(voluntaryFieldEvents.map(({ attempt }) => attempt))],
+      [5, 6, 7, 8, 9, 10, 11, 12, 13],
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-learning-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
