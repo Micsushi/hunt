@@ -438,13 +438,32 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               automationId: bounded(element.getAttribute("data-automation-id")),
               tag: element.tagName.toLocaleLowerCase("en-US"),
               inputType: element instanceof HTMLInputElement ? element.type : "",
+              typeAttribute: bounded(element.getAttribute("type")),
               role: bounded(element.getAttribute("role")),
               placeholder: bounded(element.getAttribute("placeholder")),
+              className: bounded(element.getAttribute("class")),
+              ariaHidden: bounded(element.getAttribute("aria-hidden")),
+              ariaControls: bounded(element.getAttribute("aria-controls")),
+              tabIndex: element instanceof HTMLElement ? element.tabIndex : null,
+              clientWidth: element instanceof HTMLElement ? element.clientWidth : null,
+              clientHeight: element instanceof HTMLElement ? element.clientHeight : null,
               label: bounded([
                 element.getAttribute("aria-label") ?? "",
                 ...labels,
               ].join(" ")),
               ownerAutomationIds,
+              ownerControls: [...(element.closest('[data-automation-id^="formField-"]')
+                ?.querySelectorAll("input, button, select, textarea") ?? [])]
+                .slice(0, 12)
+                .map((control) => ({
+                  tag: control.tagName.toLocaleLowerCase("en-US"),
+                  id: bounded(control.id),
+                  automationId: bounded(control.getAttribute("data-automation-id")),
+                  type: bounded(control.getAttribute("type")),
+                  role: bounded(control.getAttribute("role")),
+                  ariaHidden: bounded(control.getAttribute("aria-hidden")),
+                  tabIndex: control instanceof HTMLElement ? control.tabIndex : null,
+                })),
             };
           }, machineKey)
         ));
