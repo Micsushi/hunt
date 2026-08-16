@@ -223,13 +223,18 @@ test("exact password-recovery pages and alerts classify as recoverable account s
       "password_reset_request",
     ],
     [
-      'form[data-automation-id="signInFormo"]:has([data-automation-id="resetPasswordButton"])',
+      'form[data-automation-id="signInFormo"]:has([data-automation-id="resetPasswordButton"]):not(:has([data-automation-id="verifyPassword"]))',
       emptyInspector(),
       "password_reset_request",
     ],
     ['[data-automation-id="forgotPasswordConfirmationPage"]', emptyInspector(), "password_reset_email_sent"],
     [
       '[data-automation-id="resetPasswordPage"]:has([data-automation-id="resetPasswordSubmitButton"])',
+      emptyInspector(),
+      "password_reset_set",
+    ],
+    [
+      'form[data-automation-id="signInFormo"]:has([data-automation-id="password"]):has([data-automation-id="verifyPassword"]):has([data-automation-id="resetPasswordButton"])',
       emptyInspector(),
       "password_reset_set",
     ],

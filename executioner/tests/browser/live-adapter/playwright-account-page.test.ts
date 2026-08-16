@@ -459,8 +459,8 @@ test("activates each exact semantic link or button without returning page state"
     ["show_password_reset", { method: "locator", selector: '[data-automation-id="forgotPasswordLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
-    ["submit_password_reset_request", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]) [data-automation-id="click_filter"][role="button"]' }],
-    ["submit_password_reset", { method: "locator", selector: '[data-automation-id="resetPasswordSubmitButton"]' }],
+    ["submit_password_reset_request", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]):not(:has([data-automation-id="verifyPassword"])) [data-automation-id="click_filter"][role="button"]' }],
+    ["submit_password_reset", { method: "locator", selector: '[data-automation-id="resetPasswordSubmitButton"], form[data-automation-id="signInFormo"]:has([data-automation-id="password"]):has([data-automation-id="verifyPassword"]):has([data-automation-id="resetPasswordButton"]) [data-automation-id="click_filter"][role="button"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
