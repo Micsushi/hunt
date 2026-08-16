@@ -833,6 +833,9 @@ export class OwnedWorkdayApplicationRuntime {
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
       if (!completed.ok) {
+        this.#trace?.("questionnaire_reconciliation_failed", {
+          code: completed.error.code,
+        });
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
