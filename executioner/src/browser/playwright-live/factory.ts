@@ -106,7 +106,7 @@ export function resolveExternalMonitorOperationTimeoutMs(
   monitored: boolean,
   requestedTimeoutMs: number,
 ): number | undefined {
-  return monitored ? Math.max(requestedTimeoutMs, 900_000) : undefined;
+  return monitored ? Math.max(requestedTimeoutMs, 1_800_000) : undefined;
 }
 
 export function resolveLiveInspectionHoldPolicy(

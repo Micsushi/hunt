@@ -119,9 +119,10 @@ test("live inspection hold is exact opt-in with a bounded operation-timeout floo
 
 test("external monitoring gets a separate bounded application-operation budget", () => {
   assert.equal(resolveExternalMonitorOperationTimeoutMs(false, 30_000), undefined);
-  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 30_000), 900_000);
-  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 420_000), 900_000);
-  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 1_000_000), 1_000_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 30_000), 1_800_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 420_000), 1_800_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 1_000_000), 1_800_000);
+  assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 2_000_000), 2_000_000);
 });
 
 test("factory wires the private hold without widening the public browser facade", async () => {
