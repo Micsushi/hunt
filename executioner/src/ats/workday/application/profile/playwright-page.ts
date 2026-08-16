@@ -683,9 +683,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           }
           await this.#page.waitForTimeout(100);
           await this.#captureSelectionDiagnostic("prompt-requested", behavior);
+          const promptSearches = await visibleLocators(field.locator(
+            'input[data-automation-id="searchBox"], textarea[data-automation-id="searchBox"]',
+          ));
+          if (promptSearches.length > 1) {
+            throw new TypeError("Workday prompt search input is ambiguous");
+          }
+          const promptSearch = promptSearches[0] ?? control;
           if (editable) {
-            await control.fill("", { timeout: this.#timeoutMs });
-            await control.pressSequentially(value, {
+            await promptSearch.fill("", { timeout: this.#timeoutMs });
+            await promptSearch.pressSequentially(value, {
               delay: 10,
               timeout: this.#timeoutMs,
             });
@@ -717,19 +724,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             const delimiters = ["Enter", "Tab", ","] as const;
             for (const [index, delimiter] of delimiters.entries()) {
               if (index > 0) {
-                await control.click({ timeout: this.#timeoutMs });
-                await control.fill("", { timeout: this.#timeoutMs });
-                await control.pressSequentially(value, {
+                await promptSearch.click({ timeout: this.#timeoutMs });
+                await promptSearch.fill("", { timeout: this.#timeoutMs });
+                await promptSearch.pressSequentially(value, {
                   delay: 10,
                   timeout: this.#timeoutMs,
                 });
               }
               if (delimiter === ",") {
-                await control.pressSequentially(delimiter, {
+                await promptSearch.pressSequentially(delimiter, {
                   timeout: this.#timeoutMs,
                 });
               } else {
-                await control.press(delimiter, { timeout: this.#timeoutMs });
+                await promptSearch.press(delimiter, { timeout: this.#timeoutMs });
               }
               await this.#page.waitForTimeout(250);
               await this.#captureSelectionDiagnostic(

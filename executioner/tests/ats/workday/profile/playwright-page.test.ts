@@ -2278,6 +2278,64 @@ test("My Experience multi-select owns a local Workday prompt without aria-contro
   }
 });
 
+test("My Experience multi-select types into its field-local Workday prompt search", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+              <div id="selected-skills"></div>
+            </div>
+          </div>
+        </main>
+        <div id="skills-options" hidden><div role="option">Python</div></div>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          const options = document.querySelector('#skills-options');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('input', () => options.hidden = prompt.value !== 'Python');
+          options.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('#selected-skills').append(pill);
+            prompt.value = '';
+            prompt.hidden = true;
+            options.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Python"]',
+    }, AbortSignal.any([]));
+
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Python"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a failed optional Workday multi-select search leaves no blocking draft text", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
