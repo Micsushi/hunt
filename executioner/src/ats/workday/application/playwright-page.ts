@@ -125,10 +125,40 @@ export class PlaywrightWorkdayApplicationPage {
         // Destination readback owns the result.
       }
       navigationDiagnostic("destination_readback_started");
-      const after = await this.#waitForChangedSnapshot(
+      let after = await this.#waitForChangedSnapshot(
         before.value,
         signal,
       );
+      if (
+        !after.ok && after.error.code === "browser_effect_uncertain" &&
+        await this.#unchangedSourceStillRetryable(before.value, signal)
+      ) {
+        navigationDiagnostic("unchanged_source_retry_started");
+        const retryAction = await this.#waitForActionableNext(
+          before.value.rootSelector,
+          signal,
+        );
+        if (retryAction !== undefined) {
+          try {
+            const handle = await retryAction.elementHandle();
+            if (handle === null) throw new Error("navigation control detached");
+            await handle.focus();
+            const admitted = await handle.evaluate((control) => {
+              if (!(control instanceof HTMLButtonElement) || control.disabled ||
+                  control.getAttribute("aria-disabled") === "true") return false;
+              const label = (control.innerText || control.textContent || "")
+                .normalize("NFC").replace(/\s+/gu, " ").trim();
+              return /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label);
+            });
+            if (!admitted) throw new Error("navigation control activation denied");
+            await handle.click({ timeout: this.#navigationSettleTimeoutMs });
+            navigationDiagnostic("unchanged_source_retry_activated");
+          } catch {
+            navigationDiagnostic("unchanged_source_retry_activation_failed");
+          }
+          after = await this.#waitForChangedSnapshot(before.value, signal);
+        }
+      }
       navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
       if (!after.ok) return after;
       const afterTruth = this.#toTruth(after.value);
@@ -302,6 +332,20 @@ export class PlaywrightWorkdayApplicationPage {
       confirmed = observed.value;
     }
     return confirmed;
+  }
+  async #unchangedSourceStillRetryable(
+    before: BrowserApplicationSnapshot,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (signal.aborted) return false;
+    const current = await this.#readSnapshot(signal);
+    return current.ok &&
+      current.value.signature === before.signature &&
+      current.value.transitionKey === before.transitionKey &&
+      !current.value.submitActivated &&
+      current.value.requiredFields.length === before.requiredFields.length &&
+      current.value.requiredFields.every(({ verification }) => verification === "verified") &&
+      !hasValidationDowngrade(before, current.value);
   }
   async #waitForActionableNext(
     rootSelector: string,

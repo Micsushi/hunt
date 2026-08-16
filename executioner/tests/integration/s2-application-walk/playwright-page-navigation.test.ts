@@ -274,6 +274,30 @@ test("navigation uses a trusted gesture on the fixed admitted Workday button", a
   });
 });
 
+test("navigation retries one trusted gesture when Workday leaves the verified source unchanged", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <input required value="ready">
+      </main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        let clicks = 0;
+        document.querySelector('#next').addEventListener('click', (event) => {
+          if (!event.isTrusted || ++clicks < 2) return;
+          document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 100,
+    });
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
 test("navigation never activates a final Submit inserted during footer replacement", async () => {
   await withPage(async (page) => {
     await page.setContent(`
