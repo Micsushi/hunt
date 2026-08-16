@@ -771,15 +771,20 @@ export class OwnedWorkdayApplicationRuntime {
         !observed.ok || observed.value.submitActivated ||
         monitorPage(observed.value.page) !== pageName
       ) throw new TypeError("application transition monitor state denied");
+      applicationMonitorDiagnostic("transition_guard_succeeded");
     }
+    applicationMonitorDiagnostic("taxonomy_started", moment);
+    const taxonomy = await monitorTaxonomy(page, pageName);
+    applicationMonitorDiagnostic("taxonomy_succeeded", moment);
     await this.#externalMonitor.application(
       applicationMonitorPage(page, pageName),
       pageName,
       moment,
-      await monitorTaxonomy(page, pageName),
+      taxonomy,
       { operationId, attempt },
       signal,
     );
+    applicationMonitorDiagnostic("external_monitor_succeeded", moment);
   }
 
   #nextNavigationMonitorAttempt(from: string): number {
@@ -1158,6 +1163,16 @@ function monitorPage(
   page: "resume" | "profile" | "questionnaire" | "pre_review",
 ): "resume" | "profile" | "questionnaire" | "review" {
   return page === "pre_review" ? "review" : page;
+}
+
+function applicationMonitorDiagnostic(stage: string, moment?: string): void {
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+  try {
+    process.stderr.write(`${JSON.stringify({
+      applicationMonitorStage: stage,
+      ...(moment === undefined ? {} : { moment }),
+    })}\n`);
+  } catch {}
 }
 
 function isReturnedNavigationSource(
