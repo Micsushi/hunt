@@ -713,6 +713,22 @@ test("application taxonomy reports real numeric structure and rejects validation
         },
       },
       {
+        name: "My Experience with no required controls",
+        body: `<body data-hunt-application-page="resume"><main data-automation-id="applyFlowMyExperiencePage">
+          <h1>My Experience</h1>
+          <section><h2>Work Experience</h2><label>Job Title<input></label></section>
+          <section><h2>Resume/CV</h2><label>Upload a file<input type="file"></label></section>
+        </main></body>`,
+        denied: false,
+        expected: {
+          fieldCount: 2,
+          requiredFieldCount: 0,
+          controlTypes: ["text", "file_upload"],
+          answerTypes: ["text", "file"],
+          questionTypes: ["employment", "attachment"],
+        },
+      },
+      {
         name: "visible validation error",
         body: '<body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input aria-invalid="true"></label><div role="alert">Required</div></main></body>',
         denied: true,

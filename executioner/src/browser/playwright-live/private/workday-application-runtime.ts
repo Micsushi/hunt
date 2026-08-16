@@ -1642,7 +1642,7 @@ async function monitorExperienceTaxonomy(page: Page): Promise<{
     ) result = candidate;
   }
   if (
-    result === null || result.fieldCount < 1 || result.requiredFieldCount < 1 ||
+    result === null || result.fieldCount < 1 ||
     result.requiredFieldCount > result.fieldCount || result.controlTypes.length < 1 ||
     result.questionTypes.length < 1 || result.answerTypes.length < 1
   ) throw new TypeError("application monitor taxonomy denied");
