@@ -1114,7 +1114,7 @@ async function waitThroughApplicationDestinationSettle(
   timeoutMs: number,
   signal: AbortSignal,
 ) {
-  const settleDeadline = Date.now() + Math.min(30_000, timeoutMs);
+  const settleDeadline = Date.now() + Math.min(60_000, timeoutMs);
   let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
   while (!signal.aborted && Date.now() < settleDeadline) {
     if (!latest.ok) {
