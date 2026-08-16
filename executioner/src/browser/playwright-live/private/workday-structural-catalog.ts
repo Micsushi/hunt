@@ -42,6 +42,8 @@ export const WORKDAY_MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
 export const WORKDAY_COMPLETE_SIGN_IN_SELECTOR =
   'body:has([data-automation-id="email"]:visible):has([data-automation-id="password"]:visible):has([data-automation-id="signInSubmitButton"]:visible):has([data-automation-id="createAccountLink"]:visible)';
+const WORKDAY_PASSWORD_RESET_REQUEST_FORM_SELECTOR =
+  'form[data-automation-id="signInFormo"]:has([data-automation-id="resetPasswordButton"])';
 const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   myInformation: '[data-automation-id="applyFlowMyInfoPage"]',
   experience: '[data-automation-id="applyFlowMyExperiencePage"]',
@@ -67,7 +69,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordConfirmationPage"]'),
-  rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordSubmitButton"]'),
+  rule("structural_trait_page_account_entry_v1", WORKDAY_PASSWORD_RESET_REQUEST_FORM_SELECTOR),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordSubmitButton"]'),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
@@ -127,7 +129,7 @@ const accountRules = Object.freeze([
   ),
   rule(
     "structural_trait_account_password_reset_request_v1",
-    '[data-automation-id="forgotPasswordSubmitButton"]',
+    WORKDAY_PASSWORD_RESET_REQUEST_FORM_SELECTOR,
   ),
   rule(
     "structural_trait_account_password_reset_email_sent_v1",

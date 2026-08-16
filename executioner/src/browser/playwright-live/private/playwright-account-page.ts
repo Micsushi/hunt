@@ -108,6 +108,8 @@ const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
+const WORKDAY_PASSWORD_RESET_REQUEST_SUBMIT_OWNER_SELECTOR =
+  '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]) [data-automation-id="click_filter"][role="button"]';
 const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="verifyEmailPage"]',
@@ -795,7 +797,7 @@ function semanticLocator(
       };
     case "submit_password_reset_request":
       return {
-        locator: semanticPage.locator('[data-automation-id="forgotPasswordSubmitButton"]'),
+        locator: semanticPage.locator(WORKDAY_PASSWORD_RESET_REQUEST_SUBMIT_OWNER_SELECTOR),
         field: false,
       };
     case "submit_password_reset":

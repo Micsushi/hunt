@@ -459,7 +459,7 @@ test("activates each exact semantic link or button without returning page state"
     ["show_password_reset", { method: "locator", selector: '[data-automation-id="forgotPasswordLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
-    ["submit_password_reset_request", { method: "locator", selector: '[data-automation-id="forgotPasswordSubmitButton"]' }],
+    ["submit_password_reset_request", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["submit_password_reset", { method: "locator", selector: '[data-automation-id="resetPasswordSubmitButton"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();

@@ -223,7 +223,7 @@ test("exact password-recovery pages and alerts classify as recoverable account s
       "password_reset_request",
     ],
     [
-      '[data-automation-id="forgotPasswordSubmitButton"]',
+      'form[data-automation-id="signInFormo"]:has([data-automation-id="resetPasswordButton"])',
       emptyInspector(),
       "password_reset_request",
     ],
