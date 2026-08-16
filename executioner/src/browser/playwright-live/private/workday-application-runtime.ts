@@ -1069,6 +1069,15 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
     const typeCounts: Record<string, number> = {};
     const requiredMarker =
       '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]';
+    const accessibleRequired = (control: HTMLElement): boolean => {
+      const labels = control instanceof HTMLInputElement ||
+          control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
+        ? [...control.labels ?? []].map((label) => label.textContent ?? "")
+        : [];
+      const accessibleName = (control.getAttribute("aria-label") ?? "") + " " + labels.join(" ");
+      return /(?:^|\s|\()required\)?(?:\s*\*)?$/iu.test(accessibleName.trim()) &&
+        !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(accessibleName.trim());
+    };
     let requiredFieldCount = 0;
     for (const control of controls) {
       let type = "text";
@@ -1093,6 +1102,7 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       );
       if (
         control.hasAttribute("required") || control.getAttribute("aria-required") === "true" ||
+        accessibleRequired(control) ||
         control instanceof HTMLFieldSetElement &&
           [...control.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
             .some((radio) => radio.required) ||

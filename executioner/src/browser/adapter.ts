@@ -375,6 +375,18 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       const text = normalize(element.textContent);
       return text.length > 0 ? text : normalize(element.getAttribute("name"));
     };
+    const accessibleRequired = (element: Element): boolean => {
+      const labels = element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement
+        ? [...element.labels ?? []].map((label) => label.textContent ?? "")
+        : [];
+      const accessibleName = normalize([
+        element.getAttribute("aria-label") ?? "",
+        ...labels,
+      ].join(" "));
+      return /(?:^|\s|\()required\)?(?:\s*\*)?$/iu.test(accessibleName) &&
+        !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(accessibleName);
+    };
     const groupOf = (input: HTMLInputElement): string => {
       const fieldset = input.closest("fieldset");
       const legend = normalize(fieldset?.querySelector(":scope > legend")?.textContent);
@@ -554,6 +566,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         name,
         required: element.hasAttribute("required") ||
           element.getAttribute("aria-required") === "true" ||
+          accessibleRequired(element) ||
           (element instanceof HTMLFieldSetElement &&
             [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
               .some((radio) => radio.required)) ||
