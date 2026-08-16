@@ -1178,6 +1178,34 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
   ]);
 });
 
+test("canonicalizes a bare LinkedIn host for Workday URL validation", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://linkedin.com/in/example",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("social.linkedin", "text", null, "workday_text_v2"),
+      required: false,
+    }],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
 test("falls back from an absent dedicated social control to a generic website row", async () => {
   const linkedin = field(
     "social.linkedin",

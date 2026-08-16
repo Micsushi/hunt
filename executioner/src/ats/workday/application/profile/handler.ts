@@ -366,21 +366,32 @@ function routeSiteAnswers(
   plan: ProfilePagePlan,
   snapshot: ProfilePageSnapshot,
 ): ProfilePagePlan {
-  if (!snapshot.repeatableSections?.includes("websites")) return plan;
+  const canonicalPlan: ProfilePagePlan = {
+    ...plan,
+    fields: plan.fields.map(canonicalSiteField),
+    repeatables: plan.repeatables.map((repeatable) => ({
+      ...repeatable,
+      rows: repeatable.rows.map((row) => ({
+        ...row,
+        fields: row.fields.map(canonicalSiteField),
+      })),
+    })),
+  };
+  if (!snapshot.repeatableSections?.includes("websites")) return canonicalPlan;
   const visibleDedicated = new Set(snapshot.controls
     .filter(({ fieldId }) => isDedicatedSiteField(fieldId))
     .map(({ fieldId }) => fieldId));
-  const dedicatedUrls = new Set(plan.fields.flatMap((field) =>
+  const dedicatedUrls = new Set(canonicalPlan.fields.flatMap((field) =>
     visibleDedicated.has(field.fieldId) && isSiteUrl(field)
       ? [normalize(visibleValue(field))]
       : []
   ));
-  const website = plan.repeatables.find(({ section }) => section === "websites");
+  const website = canonicalPlan.repeatables.find(({ section }) => section === "websites");
   const routedRows = [...website?.rows ?? []].filter((row) => {
     const url = row.fields.find(({ fieldId }) => fieldId === "website.url");
     return url === undefined || !dedicatedUrls.has(normalize(visibleValue(url)));
   });
-  const moved = plan.fields.filter((field) =>
+  const moved = canonicalPlan.fields.filter((field) =>
     isDedicatedSiteField(field.fieldId) && isSiteUrl(field) &&
     !visibleDedicated.has(field.fieldId)
   );
@@ -399,15 +410,27 @@ function routeSiteAnswers(
     });
   }
   return {
-    ...plan,
-    fields: plan.fields.filter((field) =>
+    ...canonicalPlan,
+    fields: canonicalPlan.fields.filter((field) =>
       !moved.some(({ fieldId }) => fieldId === field.fieldId)
     ),
     repeatables: [
-      ...plan.repeatables.filter(({ section }) => section !== "websites"),
+      ...canonicalPlan.repeatables.filter(({ section }) => section !== "websites"),
       ...(routedRows.length === 0 ? [] : [{ section: "websites" as const, rows: routedRows }]),
     ],
   };
+}
+
+function canonicalSiteField(field: ProfileFieldPlan): ProfileFieldPlan {
+  if (!isSiteUrl(field) || field.answer.kind !== "answered") return field;
+  try {
+    const url = new URL(field.answer.value);
+    if (url.hostname.toLocaleLowerCase("en-US") !== "linkedin.com") return field;
+    url.hostname = "www.linkedin.com";
+    return { ...field, answer: { ...field.answer, value: url.href } };
+  } catch {
+    return field;
+  }
 }
 
 function isDedicatedSiteField(fieldId: string): boolean {
