@@ -1171,6 +1171,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await nested.option.click({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(100);
     }
+    await control.blur({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(25);
+    const closeDeadline = Date.now() + Math.min(this.#timeoutMs, 1_000);
+    while (
+      Date.now() < closeDeadline &&
+      (await listbox.isVisible() || await control.getAttribute("aria-expanded") === "true")
+    ) {
+      await this.#page.keyboard.press("Escape");
+      await this.#page.waitForTimeout(100);
+    }
     interaction.popupClosed = !await listbox.isVisible() &&
       await control.getAttribute("aria-expanded") !== "true";
     interaction.backingValueCommitted = normalize(
