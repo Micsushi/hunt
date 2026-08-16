@@ -22,7 +22,7 @@ def fail(code):
 
 def verification_url(content, expected_host):
     found = set()
-    marker = re.compile(r'(verify|verification|activate|activation|confirm|confirmation)', re.I)
+    marker = re.compile(r'(verify|verification|activate|activation|confirm|confirmation|reset|password)', re.I)
     for raw in re.findall(r'https://[^\s"\'<>]+', html.unescape(content)):
         try:
             value = urlsplit(raw)
@@ -58,7 +58,7 @@ try:
         status, _ = client.select('INBOX', readonly=True)
         if status != 'OK':
             fail(3)
-        since = start.strftime('%d-%b-%Y')
+        since = datetime.fromtimestamp(start.timestamp() - 86400, timezone.utc).strftime('%d-%b-%Y')
         before = datetime.fromtimestamp(end.timestamp() + 86400, timezone.utc).strftime('%d-%b-%Y')
         status, data = client.search(None, 'SINCE', since, 'BEFORE', before, 'TO', '"' + request['recipientAddress'] + '"')
         if status != 'OK' or len(data) != 1:
