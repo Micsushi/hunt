@@ -241,6 +241,24 @@ test("protected placeholders become explicit replacement-required learning inten
     },
   });
 
+  assert.deepEqual(await resolver.resolve(
+    request(field("I Agree", "checkbox")),
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "toggle",
+        behavior: "checkbox",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        checked: true,
+        provenance: "reviewed_catalog",
+      },
+    },
+  });
+
   const sources = Object.freeze([
     Object.freeze({ id: optionId("source-linkedin"), label: boundedText("LinkedIn") }),
   ]);

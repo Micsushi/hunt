@@ -1487,7 +1487,7 @@ async function monitorQuestionTypes(
       );
       if (/\b(?:race|ethnicity|gender|veteran|disability|demographic)\b/u.test(label)) categories.add("demographic");
       else if (/\b(?:authorized|authorization|sponsor|sponsorship|work permit)\b/u.test(label)) categories.add("authorization");
-      else if (/\b(?:consent|certify|terms|conditions|agreement|privacy)\b/u.test(label)) categories.add("legal");
+      else if (/\b(?:agree|consent|certify|terms|conditions|agreement|privacy)\b/u.test(label)) categories.add("legal");
       else if (/\b(?:salary|compensation|pay|rate)\b/u.test(label)) categories.add("compensation");
       else if (/\b(?:available|availability|start date|relocate|travel)\b/u.test(label)) categories.add("availability");
       else if (/\b(?:school|degree|education|university|college)\b/u.test(label)) categories.add("education");

@@ -212,6 +212,8 @@ test("answer guide exposes types, options, and replacement-required learning def
       "Yes, I have read and consent to the terms and conditions",
       "I have read and agree to the terms and conditions",
       "I acknowledge and consent to the terms and conditions",
+      "I Agree",
+      "Accept Terms and Agreements",
     ],
     answerTypes: ["boolean"],
     possibleAnswers: ["Yes", "No"],

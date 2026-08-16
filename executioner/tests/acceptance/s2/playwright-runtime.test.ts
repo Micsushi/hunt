@@ -478,9 +478,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-voluntary" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowVoluntaryDisclosuresPage">
       <div data-automation-id="formField-termsAndConditions--acceptTermsAndAgreements">
-        <label>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span>
-          <input id="termsAndConditions--acceptTermsAndAgreements" type="checkbox">
-        </label>
+        <p>I had the opportunity to self-identify.</p>
+        <p>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span></p>
+        <input id="termsAndConditions--acceptTermsAndAgreements" type="checkbox" aria-label="I Agree">
       </div>
     </main></body></html>`);
     const voluntaryOperation = generatedOperationId("operation_questionnaire_voluntary_01");
