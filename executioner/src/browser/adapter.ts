@@ -268,7 +268,11 @@ export async function applyMutation(
     }
     if (target.control.kind !== "select") return "invalid";
     const matches = target.control.options.filter((option) => option === mutation.option);
-    if (target.interaction !== "owned-popup" && matches.length !== 1) {
+    if (
+      target.interaction !== "owned-popup" &&
+      target.interaction !== "field-popup" &&
+      matches.length !== 1
+    ) {
       return matches.length === 0 ? "invalid" : "ambiguous";
     }
     if (target.control.element === "select") {

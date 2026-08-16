@@ -278,6 +278,60 @@ test("re-commits an exact Workday prompt-button selection", async () => {
   }
 });
 
+test("opens a Workday prompt button before requiring its lazily mounted option", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed04") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-authorization">
+        <label>Are you authorized to work in the U.S.? <span aria-hidden="true">*</span></label>
+        <button id="authorization" type="button" aria-label="Select One Required" aria-haspopup="listbox" data-hunt-target-token="target-authorization">Select One</button>
+      </div>
+      <script>
+        const button = document.querySelector('#authorization');
+        button.addEventListener('click', () => {
+          const options = document.createElement('div');
+          options.innerHTML = '<div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div>';
+          options.addEventListener('click', (event) => {
+            const option = event.target.closest('[data-automation-id="promptOption"]');
+            if (option === null) return;
+            button.textContent = option.textContent.trim();
+            button.dataset.committed = 'true';
+            options.remove();
+          });
+          document.body.append(options);
+        }, { once: true });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+    assert.deepEqual(observed.value.targets[0]?.control, {
+      kind: "select",
+      element: "listbox",
+      options: [],
+    });
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "Yes" as never },
+      "ededededededed05",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(
+      await context.pages()[0]!.locator("#authorization").getAttribute("data-committed"),
+      "true",
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("upload observation transfers only digest and size metadata from the page", () => {
   const source = readFileSync(
     new URL("../../../src/browser/adapter.ts", import.meta.url),
