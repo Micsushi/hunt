@@ -688,6 +688,18 @@ export class OwnedWorkdayApplicationRuntime {
     signal: AbortSignal,
   ): Promise<void> {
     if (this.#externalMonitor === undefined) return;
+    if (moment === "transition") {
+      const observed = await waitForApplicationObservation(
+        page,
+        Math.max(this.#timeoutMs, 30_000),
+        signal,
+        0,
+      );
+      if (
+        !observed.ok || observed.value.submitActivated ||
+        monitorPage(observed.value.page) !== pageName
+      ) throw new TypeError("application transition monitor state denied");
+    }
     await this.#externalMonitor.application(
       applicationMonitorPage(page, pageName),
       pageName,
