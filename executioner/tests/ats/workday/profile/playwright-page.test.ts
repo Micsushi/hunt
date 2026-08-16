@@ -2278,6 +2278,42 @@ test("My Experience multi-select owns a local Workday prompt without aria-contro
   }
 });
 
+test("a failed optional Workday multi-select search leaves no blocking draft text", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <span data-automation-id="promptSearchButton"><svg></svg></span>
+            </div>
+          </div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 100,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])));
+
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+  } finally {
+    await browser.close();
+  }
+});
+
 function traced(
   port: WorkdayProfilePagePort,
   errors: string[],

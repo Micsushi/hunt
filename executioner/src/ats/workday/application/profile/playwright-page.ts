@@ -112,6 +112,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     const interaction = emptyInteraction(request.uiBehavior);
     this.#interactions.set(request.controlId, interaction);
+    try {
     if (request.uiBehavior === "multi_select") {
       const options = parseOptionList(request.value);
       for (const option of options) {
@@ -166,7 +167,28 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday profile value did not commit");
       }
     }
+    } catch (error) {
+      if (
+        request.uiBehavior === "multi_select" ||
+        request.uiBehavior === "search_select" || request.uiBehavior === "select"
+      ) {
+        await this.#resetFailedSelection(resolved.locator);
+      }
+      throw error;
+    }
     abort(signal);
+  }
+
+  async #resetFailedSelection(control: Locator): Promise<void> {
+    try {
+      await this.#page.keyboard.press("Escape");
+      if (await control.evaluate((element) =>
+        (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+        !element.readOnly
+      )) await control.fill("", { timeout: this.#timeoutMs });
+      await control.blur({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
+    } catch {}
   }
 
   interaction(controlId: string): ProfileInteractionSnapshot | undefined {
