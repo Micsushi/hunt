@@ -354,12 +354,38 @@ export class OwnedWorkdayApplicationRuntime {
           // Workday can expose the persisted destination and then remount its
           // owned loading shell. Stabilize that known state before publishing
           // transition evidence; this recovery performs at most one reload.
-          const observed = await waitForApplicationObservation(
+          let observed = await waitForApplicationObservation(
             page,
             Math.max(this.#timeoutMs, 30_000),
             signal,
             0,
           );
+          if (
+            observed.ok && observed.value.page !== "pre_review" &&
+            observed.value.requiredFields.length === 0
+          ) {
+            this.#assertAuthorized(signal);
+            if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+              process.stderr.write(
+                '{"applicationStateRecovery":"empty_destination_reload_started"}\n',
+              );
+            }
+            await page.reload({
+              waitUntil: "domcontentloaded",
+              timeout: Math.max(this.#timeoutMs, 30_000),
+            });
+            observed = await waitForApplicationObservation(
+              page,
+              Math.max(this.#timeoutMs, 30_000),
+              signal,
+              0,
+            );
+            if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+              process.stderr.write(
+                '{"applicationStateRecovery":"empty_destination_reload_completed"}\n',
+              );
+            }
+          }
           if (!observed.ok || !input.allowed.includes(observed.value.page)) {
             throw new TypeError("application navigation readback denied");
           }
