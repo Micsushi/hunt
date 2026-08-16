@@ -385,11 +385,10 @@ export class OwnedWorkdayApplicationRuntime {
               );
             }
             // The empty destination is a client-side preview while Workday's
-            // save request is still in flight. Let the expected loading
-            // remount appear, then give that request its full bounded window
-            // before the observer's single owned-shell reload.
-            await page.waitForTimeout(10_000);
-            observed = await waitForApplicationObservation(
+            // save request is still in flight. Continuously watch through the
+            // delayed loading remount, then give that request its full bounded
+            // window before the observer's single owned-shell reload.
+            observed = await waitThroughApplicationDestinationSettle(
               page,
               Math.max(this.#timeoutMs, 90_000),
               signal,
@@ -1105,6 +1104,23 @@ async function waitForExactApplicationSource(
     (!latest.ok || !isExactVerifiedApplicationSource(latest.value, source))
   ) {
     await page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+    latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  }
+  return latest;
+}
+
+async function waitThroughApplicationDestinationSettle(
+  page: Page,
+  timeoutMs: number,
+  signal: AbortSignal,
+) {
+  const settleDeadline = Date.now() + Math.min(30_000, timeoutMs);
+  let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  while (!signal.aborted && Date.now() < settleDeadline) {
+    if (!latest.ok) {
+      return waitForApplicationObservation(page, timeoutMs, signal);
+    }
+    await page.waitForTimeout(Math.min(100, Math.max(1, settleDeadline - Date.now())));
     latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
   }
   return latest;
