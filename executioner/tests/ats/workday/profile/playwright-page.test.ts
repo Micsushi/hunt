@@ -1233,6 +1233,34 @@ test("BMO source button binds its listbox after opening and commits a flat optio
   }
 });
 
+test("a roleless source search input remains a known application-source control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <input id="source--source" type="text" placeholder="Search" aria-required="true">
+          </div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(
+      page,
+      { pageType: "profile" },
+    ).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(
+      snapshot.controls.map(({ fieldId, uiBehavior }) => ({ fieldId, uiBehavior })),
+      [{ fieldId: "source.how_did_you_hear", uiBehavior: "search_select" }],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a highlighted source leaf without backing selection is never a commit", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

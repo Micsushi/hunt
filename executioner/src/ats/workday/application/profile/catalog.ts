@@ -115,6 +115,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
         '[data-automation-id^="formField-source"] input:not([type])[role="combobox"]',
         '[data-automation-id^="formField-source"] input[type="text"][role="combobox"]',
         '[data-automation-id^="formField-source"] input[type="search"][role="combobox"]',
+        '[data-automation-id^="formField-source"] input[type="text"][id^="source--"]',
         '[data-automation-id^="formField-source"] button[type="button"][role="combobox"]',
         '[data-automation-id^="formField-source"] button[type="button"][aria-haspopup="listbox"]',
         '[id^="source--"][role="combobox"]:not(button):not(input)',
