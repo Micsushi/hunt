@@ -13,6 +13,7 @@ import {
   type AccountLifecycleCredentialMutationRequest,
   type AccountActionIntent,
   type AccountEntryDependencies,
+  type AccountEntryTraceEvent,
   type AccountFieldName,
   type AccountPageAccess,
   type ClassifiedAccountObservation,
@@ -92,9 +93,7 @@ async function mutateOnce(
   }
   emit(
     dependencies,
-    initial.value.state.kind === "existing_account"
-      ? "initial_state_existing_account"
-      : "initial_state_create_account",
+    initialStateEvent(initial.value.state),
   );
   if (noSecretState(initial.value)) {
     return { ok: true, value: accountStateResult(initial.value.state, []) };
@@ -403,23 +402,38 @@ async function mutatePasswordReset(
     const submit = await uniqueActionableAction(access, "submit_password_reset_request");
     if (!field.ok) return mapBrowserFailure(field.error.code);
     if (!submit.ok) return mapBrowserFailure(submit.error.code);
+    emit(dependencies, "fields_admitted");
     let local: MutationFailure | undefined;
     const resolved = await dependencies.credentials.useAccountCredentials(
       request.credential,
       signal,
       async (credential) => {
+        emit(dependencies, "credentials_resolved");
         const filled = await fillAndVerify(access, "email", credential.email);
         if (!filled.ok) local = filled.failure;
         else {
+          emit(dependencies, "email_verified");
+          emit(dependencies, "account_submit_activate_started");
           const activated = await access.activate("submit_password_reset_request");
-          if (!activated.ok) local = mapBrowserFailure(activated.error.code);
+          if (!activated.ok) {
+            emit(dependencies, "account_submit_activate_failed");
+            local = mapBrowserFailure(activated.error.code);
+          } else {
+            emit(dependencies, "account_submit_activated");
+          }
         }
         return { kind: "existing_account" as const, attemptedFields: ["email"] as const };
       },
     );
     if (!resolved.ok) return copyFailure(resolved);
     if (local !== undefined) return local;
+    emit(dependencies, "post_submit_classify_started");
     const observed = await classifyAfterSubmit(dependencies, request, signal);
+    if (!observed.ok || observed.value.kind !== "classified_account") {
+      emit(dependencies, "post_submit_classify_failed");
+      return failure("credential_mutation_denied");
+    }
+    emit(dependencies, postSubmitEvent(observed.value.state.kind));
     return observed.ok && observed.value.kind === "classified_account" &&
         observed.value.state.kind === "password_reset_email_sent"
       ? { ok: true, value: { kind: "password_reset_email_sent", attemptedFields: ["email", "password"] } }
@@ -470,6 +484,20 @@ async function mutatePasswordReset(
   return observed.value.state.kind === "existing_account"
     ? { ok: true, value: { kind: "sign_in_required", attemptedFields: ["email", "password"] } }
     : failure("credential_mutation_denied");
+}
+
+function initialStateEvent(
+  state: Extract<ClassifiedAccountObservation, { readonly kind: "classified_account" }>["state"],
+): AccountEntryTraceEvent {
+  if (state.kind === "existing_account") {
+    return state.accountFact === "password_reset_required"
+      ? "initial_state_password_reset_required"
+      : "initial_state_existing_account";
+  }
+  if (state.kind === "password_reset_request") return "initial_state_password_reset_request";
+  if (state.kind === "password_reset_email_sent") return "initial_state_password_reset_email_sent";
+  if (state.kind === "password_reset_set") return "initial_state_password_reset_set";
+  return "initial_state_create_account";
 }
 
 function postSubmitEvent(

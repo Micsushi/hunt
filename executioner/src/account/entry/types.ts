@@ -30,6 +30,10 @@ export type AccountActionIntent =
 export type AccountEntryTraceEvent =
   | "initial_state_existing_account"
   | "initial_state_create_account"
+  | "initial_state_password_reset_required"
+  | "initial_state_password_reset_request"
+  | "initial_state_password_reset_email_sent"
+  | "initial_state_password_reset_set"
   | "owned_access_started"
   | "account_mode_switched_to_sign_in"
   | "account_mode_switched_to_create_account"

@@ -258,6 +258,21 @@ test("password recovery opens, requests, and sets a new password through exact c
     "activate:submit_password_reset",
   ]);
   assert.equal(fixture.resolverCalls, 2);
+  assert.deepEqual(fixture.traces, [
+    "initial_state_password_reset_required",
+    "owned_access_started",
+    "initial_state_password_reset_request",
+    "owned_access_started",
+    "fields_admitted",
+    "credentials_resolved",
+    "email_verified",
+    "account_submit_activate_started",
+    "account_submit_activated",
+    "post_submit_classify_started",
+    "post_submit_password_reset_email_sent",
+    "initial_state_password_reset_set",
+    "owned_access_started",
+  ]);
 });
 
 test("post-submit account-entry uncertainty settles before state-driven routing", async () => {
@@ -909,6 +924,7 @@ type ResolvedState = ResolvedStateKind | {
 
 function accountFixture(states: readonly ResolvedState[]) {
   const operations: string[] = [];
+  const traces: string[] = [];
   let classificationCalls = 0;
   let resolverCalls = 0;
   let index = 0;
@@ -962,6 +978,7 @@ function accountFixture(states: readonly ResolvedState[]) {
     },
   };
   const dependencies: AccountEntryDependencies = {
+    trace: (event) => traces.push(event),
     classifiedAccount: {
       inspectClassifiedAccount: async () => {
         classificationCalls += 1;
@@ -1010,6 +1027,7 @@ function accountFixture(states: readonly ResolvedState[]) {
     matchResults,
     emptyResults,
     operations,
+    traces,
     get classificationCalls() {
       return classificationCalls;
     },
