@@ -162,6 +162,7 @@ export async function runStage2MailboxCandidateFromOwnerConfig(
       httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
       rawVault,
       artifactRegistry: artifacts,
+      trace: valueFreeTrace,
       approvedPolicy: approvedPolicy(owner),
       createHandle: () =>
         `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,

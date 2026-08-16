@@ -83,6 +83,25 @@ interface SafeArtifactAdmission {
   unregister(handleId: VerificationHandleId): void;
 }
 
+export type GmailApiAuthTraceEvent =
+  | "gmail_auth_query_started"
+  | "gmail_auth_secret_resolved"
+  | "gmail_auth_policy_resolved"
+  | "gmail_auth_bundle_admitted"
+  | "gmail_auth_messages_none"
+  | "gmail_auth_messages_one"
+  | "gmail_auth_messages_multiple"
+  | "gmail_auth_candidates_staged"
+  | "gmail_auth_policy_failed"
+  | "gmail_auth_policy_succeeded"
+  | "gmail_auth_artifact_registration_failed"
+  | "gmail_auth_artifact_registered"
+  | "gmail_auth_artifact_commit_failed"
+  | "gmail_auth_artifact_committed"
+  | "gmail_auth_query_succeeded_without_handle"
+  | "gmail_auth_query_succeeded_with_handle"
+  | "gmail_auth_query_failed";
+
 export interface GmailAuthorizationResolver {
   useGmailAuthorization(
     handle: ActiveGmailSecretHandle,
@@ -112,6 +131,7 @@ export interface GmailApiAuthExecutorOptions {
   readonly approvedPolicy: GmailApprovedPolicyCapability;
   readonly createHandle: () => VerificationHandleId;
   readonly policyFactory: GmailPolicyFactory;
+  readonly trace?: (event: GmailApiAuthTraceEvent) => void;
 }
 
 export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
@@ -125,17 +145,21 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
     if (signal.aborted) return cancelled();
     const admission = admitRequest(request, this.#options.binding);
     if (admission !== null) return failure(admission);
+    this.#emit("gmail_auth_query_started");
     try {
       return await this.#options.resolver.useGmailAuthorization(
         request.authorization,
         signal,
         async (authorization) => {
+          this.#emit("gmail_auth_secret_resolved");
           return this.#options.approvedPolicy.use(async (approvedPolicy) => {
+            this.#emit("gmail_auth_policy_resolved");
             const authority = parseSealedGmailBundle(
               authorization,
               this.#options.binding,
               approvedPolicy,
             );
+            this.#emit("gmail_auth_bundle_admitted");
             const messages = authority.kind === "imap"
               ? await (this.#options.imapClient ?? new GmailImapClient()).query(
                 authority,
@@ -147,6 +171,13 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
                 { notBefore: request.notBefore, notAfter: request.notAfter },
                 signal,
               );
+            this.#emit(
+              messages.length === 0
+                ? "gmail_auth_messages_none"
+                : messages.length === 1
+                  ? "gmail_auth_messages_one"
+                  : "gmail_auth_messages_multiple",
+            );
             const candidates = messages.map((message) => {
               const verificationHandle = this.#options.createHandle();
               const expiresAt = new Date(
@@ -194,6 +225,7 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
                 },
               })),
             );
+            this.#emit("gmail_auth_candidates_staged");
             try {
               const source = oneShotSource(
                 candidates.map(({ candidate }) => candidate),
@@ -202,14 +234,19 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
               const policy = this.#options.policyFactory.create(source, request.now);
               const safeResult = await policy.mailboxProvider.poll(request, signal);
               if (!safeResult.ok) {
+                this.#emit("gmail_auth_policy_failed");
                 throw new GmailProviderFailure(
                   safeResult.error.code === "operation_cancelled"
                     ? "operation_cancelled"
                     : "mailbox_query_invalid",
                 );
               }
+              this.#emit("gmail_auth_policy_succeeded");
               const handleId = safeResult.value.verificationHandle;
-              if (handleId === null) return safeResult.value;
+              if (handleId === null) {
+                this.#emit("gmail_auth_query_succeeded_without_handle");
+                return safeResult.value;
+              }
               if (
                 !this.#options.artifactRegistry.register(
                   handleId,
@@ -217,12 +254,17 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
                   () => this.#options.rawVault.invalidate(handleId),
                 )
               ) {
+                this.#emit("gmail_auth_artifact_registration_failed");
                 throw new GmailProviderFailure("mailbox_query_invalid");
               }
+              this.#emit("gmail_auth_artifact_registered");
               if (!pending.commit(handleId)) {
                 this.#options.artifactRegistry.unregister(handleId);
+                this.#emit("gmail_auth_artifact_commit_failed");
                 throw new GmailProviderFailure("mailbox_query_invalid");
               }
+              this.#emit("gmail_auth_artifact_committed");
+              this.#emit("gmail_auth_query_succeeded_with_handle");
               return safeResult.value;
             } finally {
               pending.discard();
@@ -231,11 +273,20 @@ export class GmailApiAuthExecutor implements PrivilegedGmailAuthExecutor {
         },
       );
     } catch (error) {
+      this.#emit("gmail_auth_query_failed");
       return error instanceof GmailProviderFailure ||
           error instanceof GmailImapFailure ||
           error instanceof SealedGmailAuthorizationFailure
         ? failure(error.code)
         : failure("gmail_network_unavailable");
+    }
+  }
+
+  #emit(event: GmailApiAuthTraceEvent): void {
+    try {
+      this.#options.trace?.(event);
+    } catch {
+      // Value-free diagnostics cannot alter mailbox behavior.
     }
   }
 }

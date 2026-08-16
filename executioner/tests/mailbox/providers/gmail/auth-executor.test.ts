@@ -111,6 +111,7 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
   let policyCalls = 0;
   let callbackView: Readonly<Uint8Array> | undefined;
   let policyViews: readonly Readonly<Uint8Array>[] = [];
+  const traces: string[] = [];
   const resolver: GmailAuthorizationResolver = {
     async useGmailAuthorization(_handle, signal, operation) {
       if (signal.aborted) {
@@ -145,6 +146,7 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
     httpClient: new GmailHttpClient({ baseUrl, allowLoopbackHttp: true }),
     rawVault,
     artifactRegistry: artifacts,
+    trace: (event) => traces.push(event),
     approvedPolicy: {
       async use(operation) {
         policyCalls += 1;
@@ -177,6 +179,7 @@ function buildExecutor(baseUrl: string, bundle = sealedBundle()) {
     rawVault,
     resolverCalls: () => resolverCalls,
     policyCalls: () => policyCalls,
+    traces,
     policyViews: () => policyViews,
     callbackView: () => callbackView,
   };
@@ -209,6 +212,18 @@ test("one readonly DPAPI callback returns only safe metadata and commits one adm
     assert.equal(harness.policyCalls(), 1);
     assert.equal(httpCalls(), 2);
     assert.equal(harness.rawVault.committedCount, 1);
+    assert.deepEqual(harness.traces, [
+      "gmail_auth_query_started",
+      "gmail_auth_secret_resolved",
+      "gmail_auth_policy_resolved",
+      "gmail_auth_bundle_admitted",
+      "gmail_auth_messages_one",
+      "gmail_auth_candidates_staged",
+      "gmail_auth_policy_succeeded",
+      "gmail_auth_artifact_registered",
+      "gmail_auth_artifact_committed",
+      "gmail_auth_query_succeeded_with_handle",
+    ]);
     assert.deepEqual([...(harness.callbackView() ?? [])], new Array(sealedBundle().length).fill(0));
     assert.deepEqual(
       harness.policyViews().map((value) => [...value]),

@@ -574,6 +574,7 @@ export async function runStage2AccountVerifiedInSession(
             httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
             rawVault,
             artifactRegistry: artifacts,
+            trace: valueFreeTrace,
             approvedPolicy: approvedPolicy(options.owner),
             createHandle: () =>
               `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,
@@ -801,6 +802,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
           httpClient: new GmailHttpClient({ trace: valueFreeTrace }),
           rawVault,
           artifactRegistry: artifacts,
+          trace: valueFreeTrace,
           approvedPolicy: approvedPolicy(owner),
           createHandle: () =>
             `verification_handle_${randomBytes(16).toString("hex")}` as VerificationHandleId,
