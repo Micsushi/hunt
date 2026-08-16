@@ -300,6 +300,26 @@ test("missing and non-owner protected facts use deterministic learning defaults"
   }
 });
 
+test("known boolean choices defer exact matching when Workday mounts options on open", async () => {
+  for (const [label, expectedOption, expectedId] of [
+    ["Are you authorized to work in this location?", "Yes", "deferred-yes"],
+    ["Will you require sponsorship?", "No", "deferred-no"],
+  ] as const) {
+    const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+    const result = await resolver.resolve(
+      request(field(label, "select")),
+      new AbortController().signal,
+    );
+    assert.equal(result.ok && result.value.kind, "resolved");
+    if (!result.ok || result.value.kind !== "resolved" || result.value.intent.kind !== "choice") {
+      continue;
+    }
+    assert.equal(result.value.intent.optionId, expectedId);
+    assert.equal(result.value.intent.expectedOption, expectedOption);
+    assert.equal(result.value.intent.provenance, "reviewed_catalog");
+  }
+});
+
 test("configured narrative falls back to a deterministic generated default", async () => {
   const profile = createProfileQueryFake();
   const resolver = createAnswerResolver(profile.port, undefined);

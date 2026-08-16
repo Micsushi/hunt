@@ -1,4 +1,6 @@
 import {
+  boundedText,
+  optionId,
   questionId,
   type AnswerResolutionRequest,
   type AnswerResolutionResult,
@@ -97,6 +99,21 @@ function intentFor(
   ) {
     const option = mapVisibleOption(value, field.options);
     if (option.kind !== "matched") {
+      if (field.options.length === 0 && typeof value === "boolean") {
+        const expectedOption = boundedText(value ? "Yes" : "No");
+        return Object.freeze({
+          kind: "resolved",
+          intent: Object.freeze({
+            kind: "choice",
+            behavior: field.behavior,
+            fieldId: field.fieldId,
+            target: field.target,
+            optionId: optionId(value ? "deferred-yes" : "deferred-no"),
+            expectedOption,
+            provenance,
+          }),
+        });
+      }
       return Object.freeze({
         kind: option.kind,
         questionId: questionId(canonicalQuestionId),
