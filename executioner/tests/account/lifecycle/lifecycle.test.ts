@@ -470,6 +470,39 @@ test("exact account-exists after create switches to sign-in once", async () => {
   );
 });
 
+test("existing unverified account consumes previously sent verification mail after sign-in rejection", async () => {
+  const credential = privateCredential(
+    { kind: "account_exists", attemptedFields: ["email", "password"] },
+    { kind: "account_exists", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
+  const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    mailbox: mailbox.port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer(
+      "existing_account",
+      "account_exists",
+      "existing_account",
+      "application_ready",
+    ).port,
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(mailbox.calls.length, 1);
+  assert.deepEqual(
+    credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    ["create_account", "sign_in", "sign_in"],
+  );
+});
+
 test("fresh signup may land on sign-in and then reach the application", async () => {
   const credential = privateCredential(
     { kind: "sign_in_required", attemptedFields: ["email", "password"] },

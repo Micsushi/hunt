@@ -356,9 +356,7 @@ export class AccountVerificationLifecycle {
     if (signInResult.kind === "application_ready") {
       return this.#confirmReady(input, signal, path);
     }
-    if (path === "created_account") return this.#verify(input, signal, false);
-    this.#emit("lifecycle_cycle_stopped");
-    return denied();
+    return this.#verify(input, signal, false);
   }
 
   #credentialMutation(
