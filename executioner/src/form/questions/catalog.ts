@@ -158,6 +158,21 @@ const questionAliasCatalog = Object.freeze([
     { kind: "neutral_disclosure" },
   ),
   aliasEntry(
+    "workday-placeholder-terms-consent",
+    [
+      "Yes, I have read and consent to the terms and conditions",
+      "I have read and agree to the terms and conditions",
+      "I acknowledge and consent to the terms and conditions",
+    ],
+    ["checkbox"],
+    {
+      kind: "synthetic_placeholder",
+      value: true,
+      placeholderProvenance: "synthetic_ui_learning",
+      protected: true,
+    },
+  ),
+  aliasEntry(
     "workday-placeholder-prior-employment",
     [
       "Have you ever been employed by QTS Data Centers?",
@@ -217,6 +232,7 @@ const questionSemanticCatalog = Object.freeze([
   { id: "workday-question-ethnicity-disclosure", keywordGroups: [["ethnicity"], ["ethnicities"], ["race"]] },
   { id: "workday-question-veteran-disclosure", keywordGroups: [["veteran"]] },
   { id: "workday-question-disability-disclosure", keywordGroups: [["disability"], ["disabled"]] },
+  { id: "workday-placeholder-terms-consent", keywordGroups: [["consent", "terms"], ["agree", "terms"], ["acknowledge", "terms"]] },
   { id: "workday-placeholder-prior-employment", keywordGroups: [["previously", "worked"], ["ever", "employed"], ["prior", "employment"], ["previous", "employment"]] },
   { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
   { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
@@ -348,7 +364,7 @@ function guidePolicy(
       replaceWithOwnerAnswer: true,
     });
   }
-  if (source?.kind === "synthetic_placeholder" && !source.protected) {
+  if (source?.kind === "synthetic_placeholder") {
     return Object.freeze({ kind: "visible_exact_match_only", value: source.value });
   }
   return Object.freeze({ kind: "owner_required" });

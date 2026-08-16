@@ -46,6 +46,7 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
     ["Mobile Phone", "s1-question-phone-number"],
     ["What's your gender?", "workday-question-gender-disclosure"],
     ["Select your gender", "workday-question-gender-disclosure"],
+    ["Please agree to these terms", "workday-placeholder-terms-consent"],
   ] as const;
   for (const [label, id] of semanticCases) {
     assert.deepEqual(resolveQuestion(label), {
@@ -107,6 +108,10 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
     ["Gender", "workday-question-gender-disclosure"],
     ["Veteran Status", "workday-question-veteran-disclosure"],
     ["How Did You Hear About Us?", "workday-placeholder-application-source"],
+    [
+      "Yes, I have read and consent to the terms and conditions",
+      "workday-placeholder-terms-consent",
+    ],
   ] as const;
 
   for (const [label, id] of cases) {
@@ -200,6 +205,17 @@ test("answer guide exposes types, options, and replacement-required learning def
     answerTypes: ["single_select"],
     possibleAnswers: ["Yes", "No"],
     defaultPolicy: { kind: "visible_exact_match_only", value: false },
+  });
+  assert.deepEqual(byId.get("workday-placeholder-terms-consent"), {
+    id: "workday-placeholder-terms-consent",
+    labels: [
+      "Yes, I have read and consent to the terms and conditions",
+      "I have read and agree to the terms and conditions",
+      "I acknowledge and consent to the terms and conditions",
+    ],
+    answerTypes: ["boolean"],
+    possibleAnswers: ["Yes", "No"],
+    defaultPolicy: { kind: "visible_exact_match_only", value: true },
   });
 });
 

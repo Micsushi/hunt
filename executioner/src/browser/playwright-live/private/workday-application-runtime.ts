@@ -262,6 +262,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #now: () => string;
   readonly #trace: OwnedWorkdayApplicationRuntimeOptions["trace"];
   readonly #reviewExpected = new Map<string, ReviewExpectedField>();
+  readonly #observationMonitorAttempts = new Map<string, number>();
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
 
@@ -321,7 +322,9 @@ export class OwnedWorkdayApplicationRuntime {
           monitorPage(observed.value.page),
           "recovery_observed",
           ownedRequest.operationId,
-          1,
+          this.#nextObservationMonitorAttempt(
+            monitorPage(observed.value.page), "recovery_observed",
+          ),
           signal,
         );
         return observed;
@@ -409,7 +412,12 @@ export class OwnedWorkdayApplicationRuntime {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
         const monitorPageName = await this.#monitorPageForLane(page, "profile");
         await this.#monitor(
-          page, monitorPageName, "state_observed", ownedRequest.operationId, 1, signal,
+          page,
+          monitorPageName,
+          "state_observed",
+          ownedRequest.operationId,
+          this.#nextObservationMonitorAttempt(monitorPageName, "state_observed"),
+          signal,
         );
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
@@ -546,7 +554,7 @@ export class OwnedWorkdayApplicationRuntime {
           monitorPageName,
           "state_observed",
           ownedRequest.operationId,
-          1,
+          this.#nextObservationMonitorAttempt(monitorPageName, "state_observed"),
           signal,
         );
         this.#assertAuthorized(signal);
@@ -638,7 +646,7 @@ export class OwnedWorkdayApplicationRuntime {
           "review",
           "review_readback",
           ownedRequest.operationId,
-          1,
+          this.#nextObservationMonitorAttempt("review", "review_readback"),
           signal,
         );
         this.#assertAuthorized(signal);
@@ -686,6 +694,13 @@ export class OwnedWorkdayApplicationRuntime {
     const key = from;
     const attempt = (this.#navigationMonitorAttempts.get(key) ?? 0) + 1;
     this.#navigationMonitorAttempts.set(key, attempt);
+    return attempt;
+  }
+
+  #nextObservationMonitorAttempt(page: string, moment: string): number {
+    const key = `${page}:${moment}`;
+    const attempt = (this.#observationMonitorAttempts.get(key) ?? 0) + 1;
+    this.#observationMonitorAttempts.set(key, attempt);
     return attempt;
   }
 

@@ -384,7 +384,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
   if (!intent.ok) throw new Error("resume fixture invalid");
   let nextOperation = 0;
   const accepted: string[] = [];
-  const monitored: { readonly moment: string; readonly operationId: string }[] = [];
+  const monitored: {
+    readonly moment: string;
+    readonly operationId: string;
+    readonly attempt: number;
+  }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       owner: { revisionId: "revision_questionnaire_monitor" },
@@ -414,10 +418,13 @@ test("each questionnaire field mutation has its own before and readback monitor 
     externalMonitor: {
       async auth() {},
       async application(_page, _pageName, moment, taxonomy, event) {
-        monitored.push({ moment, operationId: event.operationId });
+        monitored.push({ moment, operationId: event.operationId, attempt: event.attempt });
         if (taxonomy.fieldCount === 4) {
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
+        } else if (taxonomy.fieldCount === 1) {
+          assert.deepEqual(taxonomy.questionTypes, ["legal"]);
+          assert.equal(taxonomy.requiredFieldCount, 1);
         } else {
           assert.deepEqual(taxonomy.questionTypes, ["unknown"]);
           assert.equal(taxonomy.fieldCount, 0);
@@ -469,6 +476,45 @@ test("each questionnaire field mutation has its own before and readback monitor 
     }
     assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
 
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-voluntary" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+      <div data-automation-id="formField-termsAndConditions--acceptTermsAndAgreements">
+        <label>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span>
+          <input id="termsAndConditions--acceptTermsAndAgreements" type="checkbox">
+        </label>
+      </div>
+    </main></body></html>`);
+    const voluntaryOperation = generatedOperationId("operation_questionnaire_voluntary_01");
+    const voluntaryResult = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: voluntaryOperation,
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-voluntary" } as never,
+    }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
+    assert.equal(voluntaryResult.ok, true);
+    assert.equal(await page.locator("#termsAndConditions--acceptTermsAndAgreements").isChecked(), true);
+    assert.deepEqual(
+      monitored.filter(({ operationId }) => operationId === voluntaryOperation)
+        .map(({ moment, attempt }) => ({ moment, attempt })),
+      [{ moment: "state_observed", attempt: 2 }],
+    );
+    const voluntaryFieldEvents = monitored.filter(({ operationId }) =>
+      operationId !== voluntaryOperation &&
+      operationId !== runOperation &&
+      !fieldEvents.some((event) => event.operationId === operationId)
+    );
+    assert.deepEqual(
+      voluntaryFieldEvents.map(({ moment, attempt }) => ({ moment, attempt })),
+      [
+        { moment: "before_mutation", attempt: 5 },
+        { moment: "after_readback", attempt: 5 },
+      ],
+    );
+
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-unsupported"><label>Required unsupported control</label><span data-automation-id="required">*</span><div role="slider" tabindex="0" data-hunt-field-id="unsupported-required"></div></div>
     </main></body></html>`);
@@ -483,7 +529,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
-    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 2);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
