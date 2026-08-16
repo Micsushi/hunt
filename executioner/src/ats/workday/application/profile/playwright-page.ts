@@ -393,6 +393,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
           return true;
         }
+        if (element.matches([
+          "input:not([type]):not([id]):not([name]):not([data-automation-id])",
+          ":not([role]):not([placeholder]):not([aria-label])",
+        ].join(""))) {
+          const country = element.closest('[data-automation-id="formField-country"]');
+          if (country !== null && country.querySelector(
+            'button[id="country--country"][role="combobox"], ' +
+            'button[id="country--country"][aria-haspopup="listbox"]',
+          ) !== null) return true;
+        }
         if (
           element.getAttribute("role") === "radiogroup" &&
           reviewed.radioGroupSelectors.some((selector) =>

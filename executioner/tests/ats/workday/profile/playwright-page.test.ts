@@ -186,8 +186,11 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
     await page.setContent(`
       <body data-hunt-profile-page-type="profile">
         <main data-automation-id="applyFlowMyInfoPage">
-          <button id="country--country" name="country" aria-haspopup="listbox"
-            aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+          <div data-automation-id="formField-country">
+            <button id="country--country" name="country" aria-haspopup="listbox"
+              aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+            <input>
+          </div>
           <label>First Name*<input id="name--legalName--firstName"
             name="legalName--firstName" required></label>
           <label>Last Name*<input id="name--legalName--lastName"
