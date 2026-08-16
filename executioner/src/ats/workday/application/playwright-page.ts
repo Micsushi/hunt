@@ -98,24 +98,26 @@ export class PlaywrightWorkdayApplicationPage {
       if (action === undefined) return failure("navigation_uncertain", "navigation");
       clicked = true;
       navigationDiagnostic("action_admitted");
-      // Activate the admitted element itself. Coordinate clicks can drift onto
-      // a final Submit control if Workday remounts the sticky footer between
-      // hit testing and pointer dispatch.
+      // Activate the admitted element itself with a trusted browser gesture.
+      // A DOM click is untrusted and some Workday transitions ignore it. Keep
+      // a fixed handle so a footer remount cannot retarget the gesture onto a
+      // final Submit control.
       try {
         navigationDiagnostic("hit_test_started");
+        const handle = await action.elementHandle();
+        if (handle === null) throw new Error("navigation control detached");
         // Workday commits focused search/select drafts on blur. Move focus to
         // the admitted button before activation so its click sees that commit.
-        await action.focus({ timeout: this.#navigationSettleTimeoutMs });
-        const activated = await action.evaluate((control) => {
+        await handle.focus();
+        const activated = await handle.evaluate((control) => {
           if (!(control instanceof HTMLButtonElement) || control.disabled ||
               control.getAttribute("aria-disabled") === "true") return false;
           const label = (control.innerText || control.textContent || "")
             .normalize("NFC").replace(/\s+/gu, " ").trim();
-          if (!/^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label)) return false;
-          control.click();
-          return true;
+          return /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label);
         });
         if (!activated) throw new Error("navigation control activation denied");
+        await handle.click({ timeout: this.#navigationSettleTimeoutMs });
         navigationDiagnostic("admitted_control_activated");
       } catch {
         navigationDiagnostic("activation_failed");

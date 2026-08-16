@@ -255,6 +255,25 @@ test("navigation commits the focused Workday field before activating the sticky 
   });
 });
 
+test("navigation uses a trusted gesture on the fixed admitted Workday button", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExpPage">
+        <input required value="ready">
+      </main>
+      <footer><button id="next">Save and Continue</button></footer>
+      <script>
+        document.querySelector('#next').addEventListener('click', (event) => {
+          if (!event.isTrusted) return;
+          document.body.innerHTML = '<main data-automation-id="applyFlowApplicationQuestionsPage"><input required value="ready"></main>';
+        });
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["questionnaire"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
 test("navigation never activates a final Submit inserted during footer replacement", async () => {
   await withPage(async (page) => {
     await page.setContent(`
