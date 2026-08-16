@@ -252,7 +252,7 @@ test("each profile field mutation has its own before and readback monitor pair",
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label></main></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label><div data-automation-id="formField-source"><button type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main></body></html>`);
   let nextOperation = 0;
   const monitored: { readonly moment: string; readonly operationId: string }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
@@ -273,6 +273,17 @@ test("each profile field mutation has its own before and readback monitor pair",
               answerType: "text",
               answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
             },
+            {
+              fieldId: "source.how_did_you_hear",
+              questionType: "application_source",
+              answerType: "option",
+              answer: { kind: "answered", value: "LinkedIn", provenance: "generated_default" },
+              optionMapping: {
+                canonicalValue: "LinkedIn",
+                visibleOption: "LinkedIn",
+                provenance: "visible_option",
+              },
+            },
           ],
           repeatables: [],
         },
@@ -290,7 +301,7 @@ test("each profile field mutation has its own before and readback monitor pair",
       async auth() {},
       async application(_page, _pageName, moment, taxonomy, event) {
         monitored.push({ moment, operationId: event.operationId });
-        assert.deepEqual(taxonomy.questionTypes, ["identity"]);
+        assert.equal(taxonomy.questionTypes.includes("identity"), true);
         assert.equal(taxonomy.submitPresent, false);
       },
     },
@@ -326,7 +337,7 @@ test("each profile field mutation has its own before and readback monitor pair",
     );
     const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
     const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(operations.length, 2);
+    assert.equal(operations.length, 3);
     for (const operationId of operations) {
       assert.deepEqual(
         fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),

@@ -427,12 +427,14 @@ export class OwnedWorkdayApplicationRuntime {
               page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
             );
             this.#assertAuthorized(innerSignal);
-            const committed = await playwrightProfilePage.commit(commit, innerSignal);
-            await this.#monitor(
-              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
-            );
-            this.#assertAuthorized(innerSignal);
-            return committed;
+            try {
+              return await playwrightProfilePage.commit(commit, innerSignal);
+            } finally {
+              await this.#monitor(
+                page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
+              );
+              this.#assertAuthorized(innerSignal);
+            }
           },
           addOwnedRow: async (section, innerSignal) => {
             mutationAttempted = true;
