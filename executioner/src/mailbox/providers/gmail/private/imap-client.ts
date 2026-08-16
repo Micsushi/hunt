@@ -165,7 +165,7 @@ export class GmailImapClient {
     signal: AbortSignal,
   ): Promise<readonly QueriedGmailImapMessage[]> {
     if (signal.aborted) throw new GmailImapFailure("operation_cancelled");
-    const input = Buffer.from(JSON.stringify({ ...authority, ...window }), "utf8");
+    const input = encodeGmailImapQueryRequest(authority, window);
     try {
       const output = await this.#run(input, signal);
       try {
@@ -231,6 +231,20 @@ export class GmailImapClient {
       child.stdin.end(input);
     });
   }
+}
+
+export function encodeGmailImapQueryRequest(
+  authority: GmailImapQueryAuthority,
+  window: GmailImapQueryWindow,
+): Buffer {
+  return Buffer.from(JSON.stringify({
+    accountPassword: authority.accountPassword,
+    companyName: authority.companyName,
+    notAfter: window.notAfter,
+    notBefore: window.notBefore,
+    recipientAddress: authority.recipientAddress,
+    verificationHost: authority.verificationHost,
+  }), "utf8");
 }
 
 function parseOutput(
