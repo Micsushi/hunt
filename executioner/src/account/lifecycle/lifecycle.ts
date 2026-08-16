@@ -356,6 +356,7 @@ export class AccountVerificationLifecycle {
     if (signInResult.kind === "application_ready") {
       return this.#confirmReady(input, signal, path);
     }
+    if (path === "created_account") return this.#verify(input, signal, false);
     this.#emit("lifecycle_cycle_stopped");
     return denied();
   }
@@ -424,21 +425,24 @@ export class AccountVerificationLifecycle {
   async #verify(
     input: AccountLifecycleInput,
     signal: AbortSignal,
+    requestEmail = true,
   ): Promise<AccountLifecycleResult> {
-    if (this.#dependencies.verificationEmail === undefined) return denied();
-    const requested = await this.#dependencies.verificationEmail.request({
-      schemaVersion: 1,
-      approvalId: input.approvalId,
-      journeyId: input.journeyId,
-      operationId: input.operations.requestVerificationEmail,
-      sessionId: input.session.sessionId,
-      target: input.target,
-      now: input.now,
-    }, signal);
-    if (!requested.ok) return requested;
-    if (!exactVerificationEmailRequestResult(requested.value)) return denied();
-    if (requested.value.kind === "sent") {
-      this.#emit("lifecycle_action_verification_email_request");
+    if (requestEmail) {
+      if (this.#dependencies.verificationEmail === undefined) return denied();
+      const requested = await this.#dependencies.verificationEmail.request({
+        schemaVersion: 1,
+        approvalId: input.approvalId,
+        journeyId: input.journeyId,
+        operationId: input.operations.requestVerificationEmail,
+        sessionId: input.session.sessionId,
+        target: input.target,
+        now: input.now,
+      }, signal);
+      if (!requested.ok) return requested;
+      if (!exactVerificationEmailRequestResult(requested.value)) return denied();
+      if (requested.value.kind === "sent") {
+        this.#emit("lifecycle_action_verification_email_request");
+      }
     }
     const polled = await this.#dependencies.mailbox.poll(input.mailboxRequest, signal);
     if (!polled.ok) return polled;
