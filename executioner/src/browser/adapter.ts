@@ -352,7 +352,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         if (labelText.length > 0) return labelText;
       }
       const workdayLabel = normalize(
-        element.closest('[data-automation-id="formField"]')
+        element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]')
           ?.querySelector("label, legend")?.textContent,
       );
       if (workdayLabel.length > 0) return workdayLabel;

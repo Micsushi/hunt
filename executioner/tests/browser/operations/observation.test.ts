@@ -76,7 +76,7 @@ test("treats a nonempty aria-invalid Workday draft as needing reconciliation", a
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("edededededededed") });
   try {
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
-      <div data-automation-id="formField">
+      <div data-automation-id="formField-compensation">
         <label>Compensation expectation</label>
         <textarea required aria-invalid="true" data-hunt-target-token="target-compensation">Existing draft</textarea>
       </div>
