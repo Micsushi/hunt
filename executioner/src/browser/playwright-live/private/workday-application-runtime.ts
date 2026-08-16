@@ -137,7 +137,7 @@ async function waitForApplicationReadyPage(
 ): Promise<ProfilePageSnapshot> {
   const owned = page as unknown as Page;
   const profile = new PlaywrightWorkdayProfilePage(owned, { pageType: "profile" });
-  const minimumFieldCount = /^https:\/\//u.test(owned.url()) ? 15 : 5;
+  const minimumFieldCount = 1;
   const deadline = Date.now() + 30_000;
   let previousCount = -1;
   let stableSamples = 0;
@@ -167,7 +167,7 @@ async function waitForApplicationReadyPage(
         ? stableSamples + 1
         : 0;
       previousCount = fieldCount;
-      if (stableSamples >= 2) return observed;
+      if (stableSamples >= 10) return observed;
     } catch (error) {
       lastDiagnostic = {
         error: error instanceof Error ? error.message : "unknown",
