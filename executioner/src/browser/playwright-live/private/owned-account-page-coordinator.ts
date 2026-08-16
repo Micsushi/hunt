@@ -52,6 +52,7 @@ export class OwnedAccountPageCoordinator {
   readonly #operations = new Set<string>();
   #active = false;
   readonly #monitorAttempts = new Map<string, number>();
+  #lastStructuralDiagnostic = "";
 
   constructor(options: OwnedAccountPageCoordinatorOptions) {
     this.#options = options;
@@ -277,7 +278,7 @@ export class OwnedAccountPageCoordinator {
         const phase = authMonitorPhase(inspected.value.snapshot);
         if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
           try {
-            process.stderr.write(`${JSON.stringify({
+            const diagnostic = JSON.stringify({
               accountPostSubmitStructuralDiagnostics: {
                 phase,
                 traitIds: [...inspected.value.snapshot.traitIds].sort(),
@@ -285,7 +286,11 @@ export class OwnedAccountPageCoordinator {
                 requiredControlCount: inspected.value.snapshot.requiredControlCount,
                 optionCount: inspected.value.snapshot.optionCount,
               },
-            })}\n`);
+            });
+            if (diagnostic !== this.#lastStructuralDiagnostic) {
+              process.stderr.write(`${diagnostic}\n`);
+              this.#lastStructuralDiagnostic = diagnostic;
+            }
           } catch {}
         }
         if (failedMonitorPhase === phase) {

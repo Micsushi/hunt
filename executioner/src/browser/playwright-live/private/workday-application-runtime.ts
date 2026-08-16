@@ -141,29 +141,48 @@ async function waitForApplicationReadyPage(
   const deadline = Date.now() + 30_000;
   let previousCount = -1;
   let stableSamples = 0;
+  let lastDiagnostic: Record<string, unknown> = {};
   while (Date.now() < deadline) {
     try {
       const observed = await profile.inspect(AbortSignal.any([]));
       const fieldCount = observed.controls.length +
         observed.rows.reduce((count, row) => count + row.controls.length, 0);
       const profileRoot = owned.locator('[data-automation-id="applyFlowMyInfoPage"]:visible');
-      const hasPageHeading = await owned.getByRole("heading", {
+      const profileRootCount = await profileRoot.count();
+      const pageHeadingCount = await owned.getByRole("heading", {
         name: /^My Information$/iu,
-      }).count() === 1;
-      const hasContinue = await owned.getByRole("button", {
+      }).count();
+      const continueCount = await owned.getByRole("button", {
         name: /^Save and Continue$/iu,
-      }).count() === 1;
-      stableSamples = await profileRoot.count() === 1 && hasPageHeading && hasContinue &&
+      }).count();
+      lastDiagnostic = {
+        fieldCount,
+        minimumFieldCount,
+        profileRootCount,
+        pageHeadingCount,
+        continueCount,
+      };
+      stableSamples = profileRootCount === 1 && pageHeadingCount === 1 && continueCount === 1 &&
           fieldCount >= minimumFieldCount && fieldCount === previousCount
         ? stableSamples + 1
         : 0;
       previousCount = fieldCount;
       if (stableSamples >= 2) return observed;
-    } catch {
+    } catch (error) {
+      lastDiagnostic = {
+        error: error instanceof Error ? error.message : "unknown",
+      };
       stableSamples = 0;
       previousCount = -1;
     }
     await owned.waitForTimeout(100);
+  }
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    try {
+      process.stderr.write(`${JSON.stringify({
+        applicationReadySettleDiagnostics: lastDiagnostic,
+      })}\n`);
+    } catch {}
   }
   throw new TypeError("application-ready page did not settle");
 }
