@@ -264,6 +264,19 @@ export class OwnedAccountPageCoordinator {
       }
       if (inspected.ok && inspected.value.target.kind === "matched") {
         const phase = authMonitorPhase(inspected.value.snapshot);
+        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+          try {
+            process.stderr.write(`${JSON.stringify({
+              accountPostSubmitStructuralDiagnostics: {
+                phase,
+                traitIds: [...inspected.value.snapshot.traitIds].sort(),
+                controlCount: inspected.value.snapshot.controlCount,
+                requiredControlCount: inspected.value.snapshot.requiredControlCount,
+                optionCount: inspected.value.snapshot.optionCount,
+              },
+            })}\n`);
+          } catch {}
+        }
         if (failedMonitorPhase === phase) {
           if (Date.now() >= deadline) break;
           await delay(Math.min(100, Math.max(1, deadline - Date.now())));
