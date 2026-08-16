@@ -661,6 +661,44 @@ test("waits through a same-page loading shell after navigation", async () => {
   assert.equal(calls.filter((call) => call === "observe:profile").length, 3);
 });
 
+test("waits through transient browser truth while Workday remounts the destination", async () => {
+  const calls: string[] = [];
+  const base = dependenciesFor([
+    truth("profile"), truth("profile"),
+    truth("resume"), truth("resume"),
+  ], calls);
+  const observe = base.observer.observe.bind(base.observer);
+  let observations = 0;
+  const result = await runApplicationPageWalk(
+    {
+      ...base,
+      observer: {
+        async observe(signal) {
+          observations += 1;
+          if (observations === 3) {
+            return {
+              ok: false,
+              error: {
+                code: "browser_target_ambiguous",
+                classifier: "workday_page",
+                primitive: "page_observation",
+                unknownLayer: "page_type",
+              },
+            } as const;
+          }
+          return observe(signal);
+        },
+      },
+    },
+    { journeyId: walkFixture.journeyId, stopAfter: "resume_verified" },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.ok && result.value.checkpoint, "resume_verified");
+  assert.equal(observations, 5);
+});
+
 test("walks distinct My Information and My Experience profile roots", async () => {
   const calls: string[] = [];
   const result = await runApplicationPageWalk(

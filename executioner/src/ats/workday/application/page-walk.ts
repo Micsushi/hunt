@@ -34,6 +34,11 @@ const classifierSet = new Set<string>(applicationClassifiers);
 const primitiveSet = new Set<string>(applicationPrimitives);
 const unknownLayerSet = new Set<string>(applicationUnknownLayers);
 const navigationLoadingShellTimeoutMs = 60_000;
+const transientDestinationObservationCodes = new Set([
+  "browser_target_ambiguous",
+  "browser_target_stale",
+  "browser_effect_uncertain",
+]);
 
 /**
  * S2-F3-T4 integration seam. T1-T3 implement only their matching handler.
@@ -358,7 +363,17 @@ async function observeDestination(
   const deadline = Date.now() + navigationLoadingShellTimeoutMs;
   while (true) {
     const observed = await dependencies.observer.observe(signal);
-    if (!observed.ok || observed.value.submitActivated) return observed;
+    if (!observed.ok) {
+      const loadingObservation = transientDestinationObservationCodes.has(
+        observed.error.code,
+      );
+      if (loadingObservation && !signal.aborted && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      return observed;
+    }
+    if (observed.value.submitActivated) return observed;
     const loadingShell = observed.value.page === from &&
       observed.value.requiredFields.length === 0;
     if (loadingShell && !signal.aborted && Date.now() < deadline) {
