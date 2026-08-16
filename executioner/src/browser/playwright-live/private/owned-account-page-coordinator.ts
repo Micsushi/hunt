@@ -201,7 +201,18 @@ export class OwnedAccountPageCoordinator {
         signal,
       );
       return true;
-    } catch {
+    } catch (error) {
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        try {
+          process.stderr.write(`${JSON.stringify({
+            accountPostSubmitMonitorDiagnostics: {
+              phase,
+              moment,
+              error: error instanceof Error ? error.message : "unknown",
+            },
+          })}\n`);
+        } catch {}
+      }
       return false;
     }
   }
