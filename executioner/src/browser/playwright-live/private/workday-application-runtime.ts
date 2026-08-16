@@ -1077,6 +1077,26 @@ async function monitorTaxonomy(
     (submitCount === 1) !== (pageName === "review") ||
     submitCount > 1
   ) {
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      try {
+        const [ariaInvalidCount, automationErrorCount, alertErrorCount] = await Promise.all([
+          page.locator('[aria-invalid="true"]:visible').count(),
+          page.locator('[data-automation-id*="error" i]:visible').count(),
+          page.locator('[role="alert"][class*="error" i]:visible').count(),
+        ]);
+        process.stderr.write(`${JSON.stringify({
+          applicationMonitorTaxonomyDenied: {
+            pageName,
+            validationErrorCount,
+            ariaInvalidCount,
+            automationErrorCount,
+            alertErrorCount,
+            submitCount,
+            submitActivated,
+          },
+        })}\n`);
+      } catch {}
+    }
     throw new TypeError("application monitor taxonomy denied");
   }
   return Object.freeze({
