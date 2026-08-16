@@ -99,7 +99,11 @@ function intentFor(
   ) {
     const option = mapVisibleOption(value, field.options);
     if (option.kind !== "matched") {
-      if (field.options.length === 0 && typeof value === "boolean") {
+      if (
+        field.options.every(({ label }) =>
+          placeholderOption.test(String(label).trim().toLowerCase())
+        ) && typeof value === "boolean"
+      ) {
         const expectedOption = boundedText(value ? "Yes" : "No");
         return Object.freeze({
           kind: "resolved",

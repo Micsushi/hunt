@@ -307,7 +307,9 @@ test("known boolean choices defer exact matching when Workday mounts options on 
   ] as const) {
     const { resolver } = resolverWith({ kind: "profile_answer_missing" });
     const result = await resolver.resolve(
-      request(field(label, "select")),
+      request(field(label, "select", [
+        { id: optionId("placeholder-only"), label: boundedText("Select One") },
+      ])),
       new AbortController().signal,
     );
     assert.equal(result.ok && result.value.kind, "resolved");
