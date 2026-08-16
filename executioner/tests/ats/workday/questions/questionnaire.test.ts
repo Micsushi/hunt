@@ -345,6 +345,40 @@ test("protected synthetic facts continue as learning defaults", async () => {
   assert.equal(calls.verified, 1);
 });
 
+test("Meredith compensation and relative wording use deterministic learning defaults", async () => {
+  const compensation = field(
+    "s2-field-compensation",
+    "Expectations on Compensation - Please state your expectations of total compensation for this position. (Please list a value and/or range)",
+    "textarea",
+  );
+  const relatives = field(
+    "s2-field-relatives",
+    "Do you have any relatives currently employed by People Inc.?",
+    "radio",
+    [
+      { id: optionId("s2-option-relatives-yes"), label: boundedText("Yes") },
+      { id: optionId("s2-option-relatives-no"), label: boundedText("No") },
+    ],
+  );
+  const { handler, calls } = dependencies();
+
+  const result = await handler.complete(
+    request([compensation, relatives]),
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok && result.value.kind, "verified");
+  if (!result.ok || result.value.kind !== "verified") return;
+  assert.deepEqual(
+    result.value.answers.map(({ questionId, provenance }) => ({ questionId, provenance })),
+    [
+      { questionId: "workday-question-desired-salary", provenance: "reviewed_catalog" },
+      { questionId: "workday-placeholder-relative-employment", provenance: "reviewed_catalog" },
+    ],
+  );
+  assert.deepEqual(calls, { resolved: 0, driven: 2, verified: 2 });
+});
+
 test("non-protected synthetic facts are independently verified without becoming owner facts", async () => {
   const source = field(
     "s2-field-application-source",

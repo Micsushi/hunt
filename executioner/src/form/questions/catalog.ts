@@ -184,6 +184,20 @@ const questionAliasCatalog = Object.freeze([
       protected: false,
     },
   ),
+  aliasEntry(
+    "workday-placeholder-relative-employment",
+    [
+      "Do you have any relatives currently employed by the company?",
+      "Are any of your relatives employed by the company?",
+    ],
+    ["radio", "select", "listbox"],
+    {
+      kind: "synthetic_placeholder",
+      value: false,
+      placeholderProvenance: "synthetic_ui_learning",
+      protected: false,
+    },
+  ),
 ] as const satisfies readonly QuestionAliasCatalogEntry[]);
 
 const questionSemanticCatalog = Object.freeze([
@@ -198,13 +212,14 @@ const questionSemanticCatalog = Object.freeze([
   { id: "s1-question-resume", keywordGroups: [["resume"], ["cv"]] },
   { id: "workday-question-highest-education", keywordGroups: [["highest", "education"], ["degree", "level"]] },
   { id: "workday-question-years-experience", keywordGroups: [["years", "experience"], ["year", "experience"]] },
-  { id: "workday-question-desired-salary", keywordGroups: [["desired", "salary"], ["salary", "expectation"], ["desired", "compensation"], ["compensation", "expectation"]] },
+  { id: "workday-question-desired-salary", keywordGroups: [["desired", "salary"], ["salary", "expectation"], ["salary", "expectations"], ["desired", "compensation"], ["compensation", "expectation"], ["compensation", "expectations"], ["expected", "compensation"]] },
   { id: "workday-question-gender-disclosure", keywordGroups: [["gender"], ["sex"]] },
   { id: "workday-question-ethnicity-disclosure", keywordGroups: [["ethnicity"], ["ethnicities"], ["race"]] },
   { id: "workday-question-veteran-disclosure", keywordGroups: [["veteran"]] },
   { id: "workday-question-disability-disclosure", keywordGroups: [["disability"], ["disabled"]] },
   { id: "workday-placeholder-prior-employment", keywordGroups: [["previously", "worked"], ["ever", "employed"], ["prior", "employment"], ["previous", "employment"]] },
   { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
+  { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
 ] as const);
 
 assertCatalogHasNoCollisions([...questionCatalog, ...questionAliasCatalog]);
@@ -359,7 +374,9 @@ function createQuestionAnswerGuide(): readonly QuestionAnswerGuideEntry[] {
     const previous = guide.get(row.id);
     const possibleAnswers = row.source?.kind === "neutral_disclosure"
       ? privacyDefaults
-      : row.id === "workday-placeholder-prior-employment" || row.behaviors.includes("checkbox")
+      : row.id === "workday-placeholder-prior-employment" ||
+          row.id === "workday-placeholder-relative-employment" ||
+          row.behaviors.includes("checkbox")
       ? Object.freeze(["Yes", "No"])
       : Object.freeze([] as string[]);
     guide.set(row.id, Object.freeze({

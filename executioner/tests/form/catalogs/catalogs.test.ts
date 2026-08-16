@@ -96,6 +96,14 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
     ["Highest Level of Education", "workday-question-highest-education"],
     ["Years of Relevant Experience", "workday-question-years-experience"],
     ["Desired Salary", "workday-question-desired-salary"],
+    [
+      "Expectations on Compensation - Please state your expectations of total compensation for this position. (Please list a value and/or range)",
+      "workday-question-desired-salary",
+    ],
+    [
+      "Do you have any relatives currently employed by People Inc.?",
+      "workday-placeholder-relative-employment",
+    ],
     ["Gender", "workday-question-gender-disclosure"],
     ["Veteran Status", "workday-question-veteran-disclosure"],
     ["How Did You Hear About Us?", "workday-placeholder-application-source"],
@@ -182,6 +190,16 @@ test("answer guide exposes types, options, and replacement-required learning def
       ],
       replaceWithOwnerAnswer: true,
     },
+  });
+  assert.deepEqual(byId.get("workday-placeholder-relative-employment"), {
+    id: "workday-placeholder-relative-employment",
+    labels: [
+      "Do you have any relatives currently employed by the company?",
+      "Are any of your relatives employed by the company?",
+    ],
+    answerTypes: ["single_select"],
+    possibleAnswers: ["Yes", "No"],
+    defaultPolicy: { kind: "visible_exact_match_only", value: false },
   });
 });
 
