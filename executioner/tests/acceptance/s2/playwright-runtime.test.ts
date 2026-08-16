@@ -384,6 +384,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
   if (!intent.ok) throw new Error("resume fixture invalid");
   let nextOperation = 0;
   const accepted: string[] = [];
+  const traces: { readonly event: string; readonly details?: object }[] = [];
   const monitored: {
     readonly moment: string;
     readonly operationId: string;
@@ -414,6 +415,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       return generatedOperationId(`operation_questionnaire_monitor_${nextOperation.toString().padStart(8, "0")}`);
     },
     timeoutMs: 1_000,
+    trace: (event, details) => traces.push({ event, ...(details === undefined ? {} : { details }) }),
     initialReviewExpected: [],
     externalMonitor: {
       async auth() {},
@@ -423,7 +425,10 @@ test("each questionnaire field mutation has its own before and readback monitor 
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
         } else if (taxonomy.fieldCount === 1) {
-          assert.deepEqual(taxonomy.questionTypes, ["legal"]);
+          assert.equal(
+            taxonomy.questionTypes.includes("legal") || taxonomy.questionTypes.includes("education"),
+            true,
+          );
           assert.equal(taxonomy.requiredFieldCount, 1);
         } else {
           assert.deepEqual(taxonomy.questionTypes, ["unknown"]);
@@ -514,6 +519,30 @@ test("each questionnaire field mutation has its own before and readback monitor 
         { moment: "after_readback", attempt: 5 },
       ],
     );
+
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-learning-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-highestEducation">
+        <label for="highestEducation">Highest Level of Education <span data-automation-id="required">*</span></label>
+        <select id="highestEducation" required><option>Select One</option></select>
+      </div>
+    </main></body></html>`);
+    const learningGap = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_learning_gap_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-learning-gap" } as never,
+    }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
+    assert.equal(learningGap.ok, false);
+    assert.equal(learningGap.error?.code, "page_incomplete");
+    assert.deepEqual(traces.filter(({ event }) => event === "questionnaire_reconciliation_blocked"), [{
+      event: "questionnaire_reconciliation_blocked",
+      details: { code: "option_no_match", candidatePresent: true },
+    }]);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-unsupported"><label>Required unsupported control</label><span data-automation-id="required">*</span><div role="slider" tabindex="0" data-hunt-field-id="unsupported-required"></div></div>

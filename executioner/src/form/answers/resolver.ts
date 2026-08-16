@@ -358,12 +358,17 @@ export function createAnswerResolver(
       if (answer.value.kind === "profile_answer_missing") {
         const generatedDefault = generatedLearningDefaultFor(canonicalQuestionId);
         if (generatedDefault !== undefined) {
-          return success(intentFor(
+          const intended = intentFor(
             field,
             canonicalQuestionId,
             generatedDefault,
             "reviewed_catalog",
-          ));
+          );
+          return success(
+            intended.kind === "resolved"
+              ? intended
+              : generatedLearningIntent(field, request.resumeArtifact) ?? intended,
+          );
         }
         return success({
           kind: "profile_answer_missing",
@@ -378,12 +383,17 @@ export function createAnswerResolver(
         if (generatedDefault === undefined) {
           return failure("protected_answer_denied");
         }
-        return success(intentFor(
+        const intended = intentFor(
           field,
           canonicalQuestionId,
           generatedDefault,
           "reviewed_catalog",
-        ));
+        );
+        return success(
+          intended.kind === "resolved"
+            ? intended
+            : generatedLearningIntent(field, request.resumeArtifact) ?? intended,
+        );
       }
       const intent = intentFor(
         field,

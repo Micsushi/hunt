@@ -557,3 +557,27 @@ test("known choices fall back to a visible learning option when the owner answer
     },
   });
 });
+
+test("missing profile defaults fall back to a visible learning option", async () => {
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const result = await resolver.resolve(request(field(
+    "Years of Experience",
+    "select",
+    [{ id: optionId("experience-visible"), label: boundedText("Less than one year") }],
+  )), new AbortController().signal);
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "resolved",
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "experience-visible",
+        expectedOption: "Less than one year",
+        provenance: "visible_option",
+      },
+    },
+  });
+});

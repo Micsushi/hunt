@@ -106,7 +106,9 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
       "workday-placeholder-relative-employment",
     ],
     ["Gender", "workday-question-gender-disclosure"],
+    ["Are you Hispanic or Latino?", "workday-question-ethnicity-disclosure"],
     ["Veteran Status", "workday-question-veteran-disclosure"],
+    ["Were you ever in the military?", "workday-question-veteran-disclosure"],
     ["How Did You Hear About Us?", "workday-placeholder-application-source"],
     [
       "Yes, I have read and consent to the terms and conditions",

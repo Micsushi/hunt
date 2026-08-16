@@ -769,7 +769,7 @@ export class OwnedWorkdayApplicationRuntime {
         taxonomy.fieldCount !== visibleFields.length ||
         taxonomy.requiredFieldCount !== requiredFieldCount
       ) throw new TypeError("questionnaire field coverage mismatch");
-      const facts = structuralObservations(snapshot.fields, request.owner.revisionId);
+      const facts = structuralObservations(snapshot.fields);
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
       const monitoredAttempts = new Map<string, number>();
@@ -839,6 +839,10 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
+        this.#trace?.("questionnaire_reconciliation_blocked", {
+          code: completed.value.code,
+          candidatePresent: completed.value.candidate !== undefined,
+        });
         const placeholderCount = completed.value.protectedPlaceholderCount;
         if (
           completed.value.placeholderProvenance !== undefined &&
@@ -1781,19 +1785,44 @@ export async function bindQuestionnaireTargets(
 
 function structuralObservations(
   fields: readonly { readonly fieldId: FieldId; readonly required: boolean; readonly options: readonly unknown[] }[],
-  revisionId: string,
 ): ReadonlyMap<string, SanitizedStructuralObservationV1> {
   const values = new Map<string, SanitizedStructuralObservationV1>();
   for (const [index, field] of fields.entries()) {
+    const ordinal = index.toString().padStart(8, "0");
+    const lineage = Object.freeze([
+      Object.freeze({
+        layer: "ats_family" as const,
+        classificationId: "classification_live_workday_ats_v1" as never,
+      }),
+      Object.freeze({
+        layer: "workday_page_type" as const,
+        classificationId: "classification_live_questionnaire_v1" as never,
+      }),
+      Object.freeze({
+        layer: "ui_behavior" as const,
+        classificationId: `classification_runtime_ui_${ordinal}` as never,
+      }),
+      Object.freeze({
+        layer: "question" as const,
+        classificationId: `classification_runtime_question_${ordinal}` as never,
+      }),
+      Object.freeze({
+        layer: "answer_type" as const,
+        classificationId: `classification_runtime_answer_${ordinal}` as never,
+      }),
+    ]);
     for (const layer of ["question", "visible_option"] as const) {
       values.set(`${field.fieldId}:${layer}`, Object.freeze({
         schemaVersion: 1,
-        observationId: `structural_observation_${index}_${layer}` as never,
+        observationId: `structural_observation_${ordinal}_${layer}` as never,
         layer,
-        sourceRevisionId: revisionId as never,
-        parentLineage: Object.freeze([]),
+        sourceRevisionId: "classification_revision_workday_entry_v1" as never,
+        parentLineage: layer === "question"
+          ? Object.freeze(lineage.slice(0, 3))
+          : lineage,
         traitIds: Object.freeze([
-          `structural_trait_required_${field.required ? "yes" : "no"}` as never,
+          "structural_trait_page_questionnaire_v1" as never,
+          `structural_trait_field_required_${field.required ? "yes" : "no"}_v1` as never,
         ]),
         observedVariantId: null,
         controlCount: 1,
