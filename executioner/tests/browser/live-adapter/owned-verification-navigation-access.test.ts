@@ -109,10 +109,10 @@ test("three-digit Workday shards stay bound through verification navigation", as
   assert.deepEqual(operation, { ok: true, value: { kind: "navigated" } });
 });
 
-test("route admission checks every query field before the browser effect", async () => {
+test("a mailbox-admitted Workday target stays navigable up to the whole-link bound", async () => {
   const harness = await openedHarness();
   let operation: unknown;
-  const oversized = "x".repeat(2_049);
+  const workdayToken = "x".repeat(3_000);
 
   const result = await harness.provider.withOwnedVerificationNavigationAccess(
     accessRequest(harness.sessionId),
@@ -120,7 +120,31 @@ test("route admission checks every query field before the browser effect", async
     async (access) => {
       operation = await access.navigateVerificationTarget({
         verificationTarget: encoded(
-          `https://approved.wd5.myworkdayjobs.invalid/verify?token=private&later=${oversized}`,
+          `https://approved.wd5.myworkdayjobs.invalid/verify?token=${workdayToken}`,
+        ),
+        approvedHost: encoded("approved.wd5.myworkdayjobs.invalid"),
+        approvedTenant: encoded("approved"),
+      }, AbortSignal.any([]));
+    },
+  );
+
+  assert.deepEqual(operation, { ok: true, value: { kind: "navigated" } });
+  assert.deepEqual(result, operation);
+  assert.equal(harness.page.gotoCount, harness.gotoCountAfterOpen + 1);
+});
+
+test("verification navigation rejects a target beyond the whole-link bound", async () => {
+  const harness = await openedHarness();
+  let operation: unknown;
+  const oversized = "x".repeat(4_097);
+
+  const result = await harness.provider.withOwnedVerificationNavigationAccess(
+    accessRequest(harness.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      operation = await access.navigateVerificationTarget({
+        verificationTarget: encoded(
+          `https://approved.wd5.myworkdayjobs.invalid/verify?token=${oversized}`,
         ),
         approvedHost: encoded("approved.wd5.myworkdayjobs.invalid"),
         approvedTenant: encoded("approved"),

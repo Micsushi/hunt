@@ -236,20 +236,14 @@ function escapePattern(value: string): string {
 }
 
 function boundedVerificationRoute(target: URL): boolean {
-  if (target.pathname.length < 2 || target.pathname.length > 2_048) return false;
+  if (target.pathname.length < 2) return false;
   const parameters = [...target.searchParams];
-  if (parameters.length > 16) return false;
   const marker = /(?:verify|verification|activate|activation|confirm|confirmation)/iu;
-  if (parameters.some(([name, value]) => name.length > 128 || value.length > 2_048)) {
-    return false;
-  }
   if (parameters.some(([name, value]) =>
     (marker.test(name) || /(?:token|code|key)/iu.test(name)) && value.length > 0
   )) return true;
   const segments = target.pathname.split("/").filter(Boolean);
-  if (segments.length > 32) return false;
   const decoded = segments.map((segment) => decodeURIComponent(segment));
   const markerIndex = decoded.findIndex((segment) => marker.test(segment));
-  return markerIndex >= 0 && markerIndex < decoded.length - 1 &&
-    decoded[markerIndex + 1]!.length <= 2_048;
+  return markerIndex >= 0 && markerIndex < decoded.length - 1;
 }
