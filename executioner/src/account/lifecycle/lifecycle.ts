@@ -695,7 +695,11 @@ export class AccountVerificationLifecycle {
       "request_password_reset",
       input.operations.requestPasswordReset ?? input.operations.postVerificationSignIn,
     );
-    if (!requested.ok) return requested;
+    if (!requested.ok) {
+      return requested.error.code === "credential_effect_uncertain"
+        ? this.#verify(input, signal, false, true)
+        : requested;
+    }
     try {
       result = parseLifecycleCredentialMutationResult(requested.value);
     } catch {

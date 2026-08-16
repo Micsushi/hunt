@@ -445,6 +445,9 @@ async function mutatePasswordReset(
       return failure("credential_mutation_denied");
     }
     emit(dependencies, postSubmitEvent(observed.value.state.kind));
+    if (observed.value.state.kind === "password_reset_request") {
+      return failure("credential_effect_uncertain");
+    }
     return observed.ok && observed.value.kind === "classified_account" &&
         observed.value.state.kind === "password_reset_email_sent"
       ? { ok: true, value: { kind: "password_reset_email_sent", attemptedFields: ["email", "password"] } }

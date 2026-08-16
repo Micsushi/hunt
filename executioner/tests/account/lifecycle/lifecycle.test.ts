@@ -717,6 +717,52 @@ test("an exact credential rejection completes password recovery and signs in", a
   ]);
 });
 
+test("an unchanged password reset page continues only after exact mailbox proof", async () => {
+  const outcomes = [
+    { ok: true, value: { kind: "password_reset_required", attemptedFields: ["email", "password"] } },
+    { ok: true, value: { kind: "password_reset_request", attemptedFields: ["email", "password"] } },
+    { ok: false, error: { code: "credential_effect_uncertain", retryable: false } },
+    { ok: true, value: { kind: "sign_in_required", attemptedFields: ["email", "password"] } },
+    { ok: true, value: { kind: "application_ready", attemptedFields: ["email", "password"] } },
+  ] as const;
+  const calls: Array<{ readonly request: unknown }> = [];
+  let outcomeIndex = 0;
+  const credential: AccountLifecycleCredentialMutationAdapter = {
+    async mutate(request) {
+      calls.push({ request });
+      return outcomes[Math.min(outcomeIndex++, outcomes.length - 1)]!;
+    },
+  };
+  const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential,
+    mailbox: mailbox.port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer(
+      "existing_account",
+      "password_reset_set",
+      "existing_account",
+      "application_ready",
+    ).port,
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(mailbox.calls.length, 1);
+  assert.deepEqual(
+    calls.map(({ request }) => (request as { readonly mode: string }).mode),
+    [
+      "sign_in",
+      "show_password_reset",
+      "request_password_reset",
+      "complete_password_reset",
+      "sign_in",
+    ],
+  );
+});
+
 test("create-to-sign-in fallback rejects an independently observed absent account", async () => {
   const credential = privateCredential(
     { kind: "sign_in_required", attemptedFields: ["email", "password"] },

@@ -307,6 +307,30 @@ test("password recovery waits through unchanged source states without repeating 
   assert.equal(fixture.traces.filter((event) => event === "post_submit_classify_retry").length, 3);
 });
 
+test("password reset request preserves an unchanged page as an uncertain external effect", async () => {
+  const fixture = accountFixture([
+    "password_reset_request",
+  ]);
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    postSubmitClassificationDelay: async () => {},
+  }).lifecycle.mutate(
+    lifecycleRequest("request_password_reset", "request_external_effect"),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_effect_uncertain", retryable: false },
+  });
+  assert.equal(
+    fixture.operations.filter((item) => item === "activate:submit_password_reset_request").length,
+    1,
+  );
+  assert.equal(fixture.traces.filter((event) => event === "post_submit_classify_retry").length, 79);
+  assert.equal(fixture.traces.at(-1), "post_submit_password_reset_request");
+});
+
 test("post-submit account-entry uncertainty settles before state-driven routing", async () => {
   const fixture = accountFixture(["existing_account"]);
   let classificationCalls = 0;
