@@ -23,6 +23,7 @@ import {
 } from "../../../ats/workday/application/resume/index.ts";
 import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
+  type ApplicationPageTruth,
   type ApplicationPageHandlerPort,
   type ApplicationPortFailure,
 } from "../../../ats/workday/application/page-walk.ts";
@@ -360,10 +361,11 @@ export class OwnedWorkdayApplicationRuntime {
             signal,
             0,
           );
-          if (
-            observed.ok && observed.value.page !== "pre_review" &&
-            observed.value.requiredFields.length === 0
-          ) {
+          const stabilizeEmptyDestination = async (): Promise<void> => {
+            if (
+              !observed.ok || observed.value.page === "pre_review" ||
+              observed.value.requiredFields.length !== 0
+            ) return;
             this.#assertAuthorized(signal);
             if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
               process.stderr.write(
@@ -385,8 +387,31 @@ export class OwnedWorkdayApplicationRuntime {
                 '{"applicationStateRecovery":"empty_destination_reload_completed"}\n',
               );
             }
+          };
+          await stabilizeEmptyDestination();
+          if (observed.ok && isReturnedNavigationSource(observed.value, input)) {
+            if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+              process.stderr.write(
+                '{"applicationStateRecovery":"returned_source_retry_started"}\n',
+              );
+            }
+            const retried = await new PlaywrightWorkdayApplicationPage(page, {
+              timeoutMs: this.#timeoutMs,
+              navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
+            }).next(input, signal);
+            if (!retried.ok) return retried;
+            observed = await waitForApplicationObservation(
+              page,
+              Math.max(this.#timeoutMs, 30_000),
+              signal,
+              0,
+            );
+            await stabilizeEmptyDestination();
           }
-          if (!observed.ok || !input.allowed.includes(observed.value.page)) {
+          if (
+            !observed.ok || !input.allowed.includes(observed.value.page) ||
+            isReturnedNavigationSource(observed.value, input)
+          ) {
             throw new TypeError("application navigation readback denied");
           }
           await this.#monitor(
@@ -1060,6 +1085,18 @@ function monitorPage(
   page: "resume" | "profile" | "questionnaire" | "pre_review",
 ): "resume" | "profile" | "questionnaire" | "review" {
   return page === "pre_review" ? "review" : page;
+}
+
+function isReturnedNavigationSource(
+  observed: ApplicationPageTruth,
+  input: {
+    readonly from: ApplicationPageTruth["page"];
+    readonly fromPageId: ApplicationPageTruth["pageId"];
+  },
+): boolean {
+  if (observed.page !== input.from || observed.pageId !== input.fromPageId) return false;
+  const lanes = observed.lanes ?? [observed.page];
+  return !(input.from === "profile" && lanes.includes("resume"));
 }
 
 function applicationMonitorPage(
