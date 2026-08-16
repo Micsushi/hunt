@@ -222,6 +222,11 @@ test("exact password-recovery pages and alerts classify as recoverable account s
       emptyInspector(),
       "password_reset_request",
     ],
+    [
+      '[data-automation-id="forgotPasswordSubmitButton"]',
+      emptyInspector(),
+      "password_reset_request",
+    ],
     ['[data-automation-id="forgotPasswordConfirmationPage"]', emptyInspector(), "password_reset_email_sent"],
     [
       '[data-automation-id="resetPasswordPage"]:has([data-automation-id="resetPasswordSubmitButton"])',

@@ -67,6 +67,8 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordConfirmationPage"]'),
+  rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordSubmitButton"]'),
+  rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordSubmitButton"]'),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
     EMAIL_SIGN_IN_CHOICE_SELECTOR,
@@ -124,6 +126,10 @@ const accountRules = Object.freeze([
     '[data-automation-id="forgotPasswordPage"]:has([data-automation-id="forgotPasswordSubmitButton"])',
   ),
   rule(
+    "structural_trait_account_password_reset_request_v1",
+    '[data-automation-id="forgotPasswordSubmitButton"]',
+  ),
+  rule(
     "structural_trait_account_password_reset_email_sent_v1",
     '[data-automation-id="forgotPasswordConfirmationPage"]',
   ),
@@ -134,6 +140,10 @@ const accountRules = Object.freeze([
   rule(
     "structural_trait_account_password_reset_set_v1",
     '[data-automation-id="resetPasswordPage"]:has([data-automation-id="resetPasswordSubmitButton"])',
+  ),
+  rule(
+    "structural_trait_account_password_reset_set_v1",
+    '[data-automation-id="resetPasswordSubmitButton"]',
   ),
 ] satisfies readonly TraitRule[]);
 
