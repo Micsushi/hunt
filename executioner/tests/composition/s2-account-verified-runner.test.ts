@@ -24,7 +24,7 @@ import { runStage2AccountVerified } from "../../src/live/runner/account-verified
 const now = "2026-08-02T02:05:29.000Z";
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 
-test("account-verified bindings share the one navigation operation with Gmail", () => {
+test("account-verified bindings share navigation and exclude pre-approval Gmail", () => {
   const operations = operationIds();
   const value = createAccountVerifiedBindings(
     ownerInputs(),
@@ -66,13 +66,13 @@ test("account-verified bindings share the one navigation operation with Gmail", 
   assert.equal(value.lifecycle.mailboxRequest, value.mailboxRequest);
   assert.equal(value.lifecycle.target, value.target);
   assert.equal(value.runner.targetHandleId, "target_ref_abcdefghijklmnop");
-  assert.equal(value.mailboxRequest.notBefore, "2026-08-02T01:05:29.000Z");
-  assert.equal(value.gmail.notBefore, "2026-08-02T01:05:29.000Z");
+  assert.equal(value.mailboxRequest.notBefore, ownerInputs().approval.approvedAt);
+  assert.equal(value.gmail.notBefore, ownerInputs().approval.approvedAt);
   assert.equal(value.mailboxRequest.notAfter, now);
   assert.equal(value.gmail.notAfter, value.mailboxRequest.notAfter);
   assert.equal(
     Date.parse(value.mailboxRequest.notAfter) - Date.parse(value.mailboxRequest.notBefore),
-    60 * 60 * 1_000,
+    Date.parse(now) - Date.parse(ownerInputs().approval.approvedAt),
   );
   assert.match(value.mailboxRequest.queryId, /^mailbox_query_/u);
   assert.notEqual(value.mailboxRequest.queryId, operations.navigateVerification);
