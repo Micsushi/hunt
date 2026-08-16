@@ -387,7 +387,13 @@ async function mutatePasswordReset(
     if (!admitted.ok) return mapBrowserFailure(admitted.error.code);
     const activated = await access.activate("show_password_reset");
     if (!activated.ok) return mapBrowserFailure(activated.error.code);
-    const observed = await classifyAfterSubmit(dependencies, request, signal);
+    const observed = await classifyAfterSubmit(
+      dependencies,
+      request,
+      signal,
+      (candidate) => candidate.kind === "existing_account" &&
+        candidate.accountFact === "password_reset_required",
+    );
     return observed.ok && observed.value.kind === "classified_account" &&
         observed.value.state.kind === "password_reset_request"
       ? { ok: true, value: { kind: "password_reset_request", attemptedFields: ["email", "password"] } }
@@ -428,7 +434,12 @@ async function mutatePasswordReset(
     if (!resolved.ok) return copyFailure(resolved);
     if (local !== undefined) return local;
     emit(dependencies, "post_submit_classify_started");
-    const observed = await classifyAfterSubmit(dependencies, request, signal);
+    const observed = await classifyAfterSubmit(
+      dependencies,
+      request,
+      signal,
+      (candidate) => candidate.kind === "password_reset_request",
+    );
     if (!observed.ok || observed.value.kind !== "classified_account") {
       emit(dependencies, "post_submit_classify_failed");
       return failure("credential_mutation_denied");
@@ -474,7 +485,12 @@ async function mutatePasswordReset(
   );
   if (!resolved.ok) return copyFailure(resolved);
   if (local !== undefined) return local;
-  const observed = await classifyAfterSubmit(dependencies, request, signal);
+  const observed = await classifyAfterSubmit(
+    dependencies,
+    request,
+    signal,
+    (candidate) => candidate.kind === "password_reset_set",
+  );
   if (!observed.ok || observed.value.kind !== "classified_account") {
     return failure("credential_mutation_denied");
   }
@@ -576,13 +592,17 @@ async function classifyAfterSubmit(
   dependencies: AccountEntryDependencies,
   request: AccountLifecycleCredentialMutationRequest,
   signal: AbortSignal,
+  unchangedState?: (
+    state: Extract<ClassifiedAccountObservation, { readonly kind: "classified_account" }>["state"],
+  ) => boolean,
 ) {
   const attempts = 80;
   let inspected = await classify(dependencies, request, signal);
   for (let attempt = 1; attempt < attempts; attempt += 1) {
     if (
       !inspected.ok ||
-      inspected.value.kind === "classified_account" ||
+      (inspected.value.kind === "classified_account" &&
+        (unchangedState === undefined || !unchangedState(inspected.value.state))) ||
       inspected.value.kind === "target_mismatch" ||
       inspected.value.kind === "posting_unavailable" ||
       (inspected.value.kind === "classification_stopped" &&

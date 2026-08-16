@@ -275,6 +275,38 @@ test("password recovery opens, requests, and sets a new password through exact c
   ]);
 });
 
+test("password recovery waits through unchanged source states without repeating effects", async () => {
+  const fixture = accountFixture([
+    { kind: "existing_account", accountFact: "password_reset_required" },
+    { kind: "existing_account", accountFact: "password_reset_required" },
+    "password_reset_request",
+    "password_reset_request",
+    "password_reset_request",
+    "password_reset_email_sent",
+    "password_reset_set",
+    "password_reset_set",
+    "existing_account",
+  ]);
+  const adapter = createAccountEntryCredentialMutationAdapter(fixture.dependencies).lifecycle;
+
+  assert.equal((await adapter.mutate(
+    lifecycleRequest("show_password_reset", "open_wait"),
+    new AbortController().signal,
+  )).ok, true);
+  assert.equal((await adapter.mutate(
+    lifecycleRequest("request_password_reset", "request_wait"),
+    new AbortController().signal,
+  )).ok, true);
+  assert.equal((await adapter.mutate(
+    lifecycleRequest("complete_password_reset", "complete_wait"),
+    new AbortController().signal,
+  )).ok, true);
+  assert.equal(fixture.operations.filter((item) => item === "activate:show_password_reset").length, 1);
+  assert.equal(fixture.operations.filter((item) => item === "activate:submit_password_reset_request").length, 1);
+  assert.equal(fixture.operations.filter((item) => item === "activate:submit_password_reset").length, 1);
+  assert.equal(fixture.traces.filter((event) => event === "post_submit_classify_retry").length, 3);
+});
+
 test("post-submit account-entry uncertainty settles before state-driven routing", async () => {
   const fixture = accountFixture(["existing_account"]);
   let classificationCalls = 0;
