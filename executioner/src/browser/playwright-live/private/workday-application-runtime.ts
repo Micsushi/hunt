@@ -345,6 +345,18 @@ export class OwnedWorkdayApplicationRuntime {
           signal,
         );
         this.#assertAuthorized(signal);
+        const navigationSource = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        if (
+          !navigationSource.ok || navigationSource.value.page !== input.from ||
+          navigationSource.value.pageId !== input.fromPageId ||
+          navigationSource.value.submitActivated ||
+          navigationSource.value.requiredFields.some(({ verification }) =>
+            verification !== "verified"
+          )
+        ) throw new TypeError("application navigation source denied");
         const advanced = await new PlaywrightWorkdayApplicationPage(page, {
           timeoutMs: this.#timeoutMs,
           navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
@@ -390,6 +402,16 @@ export class OwnedWorkdayApplicationRuntime {
           };
           await stabilizeEmptyDestination();
           if (observed.ok && isReturnedNavigationSource(observed.value, input)) {
+            observed = await waitForExactApplicationSource(
+              page,
+              navigationSource.value,
+              Math.max(this.#timeoutMs, 30_000),
+              signal,
+            );
+            if (
+              !observed.ok ||
+              !isExactVerifiedApplicationSource(observed.value, navigationSource.value)
+            ) throw new TypeError("application navigation source recovery denied");
             if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
               process.stderr.write(
                 '{"applicationStateRecovery":"returned_source_retry_started"}\n',
@@ -1068,6 +1090,41 @@ async function waitForApplicationObservation(
     latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
   }
   return latest;
+}
+
+async function waitForExactApplicationSource(
+  page: Page,
+  source: ApplicationPageTruth,
+  timeoutMs: number,
+  signal: AbortSignal,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  while (
+    !signal.aborted && Date.now() < deadline &&
+    (!latest.ok || !isExactVerifiedApplicationSource(latest.value, source))
+  ) {
+    await page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+    latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  }
+  return latest;
+}
+
+function isExactVerifiedApplicationSource(
+  observed: ApplicationPageTruth,
+  source: ApplicationPageTruth,
+): boolean {
+  if (
+    observed.page !== source.page || observed.pageId !== source.pageId ||
+    observed.submitActivated || observed.c3OwnedDuplicateRows !== 0 ||
+    JSON.stringify(observed.lanes ?? [observed.page]) !==
+      JSON.stringify(source.lanes ?? [source.page]) ||
+    observed.requiredFields.some(({ verification }) => verification !== "verified")
+  ) return false;
+  const fieldKeys = (truth: ApplicationPageTruth) => truth.requiredFields
+    .map(({ fieldId: id, page: lane }) => `${lane ?? ""}:${id}`)
+    .sort();
+  return JSON.stringify(fieldKeys(observed)) === JSON.stringify(fieldKeys(source));
 }
 
 function reviewReadbackValue(readback: BrowserReadback): string | undefined {
