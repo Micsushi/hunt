@@ -43,9 +43,16 @@ export type AccountLifecycleObservation =
             readonly kind:
               | "existing_account"
               | "create_account";
-            readonly accountFact?: "absent" | "exists";
+            readonly accountFact?: "absent" | "exists" | "password_reset_required";
           }
-        | { readonly kind: "verification_required" | "application_ready" }
+        | {
+            readonly kind:
+              | "verification_required"
+              | "password_reset_request"
+              | "password_reset_email_sent"
+              | "password_reset_set"
+              | "application_ready";
+          }
         | {
             readonly kind: "manual_intervention";
             readonly reason: "captcha" | "mfa" | "access_control";
@@ -97,6 +104,10 @@ export type AccountLifecycleCredentialMutationResult =
       readonly kind:
         | "account_absent"
         | "account_exists"
+        | "password_reset_required"
+        | "password_reset_request"
+        | "password_reset_email_sent"
+        | "password_reset_set"
         | "sign_in_required"
         | "create_account_required";
       readonly attemptedFields: readonly ["email", "password"];
@@ -111,23 +122,38 @@ export type AccountLifecycleTraceEvent =
   | "lifecycle_page_sign_in"
   | "lifecycle_page_create_account"
   | "lifecycle_page_verification_required"
+  | "lifecycle_page_password_reset_request"
+  | "lifecycle_page_password_reset_email_sent"
+  | "lifecycle_page_password_reset_set"
   | "lifecycle_page_application_ready"
   | "lifecycle_page_manual_intervention"
   | "lifecycle_action_sign_in"
   | "lifecycle_action_create_account"
+  | "lifecycle_action_password_reset_open"
+  | "lifecycle_action_password_reset_request"
+  | "lifecycle_action_password_reset_complete"
   | "lifecycle_action_verification_email_request"
   | "lifecycle_action_verification_link"
   | "lifecycle_cycle_stopped";
 
 export interface AccountLifecycleCredentialMutationAdapter {
   mutate(
-    request: CredentialMutationRequest,
+    request: AccountLifecycleCredentialMutationRequest,
     signal: AbortSignal,
   ): Promise<LivePortResult<
     AccountLifecycleCredentialMutationResult,
     CredentialMutationErrorCode
   >>;
 }
+
+export type AccountLifecycleCredentialMutationRequest =
+  Omit<CredentialMutationRequest, "mode"> & {
+    readonly mode:
+      | CredentialMutationRequest["mode"]
+      | "show_password_reset"
+      | "request_password_reset"
+      | "complete_password_reset";
+  };
 
 export interface AccountLifecycleDependencies {
   readonly credentialMutation: AccountLifecycleCredentialMutationAdapter;
@@ -158,6 +184,10 @@ export interface AccountLifecycleInput {
     readonly navigateVerification: OperationId;
     readonly postVerificationSignIn: OperationId;
     readonly postVerificationCredentialSubmit: OperationId;
+    readonly showPasswordReset?: OperationId;
+    readonly requestPasswordReset?: OperationId;
+    readonly completePasswordReset?: OperationId;
+    readonly postPasswordResetSignIn?: OperationId;
   };
 }
 

@@ -154,6 +154,73 @@ test("external monitor blocks each auth effect until the exact independent ACK",
   }
 });
 
+test("external monitor retains the complete password-recovery graph", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-password-reset-"));
+  const moments = [
+    ["account_entry", "before_mutation", "operation_password_reset_open_0001"],
+    ["password_reset_request", "after_readback", "operation_password_reset_open_0001"],
+    ["password_reset_request", "before_mutation", "operation_password_reset_request_01"],
+    ["password_reset_email_sent", "after_readback", "operation_password_reset_request_01"],
+    ["password_reset_email_sent", "before_navigation", "operation_password_reset_email_001"],
+    ["verification_navigation", "transition", "operation_password_reset_email_001"],
+    ["verification_navigation", "before_navigation", "operation_password_reset_link_0001"],
+    ["password_reset_set", "transition", "operation_password_reset_link_0001"],
+    ["password_reset_set", "before_mutation", "operation_password_reset_set_0001"],
+    ["sign_in", "after_readback", "operation_password_reset_set_0001"],
+    ["sign_in", "before_mutation", "operation_password_reset_signin_01"],
+    ["application_ready", "after_readback", "operation_password_reset_signin_01"],
+    ["application_ready", "state_observed", "operation_password_reset_state_001"],
+  ] as const;
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      now: ordinalClock(),
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: request.page === "application_ready" && request.moment === "state_observed"
+          ? "account_verified"
+          : "safe_to_continue",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: `2026-08-10T12:00:00.${String(request.ordinal * 2).padStart(3, "0")}Z`,
+      }),
+    });
+
+    for (const [page, moment, operationId] of moments) {
+      await runtime.auth(
+        fixturePage(),
+        page,
+        moment,
+        taxonomy(),
+        { operationId, attempt: 1 },
+        new AbortController().signal,
+      );
+    }
+    runtime.close();
+    const read = readStage2AuthMonitorChain(join(root, "auth-monitor"), {
+      journeyId: binding.journeyId,
+      targetHandleId: binding.targetHandleId,
+      sourceRevision: binding.sourceRevision,
+      configSha256: binding.configSha256,
+      hostSha256: digest(Buffer.from(binding.host)),
+      tenantSha256: digest(Buffer.from(binding.tenant)),
+      postingSha256: digest(Buffer.from(binding.posting)),
+      processLiveNonceSha256: binding.processLiveNonceSha256,
+      processIssuedAt: binding.processIssuedAt,
+      processCheckedAt: "2026-08-10T12:00:01.000Z",
+      processExitObservedAt: "2026-08-10T12:00:00.999Z",
+      processInstanceSha256: processInstanceSha256(),
+    });
+    assert.equal(read.classification, "account_verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("external monitor derives exact identity from the observed page URL", async () => {
   for (const url of [
     "https://other.wd5.myworkdayjobs.com/en-US/Careers/job/Business-Manager_26016513",

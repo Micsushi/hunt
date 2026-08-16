@@ -105,6 +105,23 @@ test("exact account facts are retained without treating the page default as evid
   assert.equal(defaultCreate.kind === "create_account" && defaultCreate.accountFact, undefined);
 });
 
+test("password recovery traits map to exact lifecycle states", () => {
+  const required = classifyLiveAccountState("account_entry", [
+    LIVE_ENTRY_TRAITS.account.signIn,
+    "structural_trait_account_password_reset_required_v1",
+  ]);
+  assert.equal(required.kind, "existing_account");
+  assert.equal(required.kind === "existing_account" && required.accountFact,
+    "password_reset_required");
+  for (const [trait, expected] of [
+    ["structural_trait_account_password_reset_request_v1", "password_reset_request"],
+    ["structural_trait_account_password_reset_email_sent_v1", "password_reset_email_sent"],
+    ["structural_trait_account_password_reset_set_v1", "password_reset_set"],
+  ] as const) {
+    assert.equal(classifyLiveAccountState("account_entry", [trait]).kind, expected);
+  }
+});
+
 test("misplaced or conflicting account facts are ambiguity", () => {
   assert.equal(classifyLiveAccountState("account_entry", [
     LIVE_ENTRY_TRAITS.account.create,

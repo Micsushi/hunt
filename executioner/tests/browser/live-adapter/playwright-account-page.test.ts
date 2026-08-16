@@ -41,6 +41,9 @@ const POST_SUBMIT_DESTINATION_SELECTORS = [
   '[data-automation-id="mfaChallenge"]',
   '[data-automation-id="accessDeniedPage"]',
   '[data-automation-id="securityChallenge"]',
+  '[data-automation-id="forgotPasswordPage"]',
+  '[data-automation-id="forgotPasswordConfirmationPage"]',
+  '[data-automation-id="resetPasswordPage"]',
   ':text-is("Something went wrong")',
   ':text-is("{\\"503\\":\\"service-unavailable\\"}")',
 ] as const;
@@ -453,8 +456,11 @@ test("activates each exact semantic link or button without returning page state"
   const cases = [
     ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
+    ["show_password_reset", { method: "locator", selector: '[data-automation-id="forgotPasswordLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
+    ["submit_password_reset_request", { method: "locator", selector: '[data-automation-id="forgotPasswordSubmitButton"]' }],
+    ["submit_password_reset", { method: "locator", selector: '[data-automation-id="resetPasswordSubmitButton"]' }],
   ] as const;
   const adapter = new PlaywrightAccountPageAdapter();
 
@@ -471,7 +477,8 @@ test("activates each exact semantic link or button without returning page state"
 
     assert.equal(await adapter.activate(page, action), undefined);
     assert.deepEqual(page.calls[0], expectedCall);
-    if (!action.startsWith("submit_")) assert.deepEqual(page.calls, [expectedCall]);
+    const credentialSubmit = action === "submit_sign_in" || action === "submit_create_account";
+    if (!credentialSubmit) assert.deepEqual(page.calls, [expectedCall]);
     else {
       assert.equal(page.calls.some((call) =>
         (call as { readonly selector?: string }).selector ===
@@ -481,7 +488,7 @@ test("activates each exact semantic link or button without returning page state"
     assert.equal(locator.clickCalls, 1);
     assert.equal(
       destination.waitForArguments.length > 0,
-      action.startsWith("submit_"),
+      credentialSubmit,
     );
   }
 });

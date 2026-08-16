@@ -470,7 +470,7 @@ test("exact account-exists after create switches to sign-in once", async () => {
   );
 });
 
-test("existing unverified account consumes previously sent verification mail after sign-in rejection", async () => {
+test("generic account-exists after sign-in fails closed without polling verification mail", async () => {
   const credential = privateCredential(
     { kind: "account_exists", attemptedFields: ["email", "password"] },
     { kind: "account_exists", attemptedFields: ["email", "password"] },
@@ -495,15 +495,18 @@ test("existing unverified account consumes previously sent verification mail aft
     accountIntent: "fresh_create",
   }, new AbortController().signal);
 
-  assert.equal(result.ok && result.value.kind, "account_ready");
-  assert.equal(mailbox.calls.length, 1);
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.equal(mailbox.calls.length, 0);
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["create_account", "sign_in", "sign_in"],
+    ["create_account", "sign_in"],
   );
 });
 
-test("fresh signup credential denial consumes automatically sent verification mail", async () => {
+test("fresh signup credential denial fails closed without polling verification mail", async () => {
   let mutation = 0;
   const credential: AccountLifecycleCredentialMutationAdapter = {
     async mutate() {
@@ -536,9 +539,12 @@ test("fresh signup credential denial consumes automatically sent verification ma
     accountIntent: "fresh_create",
   }, new AbortController().signal);
 
-  assert.equal(result.ok && result.value.kind, "account_ready");
-  assert.equal(mutation, 3);
-  assert.equal(mailbox.calls.length, 1);
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
+  assert.equal(mutation, 2);
+  assert.equal(mailbox.calls.length, 0);
 });
 
 test("fresh signup may land on sign-in and then reach the application", async () => {
@@ -581,7 +587,7 @@ test("fresh signup may land on sign-in and then reach the application", async ()
   ]);
 });
 
-test("fresh signup consumes an automatically sent verification email after generic sign-in rejection", async () => {
+test("fresh signup does not infer verification from a generic sign-in rejection", async () => {
   const credential = privateCredential(
     { kind: "sign_in_required", attemptedFields: ["email", "password"] },
     { kind: "account_exists", attemptedFields: ["email", "password"] },
@@ -608,17 +614,19 @@ test("fresh signup consumes an automatically sent verification email after gener
     accountIntent: "fresh_create",
   }, new AbortController().signal);
 
-  assert.equal(result.ok && result.value.kind, "account_ready");
-  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path, "verified_account");
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
+  });
   assert.equal(requester.calls.length, 0);
-  assert.equal(mailbox.calls.length, 1);
+  assert.equal(mailbox.calls.length, 0);
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
-    ["create_account", "sign_in", "sign_in"],
+    ["create_account", "sign_in"],
   );
 });
 
-test("create-to-sign-in fallback checks auto-verification once instead of cycling to signup", async () => {
+test("create-to-sign-in fallback fails closed instead of guessing auto-verification", async () => {
   const credential = privateCredential(
     { kind: "sign_in_required", attemptedFields: ["email", "password"] },
     { kind: "account_absent", attemptedFields: ["email", "password"] },
@@ -639,20 +647,74 @@ test("create-to-sign-in fallback checks auto-verification once instead of cyclin
   }, new AbortController().signal);
 
   assert.deepEqual(result, {
-    ok: true,
-    value: {
-      kind: "blocked",
-      factualOutcome: {
-        source: "mailbox_verification",
-        result: { kind: "mailbox_none" },
-      },
-    },
+    ok: false,
+    error: { code: "credential_mutation_denied", retryable: false },
   });
   assert.deepEqual(
     credential.calls.map(({ request }) => (request as { readonly mode: string }).mode),
     ["create_account", "sign_in"],
   );
   assert.equal(events.includes("lifecycle_cycle_stopped"), false);
+});
+
+test("an exact credential rejection completes password recovery and signs in", async () => {
+  const credential = privateCredential(
+    { kind: "password_reset_required", attemptedFields: ["email", "password"] },
+    { kind: "password_reset_request", attemptedFields: ["email", "password"] },
+    { kind: "password_reset_email_sent", attemptedFields: ["email", "password"] },
+    { kind: "sign_in_required", attemptedFields: ["email", "password"] },
+    { kind: "application_ready", attemptedFields: ["email", "password"] },
+  );
+  const requester = verificationEmailRequester();
+  const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const events: string[] = [];
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential.port,
+    verificationEmail: requester.port,
+    mailbox: mailbox.port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer(
+      "existing_account",
+      "password_reset_set",
+      "existing_account",
+      "application_ready",
+    ).port,
+    trace: (event) => events.push(event),
+  });
+
+  const result = await lifecycle.run(input(), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(result.ok && result.value.kind === "account_ready" && result.value.path,
+    "verified_account");
+  assert.equal(requester.calls.length, 0);
+  assert.equal(mailbox.calls.length, 1);
+  assert.deepEqual(
+    credential.calls.map(({ request }) => ({
+      mode: (request as { readonly mode: string }).mode,
+      operationId: (request as { readonly operationId: string }).operationId,
+    })),
+    [
+      { mode: "sign_in", operationId: input().operations.initialCredentialMutation },
+      { mode: "show_password_reset", operationId: input().operations.showPasswordReset },
+      { mode: "request_password_reset", operationId: input().operations.requestPasswordReset },
+      { mode: "complete_password_reset", operationId: input().operations.completePasswordReset },
+      { mode: "sign_in", operationId: input().operations.postPasswordResetSignIn },
+    ],
+  );
+  assert.deepEqual(events, [
+    "lifecycle_page_sign_in",
+    "lifecycle_action_sign_in",
+    "lifecycle_action_password_reset_open",
+    "lifecycle_action_password_reset_request",
+    "lifecycle_action_verification_link",
+    "lifecycle_page_password_reset_set",
+    "lifecycle_action_password_reset_complete",
+    "lifecycle_page_sign_in",
+    "lifecycle_action_sign_in",
+    "lifecycle_page_application_ready",
+  ]);
 });
 
 test("create-to-sign-in fallback rejects an independently observed absent account", async () => {

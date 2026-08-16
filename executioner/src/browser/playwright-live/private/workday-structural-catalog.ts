@@ -64,6 +64,9 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", WORKDAY_MODERN_SIGN_IN_SELECTOR),
   rule("structural_trait_page_account_entry_v1", WORKDAY_COMPLETE_SIGN_IN_SELECTOR),
   rule("structural_trait_page_account_entry_v1", EMAIL_SIGN_IN_CHOICE_SELECTOR),
+  rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordPage"]'),
+  rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordPage"]'),
+  rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordConfirmationPage"]'),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
     EMAIL_SIGN_IN_CHOICE_SELECTOR,
@@ -116,11 +119,35 @@ const accountRules = Object.freeze([
   rule("structural_trait_account_sign_in_v1", WORKDAY_MODERN_SIGN_IN_SELECTOR),
   rule("structural_trait_account_create_v1", '[data-automation-id="createAccountPage"]'),
   rule("structural_trait_account_create_v1", '[data-automation-id="createAccountSubmitButton"]'),
+  rule(
+    "structural_trait_account_password_reset_request_v1",
+    '[data-automation-id="forgotPasswordPage"]:has([data-automation-id="forgotPasswordSubmitButton"])',
+  ),
+  rule(
+    "structural_trait_account_password_reset_email_sent_v1",
+    '[data-automation-id="forgotPasswordConfirmationPage"]',
+  ),
+  rule(
+    "structural_trait_account_password_reset_email_sent_v1",
+    '[data-automation-id="forgotPasswordPage"]:not(:has([data-automation-id="forgotPasswordSubmitButton"]))',
+  ),
+  rule(
+    "structural_trait_account_password_reset_set_v1",
+    '[data-automation-id="resetPasswordPage"]:has([data-automation-id="resetPasswordSubmitButton"])',
+  ),
 ] satisfies readonly TraitRule[]);
 
 const accountFactRules = Object.freeze([
   rule("structural_trait_account_absent_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.absent),
   rule("structural_trait_account_exists_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.exists),
+  rule(
+    "structural_trait_account_password_reset_required_v1",
+    WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
+  ),
+  rule(
+    "structural_trait_account_password_reset_required_v1",
+    WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
+  ),
 ] satisfies readonly TraitRule[]);
 
 const challengeRules = Object.freeze([
@@ -130,10 +157,6 @@ const challengeRules = Object.freeze([
   rule("structural_trait_challenge_mfa_v1", '[data-automation-id="mfaChallenge"]'),
   rule("structural_trait_challenge_access_control_v1", '[data-automation-id="accessDeniedPage"]'),
   rule("structural_trait_challenge_access_control_v1", '[data-automation-id="securityChallenge"]'),
-  rule(
-    "structural_trait_challenge_access_control_v1",
-    WORKDAY_SIGN_IN_REJECTION_SELECTORS.passwordResetRequired,
-  ),
 ] satisfies readonly TraitRule[]);
 
 const unavailableRules = Object.freeze([
@@ -308,6 +331,10 @@ async function inspectSemanticAccount(
   const signIn = await account.inspect("submit_sign_in");
   const showSignIn = await account.inspect("show_sign_in");
   const showCreate = await account.inspect("show_create_account");
+  const submitPasswordResetRequest = await account.inspect("submit_password_reset_request");
+  const submitPasswordReset = await account.inspect("submit_password_reset");
+  if (exactActionable(submitPasswordResetRequest)) return undefined;
+  if (exactActionable(submitPasswordReset)) return undefined;
   if (!exactActionable(email) || !exactActionable(password)) return undefined;
   if (
     exactActionable(confirmation) &&

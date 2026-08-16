@@ -214,23 +214,41 @@ test("a generic visible alert does not overclaim the semantic account state", as
   ]);
 });
 
-test("an exact administrator password-reset alert is an access-control challenge", async () => {
+test("exact password-recovery pages and alerts classify as recoverable account states", async () => {
+  const cases = [
+    [PASSWORD_RESET_REQUIRED_SELECTOR, signInInspector(), "password_reset_required"],
+    [
+      '[data-automation-id="forgotPasswordPage"]:has([data-automation-id="forgotPasswordSubmitButton"])',
+      emptyInspector(),
+      "password_reset_request",
+    ],
+    ['[data-automation-id="forgotPasswordConfirmationPage"]', emptyInspector(), "password_reset_email_sent"],
+    [
+      '[data-automation-id="resetPasswordPage"]:has([data-automation-id="resetPasswordSubmitButton"])',
+      emptyInspector(),
+      "password_reset_set",
+    ],
+  ] as const;
+  for (const [selector, inspector, expected] of cases) {
   const page: WorkdayStructuralPage = {
-    locator: (selector) => ({
-      count: async () => selector === PASSWORD_RESET_REQUIRED_SELECTOR ? 1 : 0,
+      locator: (candidate) => ({
+        count: async () => candidate === selector ? 1 : 0,
       isVisible: async () => true,
     }),
   };
 
-  const result = await inspectWorkdayStructure(page, false, signInInspector());
+    const result = await inspectWorkdayStructure(page, false, inspector);
 
   assert.equal(result.kind, "snapshot");
-  assert.equal(
-    result.kind === "snapshot" && result.snapshot.traitIds.includes(
-      "structural_trait_challenge_access_control_v1",
-    ),
-    true,
-  );
+    if (result.kind !== "snapshot") continue;
+    const state = classifyLiveAccountState("account_entry", result.snapshot.traitIds);
+    assert.equal(
+      expected === "password_reset_required"
+        ? state.kind === "existing_account" && state.accountFact
+        : state.kind,
+      expected,
+    );
+  }
 });
 
 test("hidden or ambiguous administrator password-reset alerts stay unclassified", async () => {
@@ -247,7 +265,7 @@ test("hidden or ambiguous administrator password-reset alerts stay unclassified"
     assert.equal(result.kind, "snapshot");
     assert.equal(
       result.kind === "snapshot" && result.snapshot.traitIds.includes(
-        "structural_trait_challenge_access_control_v1",
+        "structural_trait_account_password_reset_required_v1",
       ),
       false,
     );
@@ -555,11 +573,15 @@ function signInInspector(): WorkdaySemanticAccountInspector {
     inspect: async (control) => ({
       cardinality: control === "password_confirmation" ||
           control === "submit_create_account" ||
+          control === "submit_password_reset_request" ||
+          control === "submit_password_reset" ||
           control === "show_sign_in"
         ? 0
         : 1,
       actionable: control !== "password_confirmation" &&
         control !== "submit_create_account" &&
+        control !== "submit_password_reset_request" &&
+        control !== "submit_password_reset" &&
         control !== "show_sign_in",
     }),
   };
@@ -568,10 +590,14 @@ function signInInspector(): WorkdaySemanticAccountInspector {
 function createInspector(): WorkdaySemanticAccountInspector {
   return {
     inspect: async (control) => ({
-      cardinality: control === "submit_sign_in" || control === "show_create_account"
+      cardinality: control === "submit_sign_in" || control === "show_create_account" ||
+          control === "show_password_reset" || control === "submit_password_reset_request" ||
+          control === "submit_password_reset"
         ? 0
         : 1,
-      actionable: control !== "submit_sign_in" && control !== "show_create_account",
+      actionable: control !== "submit_sign_in" && control !== "show_create_account" &&
+        control !== "show_password_reset" && control !== "submit_password_reset_request" &&
+        control !== "submit_password_reset",
     }),
   };
 }

@@ -19,8 +19,11 @@ export type AccountFieldName = "email" | "password" | "password_confirmation";
 export type AccountActionIntent =
   | "show_sign_in"
   | "show_create_account"
+  | "show_password_reset"
   | "submit_sign_in"
   | "submit_create_account"
+  | "submit_password_reset_request"
+  | "submit_password_reset"
   | "accept_terms"
   | "request_verification_email";
 
@@ -47,6 +50,10 @@ export type AccountEntryTraceEvent =
   | "post_submit_create_account"
   | "post_submit_account_absent"
   | "post_submit_account_exists"
+  | "post_submit_password_reset_required"
+  | "post_submit_password_reset_request"
+  | "post_submit_password_reset_email_sent"
+  | "post_submit_password_reset_set"
   | "post_submit_sign_in_required"
   | "post_submit_no_progress"
   | "post_submit_verification_required"
@@ -94,9 +101,16 @@ type AccountState = {
 } & (
   | {
       readonly kind: "existing_account" | "create_account";
-      readonly accountFact?: "absent" | "exists";
+      readonly accountFact?: "absent" | "exists" | "password_reset_required";
     }
-  | { readonly kind: "verification_required" | "application_ready" }
+  | {
+      readonly kind:
+        | "verification_required"
+        | "password_reset_request"
+        | "password_reset_email_sent"
+        | "password_reset_set"
+        | "application_ready";
+    }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
 
@@ -148,6 +162,10 @@ export type AccountLifecycleCredentialMutationResult =
       readonly kind:
         | "account_absent"
         | "account_exists"
+        | "password_reset_required"
+        | "password_reset_request"
+        | "password_reset_email_sent"
+        | "password_reset_set"
         | "sign_in_required"
         | "create_account_required";
       readonly attemptedFields: readonly ["email", "password"];
@@ -160,13 +178,22 @@ export type AccountLifecycleCredentialMutationResult =
 
 export interface AccountLifecycleCredentialMutationAdapter {
   mutate(
-    request: CredentialMutationRequest,
+    request: AccountLifecycleCredentialMutationRequest,
     signal: AbortSignal,
   ): Promise<LivePortResult<
     AccountLifecycleCredentialMutationResult,
     CredentialMutationErrorCode
   >>;
 }
+
+export type AccountLifecycleCredentialMutationRequest =
+  Omit<CredentialMutationRequest, "mode"> & {
+    readonly mode:
+      | CredentialMutationRequest["mode"]
+      | "show_password_reset"
+      | "request_password_reset"
+      | "complete_password_reset";
+  };
 
 export interface AccountEntryCredentialMutationAdapter extends CredentialMutationAdapter {
   readonly lifecycle: AccountLifecycleCredentialMutationAdapter;
@@ -176,6 +203,11 @@ export function accountStateResult(
   state: AccountState,
   attemptedFields: readonly ("email" | "password")[],
 ): CredentialMutationResult {
+  if (
+    state.kind === "password_reset_request" ||
+    state.kind === "password_reset_email_sent" ||
+    state.kind === "password_reset_set"
+  ) throw new TypeError("password reset state requires lifecycle-only projection");
   return state.kind === "manual_intervention"
     ? { kind: state.kind, reason: state.reason, attemptedFields }
     : { kind: state.kind, attemptedFields };
@@ -184,7 +216,7 @@ export function accountStateResult(
 export function accountFactResult(
   state: AccountState,
 ): {
-  readonly kind: "account_absent" | "account_exists";
+  readonly kind: "account_absent" | "account_exists" | "password_reset_required";
   readonly attemptedFields: readonly ["email", "password"];
 } | undefined {
   if (state.kind === "existing_account" && state.accountFact === "absent") {
@@ -192,6 +224,12 @@ export function accountFactResult(
   }
   if (state.kind === "create_account" && state.accountFact === "exists") {
     return { kind: "account_exists", attemptedFields: ["email", "password"] };
+  }
+  if (
+    state.kind === "existing_account" &&
+    state.accountFact === "password_reset_required"
+  ) {
+    return { kind: "password_reset_required", attemptedFields: ["email", "password"] };
   }
   return undefined;
 }

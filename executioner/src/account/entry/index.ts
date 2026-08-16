@@ -4,6 +4,7 @@ export type {
   AccountEntryDependencies,
   AccountEntryCredentialMutationAdapter,
   AccountLifecycleCredentialMutationAdapter,
+  AccountLifecycleCredentialMutationRequest,
   AccountLifecycleCredentialMutationResult,
   AccountEntryTraceEvent,
   AccountFieldName,

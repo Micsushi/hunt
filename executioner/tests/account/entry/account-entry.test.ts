@@ -14,6 +14,7 @@ import type {
   AccountActionIntent,
   AccountEntryDependencies,
   AccountFieldName,
+  AccountLifecycleCredentialMutationRequest,
   AccountPageAccess,
   ClassifiedAccountObservation,
 } from "../../../src/account/entry/index.ts";
@@ -51,6 +52,17 @@ function request(
     mode,
     credential,
     fields: ["email", "password"],
+  };
+}
+
+function lifecycleRequest(
+  mode: "show_password_reset" | "request_password_reset" | "complete_password_reset",
+  suffix: string,
+): AccountLifecycleCredentialMutationRequest {
+  return {
+    ...request(),
+    operationId: `operation_password_reset_${suffix}` as never,
+    mode,
   };
 }
 
@@ -194,6 +206,58 @@ test("post-submit classification retries transient page states without repeating
   assert.equal(fixture.operations.filter((operation) =>
     operation === "activate:submit_sign_in"
   ).length, 1);
+});
+
+test("password recovery opens, requests, and sets a new password through exact controls", async () => {
+  const fixture = accountFixture([
+    { kind: "existing_account", accountFact: "password_reset_required" },
+    "password_reset_request",
+    "password_reset_request",
+    "password_reset_email_sent",
+    "password_reset_set",
+    "existing_account",
+  ]);
+  const adapter = createAccountEntryCredentialMutationAdapter(fixture.dependencies).lifecycle;
+
+  assert.deepEqual(
+    await adapter.mutate(
+      lifecycleRequest("show_password_reset", "open_0001"),
+      new AbortController().signal,
+    ),
+    { ok: true, value: { kind: "password_reset_request", attemptedFields: ["email", "password"] } },
+  );
+  assert.deepEqual(
+    await adapter.mutate(
+      lifecycleRequest("request_password_reset", "request_01"),
+      new AbortController().signal,
+    ),
+    { ok: true, value: { kind: "password_reset_email_sent", attemptedFields: ["email", "password"] } },
+  );
+  assert.deepEqual(
+    await adapter.mutate(
+      lifecycleRequest("complete_password_reset", "complete_1"),
+      new AbortController().signal,
+    ),
+    { ok: true, value: { kind: "sign_in_required", attemptedFields: ["email", "password"] } },
+  );
+  assert.deepEqual(fixture.operations, [
+    "inspectAction:show_password_reset",
+    "activate:show_password_reset",
+    "inspectField:email",
+    "inspectAction:submit_password_reset_request",
+    "fill:email",
+    "matches:email",
+    "activate:submit_password_reset_request",
+    "inspectField:password",
+    "inspectField:password_confirmation",
+    "inspectAction:submit_password_reset",
+    "fill:password",
+    "matches:password",
+    "fill:password_confirmation",
+    "matches:password_confirmation",
+    "activate:submit_password_reset",
+  ]);
+  assert.equal(fixture.resolverCalls, 2);
 });
 
 test("post-submit account-entry uncertainty settles before state-driven routing", async () => {
@@ -833,11 +897,14 @@ type ResolvedStateKind =
   | "existing_account"
   | "create_account"
   | "verification_required"
+  | "password_reset_request"
+  | "password_reset_email_sent"
+  | "password_reset_set"
   | "application_ready";
 
 type ResolvedState = ResolvedStateKind | {
   readonly kind: "existing_account" | "create_account";
-  readonly accountFact: "absent" | "exists";
+  readonly accountFact: "absent" | "exists" | "password_reset_required";
 };
 
 function accountFixture(states: readonly ResolvedState[]) {
@@ -857,8 +924,11 @@ function accountFixture(states: readonly ResolvedState[]) {
     "password_confirmation",
     "show_sign_in",
     "show_create_account",
+    "show_password_reset",
     "submit_sign_in",
     "submit_create_account",
+    "submit_password_reset_request",
+    "submit_password_reset",
     "accept_terms",
   ] as const) controls.set(control, { cardinality: 1, actionable: true });
   const access: AccountPageAccess = {
@@ -951,7 +1021,7 @@ function accountFixture(states: readonly ResolvedState[]) {
 
 function stateObservation(
   kind: ResolvedStateKind,
-  accountFact?: "absent" | "exists",
+  accountFact?: "absent" | "exists" | "password_reset_required",
 ): Extract<ClassifiedAccountObservation, { readonly kind: "classified_account" }> {
   return {
     kind: "classified_account",

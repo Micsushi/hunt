@@ -366,6 +366,15 @@ export function authMonitorPhase(snapshot: import("./types.ts").ValueFreeOwnedPa
   if (traits.has("structural_trait_challenge_mfa_v1")) return "mfa";
   if (traits.has("structural_trait_challenge_access_control_v1")) return "access_control";
   if (traits.has("structural_trait_page_email_verification_v1")) return "verification_required";
+  if (traits.has("structural_trait_account_password_reset_request_v1")) {
+    return "password_reset_request";
+  }
+  if (traits.has("structural_trait_account_password_reset_email_sent_v1")) {
+    return "password_reset_email_sent";
+  }
+  if (traits.has("structural_trait_account_password_reset_set_v1")) {
+    return "password_reset_set";
+  }
   if (traits.has("structural_trait_page_account_entry_v1")) {
     return traits.has("structural_trait_account_sign_in_v1") ? "sign_in" : "account_entry";
   }

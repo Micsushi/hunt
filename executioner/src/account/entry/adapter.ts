@@ -1,7 +1,6 @@
 import type {
   CredentialMutationAdapter,
   CredentialMutationErrorCode,
-  CredentialMutationRequest,
   LivePortResult,
   PersistentBrowserErrorCode,
 } from "../../contracts/live/index.ts";
@@ -11,6 +10,7 @@ import {
   accountFactResult,
   type AccountEntryCredentialMutationAdapter,
   type AccountLifecycleCredentialMutationResult,
+  type AccountLifecycleCredentialMutationRequest,
   type AccountActionIntent,
   type AccountEntryDependencies,
   type AccountFieldName,
@@ -32,7 +32,7 @@ export function createAccountEntryCredentialMutationAdapter(
     readonly result: Promise<MutationResult>;
   }>();
   const lifecycle = Object.freeze({
-    mutate(request: CredentialMutationRequest, signal: AbortSignal): Promise<MutationResult> {
+    mutate(request: AccountLifecycleCredentialMutationRequest, signal: AbortSignal): Promise<MutationResult> {
       const fingerprint = JSON.stringify(request);
       const previous = operations.get(request.operationId);
       if (previous !== undefined) {
@@ -62,6 +62,10 @@ export function createAccountEntryCredentialMutationAdapter(
             settled.value.kind === "account_exists" ||
             settled.value.kind === "sign_in_required" ||
             settled.value.kind === "create_account_required" ||
+            settled.value.kind === "password_reset_required" ||
+            settled.value.kind === "password_reset_request" ||
+            settled.value.kind === "password_reset_email_sent" ||
+            settled.value.kind === "password_reset_set" ||
             settled.value.kind === "navigation_required")
         ) return failure("credential_mutation_denied");
         return settled as Awaited<ReturnType<CredentialMutationAdapter["mutate"]>>;
@@ -75,7 +79,7 @@ export function createAccountEntryCredentialMutationAdapter(
 
 async function mutateOnce(
   dependencies: AccountEntryDependencies,
-  request: CredentialMutationRequest,
+  request: AccountLifecycleCredentialMutationRequest,
   signal: AbortSignal,
 ): Promise<MutationResult> {
   if (signal.aborted) return cancelled();
@@ -111,6 +115,12 @@ async function mutateOnce(
     signal,
     async (access) => {
       emit(dependencies, "owned_access_started");
+      if (passwordResetMode(request.mode)) {
+        const reset = await mutatePasswordReset(dependencies, request, state, access, signal);
+        if (reset.ok) result = reset.value;
+        else localFailure = reset;
+        return;
+      }
       const expected = request.mode === "sign_in"
         ? "existing_account"
         : "create_account";
@@ -354,8 +364,118 @@ async function cleanupPopulated(
   return clean;
 }
 
+function passwordResetMode(
+  mode: AccountLifecycleCredentialMutationRequest["mode"],
+): mode is "show_password_reset" | "request_password_reset" | "complete_password_reset" {
+  return mode === "show_password_reset" ||
+    mode === "request_password_reset" ||
+    mode === "complete_password_reset";
+}
+
+async function mutatePasswordReset(
+  dependencies: AccountEntryDependencies,
+  request: AccountLifecycleCredentialMutationRequest,
+  state: Extract<ClassifiedAccountObservation, { readonly kind: "classified_account" }>,
+  access: AccountPageAccess,
+  signal: AbortSignal,
+): Promise<MutationResult> {
+  if (request.mode === "show_password_reset") {
+    if (
+      state.state.kind !== "existing_account" ||
+      state.state.accountFact !== "password_reset_required"
+    ) return failure("credential_mutation_denied");
+    const admitted = await uniqueActionableAction(access, "show_password_reset");
+    if (!admitted.ok) return mapBrowserFailure(admitted.error.code);
+    const activated = await access.activate("show_password_reset");
+    if (!activated.ok) return mapBrowserFailure(activated.error.code);
+    const observed = await classifyAfterSubmit(dependencies, request, signal);
+    return observed.ok && observed.value.kind === "classified_account" &&
+        observed.value.state.kind === "password_reset_request"
+      ? { ok: true, value: { kind: "password_reset_request", attemptedFields: ["email", "password"] } }
+      : failure("credential_mutation_denied");
+  }
+
+  if (request.mode === "request_password_reset") {
+    if (state.state.kind !== "password_reset_request") {
+      return failure("credential_mutation_denied");
+    }
+    const field = await uniqueActionableField(access, "email");
+    const submit = await uniqueActionableAction(access, "submit_password_reset_request");
+    if (!field.ok) return mapBrowserFailure(field.error.code);
+    if (!submit.ok) return mapBrowserFailure(submit.error.code);
+    let local: MutationFailure | undefined;
+    const resolved = await dependencies.credentials.useAccountCredentials(
+      request.credential,
+      signal,
+      async (credential) => {
+        const filled = await fillAndVerify(access, "email", credential.email);
+        if (!filled.ok) local = filled.failure;
+        else {
+          const activated = await access.activate("submit_password_reset_request");
+          if (!activated.ok) local = mapBrowserFailure(activated.error.code);
+        }
+        return { kind: "existing_account" as const, attemptedFields: ["email"] as const };
+      },
+    );
+    if (!resolved.ok) return copyFailure(resolved);
+    if (local !== undefined) return local;
+    const observed = await classifyAfterSubmit(dependencies, request, signal);
+    return observed.ok && observed.value.kind === "classified_account" &&
+        observed.value.state.kind === "password_reset_email_sent"
+      ? { ok: true, value: { kind: "password_reset_email_sent", attemptedFields: ["email", "password"] } }
+      : failure("credential_mutation_denied");
+  }
+
+  if (state.state.kind !== "password_reset_set") {
+    return failure("credential_mutation_denied");
+  }
+  for (const field of ["password", "password_confirmation"] as const) {
+    const admitted = await uniqueActionableField(access, field);
+    if (!admitted.ok) return mapBrowserFailure(admitted.error.code);
+  }
+  const submit = await uniqueActionableAction(access, "submit_password_reset");
+  if (!submit.ok) return mapBrowserFailure(submit.error.code);
+  let local: MutationFailure | undefined;
+  const resolved = await dependencies.credentials.useAccountCredentials(
+    request.credential,
+    signal,
+    async (credential) => {
+      const populated: AccountFieldName[] = [];
+      for (const field of ["password", "password_confirmation"] as const) {
+        const filled = await fillAndVerify(access, field, credential.password);
+        if (!filled.ok) {
+          local = await cleanupPopulated(access, populated, dependencies)
+            ? filled.failure
+            : failure("credential_effect_uncertain");
+          break;
+        }
+        populated.push(field);
+      }
+      if (local === undefined) {
+        const activated = await access.activate("submit_password_reset");
+        if (!activated.ok) local = mapBrowserFailure(activated.error.code);
+      }
+      return { kind: "existing_account" as const, attemptedFields: ["password"] as const };
+    },
+  );
+  if (!resolved.ok) return copyFailure(resolved);
+  if (local !== undefined) return local;
+  const observed = await classifyAfterSubmit(dependencies, request, signal);
+  if (!observed.ok || observed.value.kind !== "classified_account") {
+    return failure("credential_mutation_denied");
+  }
+  if (observed.value.state.kind === "application_ready") {
+    return { ok: true, value: { kind: "application_ready", attemptedFields: ["email", "password"] } };
+  }
+  return observed.value.state.kind === "existing_account"
+    ? { ok: true, value: { kind: "sign_in_required", attemptedFields: ["email", "password"] } }
+    : failure("credential_mutation_denied");
+}
+
 function postSubmitEvent(
   kind: "existing_account" | "create_account" | "verification_required" |
+    "password_reset_required" | "password_reset_request" |
+    "password_reset_email_sent" | "password_reset_set" |
     "application_ready" | "manual_intervention" | "account_absent" | "account_exists",
 ) {
   return `post_submit_${kind}` as const;
@@ -372,12 +492,15 @@ function emit(
   }
 }
 
-function admitRequest(request: CredentialMutationRequest): MutationFailure | undefined {
+function admitRequest(request: AccountLifecycleCredentialMutationRequest): MutationFailure | undefined {
   if (
     request.schemaVersion !== 1 ||
     request.target.schemaVersion !== 1 ||
     request.target.atsFamily !== "workday" ||
-    (request.mode !== "sign_in" && request.mode !== "create_account") ||
+    ![
+      "sign_in", "create_account", "show_password_reset",
+      "request_password_reset", "complete_password_reset",
+    ].includes(request.mode) ||
     request.fields.length !== 2 ||
     request.fields[0] !== "email" ||
     request.fields[1] !== "password" ||
@@ -412,7 +535,7 @@ function validTime(value: string): boolean {
 
 function classify(
   dependencies: AccountEntryDependencies,
-  request: CredentialMutationRequest,
+  request: AccountLifecycleCredentialMutationRequest,
   signal: AbortSignal,
 ) {
   return dependencies.classifiedAccount.inspectClassifiedAccount(
@@ -423,7 +546,7 @@ function classify(
 
 async function classifyAfterSubmit(
   dependencies: AccountEntryDependencies,
-  request: CredentialMutationRequest,
+  request: AccountLifecycleCredentialMutationRequest,
   signal: AbortSignal,
 ) {
   const attempts = 80;

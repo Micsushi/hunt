@@ -16,9 +16,16 @@ type LiveAccountStateMetadata = {
 export type ResolvedLiveAccountStateResult = LiveAccountStateMetadata & (
   | {
       readonly kind: "existing_account" | "create_account";
-      readonly accountFact?: "absent" | "exists";
+      readonly accountFact?: "absent" | "exists" | "password_reset_required";
     }
-  | { readonly kind: "verification_required" | "application_ready" }
+  | {
+      readonly kind:
+        | "verification_required"
+        | "password_reset_request"
+        | "password_reset_email_sent"
+        | "password_reset_set"
+        | "application_ready";
+    }
   | { readonly kind: "manual_intervention"; readonly reason: "captcha" | "mfa" | "access_control" }
 );
 
@@ -35,6 +42,10 @@ const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
   create_account: "classification_account_create_v1",
   account_absent: "classification_account_absent_v1",
   account_exists: "classification_account_exists_v1",
+  password_reset_required: "classification_account_password_reset_required_v1",
+  password_reset_request: "classification_account_password_reset_request_v1",
+  password_reset_email_sent: "classification_account_password_reset_email_sent_v1",
+  password_reset_set: "classification_account_password_reset_set_v1",
   verification_required: "classification_account_verify_v1",
   application_ready: "classification_account_ready_v1",
   manual_intervention_captcha: "classification_account_captcha_v1",
@@ -47,6 +58,10 @@ const ACCOUNT_CLASSIFICATION_IDS = Object.freeze({
   | "create_account"
   | "account_absent"
   | "account_exists"
+  | "password_reset_required"
+  | "password_reset_request"
+  | "password_reset_email_sent"
+  | "password_reset_set"
   | "verification_required"
   | "application_ready"
   | "manual_intervention_captcha"
@@ -79,18 +94,32 @@ export function classifyLiveAccountState(
     });
   }
   if (pageType === "account_entry") {
+    const resetRequest = traits.has("structural_trait_account_password_reset_request_v1");
+    const resetEmailSent = traits.has("structural_trait_account_password_reset_email_sent_v1");
+    const resetSet = traits.has("structural_trait_account_password_reset_set_v1");
+    const resetStates = [resetRequest, resetEmailSent, resetSet].filter(Boolean).length;
+    if (resetStates > 1) return state("account_state_ambiguous");
+    if (resetRequest) return state("password_reset_request");
+    if (resetEmailSent) return state("password_reset_email_sent");
+    if (resetSet) return state("password_reset_set");
     const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn) ||
       traits.has(EMAIL_SIGN_IN_CHOICE_TRAIT);
     const create = traits.has(LIVE_ENTRY_TRAITS.account.create);
     const absent = traits.has(LIVE_ENTRY_TRAITS.accountFact.absent);
     const exists = traits.has(LIVE_ENTRY_TRAITS.accountFact.exists);
+    const resetRequired = traits.has("structural_trait_account_password_reset_required_v1");
     if (
       (signIn && create) ||
-      (absent && exists) ||
+      ([absent, exists, resetRequired].filter(Boolean).length > 1) ||
       (absent && !signIn) ||
       (exists && !create)
     ) return state("account_state_ambiguous");
-    if (signIn) return entryState("existing_account", absent ? "absent" : undefined);
+    if (signIn) {
+      return entryState(
+        "existing_account",
+        absent ? "absent" : resetRequired ? "password_reset_required" : undefined,
+      );
+    }
     if (create) return entryState("create_account", exists ? "exists" : undefined);
     return state("account_state_unknown");
   }
@@ -103,7 +132,7 @@ export function classifyLiveAccountState(
 
 function entryState(
   kind: "existing_account" | "create_account",
-  accountFact: "absent" | "exists" | undefined,
+  accountFact: "absent" | "exists" | "password_reset_required" | undefined,
 ): ResolvedLiveAccountStateResult {
   return Object.freeze({
     kind,
@@ -113,6 +142,8 @@ function entryState(
         ? "account_absent"
         : accountFact === "exists"
           ? "account_exists"
+          : accountFact === "password_reset_required"
+            ? "password_reset_required"
           : kind
     ],
     sourceRevisionId: LIVE_ENTRY_CLASSIFICATION_REVISION_ID,
@@ -121,7 +152,9 @@ function entryState(
 
 function state(
   kind: "existing_account" | "create_account" | "verification_required" |
-    "application_ready" | "account_state_unknown" | "account_state_ambiguous",
+    "password_reset_request" | "password_reset_email_sent" |
+    "password_reset_set" | "application_ready" |
+    "account_state_unknown" | "account_state_ambiguous",
 ): LiveAccountStateResult {
   return Object.freeze({
     kind,

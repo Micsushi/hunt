@@ -225,6 +225,9 @@ export class AccountVerificationLifecycle {
       });
     }
     if (result.kind === "verification_required") return this.#verify(input, signal);
+    if (result.kind === "password_reset_required") {
+      return this.#recoverPassword(input, signal);
+    }
     if (result.kind === "navigation_required") {
       return navigationRequired("reused_account", 0, false);
     }
@@ -335,9 +338,6 @@ export class AccountVerificationLifecycle {
       input.operations.accountExistsSignIn,
     );
     if (!signedIn.ok) {
-      if (signedIn.error.code === "credential_mutation_denied") {
-        return this.#verify(input, signal, false);
-      }
       return this.#recoverCredentialEffect(input, signal, signedIn, path, 0, false);
     }
     let signInResult;
@@ -353,26 +353,38 @@ export class AccountVerificationLifecycle {
       });
     }
     if (signInResult.kind === "verification_required") return this.#verify(input, signal);
+    if (signInResult.kind === "password_reset_required") {
+      return this.#recoverPassword(input, signal);
+    }
     if (signInResult.kind === "navigation_required") {
       return navigationRequired(path, 0, false);
     }
     if (signInResult.kind === "application_ready") {
       return this.#confirmReady(input, signal, path);
     }
-    return this.#verify(input, signal, false);
+    return denied();
   }
 
   #credentialMutation(
     input: AccountLifecycleInput,
     signal: AbortSignal,
-    mode: "sign_in" | "create_account",
+    mode:
+      | "sign_in"
+      | "create_account"
+      | "show_password_reset"
+      | "request_password_reset"
+      | "complete_password_reset",
     operationId: AccountLifecycleInput["operationId"],
   ) {
-    this.#emit(
-      mode === "sign_in"
-        ? "lifecycle_action_sign_in"
-        : "lifecycle_action_create_account",
-    );
+    this.#emit(mode === "sign_in"
+      ? "lifecycle_action_sign_in"
+      : mode === "create_account"
+        ? "lifecycle_action_create_account"
+        : mode === "show_password_reset"
+          ? "lifecycle_action_password_reset_open"
+          : mode === "request_password_reset"
+            ? "lifecycle_action_password_reset_request"
+            : "lifecycle_action_password_reset_complete");
     return this.#dependencies.credentialMutation.mutate({
       schemaVersion: 1,
       journeyId: input.journeyId,
@@ -427,6 +439,7 @@ export class AccountVerificationLifecycle {
     input: AccountLifecycleInput,
     signal: AbortSignal,
     requestEmail = true,
+    passwordReset = false,
   ): Promise<AccountLifecycleResult> {
     if (requestEmail) {
       if (this.#dependencies.verificationEmail === undefined) return denied();
@@ -519,6 +532,73 @@ export class AccountVerificationLifecycle {
         reason: confirmed.value.state.reason,
       });
     }
+    if (confirmed.value.state.kind === "password_reset_set") {
+      if (!passwordReset) return denied();
+      let completed = await this.#credentialMutation(
+        input,
+        signal,
+        "complete_password_reset",
+        input.operations.completePasswordReset ?? input.operations.postVerificationSignIn,
+      );
+      if (!completed.ok) {
+        return this.#recoverCredentialEffect(
+          input,
+          signal,
+          completed,
+          "verified_account",
+          1,
+          true,
+        );
+      }
+      let completedResult;
+      try {
+        completedResult = parseLifecycleCredentialMutationResult(completed.value);
+      } catch {
+        return denied();
+      }
+      if (completedResult.kind === "application_ready") {
+        return this.#confirmReady(input, signal, "reused_account");
+      }
+      if (completedResult.kind !== "sign_in_required") return denied();
+      const signInPage = await this.#observe(input, signal);
+      if (
+        !signInPage.ok ||
+        signInPage.value.kind !== "classified_account" ||
+        signInPage.value.state.kind !== "existing_account" ||
+        signInPage.value.state.accountFact !== undefined
+      ) return denied();
+      completed = await this.#credentialMutation(
+        input,
+        signal,
+        "sign_in",
+        input.operations.postPasswordResetSignIn ??
+          input.operations.postVerificationCredentialSubmit,
+      );
+      if (!completed.ok) {
+        return this.#recoverCredentialEffect(
+          input,
+          signal,
+          completed,
+          "verified_account",
+          1,
+          true,
+        );
+      }
+      try {
+        completedResult = parseLifecycleCredentialMutationResult(completed.value);
+      } catch {
+        return denied();
+      }
+      if (completedResult.kind === "navigation_required") {
+        return navigationRequired("verified_account", 1, true);
+      }
+      if (completedResult.kind !== "application_ready") return denied();
+      const final = await this.#observe(input, signal);
+      return final.ok && final.value.kind === "classified_account" &&
+          final.value.state.kind === "application_ready"
+        ? ready("verified_account", 1, true)
+        : denied();
+    }
     if (
       confirmed.value.state.kind !== "existing_account" &&
       confirmed.value.state.kind !== "create_account"
@@ -588,6 +668,41 @@ export class AccountVerificationLifecycle {
     return final.value.kind === "classified_account" &&
         final.value.state.kind === "application_ready"
       ? ready("verified_account", 1, true)
+      : denied();
+  }
+
+  async #recoverPassword(
+    input: AccountLifecycleInput,
+    signal: AbortSignal,
+  ): Promise<AccountLifecycleResult> {
+    const opened = await this.#credentialMutation(
+      input,
+      signal,
+      "show_password_reset",
+      input.operations.showPasswordReset ?? input.operations.requestVerificationEmail,
+    );
+    if (!opened.ok) return opened;
+    let result;
+    try {
+      result = parseLifecycleCredentialMutationResult(opened.value);
+    } catch {
+      return denied();
+    }
+    if (result.kind !== "password_reset_request") return denied();
+    const requested = await this.#credentialMutation(
+      input,
+      signal,
+      "request_password_reset",
+      input.operations.requestPasswordReset ?? input.operations.postVerificationSignIn,
+    );
+    if (!requested.ok) return requested;
+    try {
+      result = parseLifecycleCredentialMutationResult(requested.value);
+    } catch {
+      return denied();
+    }
+    return result.kind === "password_reset_email_sent"
+      ? this.#verify(input, signal, false, true)
       : denied();
   }
 
@@ -666,7 +781,8 @@ function exactVerificationEmailRequestResult(
 
 function accountPageTrace(
   kind: "existing_account" | "create_account" | "verification_required" |
-    "application_ready" | "manual_intervention",
+    "password_reset_request" | "password_reset_email_sent" |
+    "password_reset_set" | "application_ready" | "manual_intervention",
 ): Parameters<NonNullable<AccountLifecycleDependencies["trace"]>>[0] {
   return kind === "existing_account"
     ? "lifecycle_page_sign_in"
@@ -717,6 +833,10 @@ function parseLifecycleCredentialMutationResult(
     if (
         (candidate.kind === "account_absent" ||
           candidate.kind === "account_exists" ||
+          candidate.kind === "password_reset_required" ||
+          candidate.kind === "password_reset_request" ||
+          candidate.kind === "password_reset_email_sent" ||
+          candidate.kind === "password_reset_set" ||
           candidate.kind === "sign_in_required" ||
           candidate.kind === "create_account_required") &&
       exactAttemptedFields(candidate.attemptedFields)

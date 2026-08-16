@@ -113,6 +113,10 @@ export interface AccountVerifiedOperationIds {
   readonly navigateVerification: OperationId;
   readonly postVerificationSignIn: OperationId;
   readonly postVerificationCredentialSubmit: OperationId;
+  readonly showPasswordReset?: OperationId;
+  readonly requestPasswordReset?: OperationId;
+  readonly completePasswordReset?: OperationId;
+  readonly postPasswordResetSignIn?: OperationId;
   readonly browserClose: OperationId;
   readonly mailboxQuery: LiveIdentifier<"mailbox_query">;
 }
@@ -168,6 +172,10 @@ export function createAccountVerifiedBindings(
       navigateVerification: operations.navigateVerification,
       postVerificationSignIn: operations.postVerificationSignIn,
       postVerificationCredentialSubmit: operations.postVerificationCredentialSubmit,
+      showPasswordReset: operations.showPasswordReset,
+      requestPasswordReset: operations.requestPasswordReset,
+      completePasswordReset: operations.completePasswordReset,
+      postPasswordResetSignIn: operations.postPasswordResetSignIn,
     }),
   });
   const gmail = Object.freeze({
@@ -1367,6 +1375,10 @@ function operationIds(): AccountVerifiedOperationIds {
     navigateVerification: next(),
     postVerificationSignIn: next(),
     postVerificationCredentialSubmit: next(),
+    showPasswordReset: next(),
+    requestPasswordReset: next(),
+    completePasswordReset: next(),
+    postPasswordResetSignIn: next(),
     browserClose: next(),
     mailboxQuery: `mailbox_query_${randomBytes(16).toString("hex")}` as never,
   });

@@ -31,12 +31,18 @@ export function lifecycleInput() {
       navigateVerification: operation("navigate"),
       postVerificationSignIn: operation("sign-in"),
       postVerificationCredentialSubmit: operation("post-verification-submit"),
+      showPasswordReset: operation("show-password-reset"),
+      requestPasswordReset: operation("request-password-reset"),
+      completePasswordReset: operation("complete-password-reset"),
+      postPasswordResetSignIn: operation("post-password-reset-sign-in"),
     },
   };
 }
 
 export type ObservedState = "application_ready" | "existing_account" |
-  "create_account" | "verification_required" | "account_absent" | "account_exists";
+  "create_account" | "verification_required" | "password_reset_request" |
+  "password_reset_email_sent" | "password_reset_set" | "account_absent" |
+  "account_exists" | "password_reset_required";
 
 export function accountObserver(
   ...states: readonly (ObservedState | ClassifiedAccountObservation)[]
@@ -59,11 +65,15 @@ export function accountObserver(
         ? "absent"
         : next === "account_exists"
           ? "exists"
+          : next === "password_reset_required"
+            ? "password_reset_required"
           : undefined;
       const kind = next === "account_absent"
         ? "existing_account"
         : next === "account_exists"
           ? "create_account"
+          : next === "password_reset_required"
+            ? "existing_account"
           : next;
       return {
         ok: true,

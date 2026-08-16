@@ -30,6 +30,7 @@ export {
 const AUTH_PAGES = new Set([
   "job_posting", "apply_choice", "email_sign_in_choice", "account_entry",
   "verification_required", "verification_navigation", "sign_in", "application_ready",
+  "password_reset_request", "password_reset_email_sent", "password_reset_set",
   "captcha", "mfa", "access_control", "unknown",
 ]);
 const AUTH_MOMENTS = new Set([
@@ -43,6 +44,7 @@ const APPLICATION_MOMENTS = new Set([
 const POSTING_FREE_MONITOR_PAGES = new Set([
   "apply_choice", "email_sign_in_choice", "account_entry", "verification_required",
   "verification_navigation", "sign_in", "application_ready", "captcha", "mfa",
+  "password_reset_request", "password_reset_email_sent", "password_reset_set",
   "access_control", "resume", "profile", "questionnaire", "review",
 ]);
 const LIVE_FILE = "external-monitor-live.json";
@@ -858,10 +860,16 @@ function legalAuthTransition(from: string, to: string): boolean {
     ],
     apply_choice: ["email_sign_in_choice", "account_entry", "application_ready"],
     email_sign_in_choice: ["account_entry", "sign_in", "application_ready"],
-    account_entry: ["verification_required", "verification_navigation", "sign_in", "application_ready"],
+    account_entry: [
+      "verification_required", "verification_navigation", "sign_in", "application_ready",
+      "password_reset_request",
+    ],
+    password_reset_request: ["password_reset_email_sent"],
+    password_reset_email_sent: ["verification_navigation"],
+    password_reset_set: ["sign_in", "application_ready"],
     verification_required: ["verification_navigation", "sign_in", "application_ready"],
-    verification_navigation: ["sign_in", "application_ready"],
-    sign_in: ["job_posting", "application_ready"],
+    verification_navigation: ["sign_in", "password_reset_set", "application_ready"],
+    sign_in: ["job_posting", "password_reset_request", "application_ready"],
     application_ready: [],
   };
   return edges[from]?.includes(to) === true;

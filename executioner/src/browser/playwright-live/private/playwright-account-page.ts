@@ -121,6 +121,9 @@ const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="mfaChallenge"]',
   '[data-automation-id="accessDeniedPage"]',
   '[data-automation-id="securityChallenge"]',
+  '[data-automation-id="forgotPasswordPage"]',
+  '[data-automation-id="forgotPasswordConfirmationPage"]',
+  '[data-automation-id="resetPasswordPage"]',
   ...WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS,
 ];
 
@@ -775,6 +778,11 @@ function semanticLocator(
         locator: semanticPage.locator('[data-automation-id="createAccountLink"]'),
         field: false,
       };
+    case "show_password_reset":
+      return {
+        locator: semanticPage.locator('[data-automation-id="forgotPasswordLink"]'),
+        field: false,
+      };
     case "submit_sign_in":
       return {
         locator: semanticPage.locator(WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR),
@@ -783,6 +791,16 @@ function semanticLocator(
     case "submit_create_account":
       return {
         locator: semanticPage.locator(WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR),
+        field: false,
+      };
+    case "submit_password_reset_request":
+      return {
+        locator: semanticPage.locator('[data-automation-id="forgotPasswordSubmitButton"]'),
+        field: false,
+      };
+    case "submit_password_reset":
+      return {
+        locator: semanticPage.locator('[data-automation-id="resetPasswordSubmitButton"]'),
         field: false,
       };
     case "accept_terms":

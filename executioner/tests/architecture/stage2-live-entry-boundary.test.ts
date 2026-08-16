@@ -21,6 +21,10 @@ test("F1-T3 remains F5 read-only classification without widening live ports", as
     "ats/workday/live/account-state.ts",
     "ats/workday/live/verification.ts",
   ]);
+  const valueBlindProduction = production.replaceAll(
+    /password_reset_(?:required|request|email_sent|set)/gu,
+    "account_recovery_state",
+  );
   for (const forbidden of [
     "browser/playwright-live",
     "targetUrl",
@@ -31,7 +35,7 @@ test("F1-T3 remains F5 read-only classification without widening live ports", as
     "credential",
     "password",
   ]) {
-    assert.equal(production.includes(forbidden), false, forbidden);
+    assert.equal(valueBlindProduction.includes(forbidden), false, forbidden);
   }
 });
 

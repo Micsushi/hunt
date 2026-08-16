@@ -20,8 +20,11 @@ export type AccountFieldName = (typeof accountFieldNames)[number];
 export const accountActionIntents = [
   "show_sign_in",
   "show_create_account",
+  "show_password_reset",
   "submit_sign_in",
   "submit_create_account",
+  "submit_password_reset_request",
+  "submit_password_reset",
   "accept_terms",
   "request_verification_email",
 ] as const;
