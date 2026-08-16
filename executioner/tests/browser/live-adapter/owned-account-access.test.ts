@@ -168,6 +168,41 @@ test("external monitoring retries exact ownership through a bounded post-submit 
   ]);
 });
 
+test("terms consent remains inside the monitored create-account mutation", async () => {
+  const context = new FakeContext();
+  const semantic = new FakeSemanticAccountPage();
+  const moments: string[] = [];
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedAccountEntry(); } },
+    profiles: new MemoryProfiles(),
+    accountPage: semantic,
+    externalMonitor: {
+      async auth(_page, _phase, moment) { moments.push(moment); },
+      async application() {},
+    },
+    ids: () => liveFixtures.session.sessionId as LiveSessionId,
+    timeoutMs: 250,
+  });
+  const opened = await provider.open(openRequest(), AbortSignal.any([]));
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.withOwnedAccountPageAccess(
+    accessRequest(opened.value.session.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      assert.deepEqual(await access.activate("accept_terms"), { ok: true, value: undefined });
+      assert.deepEqual(await access.activate("submit_create_account"), { ok: true, value: undefined });
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.deepEqual(semantic.activated, ["accept_terms", "submit_create_account"]);
+  assert.deepEqual(moments, ["before_mutation", "after_readback"]);
+});
+
 test("post-submit monitoring retries when capture races into a newly classified page", async () => {
   const context = new FakeContext();
   const semantic = new FakeSemanticAccountPage();

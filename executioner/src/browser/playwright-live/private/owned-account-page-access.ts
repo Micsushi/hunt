@@ -97,7 +97,7 @@ export class OwnedAccountPageAccessScope implements OwnedAccountPageAccess {
     if (applied.kind !== "value") return this.#uncertain();
     const ownership = await this.#revalidateAfterActivation();
     if (!ownership.ok) return this.#uncertain();
-    if (this.#monitorAfterActivation !== undefined) {
+    if (this.#monitorAfterActivation !== undefined && action !== "accept_terms") {
       const monitored = await this.#monitorAfterActivation();
       if (!monitored.ok) return this.#uncertain();
       this.#activationMonitored = true;
