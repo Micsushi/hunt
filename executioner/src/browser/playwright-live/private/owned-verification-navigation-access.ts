@@ -238,7 +238,7 @@ function escapePattern(value: string): string {
 function boundedVerificationRoute(target: URL): boolean {
   if (target.pathname.length < 2) return false;
   const parameters = [...target.searchParams];
-  const marker = /(?:verify|verification|activate|activation|confirm|confirmation)/iu;
+  const marker = /(?:verify|verification|activate|activation|confirm|confirmation|reset|password)/iu;
   if (parameters.some(([name, value]) =>
     (marker.test(name) || /(?:token|code|key)/iu.test(name)) && value.length > 0
   )) return true;

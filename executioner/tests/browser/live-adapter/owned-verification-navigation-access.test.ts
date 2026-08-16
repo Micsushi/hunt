@@ -120,7 +120,7 @@ test("a mailbox-admitted Workday target stays navigable up to the whole-link bou
     async (access) => {
       operation = await access.navigateVerificationTarget({
         verificationTarget: encoded(
-          `https://approved.wd5.myworkdayjobs.invalid/verify?token=${workdayToken}`,
+          `https://approved.wd5.myworkdayjobs.invalid/account?resetPassword=${workdayToken}`,
         ),
         approvedHost: encoded("approved.wd5.myworkdayjobs.invalid"),
         approvedTenant: encoded("approved"),

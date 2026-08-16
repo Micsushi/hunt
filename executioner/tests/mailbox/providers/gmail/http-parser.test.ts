@@ -192,6 +192,24 @@ test("admits a token carried in an explicit verification path", () => {
   );
 });
 
+test("admits a Workday password-reset query", () => {
+  const target =
+    "https://tenant.example.invalid/account?resetPassword=private-reset-value";
+  const value = message({
+    payload: {
+      ...message().payload,
+      parts: [{ body: { data: encoded(target) } }],
+    },
+  });
+
+  assert.equal(
+    new TextDecoder().decode(
+      parseGmailMessage(value, expected)?.verificationTarget,
+    ),
+    target,
+  );
+});
+
 test("an out-of-range timestamp is a stable malformed-response failure", () => {
   assert.throws(
     () => parseGmailMessage(

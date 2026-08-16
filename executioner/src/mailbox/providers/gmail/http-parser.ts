@@ -211,7 +211,7 @@ function emit(
 }
 
 function carriesVerificationToken(candidate: URL): boolean {
-  const marker = /(?:verify|verification|activate|activation|confirm|confirmation)/iu;
+  const marker = /(?:verify|verification|activate|activation|confirm|confirmation|reset|password)/iu;
   for (const [name, value] of candidate.searchParams) {
     if (marker.test(name) || /(?:token|code|key)/iu.test(name)) {
       if (value.length > 0) return true;
