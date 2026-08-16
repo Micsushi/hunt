@@ -383,6 +383,39 @@ test("navigation rejects a transient destination that falls back into loading", 
   });
 });
 
+test("navigation waits through a delayed Workday fallback before accepting the destination", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <div data-automation-id="applyFlowPage">
+        <main id="source" data-automation-id="applyFlowMyInfoPage"><input required value="ready"></main>
+        <footer><button id="next">Save and Continue</button></footer>
+      </div>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.querySelector('[data-automation-id="applyFlowPage"]').innerHTML =
+            '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          setTimeout(() => {
+            document.querySelector('[data-automation-id="applyFlowPage"]').innerHTML =
+              '<main data-automation-id="applyFlowLoadingPage"></main>';
+          }, 1200);
+          setTimeout(() => {
+            document.querySelector('[data-automation-id="applyFlowPage"]').innerHTML =
+              '<main data-automation-id="applyFlowMyExpPage"><input required value="ready"></main>';
+          }, 1700);
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 50,
+      navigationSettleTimeoutMs: 5_000,
+    });
+    const started = Date.now();
+    const result = await adapter.next(request("profile", ["profile"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+    assert.ok(Date.now() - started >= 4_000);
+  });
+});
+
 test("navigation rejects duplicate actionable sticky-footer controls", async () => {
   await withPage(async (page) => {
     await page.setContent(`

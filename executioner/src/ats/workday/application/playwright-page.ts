@@ -52,6 +52,7 @@ interface BrowserApplicationAmbiguity {
     readonly visible: boolean;
   }[];
 }
+const destinationStabilityWindowMs = 3_000;
 export class PlaywrightWorkdayApplicationPage {
   readonly #page: Page;
   readonly #timeoutMs: number;
@@ -315,7 +316,10 @@ export class PlaywrightWorkdayApplicationPage {
     candidate: BrowserApplicationSnapshot,
     signal: AbortSignal,
   ): Promise<BrowserApplicationSnapshot | undefined> {
-    const deadline = Date.now() + Math.min(1_000, this.#navigationSettleTimeoutMs);
+    const deadline = Date.now() + Math.min(
+      destinationStabilityWindowMs,
+      this.#navigationSettleTimeoutMs,
+    );
     let confirmed = candidate;
     while (Date.now() < deadline) {
       await this.#page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
