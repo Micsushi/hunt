@@ -43,6 +43,7 @@ export class WindowsPinnedEnvGmailImapSealer {
     let mailboxEmail: Uint8Array | undefined;
     let mailboxPassword: Uint8Array | undefined;
     let bundle: Uint8Array | undefined;
+    let framedBundle: Uint8Array | undefined;
     try {
       mailboxEmail = uniqueValue(source, emailPrefix, 320);
       mailboxPassword = uniqueValue(source, passwordPrefix, 4_096);
@@ -81,7 +82,8 @@ export class WindowsPinnedEnvGmailImapSealer {
         verificationTtlSeconds: request.binding.verificationTtlSeconds,
       } as const;
       bundle = new TextEncoder().encode(JSON.stringify(value));
-      return await this.#bridge.protect(bundle, request.gmailMetadata, signal);
+      framedBundle = frameOneValue(bundle);
+      return await this.#bridge.protect(framedBundle, request.gmailMetadata, signal);
     } catch (error) {
       throw new Error(
         signal.aborted ? "Gmail IMAP sealing cancelled" : "Gmail IMAP sealing failed",
@@ -95,8 +97,17 @@ export class WindowsPinnedEnvGmailImapSealer {
       mailboxEmail?.fill(0);
       mailboxPassword?.fill(0);
       bundle?.fill(0);
+      framedBundle?.fill(0);
     }
   }
+}
+
+function frameOneValue(value: Readonly<Uint8Array>): Uint8Array {
+  const output = Buffer.allocUnsafe(8 + value.byteLength);
+  output.writeUInt32LE(1, 0);
+  output.writeUInt32LE(value.byteLength, 4);
+  output.set(value, 8);
+  return output;
 }
 
 async function readPinnedSource(path: string, expected: Uint8Array): Promise<Uint8Array> {
