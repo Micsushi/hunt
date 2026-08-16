@@ -351,10 +351,15 @@ export class OwnedWorkdayApplicationRuntime {
           input, signal,
         );
         if (advanced.ok) {
-          const observed = await new PlaywrightWorkdayApplicationPage(
+          // Workday can expose the persisted destination and then remount its
+          // owned loading shell. Stabilize that known state before publishing
+          // transition evidence; this recovery performs at most one reload.
+          const observed = await waitForApplicationObservation(
             page,
-            { timeoutMs: this.#timeoutMs },
-          ).observe(signal);
+            Math.max(this.#timeoutMs, 30_000),
+            signal,
+            0,
+          );
           if (!observed.ok || !input.allowed.includes(observed.value.page)) {
             throw new TypeError("application navigation readback denied");
           }
@@ -968,10 +973,11 @@ async function waitForApplicationObservation(
   page: Page,
   timeoutMs: number,
   signal: AbortSignal,
+  reloadDelayMs?: number,
 ) {
   const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
-  const reloadAt = startedAt + Math.min(30_000, Math.floor(timeoutMs / 2));
+  const reloadAt = startedAt + (reloadDelayMs ?? Math.min(30_000, Math.floor(timeoutMs / 2)));
   let reloaded = false;
   let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
   while (!latest.ok && Date.now() < deadline) {
