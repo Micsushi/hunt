@@ -381,22 +381,22 @@ export class OwnedWorkdayApplicationRuntime {
             this.#assertAuthorized(signal);
             if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
               process.stderr.write(
-                '{"applicationStateRecovery":"empty_destination_reload_started"}\n',
+                '{"applicationStateRecovery":"empty_destination_settle_started"}\n',
               );
             }
-            await page.reload({
-              waitUntil: "domcontentloaded",
-              timeout: Math.max(this.#timeoutMs, 30_000),
-            });
+            // The empty destination is a client-side preview while Workday's
+            // save request is still in flight. Let the expected loading
+            // remount appear, then give that request its full bounded window
+            // before the observer's single owned-shell reload.
+            await page.waitForTimeout(10_000);
             observed = await waitForApplicationObservation(
               page,
-              Math.max(this.#timeoutMs, 30_000),
+              Math.max(this.#timeoutMs, 90_000),
               signal,
-              0,
             );
             if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
               process.stderr.write(
-                '{"applicationStateRecovery":"empty_destination_reload_completed"}\n',
+                '{"applicationStateRecovery":"empty_destination_settle_completed"}\n',
               );
             }
           };
