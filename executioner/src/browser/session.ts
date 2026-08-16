@@ -237,7 +237,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     let effectStarted = false;
     const effect = async (upload?: Uint8Array) => {
       effectStarted = true;
-      return applyMutation(active.page, target, mutation, upload, Math.min(500, this.#timeoutMs));
+      return applyMutation(active.page, target, mutation, upload, Math.min(5_000, this.#timeoutMs));
     };
     const action = mutation.kind === "upload"
       ? useResumeArtifactUpload<"applied" | "ambiguous" | "invalid", never>(

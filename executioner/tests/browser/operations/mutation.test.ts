@@ -290,7 +290,7 @@ test("opens a Workday prompt button before requiring its lazily mounted option",
       </div>
       <script>
         const button = document.querySelector('#authorization');
-        button.addEventListener('click', () => {
+        button.addEventListener('click', () => setTimeout(() => {
           const options = document.createElement('div');
           options.innerHTML = '<div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div>';
           options.addEventListener('click', (event) => {
@@ -301,7 +301,7 @@ test("opens a Workday prompt button before requiring its lazily mounted option",
             options.remove();
           });
           document.body.append(options);
-        }, { once: true });
+        }, 750), { once: true });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
