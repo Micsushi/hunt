@@ -454,6 +454,24 @@ test("navigation reports a validation downgrade instead of claiming a transition
   });
 });
 
+test("navigation does not compare required-field state across physical Workday pages", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <input required data-hunt-field-id="shared-field" value="ready">
+        <button id="next">Next</button>
+      </main>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.body.innerHTML = '<main data-automation-id="applyFlowMyExpPage"><input type="file" required data-automation-id="file-upload-input-ref" data-hunt-field-id="resume-file"><input required data-hunt-field-id="shared-field"></main>';
+        });
+      </script>
+    `);
+    const result = await application(page).next(request("profile", ["resume"]), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
 test("hidden DOM churn is not accepted as transition evidence", async () => {
   await withPage(async (page) => {
     await page.setContent(`

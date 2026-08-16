@@ -395,6 +395,11 @@ function hasValidationDowngrade(
   before: BrowserApplicationSnapshot,
   after: BrowserApplicationSnapshot,
 ): boolean {
+  if (
+    after.page !== before.page ||
+    after.rootSelector !== before.rootSelector ||
+    after.transitionKey !== before.transitionKey
+  ) return false;
   const beforeFields = new Map(before.requiredFields.map((item) => [
     `${item.page ?? ""}:${item.fieldId}`,
     item.verification,
