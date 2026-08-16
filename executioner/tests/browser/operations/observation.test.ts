@@ -93,6 +93,40 @@ test("treats a nonempty aria-invalid Workday draft as needing reconciliation", a
   }
 });
 
+test("observes a Workday prompt button as a required single-select field", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed01") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-authorization">
+        <label>Are you authorized to work in the U.S.?</label>
+        <span data-automation-id="required">*</span>
+        <button type="button" aria-haspopup="listbox" data-hunt-target-token="target-authorization">Yes</button>
+        <div hidden>
+          <div data-automation-id="promptOption">Yes</div>
+          <div data-automation-id="promptOption">No</div>
+        </div>
+      </div>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error(`observe failed: ${observed.error.code}`);
+    assert.deepEqual(observed.value.targets, [{
+      token: "target-authorization",
+      name: "Are you authorized to work in the U.S.?",
+      required: true,
+      control: { kind: "select", element: "listbox", options: ["Yes", "No"] },
+      state: { visibility: "visible", enabled: true, actionable: true },
+      readback: { kind: "selected", option: "Yes" },
+    }]);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("rejects overbound structural strings and readbacks without fabricating prefixes", async () => {
   const cases = [
     {

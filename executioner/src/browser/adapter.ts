@@ -38,7 +38,7 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
-  readonly interaction?: "owned-popup" | "composite-date";
+  readonly interaction?: "owned-popup" | "field-popup" | "composite-date";
 }
 
 export interface ResolvedBrowserTarget extends RawControl {
@@ -275,6 +275,16 @@ export async function applyMutation(
       await locator.selectOption({ label: mutation.option }, { timeout: timeoutMs });
       return "applied";
     }
+    if (target.interaction === "field-popup") {
+      await locator.click({ timeout: timeoutMs });
+      const exact = await waitForExactFieldPopupOption(page, mutation.option, timeoutMs);
+      if (exact.count !== 1 || exact.locator === undefined) {
+        await locator.press("Escape", { timeout: timeoutMs }).catch(() => undefined);
+        return exact.count === 0 ? "invalid" : "ambiguous";
+      }
+      await exact.locator.click({ timeout: timeoutMs });
+      return "applied";
+    }
     let optionOwner = target.interaction === "owned-popup"
       ? await ownedPopup(page, locator)
       : locator;
@@ -388,7 +398,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     const selectedPopupLabel = (element: Element): string => {
       const declared = normalize(element.getAttribute("aria-valuetext"));
       if (declared.length > 0) return declared;
-      const field = element.closest('[data-automation-id="formField"]');
+      const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
       const selected = field === null
         ? []
         : [...field.querySelectorAll('[data-automation-id="selectedItem"]')]
@@ -397,13 +407,24 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       if (selected.length === 1) return selected[0]!;
       const popupSelected = [...(ownedListbox(element)?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])]
         .map((item) => normalize(item.textContent)).filter(Boolean);
-      return popupSelected.length === 1 ? popupSelected[0]! : "";
+      if (popupSelected.length === 1) return popupSelected[0]!;
+      const buttonText = element instanceof HTMLButtonElement || element.getAttribute("role") === "button"
+        ? normalize(element.textContent)
+        : "";
+      return /^(?:select|select one|choose|choose one)$/iu.test(buttonText) ? "" : buttonText;
+    };
+    const fieldPopupOptions = (element: Element): string[] => {
+      const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
+      if (field === null) return [];
+      return [...new Set([...field.querySelectorAll(
+        '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+      )].map((option) => normalize(option.textContent)).filter(Boolean))];
     };
     const isMultiSelect = (element: Element): boolean => {
       if (element instanceof HTMLSelectElement && element.multiple) return true;
       if (element.getAttribute("aria-multiselectable") === "true") return true;
       if (ownedListbox(element)?.getAttribute("aria-multiselectable") === "true") return true;
-      const field = element.closest('[data-automation-id="formField"]');
+      const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
       return (field?.querySelectorAll('[data-automation-id="selectedItem"]').length ?? 0) > 1;
     };
     const compositeDateReadback = (element: Element): BrowserReadback => {
@@ -434,19 +455,28 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
-      let interaction: "owned-popup" | "composite-date" | undefined;
+      let interaction: "owned-popup" | "field-popup" | "composite-date" | undefined;
       if (element.getAttribute("data-automation-id") === "dateSection") {
         control = { kind: "date", element: "input" };
         readback = compositeDateReadback(element);
         interaction = "composite-date";
-      } else if (element.getAttribute("role") === "combobox") {
-        if (ownedListboxId(element) === undefined || isMultiSelect(element)) return [];
-        const options = [...(ownedListbox(element)?.querySelectorAll("[role=option]") ?? [])]
-          .map((option) => normalize(option.textContent)).filter(Boolean) as never[];
-        control = { kind: "select", element: "listbox", options };
+      } else if (
+        element.getAttribute("role") === "combobox" ||
+        element.getAttribute("aria-haspopup") === "listbox"
+      ) {
+        if (isMultiSelect(element)) return [];
+        const popupOwnerId = ownedListboxId(element);
         const selected = selectedPopupLabel(element);
+        const popupOptions = [...(ownedListbox(element)?.querySelectorAll("[role=option]") ?? [])]
+          .map((option) => normalize(option.textContent)).filter(Boolean);
+        const options = [...new Set([
+          ...popupOptions,
+          ...fieldPopupOptions(element),
+          ...(selected.length > 0 ? [selected] : []),
+        ])] as never[];
+        control = { kind: "select", element: "listbox", options };
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
-        interaction = "owned-popup";
+        interaction = popupOwnerId === undefined ? "field-popup" : "owned-popup";
       } else if (element instanceof HTMLFieldSetElement) {
         const radios = [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
         if (radios.length === 0) return [];
@@ -515,6 +545,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         : !enabled
           ? { visibility: "visible", enabled: false, actionable: false }
           : { visibility: "visible", enabled: true, actionable: true };
+      const requiredOwner = element.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
       return [{
         index,
         declaredToken: normalize(element.getAttribute("data-hunt-target-token")),
@@ -523,7 +556,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           element.getAttribute("aria-required") === "true" ||
           (element instanceof HTMLFieldSetElement &&
             [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
-              .some((radio) => radio.required)),
+              .some((radio) => radio.required)) ||
+          (requiredOwner !== null && requiredOwner.querySelector(
+            '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+          ) !== null),
         control,
         state,
         readback,
@@ -596,6 +632,40 @@ async function waitForExactOwnedOption(
     exact = await exactOwnedOption(owner, option);
   }
   return exact;
+}
+
+async function waitForExactFieldPopupOption(
+  page: Page,
+  option: string,
+  timeoutMs: number,
+): Promise<{ readonly count: number; readonly locator?: Locator }> {
+  const candidates = page.locator(
+    '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+  );
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const exact = await candidates.evaluateAll((elements, expected) => {
+      const normalize = (value: string | null | undefined): string =>
+        (value ?? "").replace(/\s+/gu, " ").trim();
+      return elements.map((element, index) => ({
+        index,
+        exact: normalize(element.textContent) === expected,
+        leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
+        visible: element instanceof HTMLElement && element.getClientRects().length > 0 &&
+          getComputedStyle(element).display !== "none" &&
+          getComputedStyle(element).visibility !== "hidden",
+      })).filter(({ exact, visible }) => exact && visible);
+    }, option);
+    const leaves = exact.filter(({ leaf }) => leaf);
+    const matches = leaves.length > 0 ? leaves : exact;
+    if (matches.length > 0 || Date.now() >= deadline) {
+      return {
+        count: matches.length,
+        ...(matches.length === 1 ? { locator: candidates.nth(matches[0]!.index) } : {}),
+      };
+    }
+    await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
 }
 
 function bounded(value: string) {

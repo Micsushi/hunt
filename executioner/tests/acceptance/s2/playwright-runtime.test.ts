@@ -355,7 +355,26 @@ test("each questionnaire field mutation has its own before and readback monitor 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage"><label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label></main></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
+    <div data-automation-id="formField-authorization"><label>Are you legally authorized to work in this country?</label><span data-automation-id="required">*</span><button type="button" aria-haspopup="listbox">Yes</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
+    <div data-automation-id="formField-sponsorship"><label>Will you now or in the future require sponsorship?</label><span data-automation-id="required">*</span><button type="button" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
+    <label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label>
+    <div data-automation-id="formField-relatives"><label>Do you have any relatives currently employed by the company?</label><span data-automation-id="required">*</span><button type="button" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
+    <script>
+      document.querySelectorAll('button[aria-haspopup="listbox"]').forEach((button) => {
+        const field = button.closest('[data-automation-id^="formField-"]');
+        const options = field.querySelector('.options');
+        button.addEventListener('click', () => { options.hidden = false; });
+        options.addEventListener('click', (event) => {
+          const option = event.target.closest('[data-automation-id="promptOption"]');
+          if (option === null) return;
+          button.textContent = option.textContent.trim();
+          button.dataset.committed = 'true';
+          options.hidden = true;
+        });
+      });
+    </script>
+  </main></body></html>`);
   const artifact = resumeArtifact();
   const intent = createWorkdayResumeFileIntent({
     artifactId: artifact.resumeId,
@@ -364,6 +383,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
   });
   if (!intent.ok) throw new Error("resume fixture invalid");
   let nextOperation = 0;
+  const accepted: string[] = [];
   const monitored: { readonly moment: string; readonly operationId: string }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
@@ -384,7 +404,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
         sensitiveValues: ["Exact configured interest statement."],
       },
     } as never,
-    acceptances: { record() {} },
+    acceptances: { record(value) { accepted.push(value.checkpoint); } },
     nextOperationId: () => {
       nextOperation += 1;
       return generatedOperationId(`operation_questionnaire_monitor_${nextOperation.toString().padStart(8, "0")}`);
@@ -395,7 +415,14 @@ test("each questionnaire field mutation has its own before and readback monitor 
       async auth() {},
       async application(_page, _pageName, moment, taxonomy, event) {
         monitored.push({ moment, operationId: event.operationId });
-        assert.deepEqual(taxonomy.questionTypes, ["narrative"]);
+        if (taxonomy.fieldCount === 4) {
+          assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
+          assert.equal(taxonomy.requiredFieldCount, 4);
+        } else {
+          assert.deepEqual(taxonomy.questionTypes, ["unknown"]);
+          assert.equal(taxonomy.fieldCount, 0);
+          assert.equal(taxonomy.requiredFieldCount, 0);
+        }
         assert.equal(taxonomy.submitPresent, false);
       },
     },
@@ -426,17 +453,37 @@ test("each questionnaire field mutation has its own before and readback monitor 
 
     assert.equal((result as { ok: boolean }).ok, true);
     assert.equal(await page.locator("textarea").inputValue(), "Exact configured interest statement.");
+    assert.equal(await page.locator('button[data-committed="true"]').count(), 3);
     assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),
       ["state_observed"],
     );
     const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
     const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(operations.length, 1);
-    assert.deepEqual(
-      fieldEvents.filter(({ operationId }) => operationId === operations[0]).map(({ moment }) => moment),
-      ["before_mutation", "after_readback"],
-    );
+    assert.equal(operations.length, 4);
+    for (const operationId of operations) {
+      assert.deepEqual(
+        fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
+        ["before_mutation", "after_readback"],
+      );
+    }
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
+
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-unsupported"><label>Required unsupported control</label><span data-automation-id="required">*</span><div role="slider" tabindex="0" data-hunt-field-id="unsupported-required"></div></div>
+    </main></body></html>`);
+    await assert.rejects(runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_monitor_gap_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
+    }, new AbortController().signal), /questionnaire field coverage mismatch/u);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
@@ -742,6 +789,8 @@ test("application authority expiring during ACK permits no reconcile, navigation
     const page = await context.newPage();
     const review = pageKind === "pre_review"
       ? '<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button>Submit application</button></main>'
+      : pageKind === "questionnaire"
+      ? '<main data-automation-id="applyFlowApplicationQuestionsPage"><label>Question<textarea required></textarea></label></main>'
       : '<main data-automation-id="applyFlowMyInfoPage"><button id="effect">Next</button><input type="file" data-automation-id="file-upload-input-ref"><textarea></textarea></main>';
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-${pageKind}" data-hunt-submit-activated="false"><body data-hunt-application-page="${pageKind}">${review}<script>window.effectCount=0;document.querySelector('#effect')?.addEventListener('click',()=>window.effectCount++);window.addEventListener('beforeunload',()=>window.effectCount++);</script></body></html>`);
     let current = "2026-08-05T12:00:00.000Z";

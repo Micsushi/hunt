@@ -520,6 +520,7 @@ function readApplicationSnapshot(
     '[role="checkbox"]',
     '[tabindex]:not([tabindex="-1"])',
     'button[data-automation-id="sourcePrompt"]',
+    'button[aria-haspopup="listbox"]',
     '[aria-required="true"]',
   ].join(", ");
   const candidates = [...new Set(root.querySelectorAll<HTMLElement>(candidateSelector))]

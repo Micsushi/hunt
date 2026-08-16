@@ -741,6 +741,19 @@ export class OwnedWorkdayApplicationRuntime {
       const snapshot = createSemanticSnapshot(
         { kind: "workday", page: "questionnaire" }, discoverFields(observed.value.targets),
       );
+      const [application, taxonomy] = await Promise.all([
+        new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal),
+        monitorTaxonomy(page, monitorPageName),
+      ]);
+      const visibleFields = snapshot.fields.filter(({ state }) => state !== "hidden");
+      const requiredFieldCount = visibleFields.filter(({ required }) => required).length;
+      if (
+        visibleFields.length === 0 ||
+        !application.ok || application.value.page !== "questionnaire" ||
+        application.value.requiredFields.length !== requiredFieldCount ||
+        taxonomy.fieldCount !== visibleFields.length ||
+        taxonomy.requiredFieldCount !== requiredFieldCount
+      ) throw new TypeError("questionnaire field coverage mismatch");
       const facts = structuralObservations(snapshot.fields, request.owner.revisionId);
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
@@ -1012,6 +1025,84 @@ function monitorTitles(
   return new Set(["Application Questions", "Voluntary Disclosures"]);
 }
 
+async function monitorQuestionnaireCoverage(page: Page): Promise<{
+  readonly fieldCount: number;
+  readonly requiredFieldCount: number;
+  readonly typeCounts: Readonly<Record<string, number>>;
+} | null> {
+  return page.evaluate(() => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    const roots = [
+      '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
+      '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
+      '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+      '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+    ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
+      .filter(visible)
+      .filter((candidate, _index, all) => all.every((root) =>
+        candidate === root || candidate.contains(root)
+      ));
+    if (roots.length !== 1) return null;
+    const controls = [...new Set(roots[0]!.querySelectorAll<HTMLElement>(
+      'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
+        '[role="listbox"], [role="radio"], [role="checkbox"], ' +
+        'button[aria-haspopup="listbox"]',
+    ))].filter((control) => {
+      if (!visible(control) || control.hasAttribute("disabled") ||
+          control.getAttribute("aria-disabled") === "true") return false;
+      if (control instanceof HTMLFieldSetElement) {
+        return control.querySelector('input[type="radio"], [role="radio"]') !== null;
+      }
+      if (
+        (control instanceof HTMLInputElement && control.type === "radio" ||
+          control.getAttribute("role") === "radio") &&
+        control.closest("fieldset") !== null
+      ) return false;
+      return true;
+    });
+    const typeCounts: Record<string, number> = {};
+    const requiredMarker =
+      '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]';
+    let requiredFieldCount = 0;
+    for (const control of controls) {
+      let type = "text";
+      if (control instanceof HTMLTextAreaElement) type = "textarea";
+      else if (control instanceof HTMLSelectElement ||
+          control.getAttribute("role") === "combobox" ||
+          control.getAttribute("role") === "listbox" ||
+          control.getAttribute("aria-haspopup") === "listbox") type = "select";
+      else if (control instanceof HTMLFieldSetElement ||
+          control instanceof HTMLInputElement && control.type === "radio" ||
+          control.getAttribute("role") === "radio") type = "radio";
+      else if (control instanceof HTMLInputElement && control.type === "checkbox" ||
+          control.getAttribute("role") === "checkbox") type = "checkbox";
+      else if (control instanceof HTMLInputElement && control.type === "tel") type = "phone";
+      else if (control instanceof HTMLInputElement && control.type === "number") type = "number";
+      else if (control instanceof HTMLInputElement && control.type === "date") type = "date";
+      else if (control instanceof HTMLInputElement && control.type === "file") type = "file_upload";
+      typeCounts[type] = (typeCounts[type] ?? 0) + 1;
+
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      if (
+        control.hasAttribute("required") || control.getAttribute("aria-required") === "true" ||
+        control instanceof HTMLFieldSetElement &&
+          [...control.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+            .some((radio) => radio.required) ||
+        field !== null && field.querySelector(requiredMarker) !== null
+      ) requiredFieldCount += 1;
+    }
+    return { fieldCount: controls.length, requiredFieldCount, typeCounts };
+  });
+}
+
 async function monitorTaxonomy(
   page: Page,
   pageName: "resume" | "profile" | "questionnaire" | "review",
@@ -1025,15 +1116,23 @@ async function monitorTaxonomy(
     ["phone", 'input[type="tel"]:visible'],
     ["number", 'input[type="number"]:visible'],
     ["textarea", "textarea:visible"],
-    ["select", "select:visible, [role=combobox]:visible"],
+    ["select", 'select:visible, [role=combobox]:visible, [aria-haspopup="listbox"]:visible'],
     ["radio", 'input[type="radio"]:visible, [role=radio]:visible'],
     ["checkbox", 'input[type="checkbox"]:visible, [role=checkbox]:visible'],
     ["date", 'input[type="date"]:visible, [data-automation-id="dateSection"]:visible'],
     ["file_upload", 'input[type="file"]:visible'],
   ] as const;
-  const counts = await Promise.all(selectors.map(async ([type, selector]) =>
-    [type, await page.locator(selector).count()] as const
-  ));
+  const questionnaireCoverage = pageName === "questionnaire"
+    ? await monitorQuestionnaireCoverage(page)
+    : undefined;
+  if (questionnaireCoverage === null) {
+    throw new TypeError("application monitor taxonomy denied");
+  }
+  const counts = questionnaireCoverage === undefined
+    ? await Promise.all(selectors.map(async ([type, selector]) =>
+        [type, await page.locator(selector).count()] as const
+      ))
+    : selectors.map(([type]) => [type, questionnaireCoverage.typeCounts[type] ?? 0] as const);
   const experience = pageName === "resume" && await page.locator(
       '[data-automation-id="applyFlowMyExperiencePage"]:visible, ' +
         '[data-automation-id="applyFlowMyExpPage"]:visible',
@@ -1043,10 +1142,11 @@ async function monitorTaxonomy(
   const controlTypes = experience?.controlTypes ??
     counts.filter(([, count]) => count > 0).map(([type]) => type);
   const fieldCount = experience?.fieldCount ??
-    counts.reduce((sum, [, count]) => sum + count, 0);
-  const requiredFieldCount = experience?.requiredFieldCount ?? await page.locator(
-    'input[required]:visible, textarea[required]:visible, select[required]:visible, [aria-required="true"]:visible',
-  ).count();
+    questionnaireCoverage?.fieldCount ?? counts.reduce((sum, [, count]) => sum + count, 0);
+  const requiredFieldCount = experience?.requiredFieldCount ??
+    questionnaireCoverage?.requiredFieldCount ?? await page.locator(
+      'input[required]:visible, textarea[required]:visible, select[required]:visible, [aria-required="true"]:visible',
+    ).count();
   const answerTypes = experience === undefined
     ? new Set<string>()
     : new Set(experience.answerTypes);
@@ -1074,6 +1174,7 @@ async function monitorTaxonomy(
       : Promise.resolve(experience.questionTypes),
   ]);
   if (
+    requiredFieldCount > fieldCount ||
     validationErrorCount !== 0 ||
     submitActivated ||
     (submitCount === 1) !== (pageName === "review") ||
@@ -1103,7 +1204,7 @@ async function monitorTaxonomy(
   }
   return Object.freeze({
     fieldCount,
-    requiredFieldCount: Math.min(requiredFieldCount, fieldCount),
+    requiredFieldCount,
     controlTypes: Object.freeze(controlTypes.length === 0 ? ["text"] : controlTypes),
     questionTypes,
     answerTypes: Object.freeze(answerTypes.size === 0 ? ["text"] : [...answerTypes]),
@@ -1340,11 +1441,14 @@ async function monitorQuestionTypes(
       (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
     const categories = new Set<string>();
     const controls = [...document.querySelectorAll<HTMLElement>(
-      'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"]',
+      'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
+        'button[aria-haspopup="listbox"]',
     )];
     for (const control of controls) {
       if (control.getClientRects().length === 0) continue;
-      const field = control.closest('[data-automation-id="formField"]');
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
       const nativeLabel = control instanceof HTMLInputElement ||
           control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
         ? control.labels?.[0]?.textContent
@@ -1361,7 +1465,7 @@ async function monitorQuestionTypes(
       else if (/\b(?:salary|compensation|pay|rate)\b/u.test(label)) categories.add("compensation");
       else if (/\b(?:available|availability|start date|relocate|travel)\b/u.test(label)) categories.add("availability");
       else if (/\b(?:school|degree|education|university|college)\b/u.test(label)) categories.add("education");
-      else if (/\b(?:employer|employment|employee|worked|experience|job title|skill)\b/u.test(label)) categories.add("employment");
+      else if (/\b(?:employer|employment|employee|employed|worked|experience|job title|skill)\b/u.test(label)) categories.add("employment");
       else if (/\b(?:phone|email|address|city|state|province|country|postal|zip)\b/u.test(label)) categories.add("contact");
       else if (/\b(?:first name|last name|given name|family name|preferred name)\b/u.test(label)) categories.add("identity");
       else if (/\b(?:resume|cv|attachment|upload)\b/u.test(label)) categories.add("attachment");
@@ -1628,7 +1732,7 @@ export async function bindQuestionnaireTargets(
       );
       index += 1;
     }
-    return index > 0 && index <= 128;
+    return index <= 128;
   }, { declaredPageId: pageId, selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
   if (!result) throw new TypeError("questionnaire control binding denied");
 }

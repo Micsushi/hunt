@@ -606,11 +606,11 @@ test("required Workday listbox buttons use non-placeholder visible text as verif
       <main data-automation-id="applyFlowMyInfoPage">
         <div data-automation-id="formField-region">
           <span data-automation-id="required"></span>
-          <button id="region" role="combobox" aria-haspopup="listbox">Alberta</button>
+          <button id="region" aria-haspopup="listbox">Alberta</button>
         </div>
         <div data-automation-id="formField-device">
           <span data-automation-id="required"></span>
-          <button id="device" role="combobox" aria-haspopup="listbox">Select One</button>
+          <button id="device" aria-haspopup="listbox">Select One</button>
         </div>
       </main>
     `);
