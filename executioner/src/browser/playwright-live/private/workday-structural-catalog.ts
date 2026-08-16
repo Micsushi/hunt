@@ -49,8 +49,8 @@ const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
-  voluntaryDisclosuresAndSelfIdentify:
-    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+  voluntaryDisclosures: '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+  selfIdentify: '[data-automation-id="applyFlowSelfIdentifyPage"]',
   review: '[data-automation-id="applyFlowReviewPage"]',
 });
 
@@ -78,7 +78,8 @@ const pageRules = Object.freeze([
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestionnaire,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.applicationQuestions,
-    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.voluntaryDisclosuresAndSelfIdentify,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.voluntaryDisclosures,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.selfIdentify,
   ].map((selector) => rule("structural_trait_page_questionnaire_v1", selector)),
   rule("structural_trait_page_review_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.review),
 ] satisfies readonly TraitRule[]);

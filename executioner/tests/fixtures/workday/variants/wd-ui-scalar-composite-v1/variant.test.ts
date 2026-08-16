@@ -159,3 +159,60 @@ test("WD-UI-SCALAR-COMPOSITE-V1 preflights every date leaf before changing any p
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive choice", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <label>Disability Status</label>
+      <div data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-disability-status">
+        <label><input type="checkbox">Yes</label>
+        <label><input type="checkbox">No</label>
+        <label><input type="checkbox">Decline to self-identify</label>
+      </div>
+    </div>
+    <script>
+      document.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('change', () => {
+          if (!input.checked) return;
+          document.querySelectorAll('input[type="checkbox"]').forEach(other => {
+            if (other !== input) other.checked = false;
+          });
+        });
+      });
+    </script>
+  `, "5800000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    assert.equal(before.observation.targets.length, 1);
+    const target = before.targets.get(browserTargetToken("target-disability-status"))?.[0];
+    assert.ok(target !== undefined);
+    assert.deepEqual(target.control, {
+      kind: "choice",
+      element: "input",
+      choice: "radio",
+      group: "Disability Status",
+      checked: false,
+    });
+    assert.deepEqual(target.radioOptions, ["Yes", "No", "Decline to self-identify"]);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      500,
+    ), "applied");
+    const after = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    assert.deepEqual(after.observation.targets[0]?.readback, {
+      kind: "selected",
+      option: "Decline to self-identify",
+    });
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});

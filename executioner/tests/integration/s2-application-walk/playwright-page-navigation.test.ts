@@ -27,7 +27,7 @@ test("observes each exact Workday application root and rejects unknown roots", a
       ["applyFlowPrimaryQuestionnairePage", "questionnaire", "Primary Questionnaire"],
       ["applyFlowApplicationQuestionsPage", "questionnaire", "Application Questions"],
       ["applyFlowVoluntaryDisclosuresPage", "questionnaire", "Voluntary Disclosures"],
-      ["applyFlowVoluntaryDisclosuresPage", "questionnaire", "Self Identify"],
+      ["applyFlowSelfIdentifyPage", "questionnaire", "Self Identify"],
       ["applyFlowReviewPage", "pre_review", "Review"],
     ] as const;
     const application = new PlaywrightWorkdayApplicationPage(page);
@@ -430,6 +430,8 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
       </main>
       <script>
         document.querySelector('#next').addEventListener('click', () => {
+          const main = document.querySelector('main');
+          main.dataset.automationId = 'applyFlowSelfIdentifyPage';
           document.querySelector('[data-automation-id="progressBarActiveStep"]').textContent = 'Self Identify';
           document.querySelector('label').innerHTML = '<input required value="ready" data-hunt-field-id="self-identify">';
         });
@@ -446,6 +448,40 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
     assert.equal(
       observed.ok && observed.value.requiredFields[0]?.fieldId,
       "self-identify",
+    );
+  });
+});
+
+test("Self Identify counts composite date and exclusive disability status once", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowSelfIdentifyPage">
+        <div data-automation-id="formField-dateSignedOn">
+          <span data-automation-id="required">*</span>
+          <div data-automation-id="dateSection" data-hunt-target-token="target-date">
+            <input data-automation-id="dateSectionMonth" value="08">
+            <input data-automation-id="dateSectionDay" value="16">
+            <input data-automation-id="dateSectionYear" value="2026">
+          </div>
+        </div>
+        <div data-automation-id="formField-disabilityStatus">
+          <span data-automation-id="required">*</span>
+          <div data-automation-id="disabilityStatus-CheckboxGroup"
+            data-hunt-target-token="target-disability">
+            <label><input type="checkbox">Yes</label>
+            <label><input type="checkbox" checked>No</label>
+            <label><input type="checkbox">Decline to self-identify</label>
+          </div>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    assert.equal(observed.ok && observed.value.page, "questionnaire");
+    assert.equal(observed.ok && observed.value.requiredFields.length, 2);
+    assert.equal(
+      observed.ok && observed.value.requiredFields.every(({ verification }) => verification === "verified"),
+      true,
     );
   });
 });

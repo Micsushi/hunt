@@ -17,6 +17,7 @@ import {
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
+  '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
   "fieldset[data-hunt-target-token]",
   'input:not([type="hidden"])',
   "textarea",
@@ -38,7 +39,7 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
-  readonly interaction?: "owned-popup" | "field-popup" | "composite-date";
+  readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "exclusive-checkbox-group";
 }
 
 export interface ResolvedBrowserTarget extends RawControl {
@@ -260,7 +261,10 @@ export async function applyMutation(
     if (target.control.kind === "choice" && target.control.choice === "radio") {
       const matches = target.radioOptions?.filter((option) => option === mutation.option) ?? [];
       if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
-      const options = locator.getByRole("radio", { name: mutation.option, exact: true });
+      const options = locator.getByRole(
+        target.interaction === "exclusive-checkbox-group" ? "checkbox" : "radio",
+        { name: mutation.option, exact: true },
+      );
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       await options.setChecked(true, { timeout: timeoutMs });
@@ -413,6 +417,14 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       const aria = normalize(parentGroup?.getAttribute("aria-label"));
       return aria.length > 0 ? aria : normalize(input.name);
     };
+    const checkboxOptionName = (input: HTMLInputElement): string => {
+      const aria = normalize(input.getAttribute("aria-label"));
+      if (aria.length > 0) return aria;
+      const label = input.labels?.[0]?.cloneNode(true) as HTMLElement | undefined;
+      label?.querySelectorAll("input,textarea,select,button").forEach((control) => control.remove());
+      const labelText = normalize(label?.textContent);
+      return labelText.length > 0 ? labelText : normalize(input.value);
+    };
     const ownedListboxId = (element: Element): string | undefined => {
       const ids = [element.getAttribute("aria-controls"), element.getAttribute("aria-owns")]
         .flatMap((value) => value?.split(/\s+/u) ?? [])
@@ -488,6 +500,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     return elements.flatMap((element, index) => {
       const compositeOwner = element.closest('[data-automation-id="dateSection"][data-hunt-target-token]');
       if (compositeOwner !== null && compositeOwner !== element) return [];
+      const checkboxGroupOwner = element.closest(
+        '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
+      );
+      if (checkboxGroupOwner !== null && checkboxGroupOwner !== element) return [];
       if (
         element instanceof HTMLInputElement &&
         element.type === "radio" &&
@@ -500,11 +516,30 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
-      let interaction: "owned-popup" | "field-popup" | "composite-date" | undefined;
+      let interaction: "owned-popup" | "field-popup" | "composite-date" | "exclusive-checkbox-group" | undefined;
       if (element.getAttribute("data-automation-id") === "dateSection") {
         control = { kind: "date", element: "input" };
         readback = compositeDateReadback(element);
         interaction = "composite-date";
+      } else if (element.matches('[data-automation-id$="-CheckboxGroup"]')) {
+        const checkboxes = [...element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+        const options = checkboxes.map(checkboxOptionName).filter(Boolean);
+        if (checkboxes.length < 2 || options.length !== checkboxes.length ||
+            new Set(options).size !== options.length) return [];
+        const selected = checkboxes.filter((checkbox) => checkbox.checked);
+        control = {
+          kind: "choice",
+          element: "input",
+          choice: "radio",
+          group: name as never,
+          checked: selected.length === 1,
+        };
+        readback = {
+          kind: "selected",
+          option: selected.length === 1 ? checkboxOptionName(selected[0]!) as never : null,
+        };
+        radioOptions = options;
+        interaction = "exclusive-checkbox-group";
       } else if (
         element.getAttribute("role") === "combobox" ||
         element.getAttribute("aria-haspopup") === "listbox"

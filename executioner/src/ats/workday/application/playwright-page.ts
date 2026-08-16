@@ -511,6 +511,8 @@ function readApplicationSnapshot(
       ? ["resume", "profile"]
       : [page];
   const candidateSelector = [
+    '[data-automation-id="dateSection"]',
+    '[data-automation-id$="-CheckboxGroup"]',
     'input:not([type="hidden"])',
     "textarea",
     "select",
@@ -528,7 +530,17 @@ function readApplicationSnapshot(
       control as HTMLInputElement,
     )) &&
       !("disabled" in control && control.disabled === true) &&
-      control.getAttribute("aria-disabled") !== "true");
+      control.getAttribute("aria-disabled") !== "true")
+    .filter((control) => {
+      const dateOwner = control.closest<HTMLElement>(
+        '[data-automation-id="dateSection"]',
+      );
+      if (dateOwner !== null && dateOwner !== control) return false;
+      const checkboxGroupOwner = control.closest<HTMLElement>(
+        '[data-automation-id$="-CheckboxGroup"]',
+      );
+      return checkboxGroupOwner === null || checkboxGroupOwner === control;
+    });
   const requiredControls = candidates.filter((control) => {
     if (control.hasAttribute("required") ||
         control.getAttribute("aria-required") === "true") return true;
@@ -602,7 +614,22 @@ function readApplicationSnapshot(
       [...fieldOwner.querySelectorAll<HTMLElement>(
         '[data-automation-id="selectedItem"]',
       )].filter((item) => visible(item) && text(item.textContent) !== "");
-    if (input?.type === "file") {
+    if (control.matches('[data-automation-id="dateSection"]')) {
+      const parts = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"].map(
+        (automationId) => [...control.querySelectorAll<HTMLInputElement>(
+          `[data-automation-id="${automationId}"]`,
+        )],
+      );
+      const values = parts.map((matches) => matches.length === 1 ? matches[0]!.value.trim() : "");
+      const isoDate = `${values[2]}-${values[0]}-${values[1]}`;
+      const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+      verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
+        !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+    } else if (control.matches('[data-automation-id$="-CheckboxGroup"]')) {
+      const checkboxes = [...control.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+      verified = verified && checkboxes.length >= 2 &&
+        checkboxes.filter(({ checked }) => checked).length === 1;
+    } else if (input?.type === "file") {
       const visibleFileInputs = [...root.querySelectorAll<HTMLInputElement>(
         'input[type="file"]',
       )].filter(visible);

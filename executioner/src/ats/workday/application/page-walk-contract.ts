@@ -25,7 +25,8 @@ export const WORKDAY_APPLICATION_PAGE_SELECTORS = Object.freeze({
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
   voluntaryDisclosuresAndSelfIdentify:
-    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+    '[data-automation-id="applyFlowVoluntaryDisclosuresPage"], ' +
+    '[data-automation-id="applyFlowSelfIdentifyPage"]',
   review: '[data-automation-id="applyFlowReviewPage"]',
 });
 export const applicationClassifiers = [

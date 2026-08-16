@@ -524,6 +524,7 @@ test("all observed Workday application roots are exact application boundaries", 
     '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
     '[data-automation-id="applyFlowApplicationQuestionsPage"]',
     '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+    '[data-automation-id="applyFlowSelfIdentifyPage"]',
     '[data-automation-id="applyFlowReviewPage"]',
   ]) {
     const page: WorkdayStructuralPage = {

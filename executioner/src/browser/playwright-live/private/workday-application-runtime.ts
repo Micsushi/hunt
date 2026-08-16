@@ -112,6 +112,7 @@ const applicationReadyRoots = [
   ['[data-automation-id="applyFlowMyExpPage"]:visible', "My Experience"],
   ['[data-automation-id="applyFlowApplicationQuestionsPage"]:visible', "Application Questions"],
   ['[data-automation-id="applyFlowVoluntaryDisclosuresPage"]:visible', "Voluntary Disclosures"],
+  ['[data-automation-id="applyFlowSelfIdentifyPage"]:visible', "Self Identify"],
   ['[data-automation-id="applyFlowReviewPage"]:visible', "Review"],
 ] as const;
 
@@ -126,6 +127,8 @@ const applicationReadyHeadingSelectors = [
   '[data-automation-id="applyFlowApplicationQuestionsPage"] h2:visible',
   '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h1:visible',
   '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h2:visible',
+  '[data-automation-id="applyFlowSelfIdentifyPage"] h1:visible',
+  '[data-automation-id="applyFlowSelfIdentifyPage"] h2:visible',
   '[data-automation-id="applyFlowReviewPage"] h1:visible',
   '[data-automation-id="applyFlowReviewPage"] h2:visible',
 ].join(", ");
@@ -1035,6 +1038,7 @@ function applicationMonitorPage(
                 '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
                 '[data-automation-id="applyFlowApplicationQuestionsPage"]',
                 '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+                '[data-automation-id="applyFlowSelfIdentifyPage"]',
               ];
       for (const selector of [
         roots.flatMap((root) => [`${root} h1:visible`, `${root} h2:visible`]).join(", "),
@@ -1057,7 +1061,7 @@ function monitorTitles(
   if (pageName === "profile") return new Set(["My Information"]);
   if (pageName === "resume") return new Set(["My Experience"]);
   if (pageName === "review") return new Set(["Review"]);
-  return new Set(["Application Questions", "Voluntary Disclosures"]);
+  return new Set(["Application Questions", "Voluntary Disclosures", "Self Identify"]);
 }
 
 async function monitorQuestionnaireCoverage(page: Page): Promise<{
@@ -1078,6 +1082,7 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
       '[data-automation-id="applyFlowApplicationQuestionsPage"]',
       '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
+      '[data-automation-id="applyFlowSelfIdentifyPage"]',
     ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
       .filter(visible)
       .filter((candidate, _index, all) => all.every((root) =>
@@ -1085,7 +1090,9 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       ));
     if (roots.length !== 1) return null;
     const controls = [...new Set(roots[0]!.querySelectorAll<HTMLElement>(
-      'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
+      '[data-automation-id="dateSection"], ' +
+        '[data-automation-id$="-CheckboxGroup"], ' +
+        'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
         '[role="listbox"], [role="radio"], [role="checkbox"], ' +
         'button[aria-haspopup="listbox"]',
     ))].filter((control) => {
@@ -1094,6 +1101,14 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       if (control instanceof HTMLFieldSetElement) {
         return control.querySelector('input[type="radio"], [role="radio"]') !== null;
       }
+      const dateOwner = control.closest(
+        '[data-automation-id="dateSection"]',
+      );
+      if (dateOwner !== null && dateOwner !== control) return false;
+      const checkboxGroupOwner = control.closest(
+        '[data-automation-id$="-CheckboxGroup"]',
+      );
+      if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) return false;
       if (
         (control instanceof HTMLInputElement && control.type === "radio" ||
           control.getAttribute("role") === "radio") &&
@@ -1117,6 +1132,8 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
     for (const control of controls) {
       let type = "text";
       if (control instanceof HTMLTextAreaElement) type = "textarea";
+      else if (control.matches('[data-automation-id="dateSection"]')) type = "date";
+      else if (control.matches('[data-automation-id$="-CheckboxGroup"]')) type = "radio";
       else if (control instanceof HTMLSelectElement ||
           control.getAttribute("role") === "combobox" ||
           control.getAttribute("role") === "listbox" ||
@@ -1728,7 +1745,8 @@ export async function bindQuestionnaireTargets(
     if (roots.length !== 1) return false;
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
     const controls = roots[0]!.querySelectorAll<HTMLElement>(
-      'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
+      '[data-automation-id="dateSection"], [data-automation-id$="-CheckboxGroup"], ' +
+        'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
     );
     const identities = new Map<string, number>();
     const hash = (value: string) => {
@@ -1741,6 +1759,10 @@ export async function bindQuestionnaireTargets(
     };
     let index = 0;
     for (const control of controls) {
+      const dateOwner = control.closest('[data-automation-id="dateSection"]');
+      if (dateOwner !== null && dateOwner !== control) continue;
+      const checkboxGroupOwner = control.closest('[data-automation-id$="-CheckboxGroup"]');
+      if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) continue;
       if (control instanceof HTMLInputElement && control.type === "radio" &&
           control.closest("fieldset") !== null) continue;
       const normalize = (value: string | null | undefined) =>

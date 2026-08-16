@@ -46,6 +46,7 @@ test("questionnaire binding owns every admitted visible Workday question root", 
       "applyFlowPrimaryQuestionnairePage",
       "applyFlowApplicationQuestionsPage",
       "applyFlowVoluntaryDisclosuresPage",
+      "applyFlowSelfIdentifyPage",
     ]) {
       await page.setContent(`
         <main data-automation-id="${root}">
@@ -429,7 +430,8 @@ test("each questionnaire field mutation has its own before and readback monitor 
           assert.equal(taxonomy.requiredFieldCount, 1);
         } else if (taxonomy.fieldCount === 1) {
           assert.equal(
-            taxonomy.questionTypes.includes("legal") || taxonomy.questionTypes.includes("education"),
+            taxonomy.questionTypes.includes("legal") || taxonomy.questionTypes.includes("education") ||
+              taxonomy.questionTypes.includes("demographic"),
             true,
           );
           assert.equal(taxonomy.requiredFieldCount, 1);
@@ -566,6 +568,45 @@ test("each questionnaire field mutation has its own before and readback monitor 
       [5, 6, 7, 8, 9, 10, 11, 12, 13],
     );
 
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
+      <div data-automation-id="formField-disabilityStatus">
+        <label>Disability Status <span data-automation-id="required">*</span></label>
+        <div data-automation-id="disabilityStatus-CheckboxGroup">
+          <label><input type="checkbox">Yes, I have a disability</label>
+          <label><input type="checkbox">No, I do not have a disability</label>
+          <label><input type="checkbox">Decline to self-identify</label>
+        </div>
+      </div>
+      <script>
+        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((input) => {
+          input.addEventListener('change', () => {
+            if (!input.checked) return;
+            document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((other) => {
+              if (other !== input) other.checked = false;
+            });
+          });
+        });
+      </script>
+    </main></body></html>`);
+    const selfIdentifyOperation = generatedOperationId("operation_questionnaire_self_identify_01");
+    const selfIdentifyResult = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: selfIdentifyOperation,
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-self-identify" } as never,
+    }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
+    assert.equal(selfIdentifyResult.ok, true, JSON.stringify(selfIdentifyResult));
+    assert.deepEqual(
+      await page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"] input:checked')
+        .evaluateAll((inputs) => inputs.map((input) => input.parentElement?.textContent?.trim())),
+      ["Decline to self-identify"],
+    );
+
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-learning-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-highestEducation">
         <label for="highestEducation">Highest Level of Education <span data-automation-id="required">*</span></label>
@@ -604,7 +645,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
-    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 2);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 3);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
