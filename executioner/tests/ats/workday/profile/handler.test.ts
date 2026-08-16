@@ -147,6 +147,24 @@ test("stops on a missing required fact before browser inspection or mutation", a
   assert.equal(port.commits.length, 0);
 });
 
+test("accepts a tenant CELL readback for the canonical Mobile phone device type", async () => {
+  const plan: ProfilePagePlan = {
+    pageType: "profile",
+    fields: [field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile")],
+    repeatables: [],
+  };
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("phone.device_type", "search_select", "CELL", "workday_search_select_v2")],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 0);
+});
+
 test("retries a transient read-only inspection after a committed field", async () => {
   let failuresRemaining = 1;
   let port!: MemoryProfilePage;

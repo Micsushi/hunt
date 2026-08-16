@@ -696,6 +696,9 @@ function readbackMatches(
   expected: string,
 ): boolean {
   if (actual === null) return false;
+  if (field.fieldId === "phone.device_type" && field.answerType === "option") {
+    return phoneDeviceTypeEquivalent(actual, expected);
+  }
   if (field.answerType === "phone") {
     return actual.replace(/\D/gu, "") === expected.replace(/\D/gu, "");
   }
@@ -711,6 +714,14 @@ function readbackMatches(
     return expectedOptions !== undefined && sameNormalizedOptions(actualOptions, expectedOptions);
   }
   return normalize(actual) === normalize(expected);
+}
+
+function phoneDeviceTypeEquivalent(actual: string, expected: string): boolean {
+  const pair = new Set([
+    normalize(actual).toLocaleLowerCase("en-US"),
+    normalize(expected).toLocaleLowerCase("en-US"),
+  ]);
+  return pair.size === 1 || (pair.size === 2 && pair.has("mobile") && pair.has("cell"));
 }
 
 function optionList(value: string): readonly string[] | undefined {

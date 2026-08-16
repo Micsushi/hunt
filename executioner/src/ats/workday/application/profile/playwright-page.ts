@@ -1133,16 +1133,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     value: string,
     interaction: MutableInteraction,
   ): Promise<void> {
-    await this.#page.keyboard.type(value);
+    const selectionValue = await phoneDeviceTypeSelectionValue(listbox, value);
+    await this.#page.keyboard.type(selectionValue);
     await this.#page.waitForTimeout(100);
     const activeId = await control.getAttribute("aria-activedescendant") ??
       await listbox.getAttribute("aria-activedescendant");
     interaction.optionFocused = activeId !== null;
     const active = activeId === null
       ? undefined
-      : await exactActiveOption(this.#page, activeId, value);
-    if (await hasExactSelectableCandidate(listbox, value)) {
-      const selected = await this.#waitForSelectableLeaf(listbox, value);
+      : await exactActiveOption(this.#page, activeId, selectionValue);
+    if (await hasExactSelectableCandidate(listbox, selectionValue)) {
+      const selected = await this.#waitForSelectableLeaf(listbox, selectionValue);
       interaction.visibleOptionCount = selected.visibleOptionCount;
       interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
       await selected.option.click({ timeout: this.#timeoutMs });
@@ -1154,17 +1155,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.optionActivated = true;
     await this.#page.waitForTimeout(100);
     for (const key of ["Enter", "Space"] as const) {
-      if (normalize(await readback(control, "search_select") ?? "") === normalize(value)) {
+      if (normalize(await readback(control, "search_select") ?? "") === normalize(selectionValue)) {
         break;
       }
       await this.#page.keyboard.press(key);
       await this.#page.waitForTimeout(100);
     }
     if (
-      normalize(await readback(control, "search_select") ?? "") !== normalize(value) &&
-      await listbox.isVisible() && await hasExactSelectableCandidate(listbox, value)
+      normalize(await readback(control, "search_select") ?? "") !== normalize(selectionValue) &&
+      await listbox.isVisible() && await hasExactSelectableCandidate(listbox, selectionValue)
     ) {
-      const nested = await this.#waitForSelectableLeaf(listbox, value);
+      const nested = await this.#waitForSelectableLeaf(listbox, selectionValue);
       interaction.visibleOptionCount = nested.visibleOptionCount;
       interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
       await nested.option.click({ timeout: this.#timeoutMs });
@@ -1174,7 +1175,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await control.getAttribute("aria-expanded") !== "true";
     interaction.backingValueCommitted = normalize(
       await readback(control, "search_select") ?? "",
-    ) === normalize(value);
+    ) === normalize(selectionValue);
     interaction.validationCleared = await validationCleared(control);
     if (
       !interaction.popupClosed || !interaction.backingValueCommitted ||
@@ -1607,6 +1608,18 @@ function equivalentOptionLabels(value: string): ReadonlySet<string> {
     : normalized === "computer and information science"
       ? [normalized, "computer science"]
       : [normalized]);
+}
+
+async function phoneDeviceTypeSelectionValue(
+  listbox: Locator,
+  requested: string,
+): Promise<string> {
+  if (
+    normalize(requested) === "mobile" &&
+    !await hasExactSelectableCandidate(listbox, requested) &&
+    await hasExactSelectableCandidate(listbox, "CELL")
+  ) return "CELL";
+  return requested;
 }
 
 async function exactNormalizedOption(

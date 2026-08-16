@@ -956,6 +956,41 @@ test("v2 phone type commits an activated exact row with Enter", async () => {
   } finally { await browser.close(); }
 });
 
+test("v2 phone type maps the canonical Mobile answer to a tenant CELL option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-types" aria-expanded="false">Select One</button>
+        <div id="phone-types" role="listbox" hidden>
+          <div role="option">BUSN</div><div role="option" id="cell-option">CELL</div>
+        </div>
+      </main><script>
+        const control = document.querySelector('#phoneNumber--phoneType');
+        const popup = document.querySelector('#phone-types');
+        control.addEventListener('click', () => {
+          control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+        });
+        document.querySelector('#cell-option').addEventListener('click', () => {
+          control.textContent = 'CELL'; control.setAttribute('aria-valuetext', 'CELL');
+          control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+        });
+      </script></body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit(
+      { controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" },
+      AbortSignal.any([]),
+    );
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "CELL");
+  } finally { await browser.close(); }
+});
+
 test("search select rescans and clicks an exact option virtualized after typeahead", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
