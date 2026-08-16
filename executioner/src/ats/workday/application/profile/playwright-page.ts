@@ -605,12 +605,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ) throw new TypeError("Workday unowned select value did not commit");
         return;
       }
-      if (behavior === "multi_select") {
+      if (behavior === "multi_select" || behavior === "search_select") {
         if (editable) {
           await control.fill("", { timeout: this.#timeoutMs });
           await control.click({ timeout: this.#timeoutMs });
           await this.#page.waitForTimeout(100);
-          if (await this.#selectPromptCatalogOption(control, value, interaction)) return;
+          if (await this.#selectPromptCatalogOption(
+            control,
+            value,
+            interaction,
+            behavior,
+          )) return;
         }
         const promptWrappers = await visibleLocators(field.locator(
           '[data-automation-id="responsiveMonikerPrompt"]',
@@ -959,6 +964,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     control: Locator,
     value: string,
     interaction: MutableInteraction,
+    behavior: "search_select" | "multi_select",
   ): Promise<boolean> {
     const options = this.#page.locator('[role="option"]:visible');
     const initial = await visibleLocators(options);
@@ -1011,7 +1017,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         interaction.popupClosed = (await visibleLocators(options)).length === 0;
         interaction.backingValueCommitted = await selectionReadbackIncludes(
           control,
-          "multi_select",
+          behavior,
           value,
         );
         interaction.validationCleared = await validationCleared(control);
