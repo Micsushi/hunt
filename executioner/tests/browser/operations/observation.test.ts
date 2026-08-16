@@ -70,6 +70,27 @@ test("observes bounded structural controls without exposing selectors or handles
   }
 });
 
+test("treats a nonempty aria-invalid Workday draft as needing reconciliation", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("edededededededed") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <label>Compensation expectation
+        <textarea required aria-invalid="true" data-hunt-target-token="target-compensation">Existing draft</textarea>
+      </label>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error(`observe failed: ${observed.error.code}`);
+    assert.deepEqual(observed.value.targets[0]?.readback, { kind: "empty" });
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("rejects overbound structural strings and readbacks without fabricating prefixes", async () => {
   const cases = [
     {

@@ -494,6 +494,12 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         }
       }
       if (control === undefined) return [];
+      // Workday can restore a nonempty draft while retaining aria-invalid.
+      // Expose that state as empty so the questionnaire owner re-drives and
+      // independently verifies the answer instead of accepting stale text.
+      if (element.getAttribute("aria-invalid") === "true" && readback.kind !== "upload") {
+        readback = { kind: "empty" };
+      }
       const html = element as HTMLElement;
       const style = getComputedStyle(html);
       const visible = style.display !== "none" && style.visibility !== "hidden" && html.getClientRects().length > 0;
