@@ -40,6 +40,7 @@ interface BrowserApplicationSnapshot {
   readonly signature: string;
   readonly transitionKey: string;
   readonly validationKeys: readonly string[];
+  readonly validationOwners: readonly string[];
 }
 interface BrowserApplicationAmbiguity {
   readonly ambiguity: readonly {
@@ -131,6 +132,20 @@ export class PlaywrightWorkdayApplicationPage {
       navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
       if (!after.ok) return after;
       const afterTruth = this.#toTruth(after.value);
+      if (hasValidationDowngrade(before.value, after.value)) {
+        navigationDiagnostic("validation_downgrade", {
+          beforePage: before.value.page,
+          afterPage: after.value.page,
+          rootChanged: after.value.rootSelector !== before.value.rootSelector,
+          beforeRequiredCount: before.value.requiredFields.length,
+          afterRequiredCount: after.value.requiredFields.length,
+          afterUnverifiedFieldIds: after.value.requiredFields
+            .filter(({ verification }) => verification === "unverified")
+            .map(({ fieldId }) => fieldId),
+          validationOwners: after.value.validationOwners,
+        });
+        return failure("page_incomplete", "navigation");
+      }
       if (!request.allowed.includes(afterTruth.page) || afterTruth.submitActivated) {
         navigationDiagnostic("destination_not_allowed", {
           beforePage: before.value.page,
@@ -139,16 +154,14 @@ export class PlaywrightWorkdayApplicationPage {
           rootChanged: after.value.rootSelector !== before.value.rootSelector,
           transitionChanged: after.value.transitionKey !== before.value.transitionKey,
           submitActivated: afterTruth.submitActivated,
+          beforeRequiredCount: before.value.requiredFields.length,
+          afterRequiredCount: after.value.requiredFields.length,
+          afterUnverifiedFieldIds: after.value.requiredFields
+            .filter(({ verification }) => verification === "unverified")
+            .map(({ fieldId }) => fieldId),
+          validationOwners: after.value.validationOwners,
         });
         return failure("navigation_uncertain", "navigation");
-      }
-      if (hasValidationDowngrade(before.value, after.value)) {
-        navigationDiagnostic("validation_downgrade", {
-          beforePage: before.value.page,
-          afterPage: after.value.page,
-          rootChanged: after.value.rootSelector !== before.value.rootSelector,
-        });
-        return failure("page_incomplete", "navigation");
       }
       if (
         after.value.page === before.value.page &&
@@ -690,15 +703,22 @@ function readApplicationSnapshot(
     if (count > 0) duplicateRows += 1;
     fingerprints.set(fingerprint, count + 1);
   }
-  const validationKeys = [...root.querySelectorAll<HTMLElement>(
+  const validationElements = [...root.querySelectorAll<HTMLElement>(
     '[aria-invalid="true"], [role="alert"], [data-automation-id="inputAlert"], ' +
       '[data-automation-id*="error" i]',
-  )].filter(visible).map((item) => [
+  )].filter(visible);
+  const validationKeys = validationElements.map((item) => [
     item.getAttribute("data-automation-id") ?? "",
     item.id,
     item.getAttribute("role") ?? "",
     text(item.textContent),
   ].join(":"));
+  const validationOwners = [...new Set(validationElements.flatMap((item) => {
+    const owner = item.closest<HTMLElement>('[data-automation-id^="formField-"]');
+    const id = owner?.getAttribute("data-automation-id") ??
+      item.getAttribute("data-automation-id") ?? item.id;
+    return /^[A-Za-z][A-Za-z0-9_-]{0,127}$/u.test(id) ? [id] : [];
+  }))];
   const activeStep = [...document.querySelectorAll<HTMLElement>(
     '[data-automation-id="progressBarActiveStep"]',
   )].find(visible);
@@ -741,6 +761,7 @@ function readApplicationSnapshot(
     signature,
     transitionKey,
     validationKeys,
+    validationOwners,
   };
 }
 function failure(code: ApplicationPortFailure["code"],
