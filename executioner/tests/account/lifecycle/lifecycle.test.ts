@@ -503,6 +503,44 @@ test("existing unverified account consumes previously sent verification mail aft
   );
 });
 
+test("fresh signup credential denial consumes automatically sent verification mail", async () => {
+  let mutation = 0;
+  const credential: AccountLifecycleCredentialMutationAdapter = {
+    async mutate() {
+      mutation += 1;
+      if (mutation === 1) {
+        return { ok: true, value: { kind: "sign_in_required", attemptedFields: ["email", "password"] } };
+      }
+      if (mutation === 2) {
+        return { ok: false, error: { code: "credential_mutation_denied", retryable: false } };
+      }
+      return { ok: true, value: { kind: "application_ready", attemptedFields: ["email", "password"] } };
+    },
+  };
+  const mailbox = createMailboxProviderFake({ result: liveFixtures.mailboxAvailable });
+  const lifecycle = new AccountVerificationLifecycle({
+    credentialMutation: credential,
+    mailbox: mailbox.port,
+    artifacts: createVerificationArtifactFake().port,
+    navigator: createPrivilegedVerificationNavigatorFake().port,
+    accountState: observer(
+      "existing_account",
+      "existing_account",
+      "existing_account",
+      "application_ready",
+    ).port,
+  });
+
+  const result = await lifecycle.run({
+    ...input(),
+    accountIntent: "fresh_create",
+  }, new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "account_ready");
+  assert.equal(mutation, 3);
+  assert.equal(mailbox.calls.length, 1);
+});
+
 test("fresh signup may land on sign-in and then reach the application", async () => {
   const credential = privateCredential(
     { kind: "sign_in_required", attemptedFields: ["email", "password"] },

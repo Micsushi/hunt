@@ -335,6 +335,9 @@ export class AccountVerificationLifecycle {
       input.operations.accountExistsSignIn,
     );
     if (!signedIn.ok) {
+      if (signedIn.error.code === "credential_mutation_denied") {
+        return this.#verify(input, signal, false);
+      }
       return this.#recoverCredentialEffect(input, signal, signedIn, path, 0, false);
     }
     let signInResult;
