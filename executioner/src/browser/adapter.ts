@@ -348,10 +348,18 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     const normalize = (value: string | null | undefined): string =>
       (value ?? "").replace(/\s+/gu, " ").trim();
     const nameOf = (element: Element): string => {
+      const workdayField = element.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      if (element instanceof HTMLInputElement && element.type === "checkbox") {
+        const fieldQuestion = normalize(
+          workdayField?.querySelector("label, legend")?.textContent ?? workdayField?.textContent,
+        );
+        if (fieldQuestion.length > 0) return fieldQuestion;
+      }
       if (element.getAttribute("aria-haspopup") === "listbox") {
         const fieldLabel = normalize(
-          element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]')
-            ?.querySelector("label, legend")?.textContent,
+          workdayField?.querySelector("label, legend")?.textContent,
         );
         if (fieldLabel.length > 0) return fieldLabel;
       }
@@ -373,8 +381,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         if (labelText.length > 0) return labelText;
       }
       const workdayLabel = normalize(
-        element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]')
-          ?.querySelector("label, legend")?.textContent,
+        workdayField?.querySelector("label, legend")?.textContent,
       );
       if (workdayLabel.length > 0) return workdayLabel;
       const placeholder = normalize(element.getAttribute("placeholder"));

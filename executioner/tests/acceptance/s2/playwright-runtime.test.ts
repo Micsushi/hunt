@@ -480,7 +480,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-termsAndConditions--acceptTermsAndAgreements">
         <p>I had the opportunity to self-identify.</p>
         <p>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span></p>
-        <input id="termsAndConditions--acceptTermsAndAgreements" type="checkbox" aria-label="I Agree">
+        <input id="termsAndConditions--acceptTermsAndAgreements" name="termsAndConditions--acceptTermsAndAgreements" type="checkbox">
       </div>
     </main></body></html>`);
     const voluntaryOperation = generatedOperationId("operation_questionnaire_voluntary_01");

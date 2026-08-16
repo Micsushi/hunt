@@ -1479,8 +1479,13 @@ async function monitorQuestionTypes(
         ? control.labels?.[0]?.textContent
         : undefined;
       const ownerLabel = field?.querySelector("label, legend")?.textContent;
+      const ownerQuestion = control instanceof HTMLInputElement && control.type === "checkbox"
+        ? field?.textContent
+        : undefined;
       const label = normalize(
-        control.getAttribute("aria-haspopup") === "listbox"
+        ownerQuestion !== undefined
+          ? ownerQuestion
+          : control.getAttribute("aria-haspopup") === "listbox"
           ? ownerLabel ?? control.getAttribute("aria-label")
           : control.getAttribute("aria-label") ?? ownerLabel ?? nativeLabel ??
             control.getAttribute("placeholder"),
@@ -1723,7 +1728,9 @@ export async function bindQuestionnaireTargets(
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
-      let label = control.getAttribute("aria-haspopup") === "listbox"
+      let label = control instanceof HTMLInputElement && control.type === "checkbox"
+        ? normalize(field?.textContent)
+        : control.getAttribute("aria-haspopup") === "listbox"
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : "";
       if (label === "") label = normalize(control.getAttribute("aria-label"));
