@@ -166,13 +166,26 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
       <label>Disability Status</label>
       <div data-automation-id="disabilityStatus-CheckboxGroup"
         data-hunt-target-token="target-disability-status">
-        <label><input type="checkbox">Yes</label>
-        <label><input type="checkbox">No</label>
-        <label><input type="checkbox">Decline to self-identify</label>
+        <label><input type="checkbox"><span>Yes</span></label>
+        <label><input type="checkbox"><span>No</span></label>
+        <label><input type="checkbox"><span>Decline to self-identify</span></label>
       </div>
     </div>
     <script>
+      let labelActivation = false;
+      document.querySelectorAll('label').forEach(label => {
+        label.addEventListener('pointerdown', event => {
+          if (event.target !== label.querySelector('input')) {
+            labelActivation = true;
+            label.dataset.activated = 'true';
+          }
+        });
+        label.addEventListener('click', () => setTimeout(() => { labelActivation = false; }));
+      });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', event => {
+          if (!labelActivation) event.preventDefault();
+        });
         input.addEventListener('change', () => {
           if (!input.checked) return;
           document.querySelectorAll('input[type="checkbox"]').forEach(other => {
@@ -212,6 +225,10 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
       option: "Decline to self-identify",
     });
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+    assert.equal(
+      await variant.page.locator('label:has-text("Decline to self-identify")').getAttribute('data-activated'),
+      "true",
+    );
   } finally {
     await variant.close();
   }

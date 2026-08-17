@@ -689,6 +689,18 @@ test("each questionnaire field mutation has its own before and readback monitor 
           replacement.removeAttribute('data-hunt-target-token');
           name.replaceWith(replacement);
         });
+        let labelActivation = false;
+        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] label').forEach(label => {
+          label.addEventListener('pointerdown', event => {
+            if (event.target !== label.querySelector('input')) labelActivation = true;
+          });
+          label.addEventListener('click', () => setTimeout(() => { labelActivation = false; }));
+        });
+        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(input => {
+          input.addEventListener('click', event => {
+            if (!labelActivation) event.preventDefault();
+          });
+        });
       </script>
     </main></body></html>`);
     const selfIdentifyOperation = generatedOperationId("operation_questionnaire_self_identify_01");

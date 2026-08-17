@@ -282,17 +282,39 @@ export async function applyMutation(
         const checkboxes = locator.locator('input[type="checkbox"]');
         const checkboxCount = await checkboxes.count();
         if (checkboxCount < 2) return "invalid";
+        const labelFor = async (option: string | null): Promise<Locator | undefined> => {
+          const labels = locator.locator("label");
+          const matching: Locator[] = [];
+          for (let index = 0; index < await labels.count(); index += 1) {
+            const label = labels.nth(index);
+            if (await label.getAttribute("data-hunt-option-label") === option) matching.push(label);
+          }
+          return matching.length === 1 ? matching[0] : undefined;
+        };
+        const activateLabel = async (label: Locator): Promise<boolean> => {
+          const box = await label.boundingBox();
+          if (box === null || box.width < 2 || box.height < 2) return false;
+          await label.click({
+            position: { x: Math.max(1, box.width - 2), y: Math.max(1, box.height / 2) },
+            timeout: timeoutMs,
+          });
+          return true;
+        };
         for (let index = 0; index < checkboxCount; index += 1) {
           const checkbox = checkboxes.nth(index);
           if (await checkbox.isChecked()) {
-            await checkbox.setChecked(false, { timeout: timeoutMs });
+            const option = await checkbox.getAttribute("data-hunt-option-label");
+            const label = await labelFor(option);
+            if (label === undefined || !await activateLabel(label)) return "invalid";
           }
         }
-      }
-      await options.setChecked(true, { timeout: timeoutMs });
-      if (target.interaction === "exclusive-checkbox-group") {
+        const label = await labelFor(mutation.option);
+        if (label === undefined || !await activateLabel(label)) return "invalid";
+        await page.waitForTimeout(Math.min(150, timeoutMs));
         const checked = locator.locator('input[type="checkbox"]:checked');
         if (await checked.count() !== 1 || !await options.isChecked()) return "invalid";
+      } else {
+        await options.setChecked(true, { timeout: timeoutMs });
       }
       return "applied";
     }
@@ -552,9 +574,12 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         const options = checkboxes.map(checkboxOptionName).filter(Boolean);
         if (checkboxes.length < 2 || options.length !== checkboxes.length ||
             new Set(options).size !== options.length) return [];
-        checkboxes.forEach((checkbox, index) =>
-          checkbox.setAttribute("data-hunt-option-label", options[index]!)
-        );
+        checkboxes.forEach((checkbox, index) => {
+          checkbox.setAttribute("data-hunt-option-label", options[index]!);
+          [...checkbox.labels ?? []].forEach((label) =>
+            label.setAttribute("data-hunt-option-label", options[index]!)
+          );
+        });
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
         control = {
           kind: "choice",
