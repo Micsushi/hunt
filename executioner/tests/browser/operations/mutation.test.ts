@@ -349,12 +349,13 @@ test("passes upload bytes to Playwright through a zero-copy buffer view", async 
   const upload = Uint8Array.from([1, 2, 3, 4]);
   let captured: Buffer | undefined;
   const locator = {
+    count: async () => 1,
     setInputFiles: async (file: { readonly buffer: Buffer }) => {
       captured = file.buffer;
     },
   };
   const page = {
-    locator: () => ({ nth: () => locator }),
+    locator: () => locator,
   };
   const target = {
     index: 0,

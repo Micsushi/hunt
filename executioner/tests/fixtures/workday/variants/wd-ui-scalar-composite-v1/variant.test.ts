@@ -160,7 +160,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 preflights every date leaf before changing any p
   }
 });
 
-test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive choice", async () => {
+test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as one exclusive choice", async () => {
   const variant = await openVariantPage(`
     <style>.visual { display: inline-block; width: 18px; height: 18px; }</style>
     <div data-automation-id="formField-disabilityStatus">
@@ -209,6 +209,16 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
       checked: false,
     });
     assert.deepEqual(target.radioOptions, ["Yes", "No", "Decline to self-identify"]);
+    await variant.page.evaluate(() => {
+      document.body.insertAdjacentHTML("afterbegin", '<button type="button">Late control</button>');
+      document.querySelectorAll(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"] [data-hunt-option-label], ' +
+        '[data-automation-id="disabilityStatus-CheckboxGroup"] [data-hunt-checkbox-surface]',
+      ).forEach((element) => {
+        element.removeAttribute("data-hunt-option-label");
+        element.removeAttribute("data-hunt-checkbox-surface");
+      });
+    });
     assert.equal(await applyMutation(
       variant.page,
       target,

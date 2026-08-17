@@ -201,7 +201,8 @@ export async function applyMutation(
   upload: Uint8Array | undefined,
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
-  const locator = page.locator(controlSelector).nth(target.index);
+  const locator = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  if (await locator.count() !== 1) return "invalid";
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
     await locator.fill(mutation.text, { timeout: timeoutMs });
@@ -263,16 +264,10 @@ export async function applyMutation(
       if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
       const options = target.interaction === "exclusive-checkbox-group"
         ? await (async () => {
-          const checkboxes = locator.locator('input[type="checkbox"]');
-          const matching: Locator[] = [];
-          for (let index = 0; index < await checkboxes.count(); index += 1) {
-            const checkbox = checkboxes.nth(index);
-            if (await checkbox.getAttribute("data-hunt-option-label") === mutation.option) {
-              matching.push(checkbox);
-            }
-          }
-          if (matching.length !== 1) return undefined;
-          return matching[0]!;
+          const checkbox = locator.getByLabel(mutation.option, { exact: true });
+          if (await checkbox.count() !== 1 ||
+              await checkbox.getAttribute("type") !== "checkbox") return undefined;
+          return checkbox;
         })()
         : locator.getByRole("radio", { name: mutation.option, exact: true });
       if (options === undefined) return "invalid";
@@ -293,6 +288,18 @@ export async function applyMutation(
             if (await surface.getAttribute("data-hunt-option-label") === option) {
               matching.push(surface);
             }
+          }
+          return matching.length === 1 ? matching[0]! : undefined;
+        };
+        const exactLabelFor = async (option: string): Promise<Locator | undefined> => {
+          const labels = locator.locator("label");
+          const expected = option.normalize("NFC").replace(/\s+/gu, " ").trim();
+          const matching: Locator[] = [];
+          for (let index = 0; index < await labels.count(); index += 1) {
+            const label = labels.nth(index);
+            const text = (await label.textContent() ?? "").normalize("NFC")
+              .replace(/\s+/gu, " ").trim();
+            if (text === expected) matching.push(label);
           }
           return matching.length === 1 ? matching[0]! : undefined;
         };
@@ -346,7 +353,7 @@ export async function applyMutation(
           }
         }
         const surfaces = (await Promise.all([
-          taggedSurfaceFor("label", mutation.option),
+          exactLabelFor(mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
           taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
