@@ -502,13 +502,13 @@ test("each questionnaire field mutation has its own before and readback monitor 
         } else if (taxonomy.fieldCount === 5) {
           assert.deepEqual(taxonomy.questionTypes, ["demographic", "legal"]);
           assert.equal(taxonomy.requiredFieldCount, 1);
-        } else if (taxonomy.fieldCount === 1) {
+        } else if (taxonomy.fieldCount === 1 || taxonomy.fieldCount === 3) {
           assert.equal(
             taxonomy.questionTypes.includes("legal") || taxonomy.questionTypes.includes("education") ||
-              taxonomy.questionTypes.includes("demographic"),
+              taxonomy.questionTypes.includes("demographic") || taxonomy.questionTypes.includes("identity"),
             true,
           );
-          assert.equal(taxonomy.requiredFieldCount, 1);
+          assert.equal(taxonomy.requiredFieldCount, taxonomy.fieldCount);
         } else {
           assert.deepEqual(taxonomy.questionTypes, ["unknown"]);
           assert.equal(taxonomy.fieldCount, 0);
@@ -643,6 +643,13 @@ test("each questionnaire field mutation has its own before and readback monitor 
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
+      <div data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm">
+        <label>Language <span data-automation-id="required">*</span></label>
+        <button type="button" aria-haspopup="listbox">Select One</button>
+      </div>
+      <div data-automation-id="formField-selfIdentifiedDisabilityData--name">
+        <label>Name <span data-automation-id="required">*</span><input type="text" id="selfIdentifiedDisabilityData--name"></label>
+      </div>
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
         <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
@@ -652,6 +659,35 @@ test("each questionnaire field mutation has its own before and readback monitor 
         </fieldset>
       </div>
       <script>
+        const languageField = document.querySelector('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"]');
+        const bindLanguage = (button) => button.addEventListener('click', () => {
+          const popup = document.createElement('div');
+          popup.dataset.automationId = 'promptMenu';
+          popup.innerHTML = '<div data-automation-id="promptOption">English</div><div data-automation-id="promptOption">Spanish</div>';
+          popup.addEventListener('click', (event) => {
+            const option = event.target.closest('[data-automation-id="promptOption"]');
+            if (option === null) return;
+            const replacement = button.cloneNode(true);
+            replacement.textContent = option.textContent.trim();
+            replacement.removeAttribute('data-hunt-target-token');
+            replacement.removeAttribute('data-hunt-popup-options');
+            button.replaceWith(replacement);
+            bindLanguage(replacement);
+            popup.remove();
+          });
+          document.body.append(popup);
+        });
+        bindLanguage(languageField.querySelector('button'));
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') document.querySelector('[data-automation-id="promptMenu"]')?.remove();
+        });
+        const name = document.querySelector('#selfIdentifiedDisabilityData--name');
+        name.addEventListener('blur', () => {
+          const replacement = name.cloneNode(true);
+          replacement.value = name.value;
+          replacement.removeAttribute('data-hunt-target-token');
+          name.replaceWith(replacement);
+        });
         document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((input) => {
           input.addEventListener('change', () => {
             if (!input.checked) return;
@@ -675,6 +711,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
       input: { attempt: 1, pageId: "page-self-identify" } as never,
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(selfIdentifyResult.ok, true, JSON.stringify(selfIdentifyResult));
+    assert.equal(
+      await page.locator('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"] button').innerText(),
+      "English",
+    );
+    assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
     assert.deepEqual(
       await page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.parentElement?.textContent?.trim())),

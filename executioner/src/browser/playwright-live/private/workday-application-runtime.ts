@@ -926,6 +926,11 @@ export class OwnedWorkdayApplicationRuntime {
           verificationRequest: Parameters<FieldVerifier["verify"]>[0],
           innerSignal: AbortSignal,
         ) => {
+          // Workday may replace a control (or the entire questionnaire root)
+          // after blur/selection. Restore the deterministic semantic bindings
+          // before the independent readback so the original intent can still
+          // be verified against the newly rendered control.
+          await bindQuestionnaireTargets(page, input.pageId);
           const verified = await semanticVerifier.verify(verificationRequest, innerSignal);
           const operationId = verificationRequest.receipt.operationId;
           const attempt = monitoredAttempts.get(operationId);
