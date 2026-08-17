@@ -351,6 +351,11 @@ test("Meredith compensation and relative wording use deterministic learning defa
     "Expectations on Compensation - Please state your expectations of total compensation for this position. (Please list a value and/or range)",
     "textarea",
   );
+  const compensationRequirements = field(
+    "s2-field-compensation-requirements",
+    "Please indicate your annual salary and/or total compensation requirements",
+    "textarea",
+  );
   const relatives = field(
     "s2-field-relatives",
     "Do you have any relatives currently employed by People Inc.?",
@@ -363,7 +368,7 @@ test("Meredith compensation and relative wording use deterministic learning defa
   const { handler, calls } = dependencies();
 
   const result = await handler.complete(
-    request([compensation, relatives]),
+    request([compensation, compensationRequirements, relatives]),
     new AbortController().signal,
   );
 
@@ -373,10 +378,11 @@ test("Meredith compensation and relative wording use deterministic learning defa
     result.value.answers.map(({ questionId, provenance }) => ({ questionId, provenance })),
     [
       { questionId: "workday-question-desired-salary", provenance: "reviewed_catalog" },
+      { questionId: "workday-question-desired-salary", provenance: "reviewed_catalog" },
       { questionId: "workday-placeholder-relative-employment", provenance: "reviewed_catalog" },
     ],
   );
-  assert.deepEqual(calls, { resolved: 0, driven: 2, verified: 2 });
+  assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
 });
 
 test("non-protected synthetic facts are independently verified without becoming owner facts", async () => {

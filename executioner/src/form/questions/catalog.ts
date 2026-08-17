@@ -235,7 +235,7 @@ const questionSemanticCatalog = Object.freeze([
   { id: "s1-question-resume", keywordGroups: [["resume"], ["cv"]] },
   { id: "workday-question-highest-education", keywordGroups: [["highest", "education"], ["degree", "level"]] },
   { id: "workday-question-years-experience", keywordGroups: [["years", "experience"], ["year", "experience"]] },
-  { id: "workday-question-desired-salary", keywordGroups: [["desired", "salary"], ["salary", "expectation"], ["salary", "expectations"], ["desired", "compensation"], ["compensation", "expectation"], ["compensation", "expectations"], ["expected", "compensation"]] },
+  { id: "workday-question-desired-salary", keywordGroups: [["desired", "salary"], ["salary", "expectation"], ["salary", "expectations"], ["salary", "requirements"], ["desired", "compensation"], ["compensation", "expectation"], ["compensation", "expectations"], ["compensation", "requirements"], ["expected", "compensation"]] },
   { id: "workday-question-gender-disclosure", keywordGroups: [["gender"], ["sex"]] },
   { id: "workday-question-ethnicity-disclosure", keywordGroups: [["ethnicity"], ["ethnicities"], ["race"], ["hispanic"], ["latino"]] },
   { id: "workday-question-veteran-disclosure", keywordGroups: [["veteran"], ["military"], ["armed", "forces"]] },

@@ -102,6 +102,10 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
       "workday-question-desired-salary",
     ],
     [
+      "Please indicate your annual salary and/or total compensation requirements",
+      "workday-question-desired-salary",
+    ],
+    [
       "Do you have any relatives currently employed by People Inc.?",
       "workday-placeholder-relative-employment",
     ],
