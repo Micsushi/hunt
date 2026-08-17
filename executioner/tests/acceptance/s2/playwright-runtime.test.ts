@@ -645,11 +645,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
-        <div data-automation-id="disabilityStatus-CheckboxGroup">
+        <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
           <label><input type="checkbox">Yes, I have a disability</label>
           <label><input type="checkbox">No, I do not have a disability</label>
           <label><input type="checkbox">Decline to self-identify</label>
-        </div>
+        </fieldset>
       </div>
       <script>
         document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((input) => {

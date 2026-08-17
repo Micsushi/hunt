@@ -1286,7 +1286,10 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
     ))].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true") return false;
-      if (control instanceof HTMLFieldSetElement) {
+      if (
+        control instanceof HTMLFieldSetElement &&
+        !control.matches('[data-automation-id$="-CheckboxGroup"]')
+      ) {
         return control.querySelector('input[type="radio"], [role="radio"]') !== null;
       }
       const dateOwner = control.closest(
