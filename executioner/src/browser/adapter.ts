@@ -282,62 +282,67 @@ export async function applyMutation(
         const checkboxes = locator.locator('input[type="checkbox"]');
         const checkboxCount = await checkboxes.count();
         if (checkboxCount < 2) return "invalid";
-        const labelFor = async (option: string | null): Promise<Locator | undefined> => {
-          const labels = locator.locator("label");
+        const taggedSurfaceFor = async (
+          selector: string,
+          option: string | null,
+        ): Promise<Locator | undefined> => {
+          const surfaces = locator.locator(selector);
           const matching: Locator[] = [];
-          for (let index = 0; index < await labels.count(); index += 1) {
-            const label = labels.nth(index);
-            if (await label.getAttribute("data-hunt-option-label") === option) matching.push(label);
+          for (let index = 0; index < await surfaces.count(); index += 1) {
+            const surface = surfaces.nth(index);
+            if (await surface.getAttribute("data-hunt-option-label") === option) {
+              matching.push(surface);
+            }
           }
-          return matching.length === 1 ? matching[0] : undefined;
-        };
-        const panelFor = async (option: string | null): Promise<Locator | undefined> => {
-          const panels = locator.locator('[data-automation-id="checkboxPanel"]');
-          const matching: Locator[] = [];
-          for (let index = 0; index < await panels.count(); index += 1) {
-            const panel = panels.nth(index);
-            if (await panel.getAttribute("data-hunt-option-label") === option) matching.push(panel);
-          }
-          return matching.length === 1 ? matching[0] : undefined;
+          return matching.length === 1 ? matching[0]! : undefined;
         };
         const isOnlyChecked = async (checkbox: Locator): Promise<boolean> =>
           await locator.locator('input[type="checkbox"]:checked').count() === 1 &&
           await checkbox.isChecked();
+        const waitUntilOnlyChecked = async (checkbox: Locator): Promise<boolean> => {
+          const deadline = Date.now() + Math.min(timeoutMs, 750);
+          do {
+            if (await isOnlyChecked(checkbox)) return true;
+            await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+          } while (Date.now() < deadline);
+          return await isOnlyChecked(checkbox);
+        };
         const activate = async (
           checkbox: Locator,
-          label: Locator,
-          panel: Locator | undefined,
+          surfaces: readonly Locator[],
         ): Promise<boolean> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
-          if (panel !== undefined) {
-            try {
-              const box = await panel.boundingBox();
-              if (box !== null && box.width >= 2 && box.height >= 2) {
-                await panel.click({
-                  position: { x: Math.max(1, box.width - 2), y: Math.max(1, box.height / 2) },
-                  timeout: clickTimeout,
-                });
-              }
-              await page.waitForTimeout(Math.min(150, timeoutMs));
-              if (await isOnlyChecked(checkbox)) return true;
-            } catch {
-              // Workday variants expose different trusted pointer surfaces; try fallbacks.
-            }
-          }
-          for (const surface of [checkbox, label]) {
+          if (await isOnlyChecked(checkbox)) return true;
+          for (const surface of [checkbox, ...surfaces]) {
             try {
               await surface.click({ timeout: clickTimeout });
-              await page.waitForTimeout(Math.min(150, timeoutMs));
-              if (await isOnlyChecked(checkbox)) return true;
+              if (await waitUntilOnlyChecked(checkbox)) return true;
             } catch {
-              // Try the next trusted pointer surface.
+              // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
           }
           return false;
         };
-        const label = await labelFor(mutation.option);
-        const panel = await panelFor(mutation.option);
-        if (label === undefined || !await activate(options, label, panel)) return "invalid";
+        for (let index = 0; index < checkboxCount; index += 1) {
+          const checkbox = checkboxes.nth(index);
+          if (
+            await checkbox.getAttribute("data-hunt-option-label") !== mutation.option &&
+            await checkbox.isChecked()
+          ) {
+            try {
+              await checkbox.setChecked(false, { timeout: Math.min(timeoutMs, 1_000) });
+            } catch {
+              return "invalid";
+            }
+          }
+        }
+        const surfaces = (await Promise.all([
+          taggedSurfaceFor("label", mutation.option),
+          taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
+          taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
+          taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
+        ])).filter((surface): surface is Locator => surface !== undefined);
+        if (!await activate(options, surfaces)) return "invalid";
       } else {
         await options.setChecked(true, { timeout: timeoutMs });
       }
@@ -604,6 +609,12 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           [...checkbox.labels ?? []].forEach((label) =>
             label.setAttribute("data-hunt-option-label", options[index]!)
           );
+          checkbox.parentElement?.setAttribute("data-hunt-checkbox-surface", "owner");
+          checkbox.parentElement?.setAttribute("data-hunt-option-label", options[index]!);
+          if (checkbox.nextElementSibling instanceof HTMLElement) {
+            checkbox.nextElementSibling.setAttribute("data-hunt-checkbox-surface", "visual");
+            checkbox.nextElementSibling.setAttribute("data-hunt-option-label", options[index]!);
+          }
           checkbox.closest('[data-automation-id="checkboxPanel"]')
             ?.setAttribute("data-hunt-option-label", options[index]!);
         });

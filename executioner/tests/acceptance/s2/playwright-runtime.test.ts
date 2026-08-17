@@ -652,10 +652,12 @@ test("each questionnaire field mutation has its own before and readback monitor 
       </div>
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
-        <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
-          <div data-automation-id="checkboxPanel"><input id="has-disability" type="checkbox" checked><label for="has-disability">Yes, I have a disability, or have had one in the past</label></div>
-          <div data-automation-id="checkboxPanel"><input id="no-disability" type="checkbox" checked><label for="no-disability">No, I do not have a disability and have not had one in the past</label></div>
-          <div data-automation-id="checkboxPanel"><input id="decline-disability-input" type="checkbox" aria-labelledby="decline-disability disability-context"><label for="decline-disability-input"><span id="decline-disability">I do not want to answer</span></label></div>
+        <fieldset data-automation-id="disabilityStatus-CheckboxGroup" aria-required="true">
+          <div role="grid">
+            <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="has-disability" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="has-disability">Yes, I have a disability, or have had one in the past</label></div></div></div>
+            <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="no-disability" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="no-disability">No, I do not have a disability and have not had one in the past</label></div></div></div>
+            <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="decline-disability-input" type="checkbox" aria-checked="false" aria-required="true" aria-labelledby="decline-disability disability-context"><span class="visual"></span><div class="decoration"></div></div><label for="decline-disability-input"><span id="decline-disability">I do not want to answer</span></label></div></div></div>
+          </div>
           <span id="disability-context">Please check one of the boxes below</span>
         </fieldset>
       </div>
@@ -690,15 +692,8 @@ test("each questionnaire field mutation has its own before and readback monitor 
           name.replaceWith(replacement);
         });
         document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(input => {
-          input.addEventListener('click', event => event.preventDefault());
-        });
-        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] [data-automation-id="checkboxPanel"]').forEach(panel => {
-          panel.addEventListener('click', event => {
-            if (event.target !== panel) return;
-            const input = panel.querySelector('input');
-            document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(other => {
-              other.checked = other === input;
-            });
+          input.addEventListener('click', () => {
+            input.setAttribute('aria-checked', String(input.checked));
           });
         });
       </script>
@@ -723,7 +718,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
     assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
     assert.deepEqual(
       await page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"] input:checked')
-        .evaluateAll((inputs) => inputs.map((input) => input.parentElement?.textContent?.trim())),
+        .evaluateAll((inputs) => inputs.map((input) => input.closest('[role="row"]')?.textContent?.trim())),
       ["I do not want to answer"],
     );
 
