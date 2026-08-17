@@ -54,6 +54,7 @@ const privacyChoiceDefaults = [
   "Prefer not to answer",
   "Prefer not to say",
   "I do not wish to provide this information",
+  "I do not want to answer",
   "Decline to self-identify",
 ] as const;
 

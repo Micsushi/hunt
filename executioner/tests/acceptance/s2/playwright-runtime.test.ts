@@ -653,9 +653,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
         <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
-          <label><input type="checkbox">Yes, I have a disability</label>
-          <label><input type="checkbox">No, I do not have a disability</label>
-          <label><input type="checkbox">Decline to self-identify</label>
+          <label><input type="checkbox" checked>Yes, I have a disability, or have had one in the past</label>
+          <label><input type="checkbox" checked>No, I do not have a disability and have not had one in the past</label>
+          <label><input type="checkbox">I do not want to answer</label>
         </fieldset>
       </div>
       <script>
@@ -688,14 +688,6 @@ test("each questionnaire field mutation has its own before and readback monitor 
           replacement.removeAttribute('data-hunt-target-token');
           name.replaceWith(replacement);
         });
-        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((input) => {
-          input.addEventListener('change', () => {
-            if (!input.checked) return;
-            document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach((other) => {
-              if (other !== input) other.checked = false;
-            });
-          });
-        });
       </script>
     </main></body></html>`);
     const selfIdentifyOperation = generatedOperationId("operation_questionnaire_self_identify_01");
@@ -719,7 +711,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
     assert.deepEqual(
       await page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.parentElement?.textContent?.trim())),
-      ["Decline to self-identify"],
+      ["I do not want to answer"],
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-learning-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">

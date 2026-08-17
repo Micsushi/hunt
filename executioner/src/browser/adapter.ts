@@ -267,7 +267,22 @@ export async function applyMutation(
       );
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
+      if (target.interaction === "exclusive-checkbox-group") {
+        const checkboxes = locator.getByRole("checkbox");
+        const checkboxCount = await checkboxes.count();
+        if (checkboxCount < 2) return "invalid";
+        for (let index = 0; index < checkboxCount; index += 1) {
+          const checkbox = checkboxes.nth(index);
+          if (await checkbox.isChecked()) {
+            await checkbox.setChecked(false, { timeout: timeoutMs });
+          }
+        }
+      }
       await options.setChecked(true, { timeout: timeoutMs });
+      if (target.interaction === "exclusive-checkbox-group") {
+        const checked = locator.getByRole("checkbox", { checked: true });
+        if (await checked.count() !== 1 || !await options.isChecked()) return "invalid";
+      }
       return "applied";
     }
     if (target.control.kind !== "select") return "invalid";
