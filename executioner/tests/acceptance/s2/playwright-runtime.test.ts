@@ -701,9 +701,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
               }
             }, 0);
           });
-          input.nextElementSibling.addEventListener('click', () => {
+          document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
             document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(candidate => {
-              candidate.checked = candidate === input;
+              candidate.checked = false;
               candidate.setAttribute('aria-checked', String(candidate.checked));
               delete candidate.dataset.componentAccepted;
             });

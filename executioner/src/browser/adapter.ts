@@ -301,7 +301,7 @@ export async function applyMutation(
           await checkbox.isChecked();
         const waitUntilOnlyChecked = async (checkbox: Locator): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 1_500);
-          const stableWindow = Math.min(250, Math.max(50, Math.floor(waitWindow / 2)));
+          const stableWindow = Math.min(1_000, Math.max(50, Math.floor(waitWindow / 2)));
           const deadline = Date.now() + waitWindow;
           let stableSince: number | undefined;
           do {
@@ -346,9 +346,9 @@ export async function applyMutation(
           }
         }
         const surfaces = (await Promise.all([
+          taggedSurfaceFor("label", mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
-          taggedSurfaceFor("label", mutation.option),
           taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
         ])).filter((surface): surface is Locator => surface !== undefined);
         if (!await activate(options, surfaces)) return "invalid";

@@ -185,9 +185,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
             }
           }, 0);
         });
-        input.nextElementSibling.addEventListener('click', () => {
+        document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
-            candidate.checked = candidate === input;
+            candidate.checked = false;
             candidate.setAttribute('aria-checked', String(candidate.checked));
             delete candidate.dataset.componentAccepted;
           });
