@@ -653,9 +653,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
         <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
-          <label><input type="checkbox" checked>Yes, I have a disability, or have had one in the past</label>
-          <label><input type="checkbox" checked>No, I do not have a disability and have not had one in the past</label>
-          <label><input type="checkbox" aria-labelledby="decline-disability disability-context"><span id="decline-disability">I do not want to answer</span></label>
+          <div data-automation-id="checkboxPanel"><input id="has-disability" type="checkbox" checked><label for="has-disability">Yes, I have a disability, or have had one in the past</label></div>
+          <div data-automation-id="checkboxPanel"><input id="no-disability" type="checkbox" checked><label for="no-disability">No, I do not have a disability and have not had one in the past</label></div>
+          <div data-automation-id="checkboxPanel"><input id="decline-disability-input" type="checkbox" aria-labelledby="decline-disability disability-context"><label for="decline-disability-input"><span id="decline-disability">I do not want to answer</span></label></div>
           <span id="disability-context">Please check one of the boxes below</span>
         </fieldset>
       </div>
@@ -689,16 +689,16 @@ test("each questionnaire field mutation has its own before and readback monitor 
           replacement.removeAttribute('data-hunt-target-token');
           name.replaceWith(replacement);
         });
-        let labelActivation = false;
-        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] label').forEach(label => {
-          label.addEventListener('pointerdown', event => {
-            if (event.target !== label.querySelector('input')) labelActivation = true;
-          });
-          label.addEventListener('click', () => setTimeout(() => { labelActivation = false; }));
-        });
         document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(input => {
-          input.addEventListener('click', event => {
-            if (!labelActivation) event.preventDefault();
+          input.addEventListener('click', event => event.preventDefault());
+        });
+        document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] [data-automation-id="checkboxPanel"]').forEach(panel => {
+          panel.addEventListener('click', event => {
+            if (event.target !== panel) return;
+            const input = panel.querySelector('input');
+            document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(other => {
+              other.checked = other === input;
+            });
           });
         });
       </script>

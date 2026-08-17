@@ -291,28 +291,53 @@ export async function applyMutation(
           }
           return matching.length === 1 ? matching[0] : undefined;
         };
-        const activateLabel = async (label: Locator): Promise<boolean> => {
-          const box = await label.boundingBox();
-          if (box === null || box.width < 2 || box.height < 2) return false;
-          await label.click({
-            position: { x: Math.max(1, box.width - 2), y: Math.max(1, box.height / 2) },
-            timeout: timeoutMs,
-          });
-          return true;
-        };
-        for (let index = 0; index < checkboxCount; index += 1) {
-          const checkbox = checkboxes.nth(index);
-          if (await checkbox.isChecked()) {
-            const option = await checkbox.getAttribute("data-hunt-option-label");
-            const label = await labelFor(option);
-            if (label === undefined || !await activateLabel(label)) return "invalid";
+        const panelFor = async (option: string | null): Promise<Locator | undefined> => {
+          const panels = locator.locator('[data-automation-id="checkboxPanel"]');
+          const matching: Locator[] = [];
+          for (let index = 0; index < await panels.count(); index += 1) {
+            const panel = panels.nth(index);
+            if (await panel.getAttribute("data-hunt-option-label") === option) matching.push(panel);
           }
-        }
+          return matching.length === 1 ? matching[0] : undefined;
+        };
+        const isOnlyChecked = async (checkbox: Locator): Promise<boolean> =>
+          await locator.locator('input[type="checkbox"]:checked').count() === 1 &&
+          await checkbox.isChecked();
+        const activate = async (
+          checkbox: Locator,
+          label: Locator,
+          panel: Locator | undefined,
+        ): Promise<boolean> => {
+          const clickTimeout = Math.min(timeoutMs, 1_000);
+          if (panel !== undefined) {
+            try {
+              const box = await panel.boundingBox();
+              if (box !== null && box.width >= 2 && box.height >= 2) {
+                await panel.click({
+                  position: { x: Math.max(1, box.width - 2), y: Math.max(1, box.height / 2) },
+                  timeout: clickTimeout,
+                });
+              }
+              await page.waitForTimeout(Math.min(150, timeoutMs));
+              if (await isOnlyChecked(checkbox)) return true;
+            } catch {
+              // Workday variants expose different trusted pointer surfaces; try fallbacks.
+            }
+          }
+          for (const surface of [checkbox, label]) {
+            try {
+              await surface.click({ timeout: clickTimeout });
+              await page.waitForTimeout(Math.min(150, timeoutMs));
+              if (await isOnlyChecked(checkbox)) return true;
+            } catch {
+              // Try the next trusted pointer surface.
+            }
+          }
+          return false;
+        };
         const label = await labelFor(mutation.option);
-        if (label === undefined || !await activateLabel(label)) return "invalid";
-        await page.waitForTimeout(Math.min(150, timeoutMs));
-        const checked = locator.locator('input[type="checkbox"]:checked');
-        if (await checked.count() !== 1 || !await options.isChecked()) return "invalid";
+        const panel = await panelFor(mutation.option);
+        if (label === undefined || !await activate(options, label, panel)) return "invalid";
       } else {
         await options.setChecked(true, { timeout: timeoutMs });
       }
@@ -579,6 +604,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           [...checkbox.labels ?? []].forEach((label) =>
             label.setAttribute("data-hunt-option-label", options[index]!)
           );
+          checkbox.closest('[data-automation-id="checkboxPanel"]')
+            ?.setAttribute("data-hunt-option-label", options[index]!);
         });
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
         control = {
