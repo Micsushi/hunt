@@ -443,8 +443,29 @@ export class OwnedWorkdayApplicationRuntime {
             attempt,
             signal,
           );
+          // The independent transition observation can overlap Workday's
+          // delayed client-side remount. Carry a settled, authorized
+          // destination back to the page walk so it does not immediately
+          // re-observe that temporary loading shell and discard a proven
+          // navigation.
+          observed = await waitForApplicationObservation(
+            page,
+            Math.max(this.#timeoutMs, 30_000),
+            signal,
+            0,
+          );
+          if (
+            !observed.ok || !input.allowed.includes(observed.value.page) ||
+            isReturnedNavigationSource(observed.value, input)
+          ) {
+            throw new TypeError("application post-monitor destination denied");
+          }
+          this.#assertAuthorized(signal);
+          return {
+            ok: true,
+            value: { advanced: true, destination: observed.value },
+          };
         }
-        if (advanced.ok) this.#assertAuthorized(signal);
         return advanced;
       }
       case "reconcile_resume": {

@@ -17,6 +17,7 @@ import {
   type ApplicationPage,
   type ApplicationPageCheck,
   type ApplicationPageTruth,
+  type ApplicationPortResult,
   type ApplicationVerifiedCheckpoint,
   type ApplicationPortFailure,
   type ApplicationPrimitive,
@@ -75,7 +76,8 @@ export async function runApplicationPageWalk(
       1,
     );
   }
-  let current = await dependencies.observer.observe(signal);
+  let current: ApplicationPortResult<ApplicationPageTruth> =
+    await dependencies.observer.observe(signal);
   if (!current.ok) {
     return failure("browser_truth", current.error, applicationPages[0], 1);
   }
@@ -118,11 +120,9 @@ export async function runApplicationPageWalk(
         signal,
       );
       if (!advanced.ok) return failure("navigation", advanced.error, current.value.page, 1);
-      current = await observeDestination(
-        dependencies,
-        from,
-        signal,
-      );
+      current = advanced.value.destination === undefined
+        ? await observeDestination(dependencies, from, signal)
+        : { ok: true, value: advanced.value.destination };
       if (!current.ok) return failure("browser_truth", current.error, from, 1);
       if (
         current.value.submitActivated ||
@@ -142,7 +142,7 @@ export async function runApplicationPageWalk(
   }
 
   while (current.value.page !== "pre_review") {
-    const physicalPage = current.value.page;
+    const physicalPage: ApplicationPage = current.value.page;
     const lanes = observedLanes(current.value);
     if (lanes === undefined || !applicationPages.includes(physicalPage)) return failure(
       "browser_truth",
@@ -158,7 +158,7 @@ export async function runApplicationPageWalk(
     ])) return failure("browser_truth", internalFailure(
       "navigation_illegal", "progress_projection", "record", "navigation",
     ), physicalPage, 1);
-    let truth = current.value;
+    let truth: ApplicationPageTruth = current.value;
     for (const lane of lanes.slice(processed)) {
       if (pageChecks.length >= maximumApplicationPageVisits) return failure(
         "browser_truth",
@@ -242,11 +242,9 @@ export async function runApplicationPageWalk(
       signal,
     );
     if (!advanced.ok) return failure("navigation", advanced.error, physicalPage, 1);
-    current = await observeDestination(
-      dependencies,
-      physicalPage,
-      signal,
-    );
+    current = advanced.value.destination === undefined
+      ? await observeDestination(dependencies, physicalPage, signal)
+      : { ok: true, value: advanced.value.destination };
     if (!current.ok) return failure("browser_truth", current.error, physicalPage, 1);
     if (
       current.value.submitActivated ||

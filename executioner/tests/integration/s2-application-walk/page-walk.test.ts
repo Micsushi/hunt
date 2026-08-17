@@ -699,6 +699,49 @@ test("waits through transient browser truth while Workday remounts the destinati
   assert.equal(observations, 5);
 });
 
+test("uses the settled navigation destination without reobserving a remounted loading shell", async () => {
+  const calls: string[] = [];
+  const base = dependenciesFor([
+    truth("profile"), truth("profile"), truth("questionnaire"),
+  ], calls);
+  let observations = 0;
+  const destinations = [truth("questionnaire"), truth("pre_review")];
+  const observe = base.observer.observe.bind(base.observer);
+  const result = await runApplicationPageWalk(
+    {
+      ...base,
+      observer: {
+        async observe(signal) {
+          observations += 1;
+          return observe(signal);
+        },
+      },
+      navigation: {
+        async next(request) {
+          calls.push(`next:${request.from}:${request.allowed.join("|")}`);
+          const destination = destinations.shift();
+          assert.ok(destination, "fixture navigation destination exhausted");
+          return {
+            ok: true,
+            value: {
+              advanced: true,
+              destination,
+            },
+          };
+        },
+      },
+    },
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(observations, 3);
+  assert.deepEqual(result.ok && result.value.pageChecks.map(({ page }) => page), [
+    "profile", "questionnaire",
+  ]);
+});
+
 test("walks distinct My Information and My Experience profile roots", async () => {
   const calls: string[] = [];
   const result = await runApplicationPageWalk(

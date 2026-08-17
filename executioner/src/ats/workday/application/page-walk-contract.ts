@@ -145,7 +145,10 @@ export interface ApplicationWalkDependencies {
         readonly allowed: readonly ApplicationPage[];
       },
       signal: AbortSignal,
-    ): Promise<ApplicationPortResult<{ readonly advanced: true }>>;
+    ): Promise<ApplicationPortResult<{
+      readonly advanced: true;
+      readonly destination?: ApplicationPageTruth;
+    }>>;
   };
   readonly progress: {
     record(
