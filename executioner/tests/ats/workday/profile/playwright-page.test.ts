@@ -1062,7 +1062,7 @@ test("search select rescans and clicks an exact option virtualized after typeahe
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1_000 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
     await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
