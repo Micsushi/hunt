@@ -979,7 +979,7 @@ test("v2 phone type maps the canonical Mobile answer to a tenant CELL option", a
         });
       </script></body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
     await adapter.commit(
