@@ -261,14 +261,25 @@ export async function applyMutation(
     if (target.control.kind === "choice" && target.control.choice === "radio") {
       const matches = target.radioOptions?.filter((option) => option === mutation.option) ?? [];
       if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
-      const options = locator.getByRole(
-        target.interaction === "exclusive-checkbox-group" ? "checkbox" : "radio",
-        { name: mutation.option, exact: true },
-      );
+      const options = target.interaction === "exclusive-checkbox-group"
+        ? await (async () => {
+          const checkboxes = locator.locator('input[type="checkbox"]');
+          const matching: Locator[] = [];
+          for (let index = 0; index < await checkboxes.count(); index += 1) {
+            const checkbox = checkboxes.nth(index);
+            if (await checkbox.getAttribute("data-hunt-option-label") === mutation.option) {
+              matching.push(checkbox);
+            }
+          }
+          if (matching.length !== 1) return undefined;
+          return matching[0]!;
+        })()
+        : locator.getByRole("radio", { name: mutation.option, exact: true });
+      if (options === undefined) return "invalid";
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       if (target.interaction === "exclusive-checkbox-group") {
-        const checkboxes = locator.getByRole("checkbox");
+        const checkboxes = locator.locator('input[type="checkbox"]');
         const checkboxCount = await checkboxes.count();
         if (checkboxCount < 2) return "invalid";
         for (let index = 0; index < checkboxCount; index += 1) {
@@ -280,7 +291,7 @@ export async function applyMutation(
       }
       await options.setChecked(true, { timeout: timeoutMs });
       if (target.interaction === "exclusive-checkbox-group") {
-        const checked = locator.getByRole("checkbox", { checked: true });
+        const checked = locator.locator('input[type="checkbox"]:checked');
         if (await checked.count() !== 1 || !await options.isChecked()) return "invalid";
       }
       return "applied";
@@ -541,6 +552,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         const options = checkboxes.map(checkboxOptionName).filter(Boolean);
         if (checkboxes.length < 2 || options.length !== checkboxes.length ||
             new Set(options).size !== options.length) return [];
+        checkboxes.forEach((checkbox, index) =>
+          checkbox.setAttribute("data-hunt-option-label", options[index]!)
+        );
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
         control = {
           kind: "choice",

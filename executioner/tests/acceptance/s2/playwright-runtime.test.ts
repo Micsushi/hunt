@@ -655,7 +655,8 @@ test("each questionnaire field mutation has its own before and readback monitor 
         <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
           <label><input type="checkbox" checked>Yes, I have a disability, or have had one in the past</label>
           <label><input type="checkbox" checked>No, I do not have a disability and have not had one in the past</label>
-          <label><input type="checkbox">I do not want to answer</label>
+          <label><input type="checkbox" aria-labelledby="decline-disability disability-context"><span id="decline-disability">I do not want to answer</span></label>
+          <span id="disability-context">Please check one of the boxes below</span>
         </fieldset>
       </div>
       <script>
