@@ -89,6 +89,80 @@ test("questionnaire binding gives unknown questions stable value-free target ide
   }
 });
 
+test("repeated questionnaire navigation distinguishes the destination by exact field truth", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire">
+    <main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-source"><label>Source question
+        <textarea required data-hunt-field-id="source-question">verified source answer</textarea>
+      </label></div>
+      <button type="button">Save and Continue</button>
+    </main>
+    <script>
+      document.querySelector('button').addEventListener('click', () => {
+        document.querySelector('main').outerHTML =
+          '<main data-automation-id="applyFlowVoluntaryDisclosuresPage">' +
+          '<div data-automation-id="formField-destination"><label>Destination question' +
+          '<input required data-hunt-field-id="destination-question" value="verified destination answer"></label></div>' +
+          '<button type="button">Save and Continue</button></main>';
+      });
+    </script>
+  </body></html>`);
+  const monitored: string[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_repeated_questionnaire_next_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: {
+      async auth() {},
+      async application(_page, _pageName, moment) { monitored.push(moment); },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_repeated_questionnaire_01"),
+    sessionId: "live_session_repeated_questionnaire_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_repeated_questionnaire_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_repeated_questionnaire_01"),
+      operationId: generatedOperationId("operation_repeated_questionnaire_run_01"),
+      sessionId: "live_session_repeated_questionnaire_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "next",
+      input: {
+        journeyId: journeyId("journey_repeated_questionnaire_01"),
+        from: "questionnaire",
+        fromPageId: "s2-questionnaire",
+        allowed: ["questionnaire", "pre_review"],
+      },
+    }, new AbortController().signal) as {
+      readonly ok: boolean;
+      readonly value?: { readonly destination?: { readonly page: string } };
+    };
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.value?.destination?.page, "questionnaire");
+    assert.deepEqual(monitored, ["before_navigation", "transition"]);
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("a profile preflight owner-input block remains a deterministic page failure before mutation", async () => {
   const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-runtime-"));
   const browser = await chromium.launch({ headless: true });

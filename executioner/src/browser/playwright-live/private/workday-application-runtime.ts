@@ -400,7 +400,10 @@ export class OwnedWorkdayApplicationRuntime {
             }
           };
           await stabilizeEmptyDestination();
-          if (observed.ok && isReturnedNavigationSource(observed.value, input)) {
+          if (
+            observed.ok &&
+            isReturnedNavigationSource(observed.value, navigationSource.value)
+          ) {
             observed = await waitForExactApplicationSource(
               page,
               navigationSource.value,
@@ -431,7 +434,7 @@ export class OwnedWorkdayApplicationRuntime {
           }
           if (
             !observed.ok || !input.allowed.includes(observed.value.page) ||
-            isReturnedNavigationSource(observed.value, input)
+            isReturnedNavigationSource(observed.value, navigationSource.value)
           ) {
             throw new TypeError("application navigation readback denied");
           }
@@ -456,7 +459,7 @@ export class OwnedWorkdayApplicationRuntime {
           );
           if (
             !observed.ok || !input.allowed.includes(observed.value.page) ||
-            isReturnedNavigationSource(observed.value, input)
+            isReturnedNavigationSource(observed.value, navigationSource.value)
           ) {
             throw new TypeError("application post-monitor destination denied");
           }
@@ -1198,14 +1201,9 @@ function applicationMonitorDiagnostic(stage: string, moment?: string): void {
 
 function isReturnedNavigationSource(
   observed: ApplicationPageTruth,
-  input: {
-    readonly from: ApplicationPageTruth["page"];
-    readonly fromPageId: ApplicationPageTruth["pageId"];
-  },
+  source: ApplicationPageTruth,
 ): boolean {
-  if (observed.page !== input.from || observed.pageId !== input.fromPageId) return false;
-  const lanes = observed.lanes ?? [observed.page];
-  return !(input.from === "profile" && lanes.includes("resume"));
+  return isExactVerifiedApplicationSource(observed, source);
 }
 
 function applicationMonitorPage(
