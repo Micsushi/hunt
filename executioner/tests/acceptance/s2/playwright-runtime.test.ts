@@ -642,7 +642,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       [5, 6, 7, 8, 9, 10, 11, 12, 13],
     );
 
-    await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
       <div data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm">
         <label>Language <span data-automation-id="required">*</span></label>
         <button type="button" aria-haspopup="listbox">Select One</button>
@@ -694,6 +694,20 @@ test("each questionnaire field mutation has its own before and readback monitor 
         document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(input => {
           input.addEventListener('click', () => {
             input.setAttribute('aria-checked', String(input.checked));
+            setTimeout(() => {
+              if (input.dataset.componentAccepted !== 'true') {
+                input.checked = false;
+                input.setAttribute('aria-checked', 'false');
+              }
+            }, 0);
+          });
+          input.nextElementSibling.addEventListener('click', () => {
+            document.querySelectorAll('[data-automation-id="disabilityStatus-CheckboxGroup"] input').forEach(candidate => {
+              candidate.checked = candidate === input;
+              candidate.setAttribute('aria-checked', String(candidate.checked));
+              delete candidate.dataset.componentAccepted;
+            });
+            input.dataset.componentAccepted = 'true';
           });
         });
       </script>

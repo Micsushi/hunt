@@ -162,6 +162,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 preflights every date leaf before changing any p
 
 test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive choice", async () => {
   const variant = await openVariantPage(`
+    <style>.visual { display: inline-block; width: 18px; height: 18px; }</style>
     <div data-automation-id="formField-disabilityStatus">
       <label>Disability Status</label>
       <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
@@ -177,7 +178,20 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
         input.addEventListener('click', () => {
           input.setAttribute('aria-checked', String(input.checked));
-          input.dataset.activated = 'true';
+          setTimeout(() => {
+            if (input.dataset.componentAccepted !== 'true') {
+              input.checked = false;
+              input.setAttribute('aria-checked', 'false');
+            }
+          }, 0);
+        });
+        input.nextElementSibling.addEventListener('click', () => {
+          document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+            candidate.setAttribute('aria-checked', String(candidate.checked));
+            delete candidate.dataset.componentAccepted;
+          });
+          input.dataset.componentAccepted = 'true';
         });
       });
     </script>
@@ -213,7 +227,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 treats a Workday CheckboxGroup as one exclusive 
     });
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
     assert.equal(
-      await variant.page.locator('#decline').getAttribute('data-activated'),
+      await variant.page.locator('#decline').getAttribute('data-component-accepted'),
       "true",
     );
   } finally {

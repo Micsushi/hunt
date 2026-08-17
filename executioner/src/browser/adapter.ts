@@ -300,12 +300,21 @@ export async function applyMutation(
           await locator.locator('input[type="checkbox"]:checked').count() === 1 &&
           await checkbox.isChecked();
         const waitUntilOnlyChecked = async (checkbox: Locator): Promise<boolean> => {
-          const deadline = Date.now() + Math.min(timeoutMs, 750);
+          const waitWindow = Math.min(timeoutMs, 1_500);
+          const stableWindow = Math.min(250, Math.max(50, Math.floor(waitWindow / 2)));
+          const deadline = Date.now() + waitWindow;
+          let stableSince: number | undefined;
           do {
-            if (await isOnlyChecked(checkbox)) return true;
+            if (await isOnlyChecked(checkbox)) {
+              stableSince ??= Date.now();
+              if (Date.now() - stableSince >= stableWindow) return true;
+            } else {
+              stableSince = undefined;
+            }
             await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
           } while (Date.now() < deadline);
-          return await isOnlyChecked(checkbox);
+          return stableSince !== undefined && await isOnlyChecked(checkbox) &&
+            Date.now() - stableSince >= stableWindow;
         };
         const activate = async (
           checkbox: Locator,
@@ -313,7 +322,7 @@ export async function applyMutation(
         ): Promise<boolean> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
           if (await isOnlyChecked(checkbox)) return true;
-          for (const surface of [checkbox, ...surfaces]) {
+          for (const surface of [...surfaces, checkbox]) {
             try {
               await surface.click({ timeout: clickTimeout });
               if (await waitUntilOnlyChecked(checkbox)) return true;
@@ -337,9 +346,9 @@ export async function applyMutation(
           }
         }
         const surfaces = (await Promise.all([
-          taggedSurfaceFor("label", mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
           taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
+          taggedSurfaceFor("label", mutation.option),
           taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
         ])).filter((surface): surface is Locator => surface !== undefined);
         if (!await activate(options, surfaces)) return "invalid";
