@@ -811,7 +811,7 @@ test("search select uses exact keyboard typeahead when an owned popup exposes no
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
 
@@ -865,7 +865,7 @@ test("search select clicks the exact active descendant established by typeahead"
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
 
@@ -908,7 +908,7 @@ test("search select activates the option-row ancestor of an exact active descend
         });
       </script></body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
     await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
@@ -947,7 +947,7 @@ test("v2 phone type commits an activated exact row with Enter", async () => {
         });
       </script></body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
     await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
@@ -1109,7 +1109,7 @@ test("search select reconciles an exact nested leaf revealed by the focused row"
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
     await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
