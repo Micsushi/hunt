@@ -604,3 +604,68 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rejects a delayed controlled rollback before acc
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 commits a stable native choice through its React owner", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-controlled-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="controlled-yes" type="checkbox"><label for="controlled-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="controlled-no" type="checkbox"><label for="controlled-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="controlled-decline" type="checkbox"><label for="controlled-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', () => {
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+        });
+        Object.defineProperty(input, '__reactProps$controlled', {
+          enumerable: true,
+          value: {
+            onChange: event => { group.dataset.committedOption = event.target.id; },
+          },
+        });
+      });
+    </script>
+  `, "5980000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-controlled-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    await variant.page.locator(
+      '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+    ).evaluate(owner => {
+      const committed = (owner as HTMLElement).dataset.committedOption;
+      owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => {
+        input.checked = input.id === committed;
+      });
+    });
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-committed-option"),
+      "controlled-decline",
+    );
+    assert.equal(await variant.page.locator("#controlled-decline").isChecked(), true);
+  } finally {
+    await variant.close();
+  }
+});

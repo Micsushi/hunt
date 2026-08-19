@@ -343,9 +343,9 @@ export async function applyMutation(
           return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
         };
-        const invokeReactOptionHandler = async (): Promise<boolean> => {
+        const invokeReactOptionHandler = async (): Promise<"committed" | "absent" | "rejected"> => {
           const checkbox = await desiredCheckbox();
-          if (checkbox === undefined) return false;
+          if (checkbox === undefined) return "absent";
           return await checkbox.evaluate(async (element) => {
             const input = element as HTMLInputElement;
             const candidates: Element[] = [];
@@ -375,6 +375,7 @@ export async function applyMutation(
             ).forEach(add);
 
             const invoked = new Set<unknown>();
+            let handlerObserved = false;
             for (const candidate of candidates.slice(0, 16)) {
               const invoke = async (props: Record<string, unknown> | undefined): Promise<boolean> => {
                 if (props === undefined) return false;
@@ -391,6 +392,7 @@ export async function applyMutation(
                   ? change
                   : undefined;
                 if (handler === undefined || invoked.has(handler)) return false;
+                handlerObserved = true;
                 invoked.add(handler);
                 const type = handler === change
                   ? "change"
@@ -434,7 +436,7 @@ export async function applyMutation(
                     | Record<string, unknown>
                     | undefined,
                 )
-              ) return true;
+              ) return "committed";
               const fiberKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
               );
@@ -445,11 +447,11 @@ export async function applyMutation(
                 return?: unknown;
               } | undefined;
               while (node !== undefined && node !== null) {
-                if (await invoke(node.memoizedProps ?? node.pendingProps)) return true;
+                if (await invoke(node.memoizedProps ?? node.pendingProps)) return "committed";
                 node = node.return as typeof node;
               }
             }
-            return false;
+            return handlerObserved ? "rejected" : "absent";
           });
         };
         const activate = async (
@@ -502,6 +504,18 @@ export async function applyMutation(
           }
           return observedTransient ? "transient" : "none";
         };
+        const acceptStableActivation = async (
+          activation: "stable" | "transient" | "none",
+        ): Promise<boolean> => {
+          if (activation !== "stable") return false;
+          // A trusted event can leave the native input checked while Workday's
+          // controlled React value is still unchanged. Re-deliver the exact
+          // selected value to an owned React handler when one exists, then
+          // require another stable exclusive readback before accepting it.
+          const reactCommit = await invokeReactOptionHandler();
+          if (reactCommit === "absent") return true;
+          return reactCommit === "committed" && await waitUntilOnlyChecked();
+        };
         for (let index = 0; index < checkboxCount; index += 1) {
           const checkbox = checkboxes.nth(index);
           if (
@@ -525,21 +539,21 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox, keyboard: true };
           },
         ]);
-        if (keyboardActivation === "stable") return "applied";
+        if (await acceptStableActivation(keyboardActivation)) return "applied";
         const nativeActivation = await activate([
           async () => {
             const checkbox = await desiredCheckbox();
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
         ]);
-        if (nativeActivation === "stable") return "applied";
+        if (await acceptStableActivation(nativeActivation)) return "applied";
         const forcedNativeActivation = await activate([
           async () => {
             const checkbox = await desiredCheckbox();
             return checkbox === undefined ? undefined : { locator: checkbox, force: true };
           },
         ]);
-        if (forcedNativeActivation === "stable") return "applied";
+        if (await acceptStableActivation(forcedNativeActivation)) return "applied";
         const trustedActivation = await activate([
           async () => {
             const label = await exactLabelFor(mutation.option);
@@ -580,7 +594,7 @@ export async function applyMutation(
             return surface === undefined ? undefined : { locator: surface, panelEdge: true };
           },
         ]);
-        if (trustedActivation === "stable") return "applied";
+        if (await acceptStableActivation(trustedActivation)) return "applied";
         // A hidden native Workday checkbox can still own the delegated React
         // change event even when every visible wrapper is decorative. DOM
         // click preserves the checkbox's native toggle-before-event ordering
@@ -597,13 +611,13 @@ export async function applyMutation(
             // Fall through to the exact React owner fallback.
           }
         }
-        if (domStable) return "applied";
+        if (domStable && await acceptStableActivation("stable")) return "applied";
         // Some Workday CheckboxGroup variants update the native checkbox for a
         // pointer event, then reconcile it back because the owning React option
         // handler never ran. Keep this exact-option fallback behind all trusted
         // surfaces and require the same stable, exclusive readback afterward.
         const reactInvoked = await invokeReactOptionHandler();
-        const reactStable = reactInvoked && await waitUntilOnlyChecked();
+        const reactStable = reactInvoked === "committed" && await waitUntilOnlyChecked();
         if (!reactStable) {
           if (
             process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1" ||
