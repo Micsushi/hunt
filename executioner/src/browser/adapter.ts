@@ -657,9 +657,49 @@ export async function applyMutation(
           // rollback. The isolated live child intentionally receives a narrow
           // environment, so an opt-in parent flag can silently hide the only
           // evidence that identifies Workday's real state owner.
-          const structure = await stableGroup().evaluate((owner) =>
+          const structure = await stableGroup().evaluate((owner) => {
+            const inputStates: {
+              inputIndex: number;
+              checked: boolean;
+              disabled: boolean;
+              labelCount: number;
+            }[] = [];
+            const domLayers = new Map<string, {
+              tag: string;
+              automationId: string | null;
+              role: string | null;
+              classCount: number;
+              directHandlers: { name: string; arity: number }[];
+              inputIndexes: number[];
+            }>();
+            const fiberHandlerLayers = new Map<string, {
+              hostTag: string;
+              hostAutomationId: string | null;
+              depth: number;
+              handlers: { name: string; arity: number }[];
+              inputIndexes: number[];
+            }>();
+            const handlers = (props: unknown) =>
+              typeof props === "object" && props !== null
+                ? Object.entries(props)
+                  .filter(([name, value]) => /^on[A-Z]/u.test(name) && typeof value === "function")
+                  .map(([name, value]) => ({
+                    name,
+                    arity: (value as (...args: unknown[]) => unknown).length,
+                  }))
+                  .sort((left, right) => left.name.localeCompare(right.name) || left.arity - right.arity)
+                : [];
+            const includeIndex = (indexes: number[], inputIndex: number) => {
+              if (!indexes.includes(inputIndex)) indexes.push(inputIndex);
+            };
             [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-              .map((input, inputIndex) => {
+              .forEach((input, inputIndex) => {
+                inputStates.push({
+                  inputIndex,
+                  checked: input.checked,
+                  disabled: input.disabled,
+                  labelCount: input.labels?.length ?? 0,
+                });
                 const chain: Element[] = [];
                 for (
                   let node: Element | null = input;
@@ -669,33 +709,29 @@ export async function applyMutation(
                   chain.push(node);
                   if (node === owner) break;
                 }
-                const handlers = (props: unknown) =>
-                  typeof props === "object" && props !== null
-                    ? Object.entries(props)
-                      .filter(([name, value]) => /^on[A-Z]/u.test(name) && typeof value === "function")
-                      .map(([name, value]) => ({
-                        name,
-                        arity: (value as (...args: unknown[]) => unknown).length,
-                      }))
-                    : [];
-                return {
-                  inputIndex,
-                  checked: input.checked,
-                  disabled: input.disabled,
-                  labelCount: input.labels?.length ?? 0,
-                  chain: chain.map((element) => {
+                chain.forEach((element) => {
                     const record = element as unknown as Record<string, unknown>;
                     const directHandlers = Object.keys(element)
                       .filter((key) => key.startsWith("__reactProps$"))
                       .flatMap((key) => handlers(record[key]));
+                    const domLayer = {
+                      tag: element.tagName.toLowerCase(),
+                      automationId: element.getAttribute("data-automation-id"),
+                      role: element.getAttribute("role"),
+                      classCount: element.classList.length,
+                      directHandlers,
+                    };
+                    const domKey = JSON.stringify(domLayer);
+                    const existingDom = domLayers.get(domKey);
+                    if (existingDom === undefined) {
+                      domLayers.set(domKey, { ...domLayer, inputIndexes: [inputIndex] });
+                    } else {
+                      includeIndex(existingDom.inputIndexes, inputIndex);
+                    }
                     const fiberKey = Object.keys(element).find((key) =>
                       key.startsWith("__reactFiber$") ||
                       key.startsWith("__reactInternalInstance$")
                     );
-                    const fiberHandlers: {
-                      depth: number;
-                      handlers: { name: string; arity: number }[];
-                    }[] = [];
                     let fiber = fiberKey === undefined
                       ? undefined
                       : record[fiberKey] as {
@@ -706,22 +742,33 @@ export async function applyMutation(
                     for (let depth = 0; fiber !== undefined && fiber !== null && depth < 16; depth += 1) {
                       const layerHandlers = handlers(fiber.memoizedProps ?? fiber.pendingProps);
                       if (layerHandlers.length > 0) {
-                        fiberHandlers.push({ depth, handlers: layerHandlers });
+                        const fiberLayer = {
+                          hostTag: element.tagName.toLowerCase(),
+                          hostAutomationId: element.getAttribute("data-automation-id"),
+                          depth,
+                          handlers: layerHandlers,
+                        };
+                        const layerKey = JSON.stringify(fiberLayer);
+                        const existingFiber = fiberHandlerLayers.get(layerKey);
+                        if (existingFiber === undefined) {
+                          fiberHandlerLayers.set(layerKey, {
+                            ...fiberLayer,
+                            inputIndexes: [inputIndex],
+                          });
+                        } else {
+                          includeIndex(existingFiber.inputIndexes, inputIndex);
+                        }
                       }
                       fiber = fiber.return as typeof fiber;
                     }
-                    return {
-                      tag: element.tagName.toLowerCase(),
-                      automationId: element.getAttribute("data-automation-id"),
-                      role: element.getAttribute("role"),
-                      classCount: element.classList.length,
-                      directHandlers,
-                      fiberHandlers,
-                    };
-                  }),
-                };
-              })
-          );
+                });
+              });
+            return {
+              inputStates,
+              domLayers: [...domLayers.values()],
+              fiberHandlerLayers: [...fiberHandlerLayers.values()],
+            };
+          });
           process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
             reactInvoked,
             reactStable,
