@@ -324,8 +324,8 @@ export async function applyMutation(
             await checkbox.isChecked();
         };
         const waitUntilOnlyChecked = async (): Promise<boolean> => {
-          const waitWindow = Math.min(timeoutMs, 1_500);
-          const stableWindow = Math.min(1_000, Math.max(50, Math.floor(waitWindow / 2)));
+          const waitWindow = Math.min(timeoutMs, 1_800);
+          const stableWindow = Math.min(1_250, Math.max(50, Math.floor(waitWindow * 0.7)));
           const deadline = Date.now() + waitWindow;
           let stableSince: number | undefined;
           do {
@@ -339,6 +339,75 @@ export async function applyMutation(
           } while (Date.now() < deadline);
           return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
+        };
+        const invokeReactOptionHandler = async (): Promise<boolean> => {
+          const checkbox = await desiredCheckbox();
+          if (checkbox === undefined) return false;
+          return await checkbox.evaluate((element) => {
+            const input = element as HTMLInputElement;
+            const candidates: Element[] = [];
+            const add = (candidate: Element | null | undefined): void => {
+              if (candidate !== null && candidate !== undefined && !candidates.includes(candidate)) {
+                candidates.push(candidate);
+              }
+            };
+            add(input);
+            add(input.parentElement);
+            const panel = input.closest('[data-automation-id="checkboxPanel"]');
+            add(panel);
+            panel?.querySelectorAll(
+              '[data-automation-id="promptLeafNode"], [data-uxi-widget-type], label, span, div',
+            ).forEach(add);
+            Array.from(input.labels ?? []).forEach((label) => {
+              add(label);
+              label.querySelectorAll("span, div").forEach(add);
+            });
+
+            for (const candidate of candidates.slice(0, 16)) {
+              const fiberKey = Object.keys(candidate).find((key) =>
+                key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+              );
+              if (fiberKey === undefined) continue;
+              let node = (candidate as unknown as Record<string, unknown>)[fiberKey] as {
+                memoizedProps?: Record<string, unknown>;
+                pendingProps?: Record<string, unknown>;
+                return?: unknown;
+              } | undefined;
+              while (node !== undefined && node !== null) {
+                const props = node.memoizedProps ?? node.pendingProps;
+                const click = props?.onClick;
+                const mouseDown = props?.onMouseDown;
+                const handler = typeof click === "function"
+                  ? click
+                  : typeof mouseDown === "function"
+                  ? mouseDown
+                  : undefined;
+                if (handler !== undefined) {
+                  const type = handler === mouseDown ? "mousedown" : "click";
+                  const nativeEvent = new MouseEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    detail: type === "click" ? 1 : 0,
+                  });
+                  handler({
+                    type,
+                    target: input,
+                    currentTarget: candidate,
+                    bubbles: true,
+                    nativeEvent,
+                    preventDefault: () => undefined,
+                    stopPropagation: () => undefined,
+                    isDefaultPrevented: () => false,
+                    isPropagationStopped: () => false,
+                    persist: () => undefined,
+                  });
+                  return true;
+                }
+                node = node.return as typeof node;
+              }
+            }
+            return false;
+          });
         };
         const activate = async (
           surfaces: readonly (() => Promise<{
@@ -434,7 +503,15 @@ export async function applyMutation(
             const checkbox = await desiredCheckbox();
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
-        ])) return "invalid";
+        ])) {
+          // Some Workday CheckboxGroup variants update the native checkbox for a
+          // pointer event, then reconcile it back because the owning React option
+          // handler never ran. Keep this exact-option fallback behind all trusted
+          // surfaces and require the same stable, exclusive readback afterward.
+          if (!await invokeReactOptionHandler() || !await waitUntilOnlyChecked()) {
+            return "invalid";
+          }
+        }
       } else {
         await options.setChecked(true, { timeout: timeoutMs });
       }
