@@ -505,6 +505,13 @@ export async function applyMutation(
           const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
           return await checkbox.count() === 1 ? checkbox : undefined;
         };
+        const nativeActivation = await activate([
+          async () => {
+            const checkbox = await desiredCheckbox();
+            return checkbox === undefined ? undefined : { locator: checkbox };
+          },
+        ]);
+        if (nativeActivation === "stable") return "applied";
         const trustedActivation = await activate([
           async () => {
             const label = await exactLabelFor(mutation.option);
@@ -544,21 +551,8 @@ export async function applyMutation(
             );
             return surface === undefined ? undefined : { locator: surface, panelEdge: true };
           },
-          async () => {
-            const checkbox = await desiredCheckbox();
-            return checkbox === undefined ? undefined : { locator: checkbox };
-          },
         ]);
-        if (trustedActivation === "stable") {
-          // A controlled Workday checkbox can preserve a DOM-only pointer
-          // toggle beyond the local stability window and reconcile it away
-          // only after the adapter returns. If an exact React option owner is
-          // present, commit through it even after the trusted surface appears
-          // stable, then prove the controlled state independently again.
-          const reactInvoked = await invokeReactOptionHandler();
-          if (!reactInvoked) return "applied";
-          return await waitUntilOnlyChecked() ? "applied" : "invalid";
-        }
+        if (trustedActivation === "stable") return "applied";
         // A hidden native Workday checkbox can still own the delegated React
         // change event even when every visible wrapper is decorative. DOM
         // click preserves the checkbox's native toggle-before-event ordering

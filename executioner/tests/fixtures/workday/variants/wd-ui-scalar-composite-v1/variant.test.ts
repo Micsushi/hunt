@@ -187,7 +187,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 6000);
+          }, 3000);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -208,7 +208,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 6000);
+          }, 3000);
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
@@ -289,9 +289,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         option: boundedText("Decline to self-identify"),
       },
       undefined,
-      10_000,
+      5_000,
     ), "applied");
-    await variant.page.waitForTimeout(6_200);
+    await variant.page.waitForTimeout(3_200);
     await variant.page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
       .evaluate((element) => element.setAttribute(
         'data-hunt-target-token',
@@ -323,6 +323,72 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         .getAttribute('data-decoy-invocation-count'),
       null,
     );
+  } finally {
+    await variant.close();
+  }
+});
+
+test("WD-UI-SCALAR-COMPOSITE-V1 prefers the native Workday checkbox owner before decorative surfaces", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-automation-id="checkboxPanel"] { display: block; width: 420px; }
+      .visual { display: inline-block; width: 18px; height: 18px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-native-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="native-yes" type="checkbox"><label for="native-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-no" type="checkbox"><label for="native-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-decline" type="checkbox"><label for="native-decline">Decline to self-identify</label><span class="visual"></span></div>
+      </fieldset>
+    </div>
+    <script>
+      document.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', event => {
+          if (event.isTrusted) {
+            document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+              candidate.checked = candidate === input;
+            });
+            input.dataset.nativeOwnerAccepted = 'true';
+          }
+          setTimeout(() => {
+            if (input.dataset.nativeOwnerAccepted !== 'true') input.checked = false;
+          }, 6000);
+        });
+        document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
+          input.dataset.decorativeSurfaceActivated = 'true';
+        });
+      });
+    </script>
+  `, "5850000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-native-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    await variant.page.waitForTimeout(6_200);
+    assert.equal(
+      await variant.page.locator("#native-decline").getAttribute("data-native-owner-accepted"),
+      "true",
+    );
+    assert.equal(
+      await variant.page.locator("#native-decline").getAttribute("data-decorative-surface-activated"),
+      null,
+    );
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
   } finally {
     await variant.close();
   }
