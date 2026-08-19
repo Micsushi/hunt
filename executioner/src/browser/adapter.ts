@@ -327,7 +327,7 @@ export async function applyMutation(
           initiallyStableSince?: number,
         ): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 1_800);
-          const stableWindow = Math.min(1_250, Math.max(50, Math.floor(waitWindow * 0.7)));
+          const stableWindow = Math.min(1_700, Math.max(50, waitWindow - 150));
           const deadline = Date.now() + waitWindow;
           let stableSince = initiallyStableSince;
           do {
@@ -461,8 +461,6 @@ export async function applyMutation(
                 await surface.locator.click({ timeout: clickTimeout });
               }
               const checkedSince = Date.now();
-              if (!await isOnlyChecked()) continue;
-              await invokeReactOptionHandler(true);
               if (!await isOnlyChecked()) continue;
               const stable = await waitUntilOnlyChecked(checkedSince);
               if (stable) return true;

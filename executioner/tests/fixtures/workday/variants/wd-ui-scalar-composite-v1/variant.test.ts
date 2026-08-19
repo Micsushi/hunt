@@ -212,19 +212,23 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
-        input.closest('[data-automation-id="checkboxPanel"]').__reactProps$fixture = {
-          onClick: () => {
-            document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
-              candidate.checked = candidate === input;
-              candidate.setAttribute('aria-checked', String(candidate.checked));
-              delete candidate.dataset.componentAccepted;
-            });
-            input.dataset.componentAccepted = 'true';
-            input.closest('[data-automation-id="checkboxPanel"]')
-              .dataset.reactActivated = 'true';
-            input.closest('[data-automation-id="checkboxPanel"]')
-              .dataset.reactEventType = 'click';
-            setTimeout(() => {
+        const panel = input.closest('[data-automation-id="checkboxPanel"]');
+        let accepted = false;
+        const onClick = () => {
+          accepted = !accepted;
+          document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = accepted && candidate === input;
+            candidate.setAttribute('aria-checked', String(candidate.checked));
+            delete candidate.dataset.componentAccepted;
+          });
+          if (accepted) input.dataset.componentAccepted = 'true';
+          panel.dataset.reactActivated = String(accepted);
+          panel.dataset.reactEventType = 'click';
+          panel.dataset.reactInvocationCount = String(
+            Number(panel.dataset.reactInvocationCount ?? '0') + 1
+          );
+          if (!accepted) return;
+          setTimeout(() => {
             const owner = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
             const replacement = owner.cloneNode(true);
             replacement.removeAttribute('data-hunt-target-token');
@@ -238,9 +242,16 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
                 element.removeAttribute('data-hunt-checkbox-surface');
             });
             owner.replaceWith(replacement);
-            }, 0);
-          },
+          }, 0);
         };
+        panel.__reactProps$fixture = { onClick };
+        panel.addEventListener('click', event => {
+          if (event.target === panel) onClick();
+        });
+        document.querySelector('label[for="' + input.id + '"]').addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+        }, { capture: true });
       });
     </script>
   `, "5800000000000000");
@@ -298,6 +309,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
       await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
         .getAttribute('data-react-event-type'),
       "click",
+    );
+    assert.equal(
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute('data-react-invocation-count'),
+      "1",
     );
   } finally {
     await variant.close();
