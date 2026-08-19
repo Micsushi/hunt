@@ -183,7 +183,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 0);
+          }, 800);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -191,7 +191,29 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
             candidate.setAttribute('aria-checked', String(candidate.checked));
             delete candidate.dataset.componentAccepted;
           });
+        });
+        input.nextElementSibling.addEventListener('click', () => {
+          document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+            candidate.setAttribute('aria-checked', String(candidate.checked));
+            delete candidate.dataset.componentAccepted;
+          });
           input.dataset.componentAccepted = 'true';
+          setTimeout(() => {
+            const owner = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+            const replacement = owner.cloneNode(true);
+            replacement.removeAttribute('data-hunt-target-token');
+            replacement.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+              candidate.checked = candidate.id === input.id;
+              candidate.setAttribute('aria-checked', String(candidate.checked));
+            });
+            replacement.querySelectorAll('[data-hunt-option-label], [data-hunt-checkbox-surface]')
+              .forEach(element => {
+                element.removeAttribute('data-hunt-option-label');
+                element.removeAttribute('data-hunt-checkbox-surface');
+              });
+            owner.replaceWith(replacement);
+          }, 0);
         });
       });
     </script>
@@ -228,8 +250,13 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         option: boundedText("Decline to self-identify"),
       },
       undefined,
-      500,
+      5_000,
     ), "applied");
+    await variant.page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
+      .evaluate((element) => element.setAttribute(
+        'data-hunt-target-token',
+        'target-disability-status',
+      ));
     const after = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
     assert.deepEqual(after.observation.targets[0]?.readback, {
       kind: "selected",

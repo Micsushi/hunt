@@ -274,6 +274,11 @@ export async function applyMutation(
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       if (target.interaction === "exclusive-checkbox-group") {
+        const groupAutomationId = await locator.getAttribute("data-automation-id");
+        const stableGroup = groupAutomationId !== null &&
+            /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(groupAutomationId)
+          ? () => page.locator(`[data-automation-id="${groupAutomationId}"]`)
+          : () => locator;
         const checkboxes = locator.locator('input[type="checkbox"]');
         const checkboxCount = await checkboxes.count();
         if (checkboxCount < 2) return "invalid";
@@ -281,7 +286,7 @@ export async function applyMutation(
           selector: string,
           option: string | null,
         ): Promise<Locator | undefined> => {
-          const surfaces = locator.locator(selector);
+          const surfaces = stableGroup().locator(selector);
           const matching: Locator[] = [];
           for (let index = 0; index < await surfaces.count(); index += 1) {
             const surface = surfaces.nth(index);
@@ -292,7 +297,7 @@ export async function applyMutation(
           return matching.length === 1 ? matching[0]! : undefined;
         };
         const exactLabelFor = async (option: string): Promise<Locator | undefined> => {
-          const labels = locator.locator("label");
+          const labels = stableGroup().locator("label");
           const expected = option.normalize("NFC").replace(/\s+/gu, " ").trim();
           const matching: Locator[] = [];
           for (let index = 0; index < await labels.count(); index += 1) {
@@ -303,16 +308,20 @@ export async function applyMutation(
           }
           return matching.length === 1 ? matching[0]! : undefined;
         };
-        const isOnlyChecked = async (checkbox: Locator): Promise<boolean> =>
-          await locator.locator('input[type="checkbox"]:checked').count() === 1 &&
-          await checkbox.isChecked();
-        const waitUntilOnlyChecked = async (checkbox: Locator): Promise<boolean> => {
+        const isOnlyChecked = async (): Promise<boolean> => {
+          const group = stableGroup();
+          const checkbox = group.getByLabel(mutation.option, { exact: true });
+          return await group.count() === 1 && await checkbox.count() === 1 &&
+            await group.locator('input[type="checkbox"]:checked').count() === 1 &&
+            await checkbox.isChecked();
+        };
+        const waitUntilOnlyChecked = async (): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 1_500);
           const stableWindow = Math.min(1_000, Math.max(50, Math.floor(waitWindow / 2)));
           const deadline = Date.now() + waitWindow;
           let stableSince: number | undefined;
           do {
-            if (await isOnlyChecked(checkbox)) {
+            if (await isOnlyChecked()) {
               stableSince ??= Date.now();
               if (Date.now() - stableSince >= stableWindow) return true;
             } else {
@@ -320,19 +329,22 @@ export async function applyMutation(
             }
             await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
           } while (Date.now() < deadline);
-          return stableSince !== undefined && await isOnlyChecked(checkbox) &&
+          return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
         };
         const activate = async (
-          checkbox: Locator,
-          surfaces: readonly Locator[],
+          surfaces: readonly (() => Promise<Locator | undefined>)[],
         ): Promise<boolean> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
-          if (await isOnlyChecked(checkbox)) return true;
-          for (const surface of [...surfaces, checkbox]) {
+          if (await isOnlyChecked()) return true;
+          for (const resolveSurface of surfaces) {
             try {
+              const surface = await resolveSurface();
+              if (surface === undefined || await surface.count() !== 1) continue;
               await surface.click({ timeout: clickTimeout });
-              if (await waitUntilOnlyChecked(checkbox)) return true;
+              if (!await isOnlyChecked()) continue;
+              const stable = await waitUntilOnlyChecked();
+              if (stable) return true;
             } catch {
               // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
@@ -352,13 +364,19 @@ export async function applyMutation(
             }
           }
         }
-        const surfaces = (await Promise.all([
-          exactLabelFor(mutation.option),
-          taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
-          taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
-          taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
-        ])).filter((surface): surface is Locator => surface !== undefined);
-        if (!await activate(options, surfaces)) return "invalid";
+        const desiredCheckbox = async (): Promise<Locator | undefined> => {
+          const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
+          return await checkbox.count() === 1 ? checkbox : undefined;
+        };
+        if (!await activate([
+          async () => (await desiredCheckbox())?.locator("xpath=following-sibling::*[1]"),
+          async () => (await desiredCheckbox())?.locator("xpath=parent::*"),
+          () => exactLabelFor(mutation.option),
+          () => taggedSurfaceFor('[data-hunt-checkbox-surface="visual"]', mutation.option),
+          () => taggedSurfaceFor('[data-hunt-checkbox-surface="owner"]', mutation.option),
+          () => taggedSurfaceFor('[data-automation-id="checkboxPanel"]', mutation.option),
+          desiredCheckbox,
+        ])) return "invalid";
       } else {
         await options.setChecked(true, { timeout: timeoutMs });
       }
