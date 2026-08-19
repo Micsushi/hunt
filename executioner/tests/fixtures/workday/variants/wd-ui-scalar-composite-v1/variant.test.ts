@@ -212,8 +212,8 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
-        input.__reactProps$fixture = {
-          onChange: () => {
+        input.closest('[data-automation-id="checkboxPanel"]').__reactProps$fixture = {
+          onClick: () => {
             document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
               candidate.checked = candidate === input;
               candidate.setAttribute('aria-checked', String(candidate.checked));
@@ -223,7 +223,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
             input.closest('[data-automation-id="checkboxPanel"]')
               .dataset.reactActivated = 'true';
             input.closest('[data-automation-id="checkboxPanel"]')
-              .dataset.reactEventType = 'change';
+              .dataset.reactEventType = 'click';
             setTimeout(() => {
             const owner = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
             const replacement = owner.cloneNode(true);
@@ -297,7 +297,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
     assert.equal(
       await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
         .getAttribute('data-react-event-type'),
-      "change",
+      "click",
     );
   } finally {
     await variant.close();

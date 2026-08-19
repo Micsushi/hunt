@@ -353,8 +353,6 @@ export async function applyMutation(
                 candidates.push(candidate);
               }
             };
-            add(input);
-            add(input.parentElement);
             const panel = input.closest('[data-automation-id="checkboxPanel"]');
             add(panel);
             panel?.querySelectorAll(
@@ -364,6 +362,8 @@ export async function applyMutation(
               add(label);
               label.querySelectorAll("span, div").forEach(add);
             });
+            add(input.parentElement);
+            add(input);
 
             for (const candidate of candidates.slice(0, directOnly ? 1 : 16)) {
               const invoke = (props: Record<string, unknown> | undefined): boolean => {
