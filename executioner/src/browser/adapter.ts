@@ -461,6 +461,7 @@ export async function applyMutation(
           } | undefined>)[],
         ): Promise<"stable" | "transient" | "none"> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
+          let observedTransient = false;
           if (await isOnlyChecked()) {
             return await waitUntilOnlyChecked(Date.now()) ? "stable" : "transient";
           }
@@ -489,12 +490,17 @@ export async function applyMutation(
               const checkedSince = Date.now();
               if (!await isOnlyChecked()) continue;
               const stable = await waitUntilOnlyChecked(checkedSince);
-              return stable ? "stable" : "transient";
+              if (stable) return "stable";
+              // A controlled Workday CheckboxGroup can optimistically toggle
+              // one decorative/native surface and then reconcile it back.
+              // Keep trying the remaining exact-option surfaces so the real
+              // component owner still gets a trusted activation.
+              observedTransient = true;
             } catch {
               // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
           }
-          return "none";
+          return observedTransient ? "transient" : "none";
         };
         for (let index = 0; index < checkboxCount; index += 1) {
           const checkbox = checkboxes.nth(index);

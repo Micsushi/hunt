@@ -470,3 +470,78 @@ test("WD-UI-SCALAR-COMPOSITE-V1 activates a hidden native checkbox through Workd
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 continues past transient checkbox surfaces to the component owner", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-automation-id="checkboxPanel"] { display: block; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-transient-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="transient-yes" type="checkbox"><label for="transient-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="transient-no" type="checkbox"><label for="transient-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="transient-decline" type="checkbox"><label for="transient-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      const selectOnly = input => {
+        group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+          candidate.checked = candidate === input;
+        });
+      };
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', () => {
+          setTimeout(() => {
+            if (input.dataset.componentAccepted !== 'true') input.checked = false;
+          }, 100);
+        });
+        group.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
+          selectOnly(input);
+          setTimeout(() => {
+            if (input.dataset.componentAccepted !== 'true') input.checked = false;
+          }, 100);
+        });
+      });
+      group.querySelectorAll('[data-automation-id="checkboxPanel"]').forEach(panel => {
+        panel.addEventListener('click', event => {
+          if (event.target !== panel) return;
+          const input = panel.querySelector('input[type="checkbox"]');
+          selectOnly(input);
+          input.dataset.componentAccepted = 'true';
+          panel.dataset.componentOwnerActivated = 'true';
+        });
+      });
+    </script>
+  `, "5950000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-transient-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    await variant.page.waitForTimeout(250);
+    assert.equal(
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute("data-component-owner-activated"),
+      "true",
+    );
+    assert.equal(await variant.page.locator("#transient-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
