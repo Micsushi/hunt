@@ -435,7 +435,6 @@ export async function applyMutation(
             return false;
           }, directOnly);
         };
-        const activationDiagnostics: Array<Record<string, unknown>> = [];
         const activate = async (
           surfaces: readonly (() => Promise<{
             readonly locator: Locator;
@@ -444,25 +443,13 @@ export async function applyMutation(
         ): Promise<boolean> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
           if (await isOnlyChecked()) return true;
-          for (const [surfaceIndex, resolveSurface] of surfaces.entries()) {
+          for (const resolveSurface of surfaces) {
             try {
               const surface = await resolveSurface();
-              if (surface === undefined || await surface.locator.count() !== 1) {
-                activationDiagnostics.push({ surfaceIndex, admitted: false });
-                continue;
-              }
-              const descriptor = await surface.locator.evaluate((element) => ({
-                tag: element.tagName.toLowerCase(),
-                automationId: element.getAttribute("data-automation-id"),
-                role: element.getAttribute("role"),
-                classCount: element.classList.length,
-              }));
+              if (surface === undefined || await surface.locator.count() !== 1) continue;
               if (surface.panelEdge === true) {
                 const box = await surface.locator.boundingBox();
-                if (box === null || box.width < 2 || box.height < 2) {
-                  activationDiagnostics.push({ surfaceIndex, admitted: true, descriptor, box: false });
-                  continue;
-                }
+                if (box === null || box.width < 2 || box.height < 2) continue;
                 await surface.locator.click({
                   position: {
                     x: Math.max(1, box.width - 2),
@@ -474,26 +461,10 @@ export async function applyMutation(
                 await surface.locator.click({ timeout: clickTimeout });
               }
               const checkedSince = Date.now();
-              const immediate = await isOnlyChecked();
-              if (!immediate) {
-                activationDiagnostics.push({ surfaceIndex, admitted: true, descriptor, immediate });
-                continue;
-              }
+              if (!await isOnlyChecked()) continue;
               const stable = await waitUntilOnlyChecked(checkedSince);
-              activationDiagnostics.push({
-                surfaceIndex,
-                admitted: true,
-                descriptor,
-                immediate,
-                stable,
-              });
               if (stable) return true;
-            } catch (error) {
-              activationDiagnostics.push({
-                surfaceIndex,
-                admitted: true,
-                errorName: error instanceof Error ? error.name : "unknown",
-              });
+            } catch {
               // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
           }
@@ -598,7 +569,6 @@ export async function applyMutation(
                   })
               );
               process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
-                activationDiagnostics,
                 reactInvoked,
                 reactStable,
                 structure,
