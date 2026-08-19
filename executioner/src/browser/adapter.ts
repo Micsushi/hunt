@@ -435,6 +435,7 @@ export async function applyMutation(
             return false;
           }, directOnly);
         };
+        const activationDiagnostics: Array<Record<string, unknown>> = [];
         const activate = async (
           surfaces: readonly (() => Promise<{
             readonly locator: Locator;
@@ -443,13 +444,25 @@ export async function applyMutation(
         ): Promise<boolean> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
           if (await isOnlyChecked()) return true;
-          for (const resolveSurface of surfaces) {
+          for (const [surfaceIndex, resolveSurface] of surfaces.entries()) {
             try {
               const surface = await resolveSurface();
-              if (surface === undefined || await surface.locator.count() !== 1) continue;
+              if (surface === undefined || await surface.locator.count() !== 1) {
+                activationDiagnostics.push({ surfaceIndex, admitted: false });
+                continue;
+              }
+              const descriptor = await surface.locator.evaluate((element) => ({
+                tag: element.tagName.toLowerCase(),
+                automationId: element.getAttribute("data-automation-id"),
+                role: element.getAttribute("role"),
+                classCount: element.classList.length,
+              }));
               if (surface.panelEdge === true) {
                 const box = await surface.locator.boundingBox();
-                if (box === null || box.width < 2 || box.height < 2) continue;
+                if (box === null || box.width < 2 || box.height < 2) {
+                  activationDiagnostics.push({ surfaceIndex, admitted: true, descriptor, box: false });
+                  continue;
+                }
                 await surface.locator.click({
                   position: {
                     x: Math.max(1, box.width - 2),
@@ -461,10 +474,26 @@ export async function applyMutation(
                 await surface.locator.click({ timeout: clickTimeout });
               }
               const checkedSince = Date.now();
-              if (!await isOnlyChecked()) continue;
+              const immediate = await isOnlyChecked();
+              if (!immediate) {
+                activationDiagnostics.push({ surfaceIndex, admitted: true, descriptor, immediate });
+                continue;
+              }
               const stable = await waitUntilOnlyChecked(checkedSince);
+              activationDiagnostics.push({
+                surfaceIndex,
+                admitted: true,
+                descriptor,
+                immediate,
+                stable,
+              });
               if (stable) return true;
-            } catch {
+            } catch (error) {
+              activationDiagnostics.push({
+                surfaceIndex,
+                admitted: true,
+                errorName: error instanceof Error ? error.name : "unknown",
+              });
               // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
           }
@@ -535,7 +564,46 @@ export async function applyMutation(
           // pointer event, then reconcile it back because the owning React option
           // handler never ran. Keep this exact-option fallback behind all trusted
           // surfaces and require the same stable, exclusive readback afterward.
-          if (!await invokeReactOptionHandler() || !await waitUntilOnlyChecked()) {
+          const reactInvoked = await invokeReactOptionHandler();
+          const reactStable = reactInvoked && await waitUntilOnlyChecked();
+          if (!reactStable) {
+            if (process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1") {
+              const structure = await stableGroup().evaluate((owner) =>
+                [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+                  .map((input, inputIndex) => {
+                    const chain: Element[] = [];
+                    for (let node: Element | null = input; node !== null && node !== owner; node = node.parentElement) {
+                      chain.push(node);
+                    }
+                    return {
+                      inputIndex,
+                      checked: input.checked,
+                      disabled: input.disabled,
+                      labelCount: input.labels?.length ?? 0,
+                      chain: chain.map((element) => ({
+                        tag: element.tagName.toLowerCase(),
+                        automationId: element.getAttribute("data-automation-id"),
+                        role: element.getAttribute("role"),
+                        classCount: element.classList.length,
+                        reactHandlers: Object.keys(element)
+                          .filter((key) => key.startsWith("__reactProps$"))
+                          .flatMap((key) => {
+                            const props = (element as unknown as Record<string, unknown>)[key];
+                            return typeof props === "object" && props !== null
+                              ? Object.keys(props).filter((name) => /^on[A-Z]/u.test(name))
+                              : [];
+                          }),
+                      })),
+                    };
+                  })
+              );
+              process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
+                activationDiagnostics,
+                reactInvoked,
+                reactStable,
+                structure,
+              })}\n`);
+            }
             return "invalid";
           }
         }
