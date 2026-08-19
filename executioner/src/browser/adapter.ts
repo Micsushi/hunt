@@ -455,6 +455,7 @@ export async function applyMutation(
           surfaces: readonly (() => Promise<{
             readonly locator: Locator;
             readonly panelEdge?: true;
+            readonly force?: true;
           } | undefined>)[],
         ): Promise<"stable" | "transient" | "none"> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
@@ -465,7 +466,9 @@ export async function applyMutation(
             try {
               const surface = await resolveSurface();
               if (surface === undefined || await surface.locator.count() !== 1) continue;
-              if (surface.panelEdge === true) {
+              if (surface.force === true) {
+                await surface.locator.click({ force: true, timeout: clickTimeout });
+              } else if (surface.panelEdge === true) {
                 const box = await surface.locator.boundingBox();
                 if (box === null || box.width < 2 || box.height < 2) continue;
                 await surface.locator.click({
@@ -512,6 +515,13 @@ export async function applyMutation(
           },
         ]);
         if (nativeActivation === "stable") return "applied";
+        const forcedNativeActivation = await activate([
+          async () => {
+            const checkbox = await desiredCheckbox();
+            return checkbox === undefined ? undefined : { locator: checkbox, force: true };
+          },
+        ]);
+        if (forcedNativeActivation === "stable") return "applied";
         const trustedActivation = await activate([
           async () => {
             const label = await exactLabelFor(mutation.option);

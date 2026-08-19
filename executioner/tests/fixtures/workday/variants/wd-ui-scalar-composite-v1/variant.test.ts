@@ -413,7 +413,12 @@ test("WD-UI-SCALAR-COMPOSITE-V1 activates a hidden native checkbox through Workd
     <script>
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
         input.addEventListener('click', event => {
-          if (event.isTrusted) return;
+          if (event.isTrusted) {
+            setTimeout(() => {
+              if (input.dataset.delegatedAccepted !== 'true') input.checked = false;
+            }, 1600);
+            return;
+          }
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
             candidate.checked = candidate === input;
           });
