@@ -876,3 +876,65 @@ test("WD-UI-SCALAR-COMPOSITE-V1 presents a resolved boolean to the Workday check
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 tries native DOM activation after trusted rollback", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-native-after-transient-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="native-after-transient-yes" type="checkbox"><label for="native-after-transient-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-after-transient-no" type="checkbox"><label for="native-after-transient-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-after-transient-decline" type="checkbox"><label for="native-after-transient-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', event => {
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+          if (event.isTrusted) {
+            input.dataset.trustedTransient = 'true';
+            setTimeout(() => { input.checked = false; }, 100);
+            return;
+          }
+          input.dataset.nativeDomAccepted = 'true';
+        });
+      });
+    </script>
+  `, "5987000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-native-after-transient-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator("#native-after-transient-decline")
+        .getAttribute("data-trusted-transient"),
+      "true",
+    );
+    assert.equal(
+      await variant.page.locator("#native-after-transient-decline")
+        .getAttribute("data-native-dom-accepted"),
+      "true",
+    );
+    assert.equal(await variant.page.locator("#native-after-transient-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});

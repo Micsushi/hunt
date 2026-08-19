@@ -636,16 +636,14 @@ export async function applyMutation(
         // click preserves the checkbox's native toggle-before-event ordering
         // without weakening the same stable exclusive readback.
         let domStable = false;
-        if (trustedActivation === "none") {
-          try {
-            const checkbox = await desiredCheckbox();
-            if (checkbox !== undefined) {
-              await checkbox.evaluate((element) => (element as HTMLInputElement).click());
-              domStable = await waitUntilOnlyChecked();
-            }
-          } catch {
-            // Fall through to the exact React owner fallback.
+        try {
+          const checkbox = await desiredCheckbox();
+          if (checkbox !== undefined) {
+            await checkbox.evaluate((element) => (element as HTMLInputElement).click());
+            domStable = await waitUntilOnlyChecked();
           }
+        } catch {
+          // Fall through to the exact React owner fallback.
         }
         if (domStable && await acceptStableActivation("stable")) return "applied";
         // Some Workday CheckboxGroup variants update the native checkbox for a
