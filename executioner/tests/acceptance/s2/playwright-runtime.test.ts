@@ -492,7 +492,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
     // This scenario exercises three questionnaire pages and a checkbox that
     // must remain stable for most of the operation window. Leave headroom for
     // Playwright scheduling when the complete browser suite runs concurrently.
-    timeoutMs: 2_000,
+    timeoutMs: 6_000,
     trace: (event, details) => traces.push({ event, ...(details === undefined ? {} : { details }) }),
     initialReviewExpected: [],
     externalMonitor: {

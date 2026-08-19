@@ -326,8 +326,8 @@ export async function applyMutation(
         const waitUntilOnlyChecked = async (
           initiallyStableSince?: number,
         ): Promise<boolean> => {
-          const waitWindow = Math.min(timeoutMs, 1_800);
-          const stableWindow = Math.min(1_700, Math.max(50, waitWindow - 150));
+          const waitWindow = Math.min(timeoutMs, 3_800);
+          const stableWindow = Math.min(3_500, Math.max(50, waitWindow - 150));
           const deadline = Date.now() + waitWindow;
           let stableSince = initiallyStableSince;
           do {
@@ -456,9 +456,11 @@ export async function applyMutation(
             readonly locator: Locator;
             readonly panelEdge?: true;
           } | undefined>)[],
-        ): Promise<boolean> => {
+        ): Promise<"stable" | "transient" | "none"> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
-          if (await isOnlyChecked()) return true;
+          if (await isOnlyChecked()) {
+            return await waitUntilOnlyChecked(Date.now()) ? "stable" : "transient";
+          }
           for (const resolveSurface of surfaces) {
             try {
               const surface = await resolveSurface();
@@ -479,12 +481,12 @@ export async function applyMutation(
               const checkedSince = Date.now();
               if (!await isOnlyChecked()) continue;
               const stable = await waitUntilOnlyChecked(checkedSince);
-              if (stable) return true;
+              return stable ? "stable" : "transient";
             } catch {
               // Workday tenants expose different trusted pointer surfaces; try the next one.
             }
           }
-          return false;
+          return "none";
         };
         for (let index = 0; index < checkboxCount; index += 1) {
           const checkbox = checkboxes.nth(index);
@@ -503,7 +505,7 @@ export async function applyMutation(
           const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
           return await checkbox.count() === 1 ? checkbox : undefined;
         };
-        if (!await activate([
+        const trustedActivation = await activate([
           async () => {
             const label = await exactLabelFor(mutation.option);
             return label === undefined ? undefined : { locator: label };
@@ -546,20 +548,23 @@ export async function applyMutation(
             const checkbox = await desiredCheckbox();
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
-        ])) {
+        ]);
+        if (trustedActivation !== "stable") {
           // A hidden native Workday checkbox can still own the delegated React
           // change event even when every visible wrapper is decorative. DOM
           // click preserves the checkbox's native toggle-before-event ordering
           // without weakening the same stable exclusive readback.
           let domStable = false;
-          try {
-            const checkbox = await desiredCheckbox();
-            if (checkbox !== undefined) {
-              await checkbox.evaluate((element) => (element as HTMLInputElement).click());
-              domStable = await waitUntilOnlyChecked();
+          if (trustedActivation === "none") {
+            try {
+              const checkbox = await desiredCheckbox();
+              if (checkbox !== undefined) {
+                await checkbox.evaluate((element) => (element as HTMLInputElement).click());
+                domStable = await waitUntilOnlyChecked();
+              }
+            } catch {
+              // Fall through to the exact React owner fallback.
             }
-          } catch {
-            // Fall through to the exact React owner fallback.
           }
           if (domStable) return "applied";
           // Some Workday CheckboxGroup variants update the native checkbox for a

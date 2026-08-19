@@ -187,7 +187,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 1600);
+          }, 3000);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -208,7 +208,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 1600);
+          }, 3000);
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
@@ -291,6 +291,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
       undefined,
       5_000,
     ), "applied");
+    await variant.page.waitForTimeout(3_200);
     await variant.page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
       .evaluate((element) => element.setAttribute(
         'data-hunt-target-token',
