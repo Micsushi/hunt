@@ -354,16 +354,24 @@ export async function applyMutation(
               }
             };
             const panel = input.closest('[data-automation-id="checkboxPanel"]');
-            add(panel);
-            panel?.querySelectorAll(
-              '[data-automation-id="promptLeafNode"], [data-uxi-widget-type], label, span, div',
-            ).forEach(add);
+            // Keep the exact native control and its owner chain ahead of the
+            // panel subtree. Live Workday panels contain enough decorative
+            // descendants to exhaust the bounded candidate budget before the
+            // input when the input is appended last.
+            add(input);
+            for (
+              let owner = input.parentElement;
+              owner !== null && owner !== panel;
+              owner = owner.parentElement
+            ) add(owner);
             Array.from(input.labels ?? []).forEach((label) => {
               add(label);
               label.querySelectorAll("span, div").forEach(add);
             });
-            add(input.parentElement);
-            add(input);
+            add(panel);
+            panel?.querySelectorAll(
+              '[data-automation-id="promptLeafNode"], [data-uxi-widget-type], label, span, div',
+            ).forEach(add);
 
             const invoked = new Set<unknown>();
             for (const candidate of candidates.slice(0, 16)) {

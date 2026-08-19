@@ -174,7 +174,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         <div role="grid">
           <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="yes" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="yes"><span>Yes</span></label></div></div></div></div>
           <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="no" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="no"><span>No</span></label></div></div></div></div>
-          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="decoration"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div></div>
         </div>
       </fieldset>
     </div>
@@ -320,7 +320,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
     assert.equal(
       await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
         .getAttribute('data-decoy-invocation-count'),
-      "1",
+      null,
     );
   } finally {
     await variant.close();
