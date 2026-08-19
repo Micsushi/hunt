@@ -545,3 +545,62 @@ test("WD-UI-SCALAR-COMPOSITE-V1 continues past transient checkbox surfaces to th
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 rejects a delayed controlled rollback before accepting pointer input", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-delayed-rollback-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="delayed-yes" type="checkbox"><label for="delayed-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="delayed-no" type="checkbox"><label for="delayed-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="delayed-decline" type="checkbox"><label for="delayed-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', event => {
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+          if (event.detail === 0) {
+            input.dataset.keyboardOptimistic = 'true';
+            setTimeout(() => { input.checked = false; }, 4100);
+            return;
+          }
+          input.dataset.pointerAccepted = 'true';
+        });
+      });
+    </script>
+  `, "5970000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-delayed-rollback-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator("#delayed-decline").getAttribute("data-keyboard-optimistic"),
+      "true",
+    );
+    assert.equal(
+      await variant.page.locator("#delayed-decline").getAttribute("data-pointer-accepted"),
+      "true",
+    );
+    assert.equal(await variant.page.locator("#delayed-decline").isChecked(), true);
+  } finally {
+    await variant.close();
+  }
+});

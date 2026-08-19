@@ -326,8 +326,8 @@ export async function applyMutation(
         const waitUntilOnlyChecked = async (
           initiallyStableSince?: number,
         ): Promise<boolean> => {
-          const waitWindow = Math.min(timeoutMs, 3_800);
-          const stableWindow = Math.min(3_500, Math.max(50, waitWindow - 150));
+          const waitWindow = Math.min(timeoutMs, 5_000);
+          const stableWindow = Math.max(50, waitWindow - 150);
           const deadline = Date.now() + waitWindow;
           let stableSince = initiallyStableSince;
           do {
