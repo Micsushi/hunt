@@ -547,6 +547,21 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
         ])) {
+          // A hidden native Workday checkbox can still own the delegated React
+          // change event even when every visible wrapper is decorative. DOM
+          // click preserves the checkbox's native toggle-before-event ordering
+          // without weakening the same stable exclusive readback.
+          let domStable = false;
+          try {
+            const checkbox = await desiredCheckbox();
+            if (checkbox !== undefined) {
+              await checkbox.evaluate((element) => (element as HTMLInputElement).click());
+              domStable = await waitUntilOnlyChecked();
+            }
+          } catch {
+            // Fall through to the exact React owner fallback.
+          }
+          if (domStable) return "applied";
           // Some Workday CheckboxGroup variants update the native checkbox for a
           // pointer event, then reconcile it back because the owning React option
           // handler never ran. Keep this exact-option fallback behind all trusted
@@ -554,7 +569,10 @@ export async function applyMutation(
           const reactInvoked = await invokeReactOptionHandler();
           const reactStable = reactInvoked && await waitUntilOnlyChecked();
           if (!reactStable) {
-            if (process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1") {
+            if (
+              process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1" ||
+              process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+            ) {
               const structure = await stableGroup().evaluate((owner) =>
                 [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
                   .map((input, inputIndex) => {
