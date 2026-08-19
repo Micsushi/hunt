@@ -335,6 +335,7 @@ export async function applyMutation(
               stableSince ??= Date.now();
               if (Date.now() - stableSince >= stableWindow) return true;
             } else {
+              if (stableSince !== undefined) return false;
               stableSince = undefined;
             }
             await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
@@ -456,6 +457,7 @@ export async function applyMutation(
             readonly locator: Locator;
             readonly panelEdge?: true;
             readonly force?: true;
+            readonly keyboard?: true;
           } | undefined>)[],
         ): Promise<"stable" | "transient" | "none"> => {
           const clickTimeout = Math.min(timeoutMs, 1_000);
@@ -466,7 +468,10 @@ export async function applyMutation(
             try {
               const surface = await resolveSurface();
               if (surface === undefined || await surface.locator.count() !== 1) continue;
-              if (surface.force === true) {
+              if (surface.keyboard === true) {
+                await surface.locator.press("Space", { timeout: clickTimeout });
+                await surface.locator.blur({ timeout: clickTimeout });
+              } else if (surface.force === true) {
                 await surface.locator.click({ force: true, timeout: clickTimeout });
               } else if (surface.panelEdge === true) {
                 const box = await surface.locator.boundingBox();
@@ -508,6 +513,13 @@ export async function applyMutation(
           const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
           return await checkbox.count() === 1 ? checkbox : undefined;
         };
+        const keyboardActivation = await activate([
+          async () => {
+            const checkbox = await desiredCheckbox();
+            return checkbox === undefined ? undefined : { locator: checkbox, keyboard: true };
+          },
+        ]);
+        if (keyboardActivation === "stable") return "applied";
         const nativeActivation = await activate([
           async () => {
             const checkbox = await desiredCheckbox();

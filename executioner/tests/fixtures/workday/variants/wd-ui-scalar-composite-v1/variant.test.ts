@@ -351,6 +351,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 prefers the native Workday checkbox owner before
               candidate.checked = candidate === input;
             });
             input.dataset.nativeOwnerAccepted = 'true';
+            input.dataset.nativeOwnerEvent = event.detail === 0 ? 'keyboard' : 'pointer';
           }
           setTimeout(() => {
             if (input.dataset.nativeOwnerAccepted !== 'true') input.checked = false;
@@ -383,6 +384,10 @@ test("WD-UI-SCALAR-COMPOSITE-V1 prefers the native Workday checkbox owner before
     assert.equal(
       await variant.page.locator("#native-decline").getAttribute("data-native-owner-accepted"),
       "true",
+    );
+    assert.equal(
+      await variant.page.locator("#native-decline").getAttribute("data-native-owner-event"),
+      "keyboard",
     );
     assert.equal(
       await variant.page.locator("#native-decline").getAttribute("data-decorative-surface-activated"),
