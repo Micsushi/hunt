@@ -653,45 +653,80 @@ export async function applyMutation(
         const reactInvoked = await invokeReactOptionHandler();
         const reactStable = reactInvoked === "committed" && await waitUntilOnlyChecked();
         if (!reactStable) {
-          if (
-            process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1" ||
-            process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-          ) {
-            const structure = await stableGroup().evaluate((owner) =>
-              [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-                .map((input, inputIndex) => {
-                  const chain: Element[] = [];
-                  for (let node: Element | null = input; node !== null && node !== owner; node = node.parentElement) {
-                    chain.push(node);
-                  }
-                  return {
-                    inputIndex,
-                    checked: input.checked,
-                    disabled: input.disabled,
-                    labelCount: input.labels?.length ?? 0,
-                    chain: chain.map((element) => ({
+          // Always retain a value-free component map for an exact checkbox
+          // rollback. The isolated live child intentionally receives a narrow
+          // environment, so an opt-in parent flag can silently hide the only
+          // evidence that identifies Workday's real state owner.
+          const structure = await stableGroup().evaluate((owner) =>
+            [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+              .map((input, inputIndex) => {
+                const chain: Element[] = [];
+                for (
+                  let node: Element | null = input;
+                  node !== null;
+                  node = node.parentElement
+                ) {
+                  chain.push(node);
+                  if (node === owner) break;
+                }
+                const handlers = (props: unknown) =>
+                  typeof props === "object" && props !== null
+                    ? Object.entries(props)
+                      .filter(([name, value]) => /^on[A-Z]/u.test(name) && typeof value === "function")
+                      .map(([name, value]) => ({
+                        name,
+                        arity: (value as (...args: unknown[]) => unknown).length,
+                      }))
+                    : [];
+                return {
+                  inputIndex,
+                  checked: input.checked,
+                  disabled: input.disabled,
+                  labelCount: input.labels?.length ?? 0,
+                  chain: chain.map((element) => {
+                    const record = element as unknown as Record<string, unknown>;
+                    const directHandlers = Object.keys(element)
+                      .filter((key) => key.startsWith("__reactProps$"))
+                      .flatMap((key) => handlers(record[key]));
+                    const fiberKey = Object.keys(element).find((key) =>
+                      key.startsWith("__reactFiber$") ||
+                      key.startsWith("__reactInternalInstance$")
+                    );
+                    const fiberHandlers: {
+                      depth: number;
+                      handlers: { name: string; arity: number }[];
+                    }[] = [];
+                    let fiber = fiberKey === undefined
+                      ? undefined
+                      : record[fiberKey] as {
+                        memoizedProps?: unknown;
+                        pendingProps?: unknown;
+                        return?: unknown;
+                      } | undefined;
+                    for (let depth = 0; fiber !== undefined && fiber !== null && depth < 16; depth += 1) {
+                      const layerHandlers = handlers(fiber.memoizedProps ?? fiber.pendingProps);
+                      if (layerHandlers.length > 0) {
+                        fiberHandlers.push({ depth, handlers: layerHandlers });
+                      }
+                      fiber = fiber.return as typeof fiber;
+                    }
+                    return {
                       tag: element.tagName.toLowerCase(),
                       automationId: element.getAttribute("data-automation-id"),
                       role: element.getAttribute("role"),
                       classCount: element.classList.length,
-                      reactHandlers: Object.keys(element)
-                        .filter((key) => key.startsWith("__reactProps$"))
-                        .flatMap((key) => {
-                          const props = (element as unknown as Record<string, unknown>)[key];
-                          return typeof props === "object" && props !== null
-                            ? Object.keys(props).filter((name) => /^on[A-Z]/u.test(name))
-                            : [];
-                        }),
-                    })),
-                  };
-                })
-            );
-            process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
-              reactInvoked,
-              reactStable,
-              structure,
-            })}\n`);
-          }
+                      directHandlers,
+                      fiberHandlers,
+                    };
+                  }),
+                };
+              })
+          );
+          process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
+            reactInvoked,
+            reactStable,
+            structure,
+          })}\n`);
           return "invalid";
         }
       } else {
