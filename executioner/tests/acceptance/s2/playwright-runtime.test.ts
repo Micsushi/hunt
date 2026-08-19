@@ -489,7 +489,10 @@ test("each questionnaire field mutation has its own before and readback monitor 
       nextOperation += 1;
       return generatedOperationId(`operation_questionnaire_monitor_${nextOperation.toString().padStart(8, "0")}`);
     },
-    timeoutMs: 1_000,
+    // This scenario exercises three questionnaire pages and a checkbox that
+    // must remain stable for most of the operation window. Leave headroom for
+    // Playwright scheduling when the complete browser suite runs concurrently.
+    timeoutMs: 2_000,
     trace: (event, details) => traces.push({ event, ...(details === undefined ? {} : { details }) }),
     initialReviewExpected: [],
     externalMonitor: {
