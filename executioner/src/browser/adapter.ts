@@ -415,7 +415,7 @@ export async function applyMutation(
                   const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
                   owner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
                     .forEach((candidate) => { candidate.checked = candidate === input; });
-                  (handler as (event: unknown) => unknown)({
+                  const syntheticEvent = {
                     type,
                     target: input,
                     currentTarget: candidate,
@@ -426,7 +426,20 @@ export async function applyMutation(
                     isDefaultPrevented: () => false,
                     isPropagationStopped: () => false,
                     persist: () => undefined,
-                  });
+                  };
+                  if (handler === change && candidate !== input) {
+                    // Workday's native input owns a React ChangeEvent, while
+                    // an enclosing Checkbox component owns the already-
+                    // resolved boolean. Both appear as `onChange` in the
+                    // fiber. Preserve the native event contract on the input
+                    // and present the component contract to its owner.
+                    (handler as (checked: boolean, event: unknown) => unknown)(
+                      true,
+                      syntheticEvent,
+                    );
+                  } else {
+                    (handler as (event: unknown) => unknown)(syntheticEvent);
+                  }
                   await new Promise<void>((resolve) => setTimeout(resolve, 0));
                 } catch {
                   return false;
