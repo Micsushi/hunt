@@ -162,15 +162,19 @@ test("WD-UI-SCALAR-COMPOSITE-V1 preflights every date leaf before changing any p
 
 test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as one exclusive choice", async () => {
   const variant = await openVariantPage(`
-    <style>.visual { display: inline-block; width: 18px; height: 18px; }</style>
+    <style>
+      [data-automation-id="checkboxPanel"] { display: block; width: 420px; }
+      .option { width: 320px; }
+      .visual { display: inline-block; width: 18px; height: 18px; }
+    </style>
     <div data-automation-id="formField-disabilityStatus">
       <label>Disability Status</label>
       <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
         data-hunt-target-token="target-disability-status" aria-required="true">
         <div role="grid">
-          <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="yes" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="yes"><span>Yes</span></label></div></div></div>
-          <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="no" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="no"><span>No</span></label></div></div></div>
-          <div role="row"><div role="cell"><div class="option"><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="yes" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="yes"><span>Yes</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="no" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="no"><span>No</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div></div>
         </div>
       </fieldset>
     </div>
@@ -183,7 +187,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 800);
+          }, 1200);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -192,13 +196,18 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
             delete candidate.dataset.componentAccepted;
           });
         });
-        input.nextElementSibling.addEventListener('click', () => {
+      });
+      document.querySelectorAll('[data-automation-id="checkboxPanel"]').forEach(panel => {
+        panel.addEventListener('click', event => {
+          if (event.target !== panel) return;
+          const input = panel.querySelector('input[type="checkbox"]');
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
             candidate.checked = candidate === input;
             candidate.setAttribute('aria-checked', String(candidate.checked));
             delete candidate.dataset.componentAccepted;
           });
           input.dataset.componentAccepted = 'true';
+          panel.dataset.componentActivated = 'true';
           setTimeout(() => {
             const owner = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
             const replacement = owner.cloneNode(true);
@@ -264,7 +273,8 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
     });
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
     assert.equal(
-      await variant.page.locator('#decline').getAttribute('data-component-accepted'),
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute('data-component-activated'),
       "true",
     );
   } finally {
