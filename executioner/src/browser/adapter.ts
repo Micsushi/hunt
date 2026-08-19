@@ -458,6 +458,7 @@ export async function applyMutation(
           surfaces: readonly (() => Promise<{
             readonly locator: Locator;
             readonly panelEdge?: true;
+            readonly panelStart?: true;
             readonly force?: true;
             readonly keyboard?: true;
           } | undefined>)[],
@@ -482,6 +483,16 @@ export async function applyMutation(
                 await surface.locator.click({
                   position: {
                     x: Math.max(1, box.width - 2),
+                    y: Math.max(1, box.height / 2),
+                  },
+                  timeout: clickTimeout,
+                });
+              } else if (surface.panelStart === true) {
+                const box = await surface.locator.boundingBox();
+                if (box === null || box.width < 2 || box.height < 2) continue;
+                await surface.locator.click({
+                  position: {
+                    x: Math.min(12, Math.max(1, box.width - 2)),
                     y: Math.max(1, box.height / 2),
                   },
                   timeout: clickTimeout,
@@ -562,6 +573,10 @@ export async function applyMutation(
           async () => {
             const panel = await checkboxPanelFor();
             return panel === undefined ? undefined : { locator: panel, panelEdge: true };
+          },
+          async () => {
+            const panel = await checkboxPanelFor();
+            return panel === undefined ? undefined : { locator: panel, panelStart: true };
           },
           async () => {
             const checkbox = await desiredCheckbox();

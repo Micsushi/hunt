@@ -172,9 +172,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
       <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
         data-hunt-target-token="target-disability-status" aria-required="true">
         <div role="grid">
-          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="yes" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="yes"><span>Yes</span></label></div></div></div></div>
-          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="no" type="checkbox" checked aria-checked="true" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="no"><span>No</span></label></div></div></div></div>
-          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="decoration"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false" aria-required="true"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="yes" type="checkbox" checked aria-checked="true"><span class="visual"></span><div class="decoration"></div></div><label for="yes"><span>Yes</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="choice-owner"><input id="no" type="checkbox" checked aria-checked="true"><span class="visual"></span><div class="decoration"></div></div><label for="no"><span>No</span></label></div></div></div></div>
+          <div role="row"><div role="cell"><div data-automation-id="checkboxPanel"><div class="option"><div class="decoration"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="choice-owner"><input id="decline" type="checkbox" aria-checked="false"><span class="visual"></span><div class="decoration"></div></div><label for="decline"><span>Decline to self-identify</span></label></div></div></div></div>
         </div>
       </fieldset>
     </div>
@@ -540,6 +540,76 @@ test("WD-UI-SCALAR-COMPOSITE-V1 continues past transient checkbox surfaces to th
       "true",
     );
     assert.equal(await variant.page.locator("#transient-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
+
+test("WD-UI-SCALAR-COMPOSITE-V1 activates a left-edge Workday checkbox owner", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-automation-id="checkboxPanel"] { display: block; width: 420px; height: 32px; }
+      input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-left-edge-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="left-yes" type="checkbox"><label for="left-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="left-no" type="checkbox"><label for="left-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="left-decline" type="checkbox"><label for="left-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      const selectOnly = input => {
+        group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+          candidate.checked = candidate === input;
+        });
+      };
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', () => {
+          setTimeout(() => {
+            if (input.dataset.componentAccepted !== 'true') input.checked = false;
+          }, 100);
+        });
+      });
+      group.querySelectorAll('[data-automation-id="checkboxPanel"]').forEach(panel => {
+        panel.addEventListener('click', event => {
+          const bounds = panel.getBoundingClientRect();
+          if (event.clientX - bounds.left > 24) return;
+          const input = panel.querySelector('input[type="checkbox"]');
+          selectOnly(input);
+          input.dataset.componentAccepted = 'true';
+          panel.dataset.leftEdgeOwnerActivated = 'true';
+        });
+      });
+    </script>
+  `, "5990000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-left-edge-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute("data-left-edge-owner-activated"),
+      "true",
+    );
+    assert.equal(await variant.page.locator("#left-decline").isChecked(), true);
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
   } finally {
     await variant.close();
