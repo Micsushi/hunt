@@ -187,7 +187,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 1200);
+          }, 1600);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -208,22 +208,23 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 1200);
+          }, 1600);
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
-        input.__reactFiber$fixture = {
-          memoizedProps: {
-            onClick: () => {
-              document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
-                candidate.checked = candidate === input;
-                candidate.setAttribute('aria-checked', String(candidate.checked));
-                delete candidate.dataset.componentAccepted;
-              });
-              input.dataset.componentAccepted = 'true';
-              input.closest('[data-automation-id="checkboxPanel"]')
-                .dataset.reactActivated = 'true';
-              setTimeout(() => {
+        input.__reactProps$fixture = {
+          onChange: () => {
+            document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+              candidate.checked = candidate === input;
+              candidate.setAttribute('aria-checked', String(candidate.checked));
+              delete candidate.dataset.componentAccepted;
+            });
+            input.dataset.componentAccepted = 'true';
+            input.closest('[data-automation-id="checkboxPanel"]')
+              .dataset.reactActivated = 'true';
+            input.closest('[data-automation-id="checkboxPanel"]')
+              .dataset.reactEventType = 'change';
+            setTimeout(() => {
             const owner = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
             const replacement = owner.cloneNode(true);
             replacement.removeAttribute('data-hunt-target-token');
@@ -237,8 +238,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
                 element.removeAttribute('data-hunt-checkbox-surface');
             });
             owner.replaceWith(replacement);
-              }, 0);
-            },
+            }, 0);
           },
         };
       });
@@ -293,6 +293,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
       await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
         .getAttribute('data-react-activated'),
       "true",
+    );
+    assert.equal(
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute('data-react-event-type'),
+      "change",
     );
   } finally {
     await variant.close();

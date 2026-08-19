@@ -364,6 +364,57 @@ export async function applyMutation(
             });
 
             for (const candidate of candidates.slice(0, 16)) {
+              const invoke = (props: Record<string, unknown> | undefined): boolean => {
+                if (props === undefined) return false;
+                const change = props.onChange;
+                const click = props.onClick;
+                const mouseDown = props.onMouseDown;
+                const handler = candidate === input && typeof change === "function"
+                  ? change
+                  : typeof click === "function"
+                  ? click
+                  : typeof mouseDown === "function"
+                  ? mouseDown
+                  : typeof change === "function"
+                  ? change
+                  : undefined;
+                if (handler === undefined) return false;
+                const type = handler === change
+                  ? "change"
+                  : handler === mouseDown
+                  ? "mousedown"
+                  : "click";
+                const nativeEvent = type === "change"
+                  ? new Event(type, { bubbles: true, cancelable: true })
+                  : new MouseEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    detail: type === "click" ? 1 : 0,
+                  });
+                handler({
+                  type,
+                  target: input,
+                  currentTarget: candidate,
+                  bubbles: true,
+                  nativeEvent,
+                  preventDefault: () => undefined,
+                  stopPropagation: () => undefined,
+                  isDefaultPrevented: () => false,
+                  isPropagationStopped: () => false,
+                  persist: () => undefined,
+                });
+                return true;
+              };
+              const propsKey = Object.keys(candidate).find((key) =>
+                key.startsWith("__reactProps$")
+              );
+              if (
+                propsKey !== undefined && invoke(
+                  (candidate as unknown as Record<string, unknown>)[propsKey] as
+                    | Record<string, unknown>
+                    | undefined,
+                )
+              ) return true;
               const fiberKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
               );
@@ -374,35 +425,7 @@ export async function applyMutation(
                 return?: unknown;
               } | undefined;
               while (node !== undefined && node !== null) {
-                const props = node.memoizedProps ?? node.pendingProps;
-                const click = props?.onClick;
-                const mouseDown = props?.onMouseDown;
-                const handler = typeof click === "function"
-                  ? click
-                  : typeof mouseDown === "function"
-                  ? mouseDown
-                  : undefined;
-                if (handler !== undefined) {
-                  const type = handler === mouseDown ? "mousedown" : "click";
-                  const nativeEvent = new MouseEvent(type, {
-                    bubbles: true,
-                    cancelable: true,
-                    detail: type === "click" ? 1 : 0,
-                  });
-                  handler({
-                    type,
-                    target: input,
-                    currentTarget: candidate,
-                    bubbles: true,
-                    nativeEvent,
-                    preventDefault: () => undefined,
-                    stopPropagation: () => undefined,
-                    isDefaultPrevented: () => false,
-                    isPropagationStopped: () => false,
-                    persist: () => undefined,
-                  });
-                  return true;
-                }
+                if (invoke(node.memoizedProps ?? node.pendingProps)) return true;
                 node = node.return as typeof node;
               }
             }
@@ -434,6 +457,8 @@ export async function applyMutation(
               } else {
                 await surface.locator.click({ timeout: clickTimeout });
               }
+              if (!await isOnlyChecked()) continue;
+              await invokeReactOptionHandler();
               if (!await isOnlyChecked()) continue;
               const stable = await waitUntilOnlyChecked();
               if (stable) return true;
