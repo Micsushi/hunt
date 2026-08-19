@@ -323,11 +323,13 @@ export async function applyMutation(
             await group.locator('input[type="checkbox"]:checked').count() === 1 &&
             await checkbox.isChecked();
         };
-        const waitUntilOnlyChecked = async (): Promise<boolean> => {
+        const waitUntilOnlyChecked = async (
+          initiallyStableSince?: number,
+        ): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 1_800);
           const stableWindow = Math.min(1_250, Math.max(50, Math.floor(waitWindow * 0.7)));
           const deadline = Date.now() + waitWindow;
-          let stableSince: number | undefined;
+          let stableSince = initiallyStableSince;
           do {
             if (await isOnlyChecked()) {
               stableSince ??= Date.now();
@@ -340,10 +342,10 @@ export async function applyMutation(
           return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
         };
-        const invokeReactOptionHandler = async (): Promise<boolean> => {
+        const invokeReactOptionHandler = async (directOnly = false): Promise<boolean> => {
           const checkbox = await desiredCheckbox();
           if (checkbox === undefined) return false;
-          return await checkbox.evaluate((element) => {
+          return await checkbox.evaluate((element, directOnly) => {
             const input = element as HTMLInputElement;
             const candidates: Element[] = [];
             const add = (candidate: Element | null | undefined): void => {
@@ -363,7 +365,7 @@ export async function applyMutation(
               label.querySelectorAll("span, div").forEach(add);
             });
 
-            for (const candidate of candidates.slice(0, 16)) {
+            for (const candidate of candidates.slice(0, directOnly ? 1 : 16)) {
               const invoke = (props: Record<string, unknown> | undefined): boolean => {
                 if (props === undefined) return false;
                 const change = props.onChange;
@@ -415,6 +417,7 @@ export async function applyMutation(
                     | undefined,
                 )
               ) return true;
+              if (directOnly) continue;
               const fiberKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
               );
@@ -430,7 +433,7 @@ export async function applyMutation(
               }
             }
             return false;
-          });
+          }, directOnly);
         };
         const activate = async (
           surfaces: readonly (() => Promise<{
@@ -457,10 +460,11 @@ export async function applyMutation(
               } else {
                 await surface.locator.click({ timeout: clickTimeout });
               }
+              const checkedSince = Date.now();
               if (!await isOnlyChecked()) continue;
-              await invokeReactOptionHandler();
+              await invokeReactOptionHandler(true);
               if (!await isOnlyChecked()) continue;
-              const stable = await waitUntilOnlyChecked();
+              const stable = await waitUntilOnlyChecked(checkedSince);
               if (stable) return true;
             } catch {
               // Workday tenants expose different trusted pointer surfaces; try the next one.
@@ -487,6 +491,10 @@ export async function applyMutation(
         };
         if (!await activate([
           async () => {
+            const label = await exactLabelFor(mutation.option);
+            return label === undefined ? undefined : { locator: label };
+          },
+          async () => {
             const panel = await checkboxPanelFor();
             return panel === undefined ? undefined : { locator: panel, panelEdge: true };
           },
@@ -501,10 +509,6 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : {
               locator: checkbox.locator("xpath=parent::*"),
             };
-          },
-          async () => {
-            const label = await exactLabelFor(mutation.option);
-            return label === undefined ? undefined : { locator: label };
           },
           async () => {
             const surface = await taggedSurfaceFor(
