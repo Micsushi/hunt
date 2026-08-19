@@ -407,6 +407,14 @@ export async function applyMutation(
                     detail: type === "click" ? 1 : 0,
                   });
                 try {
+                  // React's controlled checkbox handler reads the post-toggle
+                  // state from event.target. Every trusted surface may already
+                  // have been reconciled back to false by the time this exact
+                  // owner fallback runs, so present the state a real checkbox
+                  // change would expose before invoking the handler.
+                  const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
+                  owner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                    .forEach((candidate) => { candidate.checked = candidate === input; });
                   (handler as (event: unknown) => unknown)({
                     type,
                     target: input,
