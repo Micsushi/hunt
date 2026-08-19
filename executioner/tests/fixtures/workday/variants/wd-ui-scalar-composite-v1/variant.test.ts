@@ -244,10 +244,12 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
             owner.replaceWith(replacement);
           }, 0);
         };
-        panel.__reactProps$fixture = { onClick };
-        panel.addEventListener('click', event => {
-          if (event.target === panel) onClick();
-        });
+        panel.__reactProps$fixture = { onClick: () => {
+          panel.dataset.decoyInvocationCount = String(
+            Number(panel.dataset.decoyInvocationCount ?? '0') + 1
+          );
+        } };
+        input.__reactProps$fixture = { onChange: onClick };
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', event => {
           event.preventDefault();
           event.stopPropagation();
@@ -313,6 +315,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
     assert.equal(
       await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
         .getAttribute('data-react-invocation-count'),
+      "1",
+    );
+    assert.equal(
+      await variant.page.locator('[data-automation-id="checkboxPanel"]:has-text("Decline to self-identify")')
+        .getAttribute('data-decoy-invocation-count'),
       "1",
     );
   } finally {

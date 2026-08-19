@@ -342,10 +342,10 @@ export async function applyMutation(
           return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
         };
-        const invokeReactOptionHandler = async (directOnly = false): Promise<boolean> => {
+        const invokeReactOptionHandler = async (): Promise<boolean> => {
           const checkbox = await desiredCheckbox();
           if (checkbox === undefined) return false;
-          return await checkbox.evaluate((element, directOnly) => {
+          return await checkbox.evaluate(async (element) => {
             const input = element as HTMLInputElement;
             const candidates: Element[] = [];
             const add = (candidate: Element | null | undefined): void => {
@@ -365,8 +365,9 @@ export async function applyMutation(
             add(input.parentElement);
             add(input);
 
-            for (const candidate of candidates.slice(0, directOnly ? 1 : 16)) {
-              const invoke = (props: Record<string, unknown> | undefined): boolean => {
+            const invoked = new Set<unknown>();
+            for (const candidate of candidates.slice(0, 16)) {
+              const invoke = async (props: Record<string, unknown> | undefined): Promise<boolean> => {
                 if (props === undefined) return false;
                 const change = props.onChange;
                 const click = props.onClick;
@@ -380,7 +381,8 @@ export async function applyMutation(
                   : typeof change === "function"
                   ? change
                   : undefined;
-                if (handler === undefined) return false;
+                if (handler === undefined || invoked.has(handler)) return false;
+                invoked.add(handler);
                 const type = handler === change
                   ? "change"
                   : handler === mouseDown
@@ -393,31 +395,37 @@ export async function applyMutation(
                     cancelable: true,
                     detail: type === "click" ? 1 : 0,
                   });
-                handler({
-                  type,
-                  target: input,
-                  currentTarget: candidate,
-                  bubbles: true,
-                  nativeEvent,
-                  preventDefault: () => undefined,
-                  stopPropagation: () => undefined,
-                  isDefaultPrevented: () => false,
-                  isPropagationStopped: () => false,
-                  persist: () => undefined,
-                });
-                return true;
+                try {
+                  (handler as (event: unknown) => unknown)({
+                    type,
+                    target: input,
+                    currentTarget: candidate,
+                    bubbles: true,
+                    nativeEvent,
+                    preventDefault: () => undefined,
+                    stopPropagation: () => undefined,
+                    isDefaultPrevented: () => false,
+                    isPropagationStopped: () => false,
+                    persist: () => undefined,
+                  });
+                  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+                } catch {
+                  return false;
+                }
+                const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
+                return owner !== null && input.checked &&
+                  owner.querySelectorAll('input[type="checkbox"]:checked').length === 1;
               };
               const propsKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactProps$")
               );
               if (
-                propsKey !== undefined && invoke(
+                propsKey !== undefined && await invoke(
                   (candidate as unknown as Record<string, unknown>)[propsKey] as
                     | Record<string, unknown>
                     | undefined,
                 )
               ) return true;
-              if (directOnly) continue;
               const fiberKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
               );
@@ -428,12 +436,12 @@ export async function applyMutation(
                 return?: unknown;
               } | undefined;
               while (node !== undefined && node !== null) {
-                if (invoke(node.memoizedProps ?? node.pendingProps)) return true;
+                if (await invoke(node.memoizedProps ?? node.pendingProps)) return true;
                 node = node.return as typeof node;
               }
             }
             return false;
-          }, directOnly);
+          });
         };
         const activate = async (
           surfaces: readonly (() => Promise<{
