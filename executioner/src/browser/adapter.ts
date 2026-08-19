@@ -549,72 +549,80 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
         ]);
-        if (trustedActivation !== "stable") {
-          // A hidden native Workday checkbox can still own the delegated React
-          // change event even when every visible wrapper is decorative. DOM
-          // click preserves the checkbox's native toggle-before-event ordering
-          // without weakening the same stable exclusive readback.
-          let domStable = false;
-          if (trustedActivation === "none") {
-            try {
-              const checkbox = await desiredCheckbox();
-              if (checkbox !== undefined) {
-                await checkbox.evaluate((element) => (element as HTMLInputElement).click());
-                domStable = await waitUntilOnlyChecked();
-              }
-            } catch {
-              // Fall through to the exact React owner fallback.
-            }
-          }
-          if (domStable) return "applied";
-          // Some Workday CheckboxGroup variants update the native checkbox for a
-          // pointer event, then reconcile it back because the owning React option
-          // handler never ran. Keep this exact-option fallback behind all trusted
-          // surfaces and require the same stable, exclusive readback afterward.
+        if (trustedActivation === "stable") {
+          // A controlled Workday checkbox can preserve a DOM-only pointer
+          // toggle beyond the local stability window and reconcile it away
+          // only after the adapter returns. If an exact React option owner is
+          // present, commit through it even after the trusted surface appears
+          // stable, then prove the controlled state independently again.
           const reactInvoked = await invokeReactOptionHandler();
-          const reactStable = reactInvoked && await waitUntilOnlyChecked();
-          if (!reactStable) {
-            if (
-              process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1" ||
-              process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
-            ) {
-              const structure = await stableGroup().evaluate((owner) =>
-                [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-                  .map((input, inputIndex) => {
-                    const chain: Element[] = [];
-                    for (let node: Element | null = input; node !== null && node !== owner; node = node.parentElement) {
-                      chain.push(node);
-                    }
-                    return {
-                      inputIndex,
-                      checked: input.checked,
-                      disabled: input.disabled,
-                      labelCount: input.labels?.length ?? 0,
-                      chain: chain.map((element) => ({
-                        tag: element.tagName.toLowerCase(),
-                        automationId: element.getAttribute("data-automation-id"),
-                        role: element.getAttribute("role"),
-                        classCount: element.classList.length,
-                        reactHandlers: Object.keys(element)
-                          .filter((key) => key.startsWith("__reactProps$"))
-                          .flatMap((key) => {
-                            const props = (element as unknown as Record<string, unknown>)[key];
-                            return typeof props === "object" && props !== null
-                              ? Object.keys(props).filter((name) => /^on[A-Z]/u.test(name))
-                              : [];
-                          }),
-                      })),
-                    };
-                  })
-              );
-              process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
-                reactInvoked,
-                reactStable,
-                structure,
-              })}\n`);
+          if (!reactInvoked) return "applied";
+          return await waitUntilOnlyChecked() ? "applied" : "invalid";
+        }
+        // A hidden native Workday checkbox can still own the delegated React
+        // change event even when every visible wrapper is decorative. DOM
+        // click preserves the checkbox's native toggle-before-event ordering
+        // without weakening the same stable exclusive readback.
+        let domStable = false;
+        if (trustedActivation === "none") {
+          try {
+            const checkbox = await desiredCheckbox();
+            if (checkbox !== undefined) {
+              await checkbox.evaluate((element) => (element as HTMLInputElement).click());
+              domStable = await waitUntilOnlyChecked();
             }
-            return "invalid";
+          } catch {
+            // Fall through to the exact React owner fallback.
           }
+        }
+        if (domStable) return "applied";
+        // Some Workday CheckboxGroup variants update the native checkbox for a
+        // pointer event, then reconcile it back because the owning React option
+        // handler never ran. Keep this exact-option fallback behind all trusted
+        // surfaces and require the same stable, exclusive readback afterward.
+        const reactInvoked = await invokeReactOptionHandler();
+        const reactStable = reactInvoked && await waitUntilOnlyChecked();
+        if (!reactStable) {
+          if (
+            process.env.HUNT_C3_CHECKBOX_DIAGNOSTIC === "1" ||
+            process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+          ) {
+            const structure = await stableGroup().evaluate((owner) =>
+              [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+                .map((input, inputIndex) => {
+                  const chain: Element[] = [];
+                  for (let node: Element | null = input; node !== null && node !== owner; node = node.parentElement) {
+                    chain.push(node);
+                  }
+                  return {
+                    inputIndex,
+                    checked: input.checked,
+                    disabled: input.disabled,
+                    labelCount: input.labels?.length ?? 0,
+                    chain: chain.map((element) => ({
+                      tag: element.tagName.toLowerCase(),
+                      automationId: element.getAttribute("data-automation-id"),
+                      role: element.getAttribute("role"),
+                      classCount: element.classList.length,
+                      reactHandlers: Object.keys(element)
+                        .filter((key) => key.startsWith("__reactProps$"))
+                        .flatMap((key) => {
+                          const props = (element as unknown as Record<string, unknown>)[key];
+                          return typeof props === "object" && props !== null
+                            ? Object.keys(props).filter((name) => /^on[A-Z]/u.test(name))
+                            : [];
+                        }),
+                    })),
+                  };
+                })
+            );
+            process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
+              reactInvoked,
+              reactStable,
+              structure,
+            })}\n`);
+          }
+          return "invalid";
         }
       } else {
         await options.setChecked(true, { timeout: timeoutMs });

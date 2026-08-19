@@ -187,7 +187,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 3000);
+          }, 6000);
         });
         document.querySelector('label[for="' + input.id + '"]').addEventListener('click', () => {
           document.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
@@ -208,7 +208,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
               input.checked = false;
               input.setAttribute('aria-checked', 'false');
             }
-          }, 3000);
+          }, 6000);
         });
       });
       document.querySelectorAll('input[type="checkbox"]').forEach(input => {
@@ -289,9 +289,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         option: boundedText("Decline to self-identify"),
       },
       undefined,
-      5_000,
+      10_000,
     ), "applied");
-    await variant.page.waitForTimeout(3_200);
+    await variant.page.waitForTimeout(6_200);
     await variant.page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
       .evaluate((element) => element.setAttribute(
         'data-hunt-target-token',
