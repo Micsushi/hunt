@@ -1691,7 +1691,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 passes a virtualized row item through nested sel
   }
 });
 
-test("WD-UI-SCALAR-COMPOSITE-V1 passes the exact shared Workday option object", async () => {
+test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner replacement", async () => {
   const variant = await openVariantPage(`
     <style>
       [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
@@ -1718,11 +1718,14 @@ test("WD-UI-SCALAR-COMPOSITE-V1 passes the exact shared Workday option object", 
         'data-automation-id': 'disabilityStatus',
         onRemove: option => { group.dataset.removedOption = String(option?.id ?? ''); },
         onSelect: option => {
-          group.dataset.selectedOption = String(option?.id ?? '');
           const selectedIndex = options.indexOf(option);
           if (selectedIndex < 0) return;
-          hostProps.forEach((props, candidateIndex) => { props.checked = candidateIndex === selectedIndex; });
-          inputs.forEach((input, candidateIndex) => { input.checked = candidateIndex === selectedIndex; });
+          const replacement = group.cloneNode(true);
+          replacement.dataset.selectedOption = String(option?.id ?? '');
+          replacement.querySelectorAll('input[type="checkbox"]').forEach((input, candidateIndex) => {
+            input.checked = candidateIndex === selectedIndex;
+          });
+          group.replaceWith(replacement);
         },
         value: {},
         options,

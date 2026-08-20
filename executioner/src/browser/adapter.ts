@@ -366,7 +366,7 @@ export async function applyMutation(
         const invokeReactOptionHandler = async (): Promise<"committed" | "absent" | "rejected"> => {
           const checkbox = await desiredCheckbox();
           if (checkbox === undefined) return "absent";
-          return await checkbox.evaluate(async (element) => {
+          const result = await checkbox.evaluate(async (element) => {
             const input = element as HTMLInputElement;
             const candidates: Element[] = [];
             const add = (candidate: Element | null | undefined): void => {
@@ -710,6 +710,14 @@ export async function applyMutation(
               ? "committed"
               : "rejected";
           });
+          // Workday can replace the entire controlled CheckboxGroup while the
+          // exact owner callback is still resolving. In that case the captured
+          // input and owner are detached and remain unchecked even though the
+          // replacement live group contains the committed selection. Reconcile
+          // against the stable automation-owned group before rejecting it.
+          return result === "rejected" && await isOnlyChecked()
+            ? "committed"
+            : result;
         };
         const activate = async (
           surfaces: readonly (() => Promise<{
