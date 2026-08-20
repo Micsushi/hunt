@@ -207,6 +207,51 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
+test("retries a Workday formatted date with separators after digit-only input is cleared", async () => {
+  const fixture = await loopbackPage(`
+    <label>Date <input type="tel" placeholder="MM/DD/YYYY"
+      data-hunt-target-token="target-formatted-date"></label>
+    <script>
+      const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
+      input.addEventListener('input', () => {
+        if (input.value.split('/').map((part) => part.length).join('-') !== '2-2-4') input.value = '';
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("bcbcbcbcbcbcbcbc") });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("date target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "set_date", target, isoDate: "2026-09-01" },
+      "bcbcbcbcbcbcbccd",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    assert.equal(
+      await page.locator('[data-hunt-target-token="target-formatted-date"]').inputValue(),
+      "09/01/2026",
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("fails stale, ambiguous, mismatched, and replayed operations closed", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
