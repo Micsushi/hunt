@@ -569,6 +569,8 @@ function readApplicationSnapshot(
   const candidateSelector = [
     '[data-automation-id="dateSection"]',
     '[data-automation-id$="-CheckboxGroup"]',
+    '[data-automation-id="formField"]',
+    '[data-automation-id^="formField-"]',
     'input:not([type="hidden"])',
     "textarea",
     "select",
@@ -588,6 +590,19 @@ function readApplicationSnapshot(
       !("disabled" in control && control.disabled === true) &&
       control.getAttribute("aria-disabled") !== "true")
     .filter((control) => {
+      const genericCheckboxOwner = control.closest<HTMLElement>(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const genericCheckboxes = genericCheckboxOwner === null ? [] :
+        [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+          .filter((checkbox) => visible(checkbox));
+      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
+        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
+        genericCheckboxes.length >= 2;
+      if (isGenericCheckboxGroup) return genericCheckboxOwner === control;
+      if (control.matches(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      )) return false;
       const dateOwner = control.closest<HTMLElement>(
         '[data-automation-id="dateSection"]',
       );
@@ -683,7 +698,12 @@ function readApplicationSnapshot(
       const parsed = new Date(`${isoDate}T00:00:00.000Z`);
       verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
         !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
-    } else if (control.matches('[data-automation-id$="-CheckboxGroup"]')) {
+    } else if (
+      control.matches('[data-automation-id$="-CheckboxGroup"]') ||
+      control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
+        control.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
+        control.querySelectorAll('input[type="checkbox"]').length >= 2
+    ) {
       const checkboxes = [...control.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
       verified = verified && checkboxes.length >= 2 &&
         checkboxes.filter(({ checked }) => checked).length === 1;

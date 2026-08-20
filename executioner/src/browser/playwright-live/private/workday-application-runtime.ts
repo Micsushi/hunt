@@ -1287,12 +1287,26 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
     const controls = [...new Set(roots[0]!.querySelectorAll<HTMLElement>(
       '[data-automation-id="dateSection"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
+        '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
         'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
         '[role="listbox"], [role="radio"], [role="checkbox"], ' +
         'button[aria-haspopup="listbox"]',
     ))].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true") return false;
+      const genericCheckboxOwner = control.closest<HTMLElement>(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const genericCheckboxes = genericCheckboxOwner === null ? [] :
+        [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+          .filter(visible);
+      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
+        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
+        genericCheckboxes.length >= 2;
+      if (isGenericCheckboxGroup) return genericCheckboxOwner === control;
+      if (control.matches(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      )) return false;
       if (
         control instanceof HTMLFieldSetElement &&
         !control.matches('[data-automation-id$="-CheckboxGroup"]')
@@ -1331,7 +1345,12 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       let type = "text";
       if (control instanceof HTMLTextAreaElement) type = "textarea";
       else if (control.matches('[data-automation-id="dateSection"]')) type = "date";
-      else if (control.matches('[data-automation-id$="-CheckboxGroup"]')) type = "radio";
+      else if (
+        control.matches('[data-automation-id$="-CheckboxGroup"]') ||
+        control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
+          control.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
+          control.querySelectorAll('input[type="checkbox"]').length >= 2
+      ) type = "radio";
       else if (control instanceof HTMLSelectElement ||
           control.getAttribute("role") === "combobox" ||
           control.getAttribute("role") === "listbox" ||
@@ -1944,6 +1963,7 @@ export async function bindQuestionnaireTargets(
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
     const controls = roots[0]!.querySelectorAll<HTMLElement>(
       '[data-automation-id="dateSection"], [data-automation-id$="-CheckboxGroup"], ' +
+        '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
         'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
     );
     const identities = new Map<string, number>();
@@ -1957,6 +1977,21 @@ export async function bindQuestionnaireTargets(
     };
     let index = 0;
     for (const control of controls) {
+      const genericCheckboxOwner = control.closest<HTMLElement>(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const genericCheckboxes = genericCheckboxOwner === null ? [] :
+        [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+          .filter(visible);
+      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
+        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
+        genericCheckboxes.length >= 2;
+      if (isGenericCheckboxGroup) {
+        if (genericCheckboxOwner !== control) continue;
+        control.setAttribute("data-hunt-exclusive-checkbox-group", "true");
+      } else if (control.matches(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      )) continue;
       const dateOwner = control.closest('[data-automation-id="dateSection"]');
       if (dateOwner !== null && dateOwner !== control) continue;
       const checkboxGroupOwner = control.closest('[data-automation-id$="-CheckboxGroup"]');
@@ -2112,7 +2147,9 @@ async function popupSelectedValue(target: import("playwright").Locator): Promise
 }
 
 async function checkboxFailureDiagnostics(page: Page): Promise<object> {
-  return await page.locator('[data-automation-id$="-CheckboxGroup"]').evaluateAll((groups) => ({
+  return await page.locator(
+    '[data-automation-id$="-CheckboxGroup"], [data-hunt-exclusive-checkbox-group="true"]',
+  ).evaluateAll((groups) => ({
     groupCount: groups.length,
     groups: groups.slice(0, 4).map((group) => {
       const record = group as unknown as Record<string, unknown>;

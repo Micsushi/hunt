@@ -18,6 +18,7 @@ import {
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
   '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
+  '[data-hunt-exclusive-checkbox-group="true"][data-hunt-target-token]',
   "fieldset[data-hunt-target-token]",
   'input:not([type="hidden"])',
   "textarea",
@@ -378,7 +379,8 @@ export async function applyMutation(
               '[data-uxi-widget-type="multiselectlistitem"]',
             );
             const checkboxOwner = input.closest(
-              '[data-automation-id$="-CheckboxGroup"]',
+              '[data-automation-id$="-CheckboxGroup"], ' +
+                '[data-hunt-exclusive-checkbox-group="true"]',
             );
             const checkboxIndex = checkboxOwner === null
               ? -1
@@ -562,7 +564,10 @@ export async function applyMutation(
                   // have been reconciled back to false by the time this exact
                   // owner fallback runs, so present the state a real checkbox
                   // change would expose before invoking the handler.
-                  const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
+                  const owner = input.closest(
+                    '[data-automation-id$="-CheckboxGroup"], ' +
+                      '[data-hunt-exclusive-checkbox-group="true"]',
+                  );
                   owner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
                     .forEach((candidate) => { candidate.checked = candidate === input; });
                   // A directly invoked React prop does not pass through the
@@ -1127,7 +1132,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       const compositeOwner = element.closest('[data-automation-id="dateSection"][data-hunt-target-token]');
       if (compositeOwner !== null && compositeOwner !== element) return [];
       const checkboxGroupOwner = element.closest(
-        '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
+        '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token], ' +
+          '[data-hunt-exclusive-checkbox-group="true"][data-hunt-target-token]',
       );
       if (checkboxGroupOwner !== null && checkboxGroupOwner !== element) return [];
       if (
@@ -1147,7 +1153,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "date", element: "input" };
         readback = compositeDateReadback(element);
         interaction = "composite-date";
-      } else if (element.matches('[data-automation-id$="-CheckboxGroup"]')) {
+      } else if (element.matches(
+        '[data-automation-id$="-CheckboxGroup"], ' +
+          '[data-hunt-exclusive-checkbox-group="true"]',
+      )) {
         const checkboxes = [...element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
         const options = checkboxes.map(checkboxOptionName).filter(Boolean);
         if (checkboxes.length < 2 || options.length !== checkboxes.length ||
