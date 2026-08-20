@@ -724,9 +724,13 @@ function readApplicationSnapshot(
           ).length === 1
       )
     ) {
-      const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(input.value.trim());
+      const value = input.value.replace(
+        /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+        "",
+      );
+      const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(value);
       const isoDate = match === null
-        ? ""
+        ? /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : ""
         : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
       const parsed = new Date(`${isoDate}T00:00:00.000Z`);
       verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&

@@ -1369,11 +1369,15 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         : { kind: "unavailable" };
     };
     const formattedDateReadback = (element: HTMLInputElement): BrowserReadback => {
-      const value = normalize(element.value);
+      const value = normalize(element.value).replace(
+        /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+        "",
+      );
       if (value === "") return { kind: "empty" };
       const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(value);
-      if (match === null) return { kind: "unavailable" };
-      const isoDate = `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+      const isoDate = match === null
+        ? /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : ""
+        : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
       const date = new Date(`${isoDate}T00:00:00.000Z`);
       return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === isoDate
         ? { kind: "text", value: isoDate as never }
