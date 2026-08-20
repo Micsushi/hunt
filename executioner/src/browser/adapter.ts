@@ -301,6 +301,7 @@ export async function applyMutation(
           );
           if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) &&
               !/^\d{4}-\d{2}-\d{2}$/u.test(typed)) {
+            await locator.focus({ timeout: timeoutMs });
             await locator.evaluate((element, value) => {
               if (!(element instanceof HTMLInputElement)) return false;
               const record = element as unknown as Record<string, unknown>;
@@ -338,7 +339,7 @@ export async function applyMutation(
                 return false;
               }
             }, formatted);
-            await page.waitForTimeout(50);
+            await locator.blur({ timeout: timeoutMs });
           }
         }
       }

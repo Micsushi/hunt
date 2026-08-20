@@ -214,15 +214,23 @@ test("commits a controlled Workday formatted date through its React input owner"
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
       let accepted = '';
+      let pending = '';
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: { value: '', onChange: (event) => {
-          accepted = event.target.value;
-          input.value = accepted;
-        } },
+        value: {
+          value: '',
+          onChange: (event) => { pending = event.target.value; },
+          onBlur: () => {
+            accepted = pending;
+            input.value = accepted;
+          },
+        },
       });
       input.addEventListener('input', () => { input.value = accepted; });
-      input.addEventListener('blur', () => { input.value = accepted; });
+      input.addEventListener('blur', () => {
+        input.__reactProps$controlledDate.onBlur();
+        input.value = accepted;
+      });
     </script>
   `);
   const browser = await chromium.launch();
