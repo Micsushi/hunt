@@ -377,6 +377,13 @@ export async function applyMutation(
             const listItem = input.closest(
               '[data-uxi-widget-type="multiselectlistitem"]',
             );
+            const checkboxOwner = input.closest(
+              '[data-automation-id$="-CheckboxGroup"]',
+            );
+            const checkboxIndex = checkboxOwner === null
+              ? -1
+              : [...checkboxOwner.querySelectorAll('input[type="checkbox"]')]
+                .indexOf(input);
             // Keep the exact native control and its owner chain ahead of the
             // panel subtree. Live Workday panels contain enough decorative
             // descendants to exhaust the bounded candidate budget before the
@@ -421,6 +428,54 @@ export async function applyMutation(
               const props = fiber?.memoizedProps ?? fiber?.pendingProps;
               return typeof props?.checked === "boolean" ? props.checked : undefined;
             };
+            const invokeSharedIndexedListSelect = async (): Promise<void> => {
+              if (listItem === null || checkboxIndex < 0) return;
+              const propsSeen = new Set<unknown>();
+              const rowIndexOwners = new Set<unknown>();
+              const sharedSelects = new Set<(...args: unknown[]) => unknown>();
+              const inspect = (props: Record<string, unknown> | undefined): void => {
+                if (props === undefined || propsSeen.has(props)) return;
+                propsSeen.add(props);
+                if (props.index === checkboxIndex) rowIndexOwners.add(props);
+                if (
+                  !Number.isSafeInteger(props.index) &&
+                  typeof props.onSelect === "function" &&
+                  props.onSelect.length === 1
+                ) sharedSelects.add(props.onSelect as (...args: unknown[]) => unknown);
+              };
+              for (const candidate of candidates.slice(0, 16)) {
+                const record = candidate as unknown as Record<string, unknown>;
+                Object.keys(candidate).filter((key) => key.startsWith("__reactProps$"))
+                  .forEach((key) => inspect(record[key] as Record<string, unknown> | undefined));
+                const fiberKey = Object.keys(candidate).find((key) =>
+                  key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+                );
+                let fiber = fiberKey === undefined
+                  ? undefined
+                  : record[fiberKey] as {
+                    memoizedProps?: Record<string, unknown>;
+                    pendingProps?: Record<string, unknown>;
+                    return?: unknown;
+                  } | undefined;
+                while (fiber !== undefined && fiber !== null) {
+                  inspect(fiber.memoizedProps ?? fiber.pendingProps);
+                  fiber = fiber.return as typeof fiber;
+                }
+              }
+              if (rowIndexOwners.size === 0 || sharedSelects.size !== 1) return;
+              const [select] = sharedSelects;
+              if (select === undefined || invoked.has(select)) return;
+              handlerObserved = true;
+              invoked.add(select);
+              checkboxOwner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                .forEach((candidate) => { candidate.checked = candidate === input; });
+              try {
+                select(checkboxIndex);
+                await new Promise<void>((resolve) => setTimeout(resolve, 0));
+              } catch {
+                // Stable exclusive readback below rejects the attempted owner contract.
+              }
+            };
             for (const candidate of candidates.slice(0, 16)) {
               const invoke = async (
                 props: Record<string, unknown> | undefined,
@@ -433,13 +488,6 @@ export async function applyMutation(
                 const declaredListItemIndex = listItem?.getAttribute(
                   "data-uxi-multiselectlistitem-index",
                 );
-                const checkboxOwner = input.closest(
-                  '[data-automation-id$="-CheckboxGroup"]',
-                );
-                const checkboxIndex = checkboxOwner === null
-                  ? -1
-                  : [...checkboxOwner.querySelectorAll('input[type="checkbox"]')]
-                    .indexOf(input);
                 // Some Workday tenants omit the Canvas row's diagnostic index
                 // attribute even though the row React props retain the same
                 // stable position. Bind that exact position only within the
@@ -586,7 +634,8 @@ export async function applyMutation(
                 fiberDepth += 1;
               }
             }
-            const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
+            await invokeSharedIndexedListSelect();
+            const owner = checkboxOwner;
             return !handlerObserved
               ? "absent"
               : owner !== null && input.checked &&
