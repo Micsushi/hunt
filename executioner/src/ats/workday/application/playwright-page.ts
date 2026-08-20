@@ -710,8 +710,10 @@ function readApplicationSnapshot(
       verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
         !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
     } else if (
-      input?.type === "text" &&
-      /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(input.placeholder.trim())
+      input !== undefined && (input.type === "text" || input.type === "tel") &&
+      /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+        input.placeholder.trim(),
+      )
     ) {
       const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(input.value.trim());
       const isoDate = match === null

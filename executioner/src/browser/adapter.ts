@@ -1405,8 +1405,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         readback = compositeDateReadback(element);
         interaction = "composite-date";
       } else if (
-        element instanceof HTMLInputElement && element.type === "text" &&
-        /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(
+        element instanceof HTMLInputElement &&
+        (element.type === "text" || element.type === "tel") &&
+        /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
           normalize(element.getAttribute("placeholder")),
         )
       ) {
