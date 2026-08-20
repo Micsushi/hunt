@@ -431,17 +431,20 @@ export async function applyMutation(
             const invokeSharedIndexedListSelect = async (): Promise<void> => {
               if (listItem === null || checkboxIndex < 0) return;
               const propsSeen = new Set<unknown>();
-              const rowIndexOwners = new Set<unknown>();
-              const sharedSelects = new Set<(...args: unknown[]) => unknown>();
+              const rowIndexOwners: Record<string, unknown>[] = [];
+              const sharedSelects: ((...args: unknown[]) => unknown)[] = [];
+              const includeSelect = (select: (...args: unknown[]) => unknown): void => {
+                if (!sharedSelects.includes(select)) sharedSelects.push(select);
+              };
               const inspect = (props: Record<string, unknown> | undefined): void => {
                 if (props === undefined || propsSeen.has(props)) return;
                 propsSeen.add(props);
-                if (props.index === checkboxIndex) rowIndexOwners.add(props);
+                if (props.index === checkboxIndex) rowIndexOwners.push(props);
                 if (
                   !Number.isSafeInteger(props.index) &&
                   typeof props.onSelect === "function" &&
                   props.onSelect.length === 1
-                ) sharedSelects.add(props.onSelect as (...args: unknown[]) => unknown);
+                ) includeSelect(props.onSelect as (...args: unknown[]) => unknown);
               };
               for (const candidate of candidates.slice(0, 16)) {
                 const record = candidate as unknown as Record<string, unknown>;
@@ -462,18 +465,42 @@ export async function applyMutation(
                   fiber = fiber.return as typeof fiber;
                 }
               }
-              if (rowIndexOwners.size === 0 || sharedSelects.size !== 1) return;
-              const [select] = sharedSelects;
-              if (select === undefined || invoked.has(select)) return;
-              handlerObserved = true;
-              invoked.add(select);
-              checkboxOwner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
-                .forEach((candidate) => { candidate.checked = candidate === input; });
-              try {
-                select(checkboxIndex);
-                await new Promise<void>((resolve) => setTimeout(resolve, 0));
-              } catch {
-                // Stable exclusive readback below rejects the attempted owner contract.
+              if (rowIndexOwners.length === 0 || sharedSelects.length === 0) return;
+              const itemPayload = rowIndexOwners.flatMap((props) => {
+                const direct = [props.item, props.option, props.dataItem, props.value]
+                  .filter((value) => value !== undefined && typeof value !== "function");
+                const data = props.data;
+                const indexed = Array.isArray(data)
+                  ? data[checkboxIndex]
+                  : typeof data === "object" && data !== null
+                  ? ["items", "options", "values"].flatMap((key) => {
+                    const values = (data as Record<string, unknown>)[key];
+                    return Array.isArray(values) && checkboxIndex < values.length
+                      ? [values[checkboxIndex]]
+                      : [];
+                  })
+                  : [];
+                const owned = [props.items, props.options, props.values].flatMap((values) =>
+                  Array.isArray(values) && checkboxIndex < values.length
+                    ? [values[checkboxIndex]]
+                    : []
+                );
+                return [...direct, ...indexed, ...owned];
+              }).find((value) => value !== undefined);
+              const payload = itemPayload ?? checkboxIndex;
+              for (const select of sharedSelects) {
+                if (invoked.has(select)) continue;
+                handlerObserved = true;
+                invoked.add(select);
+                checkboxOwner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                  .forEach((candidate) => { candidate.checked = false; });
+                try {
+                  select(payload);
+                  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                  if (reactHostChecked() === true || input.checked) return;
+                } catch {
+                  // Try the next exact nested owner; stable readback remains authoritative.
+                }
               }
             };
             for (const candidate of candidates.slice(0, 16)) {

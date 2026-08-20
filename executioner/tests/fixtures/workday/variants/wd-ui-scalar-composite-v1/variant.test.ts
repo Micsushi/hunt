@@ -1593,3 +1593,100 @@ test("WD-UI-SCALAR-COMPOSITE-V1 joins a row index to its shared Workday selectio
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 passes a virtualized row item through nested selection owners", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-nested-list-owner-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="nested-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="nested-no" type="checkbox" aria-label="No"></div><span>No</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="nested-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      const inputs = [...group.querySelectorAll('input[type="checkbox"]')];
+      const items = inputs.map((input, index) => ({ optionId: input.id, index }));
+      const hostProps = inputs.map(() => ({ checked: false, onChange: () => {} }));
+      const outerProps = {
+        onRemove: item => { group.dataset.outerRemoved = String(item?.optionId ?? ''); },
+        onSelect: item => { group.dataset.outerSelected = String(item?.optionId ?? ''); },
+      };
+      const innerProps = {
+        onRemove: item => { group.dataset.innerRemoved = String(item?.optionId ?? ''); },
+        onSelect: item => {
+          group.dataset.nestedSelectedItem = String(item?.optionId ?? '');
+          const selectedIndex = items.indexOf(item);
+          if (selectedIndex < 0) return;
+          hostProps.forEach((props, candidateIndex) => { props.checked = candidateIndex === selectedIndex; });
+          inputs.forEach((input, candidateIndex) => { input.checked = candidateIndex === selectedIndex; });
+        },
+      };
+      inputs.forEach((input, index) => {
+        const row = input.closest('[data-uxi-widget-type="multiselectlistitem"]');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.nestedSelectedItem !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.nestedSelectedItem !== input.id) input.checked = false;
+          }, 100);
+        });
+        Object.defineProperty(input, '__reactProps$nestedHost', {
+          enumerable: true,
+          value: hostProps[index],
+        });
+        Object.defineProperty(input, '__reactFiber$nestedOwner', {
+          enumerable: true,
+          value: {
+            memoizedProps: hostProps[index],
+            return: {
+              memoizedProps: { data: { items }, index },
+              return: {
+                memoizedProps: innerProps,
+                return: { memoizedProps: outerProps },
+              },
+            },
+          },
+        });
+      });
+    </script>
+  `, "5989950000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-nested-list-owner-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-nested-selected-item"),
+      "nested-decline",
+    );
+    assert.equal(await variant.page.locator("#nested-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
