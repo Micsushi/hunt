@@ -323,6 +323,25 @@ export async function applyMutation(
             await group.locator('input[type="checkbox"]:checked').count() === 1 &&
             await checkbox.isChecked();
         };
+        const recordCheckboxAttempt = async (stage: string, outcome: string): Promise<void> => {
+          try {
+            await stableGroup().evaluate((owner, entry) => {
+              const record = owner as unknown as Record<string, unknown>;
+              const existing = Array.isArray(record.__huntCheckboxAttempts)
+                ? record.__huntCheckboxAttempts as unknown[]
+                : [];
+              record.__huntCheckboxAttempts = [...existing, {
+                ...entry,
+                checkedCount: owner.querySelectorAll('input[type="checkbox"]:checked').length,
+                optionRowCount: owner.querySelectorAll(
+                  '[data-hunt-checkbox-surface="option-row"]',
+                ).length,
+              }].slice(-12);
+            }, { stage, outcome });
+          } catch {
+            // Diagnostics never change the admitted mutation result.
+          }
+        };
         const waitUntilOnlyChecked = async (
           initiallyStableSince?: number,
         ): Promise<boolean> => {
@@ -630,6 +649,7 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox, keyboard: true };
           },
         ]);
+        await recordCheckboxAttempt("keyboard", keyboardActivation);
         if (await acceptStableActivation(keyboardActivation)) return "applied";
         const nativeActivation = await activate([
           async () => {
@@ -637,6 +657,7 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox };
           },
         ]);
+        await recordCheckboxAttempt("native", nativeActivation);
         if (await acceptStableActivation(nativeActivation)) return "applied";
         const forcedNativeActivation = await activate([
           async () => {
@@ -644,6 +665,7 @@ export async function applyMutation(
             return checkbox === undefined ? undefined : { locator: checkbox, force: true };
           },
         ]);
+        await recordCheckboxAttempt("forced_native", forcedNativeActivation);
         if (await acceptStableActivation(forcedNativeActivation)) return "applied";
         const trustedActivation = await activate([
           async () => {
@@ -695,6 +717,7 @@ export async function applyMutation(
             return surface === undefined ? undefined : { locator: surface, panelEdge: true };
           },
         ]);
+        await recordCheckboxAttempt("trusted_surfaces", trustedActivation);
         if (await acceptStableActivation(trustedActivation)) return "applied";
         // A hidden native Workday checkbox can still own the delegated React
         // change event even when every visible wrapper is decorative. DOM
@@ -710,6 +733,7 @@ export async function applyMutation(
         } catch {
           // Fall through to the exact React owner fallback.
         }
+        await recordCheckboxAttempt("dom_click", domStable ? "stable" : "rejected");
         if (domStable && await acceptStableActivation("stable")) return "applied";
         // Some Workday CheckboxGroup variants update the native checkbox for a
         // pointer event, then reconcile it back because the owning React option
@@ -717,12 +741,21 @@ export async function applyMutation(
         // surfaces and require the same stable, exclusive readback afterward.
         const reactInvoked = await invokeReactOptionHandler();
         const reactStable = reactInvoked === "committed" && await waitUntilOnlyChecked();
+        await recordCheckboxAttempt("react_owner", `${reactInvoked}:${reactStable}`);
         if (!reactStable) {
+          const structure = await checkboxOwnerStructure(stableGroup());
+          try {
+            await stableGroup().evaluate((owner, value) => {
+              (owner as unknown as Record<string, unknown>).__huntCheckboxStructure = value;
+            }, structure);
+          } catch {
+            // Diagnostics never change the admitted mutation result.
+          }
           process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({
             stage: "after_rejection",
             reactInvoked,
             reactStable,
-            structure: await checkboxOwnerStructure(stableGroup()),
+            structure,
           })}\n`);
           return "invalid";
         }

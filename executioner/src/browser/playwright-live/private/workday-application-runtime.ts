@@ -972,12 +972,14 @@ export class OwnedWorkdayApplicationRuntime {
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
       if (!completed.ok) {
+        this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_failed", {
           code: completed.error.code,
         });
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
+        this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_blocked", {
           code: completed.value.code,
           candidatePresent: completed.value.candidate !== undefined,
@@ -2107,6 +2109,35 @@ async function popupSelectedValue(target: import("playwright").Locator): Promise
     const text = normalize(element.textContent);
     return /^(?:select|select one|choose|choose one)$/iu.test(text) ? "" : text;
   });
+}
+
+async function checkboxFailureDiagnostics(page: Page): Promise<object> {
+  return await page.locator('[data-automation-id$="-CheckboxGroup"]').evaluateAll((groups) => ({
+    groupCount: groups.length,
+    groups: groups.slice(0, 4).map((group) => {
+      const record = group as unknown as Record<string, unknown>;
+      return {
+        checkboxCount: group.querySelectorAll('input[type="checkbox"]').length,
+        checkedCount: group.querySelectorAll('input[type="checkbox"]:checked').length,
+        optionRowCount: group.querySelectorAll(
+          '[data-hunt-checkbox-surface="option-row"]',
+        ).length,
+        ownerSurfaceCount: group.querySelectorAll(
+          '[data-hunt-checkbox-surface="owner"]',
+        ).length,
+        visualSurfaceCount: group.querySelectorAll(
+          '[data-hunt-checkbox-surface="visual"]',
+        ).length,
+        attempts: Array.isArray(record.__huntCheckboxAttempts)
+          ? record.__huntCheckboxAttempts
+          : [],
+        structure: typeof record.__huntCheckboxStructure === "object" &&
+            record.__huntCheckboxStructure !== null
+          ? record.__huntCheckboxStructure
+          : null,
+      };
+    }),
+  }));
 }
 
 function structuralObservations(
