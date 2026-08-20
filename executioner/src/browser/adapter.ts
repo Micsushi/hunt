@@ -203,7 +203,9 @@ export async function applyMutation(
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
   const locator = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-  if (await locator.count() !== 1) return "invalid";
+  const mayRebindExclusiveChoice = mutation.kind === "select" &&
+    target.interaction === "exclusive-checkbox-group";
+  if (await locator.count() !== 1 && !mayRebindExclusiveChoice) return "invalid";
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
     await locator.fill(mutation.text, { timeout: timeoutMs });
@@ -263,11 +265,33 @@ export async function applyMutation(
     if (target.control.kind === "choice" && target.control.choice === "radio") {
       const matches = target.radioOptions?.filter((option) => option === mutation.option) ?? [];
       if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
+      const exclusiveOwner = target.interaction === "exclusive-checkbox-group"
+        ? await (async (): Promise<Locator | undefined> => {
+          const expectedCount = target.radioOptions?.length ?? 0;
+          if (expectedCount < 2) return undefined;
+          if (await locator.count() === 1 &&
+              await locator.locator('input[type="checkbox"]').count() === expectedCount) {
+            return locator;
+          }
+          const groups = page.locator(
+            '[data-automation-id$="-CheckboxGroup"]:visible',
+          );
+          const matching: Locator[] = [];
+          for (let index = 0; index < await groups.count(); index += 1) {
+            const group = groups.nth(index);
+            if (await group.locator('input[type="checkbox"]').count() === expectedCount) {
+              matching.push(group);
+            }
+          }
+          return matching.length === 1 ? matching[0] : undefined;
+        })()
+        : undefined;
       const options = target.interaction === "exclusive-checkbox-group"
         ? await (async () => {
+          if (exclusiveOwner === undefined) return undefined;
           const desiredOptionIndex = target.radioOptions?.indexOf(mutation.option) ?? -1;
           if (desiredOptionIndex < 0) return undefined;
-          const checkbox = locator.locator('input[type="checkbox"]').nth(desiredOptionIndex);
+          const checkbox = exclusiveOwner.locator('input[type="checkbox"]').nth(desiredOptionIndex);
           if (await checkbox.count() !== 1) return undefined;
           return checkbox;
         })()
@@ -276,7 +300,8 @@ export async function applyMutation(
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       if (target.interaction === "exclusive-checkbox-group") {
-        const checkboxCount = await locator.locator('input[type="checkbox"]').count();
+        if (exclusiveOwner === undefined) return "invalid";
+        const checkboxCount = await exclusiveOwner.locator('input[type="checkbox"]').count();
         if (checkboxCount < 2) return "invalid";
         const checkboxAdmission = await options.evaluate((element) => {
           const owner = element.closest(
@@ -303,7 +328,7 @@ export async function applyMutation(
         const stableGroup = groupAutomationId !== null &&
             /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(groupAutomationId)
           ? () => page.locator(`[data-automation-id="${groupAutomationId}"]:visible`)
-          : () => locator;
+          : () => exclusiveOwner;
         const checkboxes = stableGroup().locator('input[type="checkbox"]');
         const taggedSurfaceFor = async (
           selector: string,

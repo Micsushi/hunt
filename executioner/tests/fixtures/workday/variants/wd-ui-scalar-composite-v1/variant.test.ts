@@ -280,7 +280,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
         element.removeAttribute("data-hunt-checkbox-surface");
       });
     });
-    assert.equal(await applyMutation(
+    const mutationResult = await applyMutation(
       variant.page,
       target,
       {
@@ -290,7 +290,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 rebinds a virtualized Workday CheckboxGroup as o
       },
       undefined,
       5_000,
-    ), "applied");
+    );
+    const preflightProbe = await variant.page.evaluate(() =>
+      (document.documentElement as unknown as Record<string, unknown>).__huntCheckboxProbe
+    );
+    assert.equal(mutationResult, "applied", JSON.stringify(preflightProbe));
     await variant.page.waitForTimeout(3_200);
     await variant.page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
       .evaluate((element) => element.setAttribute(
@@ -1797,11 +1801,22 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
       browserTargetToken("target-shared-option-owner-disability-status"),
     )?.[0];
     assert.ok(target !== undefined);
+    assert.deepEqual(target.radioOptions, ["Yes", "No", "Decline to self-identify"]);
+    assert.equal(target.control.kind, "choice");
+    assert.equal(target.control.kind === "choice" ? target.control.choice : undefined, "radio");
+    assert.equal(target.interaction, "exclusive-checkbox-group");
     await variant.page.evaluate(() => {
       (window as unknown as Record<string, unknown>).__huntArmCheckboxRemount = true;
       document.querySelector('#option-decline')?.removeAttribute('aria-label');
+      document.querySelector('[data-automation-id="formField-disabilityStatus"]')
+        ?.removeAttribute('data-hunt-target-token');
     });
-    assert.equal(await applyMutation(
+    const reboundGroup = variant.page.locator(
+      '[data-automation-id$="-CheckboxGroup"]:visible',
+    );
+    assert.equal(await reboundGroup.count(), 1);
+    assert.equal(await reboundGroup.locator('input[type="checkbox"]').count(), 3);
+    const mutationResult = await applyMutation(
       variant.page,
       target,
       {
@@ -1811,7 +1826,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
       },
       undefined,
       5_000,
-    ), "applied");
+    );
+    const preflightProbe = await variant.page.evaluate(() =>
+      (document.documentElement as unknown as Record<string, unknown>).__huntCheckboxProbe
+    );
+    assert.equal(mutationResult, "applied", JSON.stringify(preflightProbe));
     assert.equal(
       await variant.page.locator(
         '[data-automation-id="disabilityStatus-CheckboxGroup"]:visible',
