@@ -415,6 +415,16 @@ export async function applyMutation(
                   const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
                   owner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
                     .forEach((candidate) => { candidate.checked = candidate === input; });
+                  // A directly invoked React prop does not pass through the
+                  // browser's dispatch path, so a freshly constructed native
+                  // event otherwise has a null target. Owned checkbox handlers
+                  // may follow the React ChangeEvent through
+                  // `nativeEvent.target.checked`; preserve the real-event
+                  // relationship when delivering the exact callback.
+                  Object.defineProperties(nativeEvent, {
+                    target: { configurable: true, value: input },
+                    srcElement: { configurable: true, value: input },
+                  });
                   const syntheticEvent = {
                     type,
                     target: input,

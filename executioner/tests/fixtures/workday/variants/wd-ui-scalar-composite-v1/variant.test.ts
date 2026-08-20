@@ -811,6 +811,79 @@ test("WD-UI-SCALAR-COMPOSITE-V1 presents checked state to a controlled React fal
   }
 });
 
+test("WD-UI-SCALAR-COMPOSITE-V1 presents the native checkbox target to a React change handler", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-react-native-event-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="native-event-yes" type="checkbox"><label for="native-event-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-event-no" type="checkbox"><label for="native-event-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="native-event-decline" type="checkbox"><label for="native-event-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', () => {
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        Object.defineProperty(input, '__reactProps$controlledNativeEvent', {
+          enumerable: true,
+          value: {
+            checked: false,
+            onChange: event => {
+              const nativeTarget = event.nativeEvent?.target;
+              group.dataset.nativeTargetMatched = String(nativeTarget === event.target);
+              if (nativeTarget !== input || nativeTarget.checked !== true) return;
+              group.dataset.committedOption = input.id;
+              group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+                candidate.checked = candidate === input;
+              });
+            },
+          },
+        });
+      });
+    </script>
+  `, "5985500000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-react-native-event-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-native-target-matched"),
+      "true",
+    );
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-committed-option"),
+      "native-event-decline",
+    );
+    assert.equal(await variant.page.locator("#native-event-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
+
 test("WD-UI-SCALAR-COMPOSITE-V1 presents a resolved boolean to the Workday checkbox owner", async () => {
   const variant = await openVariantPage(`
     <div data-automation-id="formField-disabilityStatus">
