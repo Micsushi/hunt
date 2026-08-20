@@ -903,25 +903,29 @@ test("WD-UI-SCALAR-COMPOSITE-V1 continues from the input host event to its check
             if (group.dataset.committedOption !== input.id) input.checked = false;
           }, 100);
         });
-        const hostChange = event => {
-          group.dataset.hostEventChecked = String(event.target.checked);
+        const hostProps = {
+          checked: false,
+          onChange: event => {
+            group.dataset.hostEventChecked = String(event.target.checked);
+          },
         };
-        const ownerChange = checked => {
-          group.dataset.ownerArgument = typeof checked + ':' + String(checked);
-          if (checked !== true) return;
+        const ownerChange = event => {
+          group.dataset.ownerArgument = typeof event + ':' + String(event.target?.checked);
+          if (event.target !== input || event.target.checked !== true) return;
           group.dataset.committedOption = input.id;
+          hostProps.checked = true;
           group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
             candidate.checked = candidate === input;
           });
         };
         Object.defineProperty(input, '__reactProps$fiberOwner', {
           enumerable: true,
-          value: { checked: false, onChange: hostChange },
+          value: hostProps,
         });
         Object.defineProperty(input, '__reactFiber$fiberOwner', {
           enumerable: true,
           value: {
-            memoizedProps: { checked: false, onChange: hostChange },
+            memoizedProps: hostProps,
             return: { memoizedProps: { checked: false, onChange: ownerChange } },
           },
         });
@@ -955,7 +959,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 continues from the input host event to its check
       await variant.page.locator(
         '[data-automation-id="disabilityStatus-CheckboxGroup"]',
       ).getAttribute("data-owner-argument"),
-      "boolean:true",
+      "object:true",
     );
     assert.equal(
       await variant.page.locator(

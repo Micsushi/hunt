@@ -376,6 +376,25 @@ export async function applyMutation(
 
             const invoked = new Set<unknown>();
             let handlerObserved = false;
+            const reactHostChecked = (): boolean | undefined => {
+              const record = input as unknown as Record<string, unknown>;
+              const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+              const direct = propsKey === undefined
+                ? undefined
+                : record[propsKey] as Record<string, unknown> | undefined;
+              if (typeof direct?.checked === "boolean") return direct.checked;
+              const fiberKey = Object.keys(input).find((key) =>
+                key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+              );
+              const fiber = fiberKey === undefined
+                ? undefined
+                : record[fiberKey] as {
+                  memoizedProps?: Record<string, unknown>;
+                  pendingProps?: Record<string, unknown>;
+                } | undefined;
+              const props = fiber?.memoizedProps ?? fiber?.pendingProps;
+              return typeof props?.checked === "boolean" ? props.checked : undefined;
+            };
             for (const candidate of candidates.slice(0, 16)) {
               const invoke = async (
                 props: Record<string, unknown> | undefined,
@@ -446,10 +465,22 @@ export async function applyMutation(
                     // resolved boolean. Both appear as `onChange` in the
                     // fiber. Preserve the event contract on the host fiber and
                     // present the component contract to deeper owners.
-                    (handler as (checked: boolean, event: unknown) => unknown)(
-                      true,
-                      syntheticEvent,
-                    );
+                    try {
+                      (handler as (checked: boolean, event: unknown) => unknown)(
+                        true,
+                        syntheticEvent,
+                      );
+                      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+                    } catch {
+                      // A one-argument component owner can retain the host
+                      // ChangeEvent contract; controlled host state below
+                      // decides whether that fallback remains necessary.
+                    }
+                    if (reactHostChecked() === false) {
+                      owner?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                        .forEach((checkbox) => { checkbox.checked = checkbox === input; });
+                      (handler as (event: unknown) => unknown)(syntheticEvent);
+                    }
                   } else {
                     (handler as (event: unknown) => unknown)(syntheticEvent);
                   }
