@@ -431,10 +431,14 @@ export async function applyMutation(
               return typeof props?.checked === "boolean" ? props.checked : undefined;
             };
             const invokeSharedIndexedListSelect = async (): Promise<void> => {
-              if (listItem === null || checkboxIndex < 0) return;
+              if (checkboxOwner === null || checkboxIndex < 0) return;
               const propsSeen = new Set<unknown>();
               const rowIndexOwners: Record<string, unknown>[] = [];
               const sharedSelects: ((...args: unknown[]) => unknown)[] = [];
+              const sharedOptionSelects: {
+                select: (...args: unknown[]) => unknown;
+                payload: unknown;
+              }[] = [];
               const includeSelect = (select: (...args: unknown[]) => unknown): void => {
                 if (!sharedSelects.includes(select)) sharedSelects.push(select);
               };
@@ -446,7 +450,23 @@ export async function applyMutation(
                   !Number.isSafeInteger(props.index) &&
                   typeof props.onSelect === "function" &&
                   props.onSelect.length === 1
-                ) includeSelect(props.onSelect as (...args: unknown[]) => unknown);
+                ) {
+                  const select = props.onSelect as (...args: unknown[]) => unknown;
+                  includeSelect(select);
+                  const options = props.options;
+                  const payload = Array.isArray(options) &&
+                      options.length === checkboxOwner.querySelectorAll('input[type="checkbox"]').length
+                    ? options[checkboxIndex]
+                    : undefined;
+                  const payloadKeys = typeof payload === "object" && payload !== null
+                    ? Object.keys(payload)
+                    : [];
+                  if (
+                    payloadKeys.includes("id") && payloadKeys.includes("label") &&
+                    payloadKeys.includes("required") &&
+                    !sharedOptionSelects.some((candidate) => candidate.select === select)
+                  ) sharedOptionSelects.push({ select, payload });
+                }
               };
               for (const candidate of candidates.slice(0, 16)) {
                 const record = candidate as unknown as Record<string, unknown>;
@@ -467,6 +487,21 @@ export async function applyMutation(
                   fiber = fiber.return as typeof fiber;
                 }
               }
+              for (const { select, payload } of sharedOptionSelects) {
+                if (invoked.has(select)) continue;
+                handlerObserved = true;
+                invoked.add(select);
+                checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                  .forEach((candidate) => { candidate.checked = false; });
+                try {
+                  select(payload);
+                  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                  if (reactHostChecked() === true || input.checked) return;
+                } catch {
+                  // Try another exact owner; stable readback remains authoritative.
+                }
+              }
+              if (listItem === null) return;
               if (rowIndexOwners.length === 0 || sharedSelects.length === 0) return;
               const itemPayload = rowIndexOwners.flatMap((props) => {
                 const direct = [props.item, props.option, props.dataItem, props.value]
