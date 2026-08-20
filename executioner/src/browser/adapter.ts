@@ -266,8 +266,13 @@ export async function applyMutation(
       return "applied";
     }
     if (target.interaction === "formatted-date") {
-      const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
-      await locator.fill(formatted, { timeout: timeoutMs });
+      const digits = `${mutation.isoDate.slice(5, 7)}${mutation.isoDate.slice(8, 10)}${mutation.isoDate.slice(0, 4)}`;
+      await locator.click({ timeout: timeoutMs });
+      await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A", {
+        timeout: timeoutMs,
+      });
+      await locator.press("Backspace", { timeout: timeoutMs });
+      await locator.pressSequentially(digits, { delay: 20, timeout: timeoutMs });
       await locator.blur({ timeout: timeoutMs });
       return "applied";
     }

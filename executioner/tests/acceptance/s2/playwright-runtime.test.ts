@@ -747,7 +747,10 @@ test("each questionnaire field mutation has its own before and readback monitor 
       "English",
     );
     assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
-    assert.equal(await page.locator("#selfIdentifiedDisabilityData--date").inputValue(), "09/01/2026");
+    assert.equal(
+      await page.locator("#selfIdentifiedDisabilityData--date").inputValue(),
+      "09\u200e/\u200e01\u200e/\u200e2026",
+    );
     assert.deepEqual(
       await page.locator('[data-automation-id="formField-disabilityStatus"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.closest('[role="row"]')?.textContent?.trim())),
