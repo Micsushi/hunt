@@ -1696,18 +1696,20 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     <style>
       [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
     </style>
-    <div data-automation-id="formField-disabilityStatus">
+    <div data-automation-id="formField-disabilityStatus"
+      data-hunt-exclusive-checkbox-group="true"
+      aria-label="Disability status"
+      data-hunt-target-token="target-shared-option-owner-disability-status">
       <span data-automation-id="required">*</span>
-      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
-        data-hunt-target-token="target-shared-option-owner-disability-status">
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup">
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-no" type="checkbox" aria-label="No"></div><span>No</span></div>
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
       </fieldset>
-      <fieldset data-automation-id="disabilityStatus-CheckboxGroup" hidden>
-        <input type="checkbox" aria-label="Decline to self-identify">
-      </fieldset>
     </div>
+    <fieldset data-automation-id="disabilityStatus-CheckboxGroup" hidden>
+      <input type="checkbox" aria-label="Decline to self-identify">
+    </fieldset>
     <script>
       const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
       const inputs = [...group.querySelectorAll('input[type="checkbox"]')];
@@ -1780,7 +1782,8 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
         ) {
           window.__huntArmCheckboxRemount = false;
           queueMicrotask(() => {
-            group.removeAttribute('data-hunt-target-token');
+            group.closest('[data-automation-id="formField-disabilityStatus"]')
+              .removeAttribute('data-hunt-target-token');
             inputs.forEach(input => input.removeAttribute('aria-label'));
           });
         }

@@ -275,19 +275,30 @@ export async function applyMutation(
       const count = await options.count();
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       if (target.interaction === "exclusive-checkbox-group") {
-        const groupAutomationId = await locator.getAttribute("data-automation-id");
         const checkboxCount = await locator.locator('input[type="checkbox"]').count();
         if (checkboxCount < 2) return "invalid";
-        const desiredCheckboxIndex = await options.evaluate((element) => {
+        const checkboxAdmission = await options.evaluate((element) => {
           const owner = element.closest(
             '[data-automation-id$="-CheckboxGroup"], ' +
               '[data-hunt-exclusive-checkbox-group="true"]',
           );
-          return owner === null
-            ? -1
-            : [...owner.querySelectorAll('input[type="checkbox"]')].indexOf(element);
+          if (owner === null) return undefined;
+          return {
+            desiredCheckboxIndex: [
+              ...owner.querySelectorAll('input[type="checkbox"]'),
+            ].indexOf(element),
+            groupAutomationId: owner.getAttribute("data-automation-id"),
+            groupCheckboxCount: owner.querySelectorAll('input[type="checkbox"]').length,
+          };
         });
-        if (desiredCheckboxIndex < 0) return "invalid";
+        if (checkboxAdmission === undefined ||
+            checkboxAdmission.desiredCheckboxIndex < 0 ||
+            checkboxAdmission.groupCheckboxCount < 2) return "invalid";
+        const {
+          desiredCheckboxIndex,
+          groupAutomationId,
+          groupCheckboxCount,
+        } = checkboxAdmission;
         const stableGroup = groupAutomationId !== null &&
             /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(groupAutomationId)
           ? () => page.locator(`[data-automation-id="${groupAutomationId}"]:visible`)
@@ -878,7 +889,7 @@ export async function applyMutation(
           if (reactCommit === "absent") return true;
           return reactCommit === "committed" && await waitUntilOnlyChecked();
         };
-        for (let index = 0; index < checkboxCount; index += 1) {
+        for (let index = 0; index < groupCheckboxCount; index += 1) {
           const checkbox = checkboxes.nth(index);
           if (
             await checkbox.getAttribute("data-hunt-option-label") !== mutation.option &&
@@ -901,7 +912,7 @@ export async function applyMutation(
           const checkbox = group.getByLabel(mutation.option, { exact: true });
           if (await checkbox.count() === 1) return checkbox;
           const current = group.locator('input[type="checkbox"]');
-          return await current.count() === checkboxCount
+          return await current.count() === groupCheckboxCount
             ? current.nth(desiredCheckboxIndex)
             : undefined;
         };
