@@ -543,6 +543,56 @@ test("Self Identify counts composite date and exclusive disability status once",
   });
 });
 
+test("Self Identify reports value-free checkbox React handler structure", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowSelfIdentifyPage">
+        <div data-automation-id="formField-disabilityStatus">
+          <span data-automation-id="required">*</span>
+          <div data-automation-id="disabilityStatus-CheckboxGroup"
+            data-hunt-target-token="target-disability">
+            <label><input type="checkbox" value="sensitive-option-value">First option</label>
+            <label><input type="checkbox">Second option</label>
+          </div>
+        </div>
+      </main>
+      <script>
+        const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+        Object.defineProperty(group, '__reactProps$fixture', {
+          enumerable: true,
+          value: {
+            onBlur() {},
+            onChange(event, checked) {},
+            value: 'sensitive-option-value',
+          },
+        });
+      </script>
+    `);
+    const previousTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+    const previousWrite = process.stderr.write;
+    const writes: string[] = [];
+    process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = "1";
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const observed = await application(page).observe(signal());
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+    } finally {
+      process.stderr.write = previousWrite;
+      if (previousTrace === undefined) delete process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+      else process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = previousTrace;
+    }
+    const diagnostic = writes.find((line) => line.includes("applicationRequiredFieldDiagnostics"));
+    assert.ok(diagnostic);
+    assert.match(diagnostic, /"hostAutomationId":"disabilityStatus-CheckboxGroup"/u);
+    assert.match(diagnostic, /"name":"onBlur","arity":0/u);
+    assert.match(diagnostic, /"name":"onChange","arity":2/u);
+    assert.doesNotMatch(diagnostic, /sensitive-option-value|First option|Second option/u);
+  });
+});
+
 test("navigation reports a validation downgrade instead of claiming a transition", async () => {
   await withPage(async (page) => {
     await page.setContent(`

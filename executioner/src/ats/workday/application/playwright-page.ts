@@ -33,6 +33,14 @@ interface BrowserApplicationSnapshot {
       readonly fieldOwnerSelectedItemCount: number;
       readonly inputNonEmpty: boolean;
       readonly ariaValueNonEmpty: boolean;
+      readonly checkboxReactHandlerLayers?: readonly {
+        readonly hostTag: string;
+        readonly hostAutomationId: string | null;
+        readonly domDepth: number;
+        readonly fiberDepth: number;
+        readonly handlers: readonly { readonly name: string; readonly arity: number }[];
+        readonly inputIndexes: readonly number[];
+      }[];
     };
   }[];
   readonly c3OwnedDuplicateRows: number;
@@ -636,6 +644,8 @@ function readApplicationSnapshot(
     if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
     if (radioKey !== undefined) seenRadioGroups.add(radioKey);
     let verified = control.getAttribute("aria-invalid") !== "true";
+    let checkboxReactHandlerLayers:
+      BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
     // Workday renders tokenized combobox selections beside the input inside the
     // nearest automation-owned ancestor. `closest()` on the control itself can
     // stop at the input, while the broader form-field owner can contain several
@@ -677,6 +687,79 @@ function readApplicationSnapshot(
       const checkboxes = [...control.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
       verified = verified && checkboxes.length >= 2 &&
         checkboxes.filter(({ checked }) => checked).length === 1;
+      const layers = new Map<string, {
+        hostTag: string;
+        hostAutomationId: string | null;
+        domDepth: number;
+        fiberDepth: number;
+        handlers: { name: string; arity: number }[];
+        inputIndexes: number[];
+      }>();
+      const handlers = (props: unknown) =>
+        typeof props === "object" && props !== null
+          ? Object.entries(props)
+            .filter(([name, value]) => /^on[A-Z]/u.test(name) && typeof value === "function")
+            .map(([name, value]) => ({
+              name,
+              arity: (value as (...args: unknown[]) => unknown).length,
+            }))
+            .sort((left, right) => left.name.localeCompare(right.name) || left.arity - right.arity)
+          : [];
+      const addLayer = (
+        inputIndex: number,
+        element: Element,
+        domDepth: number,
+        fiberDepth: number,
+        layerHandlers: { name: string; arity: number }[],
+      ) => {
+        if (layerHandlers.length === 0) return;
+        const layer = {
+          hostTag: element.tagName.toLocaleLowerCase("en-US"),
+          hostAutomationId: element.getAttribute("data-automation-id"),
+          domDepth,
+          fiberDepth,
+          handlers: layerHandlers,
+        };
+        const key = JSON.stringify(layer);
+        const existing = layers.get(key);
+        if (existing === undefined) {
+          layers.set(key, { ...layer, inputIndexes: [inputIndex] });
+        } else if (!existing.inputIndexes.includes(inputIndex)) {
+          existing.inputIndexes.push(inputIndex);
+        }
+      };
+      checkboxes.forEach((checkbox, inputIndex) => {
+        let element: Element | null = checkbox;
+        for (let domDepth = 0; element !== null && domDepth < 8; domDepth += 1) {
+          const record = element as unknown as Record<string, unknown>;
+          Object.keys(element)
+            .filter((key) => key.startsWith("__reactProps$"))
+            .forEach((key) => addLayer(inputIndex, element!, domDepth, -1, handlers(record[key])));
+          const fiberKey = Object.keys(element).find((key) =>
+            key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+          );
+          let fiber = fiberKey === undefined
+            ? undefined
+            : record[fiberKey] as {
+              memoizedProps?: unknown;
+              pendingProps?: unknown;
+              return?: unknown;
+            } | undefined;
+          for (let fiberDepth = 0; fiber !== undefined && fiber !== null && fiberDepth < 16; fiberDepth += 1) {
+            addLayer(
+              inputIndex,
+              element,
+              domDepth,
+              fiberDepth,
+              handlers(fiber.memoizedProps ?? fiber.pendingProps),
+            );
+            fiber = fiber.return as typeof fiber;
+          }
+          if (element === control) break;
+          element = element.parentElement;
+        }
+      });
+      checkboxReactHandlerLayers = [...layers.values()];
     } else if (input?.type === "file") {
       const visibleFileInputs = [...root.querySelectorAll<HTMLInputElement>(
         'input[type="file"]',
@@ -759,6 +842,7 @@ function readApplicationSnapshot(
         fieldOwnerSelectedItemCount: fieldOwnerSelectedItems.length,
         inputNonEmpty: input?.value.trim() !== "",
         ariaValueNonEmpty: text(control.getAttribute("aria-valuetext")) !== "",
+        ...(checkboxReactHandlerLayers === undefined ? {} : { checkboxReactHandlerLayers }),
       },
     });
   }
