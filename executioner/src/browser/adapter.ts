@@ -430,12 +430,28 @@ export async function applyMutation(
                 const change = props.onChange;
                 const click = props.onClick;
                 const mouseDown = props.onMouseDown;
-                const listItemIndex = Number(
-                  listItem?.getAttribute("data-uxi-multiselectlistitem-index"),
+                const declaredListItemIndex = listItem?.getAttribute(
+                  "data-uxi-multiselectlistitem-index",
                 );
+                const checkboxOwner = input.closest(
+                  '[data-automation-id$="-CheckboxGroup"]',
+                );
+                const checkboxIndex = checkboxOwner === null
+                  ? -1
+                  : [...checkboxOwner.querySelectorAll('input[type="checkbox"]')]
+                    .indexOf(input);
+                // Some Workday tenants omit the Canvas row's diagnostic index
+                // attribute even though the row React props retain the same
+                // stable position. Bind that exact position only within the
+                // already unique CheckboxGroup and selected list row.
+                const listItemIndex = typeof declaredListItemIndex === "string" &&
+                    /^\d+$/u.test(declaredListItemIndex)
+                  ? Number(declaredListItemIndex)
+                  : checkboxIndex;
                 const select = props.onSelect;
-                const exactListSelect = typeof select === "function" &&
+                const exactListSelect = listItem !== null && typeof select === "function" &&
                   Number.isSafeInteger(listItemIndex) &&
+                  listItemIndex >= 0 &&
                   props.index === listItemIndex;
                 const handler = exactListSelect
                   ? select

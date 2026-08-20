@@ -1414,3 +1414,94 @@ test("WD-UI-SCALAR-COMPOSITE-V1 invokes the exact Workday list row React host", 
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 binds an unindexed Workday row by its exact group position", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-unindexed-list-owner-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="unindexed-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="unindexed-no" type="checkbox" aria-label="No"></div><span>No</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="unindexed-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('[data-uxi-widget-type="multiselectlistitem"]').forEach((row, index) => {
+        const input = row.querySelector('input');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        const hostProps = { checked: false, onChange: () => {} };
+        const rowProps = {
+          index,
+          onSelect: (item, event, node) => {
+            group.dataset.unindexedSelectionArgument = [
+              String(item === rowProps),
+              event.type,
+              String(node === row),
+            ].join(':');
+            if (item !== rowProps || event.type !== 'click' || node !== row) return;
+            group.dataset.committedOption = input.id;
+            hostProps.checked = true;
+            group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+              candidate.checked = candidate === input;
+            });
+          },
+        };
+        Object.defineProperty(input, '__reactProps$unindexedHost', {
+          enumerable: true,
+          value: hostProps,
+        });
+        Object.defineProperty(input, '__reactFiber$unindexedOwner', {
+          enumerable: true,
+          value: {
+            memoizedProps: hostProps,
+            return: { memoizedProps: rowProps },
+          },
+        });
+      });
+    </script>
+  `, "5989875000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-unindexed-list-owner-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-unindexed-selection-argument"),
+      "true:click:true",
+    );
+    assert.equal(await variant.page.locator("#unindexed-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
