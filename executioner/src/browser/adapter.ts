@@ -423,7 +423,19 @@ export async function applyMutation(
                 const change = props.onChange;
                 const click = props.onClick;
                 const mouseDown = props.onMouseDown;
-                const handler = candidate === input && typeof change === "function"
+                const listItem = input.closest(
+                  '[data-uxi-widget-type="multiselectlistitem"]',
+                );
+                const listItemIndex = Number(
+                  listItem?.getAttribute("data-uxi-multiselectlistitem-index"),
+                );
+                const select = props.onSelect;
+                const exactListSelect = typeof select === "function" &&
+                  Number.isSafeInteger(listItemIndex) &&
+                  props.index === listItemIndex;
+                const handler = exactListSelect
+                  ? select
+                  : candidate === input && typeof change === "function"
                   ? change
                   : typeof click === "function"
                   ? click
@@ -435,7 +447,9 @@ export async function applyMutation(
                 if (handler === undefined || invoked.has(handler)) return;
                 handlerObserved = true;
                 invoked.add(handler);
-                const type = handler === change
+                const type = exactListSelect || handler === click
+                  ? "click"
+                  : handler === change
                   ? "change"
                   : handler === mouseDown
                   ? "mousedown"
@@ -469,16 +483,30 @@ export async function applyMutation(
                   const syntheticEvent = {
                     type,
                     target: input,
-                    currentTarget: candidate,
+                    currentTarget: exactListSelect && listItem !== null ? listItem : candidate,
                     bubbles: true,
                     nativeEvent,
+                    shiftKey: false,
+                    altKey: false,
+                    metaKey: false,
+                    ctrlKey: false,
                     preventDefault: () => undefined,
                     stopPropagation: () => undefined,
                     isDefaultPrevented: () => false,
                     isPropagationStopped: () => false,
                     persist: () => undefined,
                   };
-                  if (handler === change && changeContract === "resolved_boolean") {
+                  if (exactListSelect && listItem !== null) {
+                    // Workday's virtualized multi-select row owns the real
+                    // selection callback. Its list contract receives the
+                    // exact row props, click event, and row node; the nested
+                    // checkboxPanel onChange is intentionally a no-op.
+                    (handler as (item: unknown, event: unknown, node: Element) => unknown)(
+                      props,
+                      syntheticEvent,
+                      listItem,
+                    );
+                  } else if (handler === change && changeContract === "resolved_boolean") {
                     // Workday's native input owns a React ChangeEvent, while
                     // an enclosing Checkbox component owns the already-
                     // resolved boolean. Both appear as `onChange` in the

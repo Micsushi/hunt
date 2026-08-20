@@ -1235,3 +1235,102 @@ test("WD-UI-SCALAR-COMPOSITE-V1 activates the exact Workday multiselect list ite
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 invokes the index-bound Workday list selection owner", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-list-selection-owner-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem" data-uxi-multiselectlistitem-index="0"><div data-automation-id="checkboxPanel"><input id="selection-owner-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
+        <div data-uxi-widget-type="multiselectlistitem" data-uxi-multiselectlistitem-index="1"><div data-automation-id="checkboxPanel"><input id="selection-owner-no" type="checkbox" aria-label="No"></div><span>No</span></div>
+        <div data-uxi-widget-type="multiselectlistitem" data-uxi-multiselectlistitem-index="2"><div data-automation-id="checkboxPanel"><input id="selection-owner-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('[data-uxi-widget-type="multiselectlistitem"]').forEach((row, index) => {
+        const input = row.querySelector('input');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', () => {
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        const hostProps = { checked: false, onChange: () => {} };
+        const rowProps = {
+          id: input.id,
+          index,
+          isSelected: false,
+          onSelect: (item, event, node) => {
+            group.dataset.selectionArgument = [
+              String(item === rowProps),
+              event.type,
+              String(node === row),
+            ].join(':');
+            if (item !== rowProps || event.type !== 'click' || node !== row) return;
+            group.dataset.committedOption = input.id;
+            rowProps.isSelected = true;
+            hostProps.checked = true;
+            group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+              candidate.checked = candidate === input;
+            });
+          },
+        };
+        Object.defineProperty(input, '__reactProps$listSelectionHost', {
+          enumerable: true,
+          value: hostProps,
+        });
+        Object.defineProperty(input, '__reactFiber$listSelectionOwner', {
+          enumerable: true,
+          value: {
+            memoizedProps: hostProps,
+            return: { memoizedProps: rowProps },
+          },
+        });
+      });
+    </script>
+  `, "5989500000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-list-selection-owner-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-selection-argument"),
+      "true:click:true",
+    );
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-committed-option"),
+      "selection-owner-decline",
+    );
+    assert.equal(await variant.page.locator("#selection-owner-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
