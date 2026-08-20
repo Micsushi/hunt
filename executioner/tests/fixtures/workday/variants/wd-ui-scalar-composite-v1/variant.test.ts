@@ -1790,3 +1790,103 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 supports a shared owner that selects by exact option id", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-shared-id-owner-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="id-option-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="id-option-no" type="checkbox" aria-label="No"></div><span>No</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="id-option-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      const inputs = [...group.querySelectorAll('input[type="checkbox"]')];
+      const options = inputs.map((input, index) => ({
+        id: input.id,
+        label: input.getAttribute('aria-label'),
+        required: index === 2,
+      }));
+      const hostProps = inputs.map(() => ({ checked: false, onChange: () => {} }));
+      const sharedProps = {
+        'data-automation-id': 'disabilityStatus',
+        onRemove: optionId => { group.dataset.removedOption = String(optionId ?? ''); },
+        onSelect: optionId => {
+          if (typeof optionId !== 'string') return;
+          const selectedIndex = options.findIndex(option => option.id === optionId);
+          if (selectedIndex < 0) return;
+          const replacement = group.cloneNode(true);
+          replacement.dataset.selectedOption = optionId;
+          replacement.querySelectorAll('input[type="checkbox"]').forEach((input, candidateIndex) => {
+            input.checked = candidateIndex === selectedIndex;
+          });
+          group.replaceWith(replacement);
+        },
+        value: new Set(),
+        options,
+        isMultiSelect: false,
+        id: 'disabilityStatus',
+      };
+      inputs.forEach((input, index) => {
+        const row = input.closest('[data-uxi-widget-type="multiselectlistitem"]');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.selectedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.selectedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        Object.defineProperty(input, '__reactProps$sharedIdHost', {
+          enumerable: true,
+          value: hostProps[index],
+        });
+        Object.defineProperty(input, '__reactFiber$sharedIdOwner', {
+          enumerable: true,
+          value: {
+            memoizedProps: hostProps[index],
+            return: { memoizedProps: sharedProps },
+          },
+        });
+      });
+    </script>
+  `, "5990000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-shared-id-owner-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-selected-option"),
+      "id-option-decline",
+    );
+    assert.equal(await variant.page.locator("#id-option-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});

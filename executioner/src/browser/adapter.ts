@@ -491,14 +491,42 @@ export async function applyMutation(
                 if (invoked.has(select)) continue;
                 handlerObserved = true;
                 invoked.add(select);
-                checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
-                  .forEach((candidate) => { candidate.checked = false; });
-                try {
-                  select(payload);
-                  await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                  if (reactHostChecked() === true || input.checked) return;
-                } catch {
-                  // Try another exact owner; stable readback remains authoritative.
+                const ownerAutomationId = checkboxOwner.getAttribute("data-automation-id");
+                const desiredLabel = input.getAttribute("aria-label");
+                const liveOnlyChecked = (): boolean => {
+                  const liveOwner = ownerAutomationId === null
+                    ? checkboxOwner
+                    : [...document.querySelectorAll('[data-automation-id]')].find((candidate) =>
+                      candidate.getAttribute("data-automation-id") === ownerAutomationId
+                    ) ?? checkboxOwner;
+                  const liveInputs = [...liveOwner.querySelectorAll<HTMLInputElement>(
+                    'input[type="checkbox"]',
+                  )];
+                  return liveInputs.filter((candidate) => candidate.checked).length === 1 &&
+                    liveInputs.some((candidate) =>
+                      candidate.checked && candidate.getAttribute("aria-label") === desiredLabel
+                    );
+                };
+                const payloadRecord = typeof payload === "object" && payload !== null
+                  ? payload as Record<string, unknown>
+                  : undefined;
+                const exactPayloads = [
+                  payload,
+                  typeof payloadRecord?.id === "string" ? payloadRecord.id : undefined,
+                ].filter((candidate, index, all) =>
+                  candidate !== undefined && all.indexOf(candidate) === index
+                );
+                for (const exactPayload of exactPayloads) {
+                  checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                    .forEach((candidate) => { candidate.checked = false; });
+                  try {
+                    await Promise.resolve(select(exactPayload));
+                    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                    if (liveOnlyChecked() || reactHostChecked() === true || input.checked) return;
+                  } catch {
+                    // Try the other exact option representation or exact owner;
+                    // stable readback remains authoritative.
+                  }
                 }
               }
               if (listItem === null) return;
