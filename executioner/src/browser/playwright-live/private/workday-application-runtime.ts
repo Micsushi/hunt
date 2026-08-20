@@ -1367,8 +1367,16 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       else if (control.matches('[data-automation-id="dateSection"]')) type = "date";
       else if (control instanceof HTMLInputElement &&
           (control.type === "text" || control.type === "tel") &&
-          /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
-            control.placeholder.trim(),
+          (
+            /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+              control.placeholder.trim(),
+            ) || [...(control.closest(
+              '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+            )?.querySelectorAll('button[aria-label]') ?? [])].filter((button) =>
+              /^(?:open )?(?:calendar|date picker)$/iu.test(
+                (button.getAttribute("aria-label") ?? "").trim(),
+              )
+            ).length === 1
           )) type = "date";
       else if (
         control.matches('[data-automation-id$="-CheckboxGroup"]') ||

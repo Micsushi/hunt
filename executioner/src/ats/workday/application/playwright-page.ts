@@ -711,8 +711,15 @@ function readApplicationSnapshot(
         !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
     } else if (
       input !== undefined && (input.type === "text" || input.type === "tel") &&
-      /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
-        input.placeholder.trim(),
+      (
+        /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+          input.placeholder.trim(),
+        ) || [...(fieldOwner?.querySelectorAll('button[aria-label]') ?? [])]
+          .filter((button) => visible(button) &&
+            /^(?:open )?(?:calendar|date picker)$/iu.test(
+              (button.getAttribute("aria-label") ?? "").trim(),
+            )
+          ).length === 1
       )
     ) {
       const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(input.value.trim());
