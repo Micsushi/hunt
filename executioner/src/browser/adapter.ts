@@ -1432,6 +1432,25 @@ async function checkboxOwnerStructure(group: Locator) {
       handlers: { name: string; arity: number }[];
       inputIndexes: number[];
     }>();
+    const selectionLayers = new Map<string, {
+      hostTag: string;
+      hostAutomationId: string | null;
+      domDepth: number;
+      fiberDepth: number;
+      propsKeys: string[];
+      index: number | null;
+      handlers: { name: string; arity: number; functionId: number }[];
+      objects: { name: string; arrayLength: number | null; keys: string[] }[];
+      inputIndexes: number[];
+    }>();
+    const functionIds = new Map<unknown, number>();
+    const functionId = (value: unknown): number => {
+      const existing = functionIds.get(value);
+      if (existing !== undefined) return existing;
+      const next = functionIds.size + 1;
+      functionIds.set(value, next);
+      return next;
+    };
     const handlers = (props: unknown) =>
       typeof props === "object" && props !== null
         ? Object.entries(props)
@@ -1444,6 +1463,53 @@ async function checkboxOwnerStructure(group: Locator) {
         : [];
     const includeIndex = (indexes: number[], inputIndex: number) => {
       if (!indexes.includes(inputIndex)) indexes.push(inputIndex);
+    };
+    const addSelectionLayer = (
+      inputIndex: number,
+      element: Element,
+      domDepth: number,
+      fiberDepth: number,
+      props: unknown,
+    ) => {
+      if (typeof props !== "object" || props === null) return;
+      const entries = Object.entries(props);
+      const selectionHandlers = entries.filter(([name, value]) =>
+        /^(?:onSelect|onRemove)$/u.test(name) && typeof value === "function"
+      ).map(([name, value]) => ({
+        name,
+        arity: (value as (...args: unknown[]) => unknown).length,
+        functionId: functionId(value),
+      }));
+      const rawIndex = (props as Record<string, unknown>).index;
+      const index = typeof rawIndex === "number" && Number.isSafeInteger(rawIndex)
+        ? rawIndex
+        : null;
+      const objects = entries.filter(([, value]) => typeof value === "object" && value !== null)
+        .slice(0, 24).map(([name, value]) => ({
+          name,
+          arrayLength: Array.isArray(value) ? value.length : null,
+          keys: Array.isArray(value)
+            ? typeof value[0] === "object" && value[0] !== null
+              ? Object.keys(value[0]).slice(0, 24)
+              : []
+            : Object.keys(value as object).slice(0, 24),
+        }));
+      if (selectionHandlers.length === 0 && index === null && objects.length === 0) return;
+      const layer = {
+        hostTag: element.tagName.toLowerCase(),
+        hostAutomationId: element.getAttribute("data-automation-id"),
+        domDepth,
+        fiberDepth,
+        propsKeys: entries.map(([name]) => name).slice(0, 40),
+        index,
+        handlers: selectionHandlers,
+        objects,
+      };
+      const key = JSON.stringify(layer);
+      const existing = selectionLayers.get(key);
+      if (existing === undefined) {
+        selectionLayers.set(key, { ...layer, inputIndexes: [inputIndex] });
+      } else includeIndex(existing.inputIndexes, inputIndex);
     };
     [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
       .forEach((input, inputIndex) => {
@@ -1462,11 +1528,13 @@ async function checkboxOwnerStructure(group: Locator) {
           chain.push(node);
           if (node === owner) break;
         }
-        chain.forEach((element) => {
+        chain.forEach((element, domDepth) => {
           const record = element as unknown as Record<string, unknown>;
-          const directHandlers = Object.keys(element)
-            .filter((key) => key.startsWith("__reactProps$"))
-            .flatMap((key) => handlers(record[key]));
+          const directProps = Object.keys(element).filter((key) => key.startsWith("__reactProps$"));
+          const directHandlers = directProps.flatMap((key) => handlers(record[key]));
+          directProps.forEach((key) =>
+            addSelectionLayer(inputIndex, element, domDepth, -1, record[key])
+          );
           const domLayer = {
             tag: element.tagName.toLowerCase(),
             automationId: element.getAttribute("data-automation-id"),
@@ -1493,7 +1561,9 @@ async function checkboxOwnerStructure(group: Locator) {
               return?: unknown;
             } | undefined;
           for (let depth = 0; fiber !== undefined && fiber !== null && depth < 16; depth += 1) {
-            const layerHandlers = handlers(fiber.memoizedProps ?? fiber.pendingProps);
+            const props = fiber.memoizedProps ?? fiber.pendingProps;
+            const layerHandlers = handlers(props);
+            addSelectionLayer(inputIndex, element, domDepth, depth, props);
             if (layerHandlers.length > 0) {
               const fiberLayer = {
                 hostTag: element.tagName.toLowerCase(),
@@ -1520,6 +1590,7 @@ async function checkboxOwnerStructure(group: Locator) {
       inputStates,
       domLayers: [...domLayers.values()],
       fiberHandlerLayers: [...fiberHandlerLayers.values()],
+      selectionLayers: [...selectionLayers.values()],
     };
   });
 }
