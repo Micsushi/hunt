@@ -275,17 +275,27 @@ export async function applyMutation(
       await page.keyboard.press("Backspace");
       await page.keyboard.type(digits, { delay: 20 });
       await page.keyboard.press("Tab");
+      const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
       const readback = (await locator.inputValue({ timeout: timeoutMs })).replace(
         /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
         "",
       );
       if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(readback) &&
           !/^\d{4}-\d{2}-\d{2}$/u.test(readback)) {
-        await locator.fill(
-          `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`,
-          { timeout: timeoutMs },
-        );
+        await locator.fill(formatted, { timeout: timeoutMs });
         await locator.blur({ timeout: timeoutMs });
+        const committed = (await locator.inputValue({ timeout: timeoutMs })).replace(
+          /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+          "",
+        );
+        if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(committed) &&
+            !/^\d{4}-\d{2}-\d{2}$/u.test(committed)) {
+          await locator.focus({ timeout: timeoutMs });
+          await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+          await page.keyboard.press("Backspace");
+          await page.keyboard.type(formatted, { delay: 20 });
+          await page.keyboard.press("Tab");
+        }
       }
       return "applied";
     }

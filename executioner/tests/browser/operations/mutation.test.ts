@@ -213,7 +213,10 @@ test("retries a Workday formatted date with separators after digit-only input is
       data-hunt-target-token="target-formatted-date"></label>
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
-      input.addEventListener('input', () => {
+      input.addEventListener('input', (event) => {
+        if ((event.data || '').length > 1) input.value = '';
+      });
+      input.addEventListener('blur', () => {
         if (input.value.split('/').map((part) => part.length).join('-') !== '2-2-4') input.value = '';
       });
     </script>
