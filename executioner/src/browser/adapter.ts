@@ -1410,7 +1410,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         (
           /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
             normalize(element.getAttribute("placeholder")),
-          ) || [...(element.closest(
+          ) || /^date(?:\s*\*)?$/iu.test(normalize(element.closest(
+            '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+          )?.querySelector("label, legend")?.textContent)) || [...(element.closest(
             '[data-automation-id="formField"], [data-automation-id^="formField-"]',
           )?.querySelectorAll('button[aria-label]') ?? [])].filter((button) =>
             /^(?:open )?(?:calendar|date picker)$/iu.test(

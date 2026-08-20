@@ -659,7 +659,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-selfIdentifiedDisabilityData--date">
         <label for="selfIdentifiedDisabilityData--date">Date <span data-automation-id="required">*</span></label>
         <input type="tel" id="selfIdentifiedDisabilityData--date">
-        <button type="button" aria-label="Open calendar"></button>
+        <button type="button"></button>
       </div>
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>

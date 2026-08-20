@@ -714,6 +714,8 @@ function readApplicationSnapshot(
       (
         /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
           input.placeholder.trim(),
+        ) || /^date(?:\s*\*)?$/iu.test(
+          (fieldOwner?.querySelector("label, legend")?.textContent ?? "").replace(/\s+/gu, " ").trim(),
         ) || [...(fieldOwner?.querySelectorAll('button[aria-label]') ?? [])]
           .filter((button) => visible(button) &&
             /^(?:open )?(?:calendar|date picker)$/iu.test(
