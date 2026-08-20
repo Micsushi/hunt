@@ -276,13 +276,23 @@ export async function applyMutation(
       if (count !== 1) return count === 0 ? "invalid" : "ambiguous";
       if (target.interaction === "exclusive-checkbox-group") {
         const groupAutomationId = await locator.getAttribute("data-automation-id");
+        const checkboxCount = await locator.locator('input[type="checkbox"]').count();
+        if (checkboxCount < 2) return "invalid";
+        const desiredCheckboxIndex = await options.evaluate((element) => {
+          const owner = element.closest(
+            '[data-automation-id$="-CheckboxGroup"], ' +
+              '[data-hunt-exclusive-checkbox-group="true"]',
+          );
+          return owner === null
+            ? -1
+            : [...owner.querySelectorAll('input[type="checkbox"]')].indexOf(element);
+        });
+        if (desiredCheckboxIndex < 0) return "invalid";
         const stableGroup = groupAutomationId !== null &&
             /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(groupAutomationId)
           ? () => page.locator(`[data-automation-id="${groupAutomationId}"]`)
           : () => locator;
-        const checkboxes = locator.locator('input[type="checkbox"]');
-        const checkboxCount = await checkboxes.count();
-        if (checkboxCount < 2) return "invalid";
+        const checkboxes = stableGroup().locator('input[type="checkbox"]');
         const taggedSurfaceFor = async (
           selector: string,
           option: string | null,
@@ -319,8 +329,8 @@ export async function applyMutation(
         };
         const isOnlyChecked = async (): Promise<boolean> => {
           const group = stableGroup();
-          const checkbox = group.getByLabel(mutation.option, { exact: true });
-          return await group.count() === 1 && await checkbox.count() === 1 &&
+          const checkbox = await desiredCheckbox();
+          return await group.count() === 1 && checkbox !== undefined &&
             await group.locator('input[type="checkbox"]:checked').count() === 1 &&
             await checkbox.isChecked();
         };
@@ -882,13 +892,18 @@ export async function applyMutation(
           }
         }
         const desiredCheckbox = async (): Promise<Locator | undefined> => {
-          // Preserve the already-admitted target-local option while it remains
-          // unique. A Workday transition can briefly retain a second group
-          // with the same automation ID, making the broader remount locator
-          // ambiguous even though this exact target is still authoritative.
+          // Preserve the admitted target-local option while its accessible
+          // binding remains live. If Workday remounts it without that binding,
+          // use the captured position only inside the one unchanged-size group.
           if (await options.count() === 1) return options;
-          const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
-          return await checkbox.count() === 1 ? checkbox : undefined;
+          const group = stableGroup();
+          if (await group.count() !== 1) return undefined;
+          const checkbox = group.getByLabel(mutation.option, { exact: true });
+          if (await checkbox.count() === 1) return checkbox;
+          const current = group.locator('input[type="checkbox"]');
+          return await current.count() === checkboxCount
+            ? current.nth(desiredCheckboxIndex)
+            : undefined;
         };
         if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
           process.stderr.write(`C3_CHECKBOX_DIAGNOSTIC ${JSON.stringify({

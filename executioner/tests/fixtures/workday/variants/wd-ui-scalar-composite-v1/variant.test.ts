@@ -1704,9 +1704,6 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-no" type="checkbox" aria-label="No"></div><span>No</span></div>
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
       </fieldset>
-      <fieldset data-automation-id="disabilityStatus-CheckboxGroup" hidden>
-        <input type="checkbox" aria-label="Decline to self-identify">
-      </fieldset>
     </div>
     <script>
       const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
@@ -1730,9 +1727,6 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
             replacement.querySelectorAll('input[type="checkbox"]').forEach((input, candidateIndex) => {
               input.checked = candidateIndex === selectedIndex;
             });
-            document.querySelector(
-              '[data-automation-id="disabilityStatus-CheckboxGroup"][hidden]',
-            )?.remove();
             group.replaceWith(replacement);
           }, 250);
         },
@@ -1773,6 +1767,22 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
           },
         });
       });
+      const nativeClosest = Element.prototype.closest;
+      Element.prototype.closest = function(selector) {
+        const result = nativeClosest.call(this, selector);
+        if (
+          window.__huntArmCheckboxRemount === true &&
+          this.id === 'option-decline' &&
+          selector.includes('CheckboxGroup')
+        ) {
+          window.__huntArmCheckboxRemount = false;
+          queueMicrotask(() => {
+            group.removeAttribute('data-hunt-target-token');
+            inputs.forEach(input => input.removeAttribute('aria-label'));
+          });
+        }
+        return result;
+      };
     </script>
   `, "5990000000000000");
   try {
@@ -1781,6 +1791,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
       browserTargetToken("target-shared-option-owner-disability-status"),
     )?.[0];
     assert.ok(target !== undefined);
+    await variant.page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).__huntArmCheckboxRemount = true;
+    });
     assert.equal(await applyMutation(
       variant.page,
       target,
