@@ -229,9 +229,15 @@ export class PlaywrightBrowserSession implements BrowserSession {
       .catch(() => undefined);
     if (fresh === undefined) return failure("browser_target_stale");
     const matches = fresh.targets.get(mutation.target);
-    if (matches === undefined || matches.length === 0) return failure("browser_target_stale");
-    if (matches.length !== 1) return failure("browser_target_ambiguous");
-    const target = matches[0];
+    const observedTarget = observed[0];
+    const mayRebindExclusiveChoice = mutation.kind === "select" &&
+      observedTarget?.interaction === "exclusive-checkbox-group" &&
+      compatible(observedTarget, mutation);
+    if ((matches === undefined || matches.length === 0) && !mayRebindExclusiveChoice) {
+      return failure("browser_target_stale");
+    }
+    if (matches !== undefined && matches.length > 1) return failure("browser_target_ambiguous");
+    const target = matches?.[0] ?? observedTarget;
     if (target === undefined || !compatible(target, mutation)) return failure("browser_target_invalid");
 
     let effectStarted = false;

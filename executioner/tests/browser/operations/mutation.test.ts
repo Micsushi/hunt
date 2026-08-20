@@ -227,6 +227,52 @@ test("fails stale, ambiguous, mismatched, and replayed operations closed", async
   }
 });
 
+test("rebinds one uniquely observed Workday checkbox group after its target token vanishes", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("cdcdcdcdcdcdcdcd"),
+  });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: dataPage(`
+        <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+          data-hunt-target-token="target-disability-status">
+          <legend>Disability status</legend>
+          <label><input type="checkbox" aria-label="Yes">Yes</label>
+          <label><input type="checkbox" aria-label="No">No</label>
+          <label><input id="decline" type="checkbox"
+            aria-label="Decline to self-identify">Decline to self-identify</label>
+        </fieldset>
+      `, "page-questionnaire"),
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    await page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]')
+      .evaluate((element) => element.removeAttribute("data-hunt-target-token"));
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "Decline to self-identify" as never },
+      "cdcdcdcdcdcdcdce",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(await page.locator("#decline").isChecked(), true);
+    assert.equal(await page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("re-commits an exact Workday prompt-button selection", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
