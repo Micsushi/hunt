@@ -40,7 +40,7 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
-  readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "exclusive-checkbox-group";
+  readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" | "exclusive-checkbox-group";
 }
 
 export interface ResolvedBrowserTarget extends RawControl {
@@ -265,6 +265,12 @@ export async function applyMutation(
       }
       return "applied";
     }
+    if (target.interaction === "formatted-date") {
+      const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
+      await locator.fill(formatted, { timeout: timeoutMs });
+      await locator.blur({ timeout: timeoutMs });
+      return "applied";
+    }
     await locator.fill(mutation.isoDate, { timeout: timeoutMs });
     await locator.blur({ timeout: timeoutMs });
     return "applied";
@@ -412,7 +418,10 @@ export async function applyMutation(
           initiallyStableSince?: number,
         ): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 5_000);
-          const stableWindow = Math.max(50, waitWindow - 150);
+          // The controlled-rollback corpus includes a 4.1-second optimistic
+          // checkbox state. Require 4.3 seconds while retaining enough
+          // scheduling margin for a final readback on loaded Windows hosts.
+          const stableWindow = Math.max(50, Math.min(waitWindow - 150, 4_300));
           const deadline = Date.now() + waitWindow;
           let stableSince = initiallyStableSince;
           do {
@@ -1359,6 +1368,17 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         ? { kind: "text", value: isoDate as never }
         : { kind: "unavailable" };
     };
+    const formattedDateReadback = (element: HTMLInputElement): BrowserReadback => {
+      const value = normalize(element.value);
+      if (value === "") return { kind: "empty" };
+      const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(value);
+      if (match === null) return { kind: "unavailable" };
+      const isoDate = `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+      const date = new Date(`${isoDate}T00:00:00.000Z`);
+      return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === isoDate
+        ? { kind: "text", value: isoDate as never }
+        : { kind: "unavailable" };
+    };
     return elements.flatMap((element, index) => {
       const compositeOwner = element.closest('[data-automation-id="dateSection"][data-hunt-target-token]');
       if (compositeOwner !== null && compositeOwner !== element) return [];
@@ -1379,11 +1399,20 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
-      let interaction: "owned-popup" | "field-popup" | "composite-date" | "exclusive-checkbox-group" | undefined;
+      let interaction: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" | "exclusive-checkbox-group" | undefined;
       if (element.getAttribute("data-automation-id") === "dateSection") {
         control = { kind: "date", element: "input" };
         readback = compositeDateReadback(element);
         interaction = "composite-date";
+      } else if (
+        element instanceof HTMLInputElement && element.type === "text" &&
+        /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(
+          normalize(element.getAttribute("placeholder")),
+        )
+      ) {
+        control = { kind: "date", element: "input" };
+        readback = formattedDateReadback(element);
+        interaction = "formatted-date";
       } else if (element.matches(
         '[data-automation-id$="-CheckboxGroup"], ' +
           '[data-hunt-exclusive-checkbox-group="true"]',

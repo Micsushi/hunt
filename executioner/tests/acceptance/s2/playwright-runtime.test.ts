@@ -499,8 +499,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
       async auth() {},
       async application(_page, _pageName, moment, taxonomy, event) {
         monitored.push({ moment, operationId: event.operationId, attempt: event.attempt });
-        if (taxonomy.fieldCount === 4) {
+        if (taxonomy.fieldCount === 4 && taxonomy.questionTypes.includes("authorization")) {
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
+          assert.equal(taxonomy.requiredFieldCount, 4);
+        } else if (taxonomy.fieldCount === 4) {
+          assert.deepEqual(taxonomy.questionTypes, ["demographic", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
         } else if (taxonomy.fieldCount === 5) {
           assert.deepEqual(taxonomy.questionTypes, ["demographic", "legal"]);
@@ -653,6 +656,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-selfIdentifiedDisabilityData--name">
         <label>Name <span data-automation-id="required">*</span><input type="text" id="selfIdentifiedDisabilityData--name"></label>
       </div>
+      <div data-automation-id="formField-selfIdentifiedDisabilityData--date">
+        <label for="selfIdentifiedDisabilityData--date">Date <span data-automation-id="required">*</span></label>
+        <input type="text" id="selfIdentifiedDisabilityData--date" placeholder="MM / DD / YYYY">
+        <button type="button" aria-label="Open calendar"></button>
+      </div>
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
         <div class="disability-options">
@@ -733,6 +741,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       "English",
     );
     assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
+    assert.equal(await page.locator("#selfIdentifiedDisabilityData--date").inputValue(), "09/01/2026");
     assert.deepEqual(
       await page.locator('[data-automation-id="formField-disabilityStatus"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.closest('[role="row"]')?.textContent?.trim())),

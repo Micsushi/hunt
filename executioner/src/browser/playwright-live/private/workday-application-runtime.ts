@@ -1365,6 +1365,8 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       let type = "text";
       if (control instanceof HTMLTextAreaElement) type = "textarea";
       else if (control.matches('[data-automation-id="dateSection"]')) type = "date";
+      else if (control instanceof HTMLInputElement && control.type === "text" &&
+          /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(control.placeholder.trim())) type = "date";
       else if (
         control.matches('[data-automation-id$="-CheckboxGroup"]') ||
         control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&

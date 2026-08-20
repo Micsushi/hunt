@@ -710,6 +710,17 @@ function readApplicationSnapshot(
       verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
         !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
     } else if (
+      input?.type === "text" &&
+      /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(input.placeholder.trim())
+    ) {
+      const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(input.value.trim());
+      const isoDate = match === null
+        ? ""
+        : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+      const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+      verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
+        !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+    } else if (
       control.matches('[data-automation-id$="-CheckboxGroup"]') ||
       control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
         control.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
