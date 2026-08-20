@@ -884,6 +884,92 @@ test("WD-UI-SCALAR-COMPOSITE-V1 presents the native checkbox target to a React c
   }
 });
 
+test("WD-UI-SCALAR-COMPOSITE-V1 continues from the input host event to its checkbox fiber owner", async () => {
+  const variant = await openVariantPage(`
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-react-fiber-owner-disability-status">
+        <div data-automation-id="checkboxPanel"><input id="fiber-owner-yes" type="checkbox"><label for="fiber-owner-yes">Yes</label></div>
+        <div data-automation-id="checkboxPanel"><input id="fiber-owner-no" type="checkbox"><label for="fiber-owner-no">No</label></div>
+        <div data-automation-id="checkboxPanel"><input id="fiber-owner-decline" type="checkbox"><label for="fiber-owner-decline">Decline to self-identify</label></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.addEventListener('click', () => {
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        const hostChange = event => {
+          group.dataset.hostEventChecked = String(event.target.checked);
+        };
+        const ownerChange = checked => {
+          group.dataset.ownerArgument = typeof checked + ':' + String(checked);
+          if (checked !== true) return;
+          group.dataset.committedOption = input.id;
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+        };
+        Object.defineProperty(input, '__reactProps$fiberOwner', {
+          enumerable: true,
+          value: { checked: false, onChange: hostChange },
+        });
+        Object.defineProperty(input, '__reactFiber$fiberOwner', {
+          enumerable: true,
+          value: {
+            memoizedProps: { checked: false, onChange: hostChange },
+            return: { memoizedProps: { checked: false, onChange: ownerChange } },
+          },
+        });
+      });
+    </script>
+  `, "5985750000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-react-fiber-owner-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-host-event-checked"),
+      "true",
+    );
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-owner-argument"),
+      "boolean:true",
+    );
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-committed-option"),
+      "fiber-owner-decline",
+    );
+    assert.equal(await variant.page.locator("#fiber-owner-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
+
 test("WD-UI-SCALAR-COMPOSITE-V1 presents a resolved boolean to the Workday checkbox owner", async () => {
   const variant = await openVariantPage(`
     <div data-automation-id="formField-disabilityStatus">

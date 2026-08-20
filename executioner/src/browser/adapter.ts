@@ -377,8 +377,11 @@ export async function applyMutation(
             const invoked = new Set<unknown>();
             let handlerObserved = false;
             for (const candidate of candidates.slice(0, 16)) {
-              const invoke = async (props: Record<string, unknown> | undefined): Promise<boolean> => {
-                if (props === undefined) return false;
+              const invoke = async (
+                props: Record<string, unknown> | undefined,
+                changeContract: "event" | "resolved_boolean",
+              ): Promise<void> => {
+                if (props === undefined) return;
                 const change = props.onChange;
                 const click = props.onClick;
                 const mouseDown = props.onMouseDown;
@@ -391,7 +394,7 @@ export async function applyMutation(
                   : typeof change === "function"
                   ? change
                   : undefined;
-                if (handler === undefined || invoked.has(handler)) return false;
+                if (handler === undefined || invoked.has(handler)) return;
                 handlerObserved = true;
                 invoked.add(handler);
                 const type = handler === change
@@ -437,12 +440,12 @@ export async function applyMutation(
                     isPropagationStopped: () => false,
                     persist: () => undefined,
                   };
-                  if (handler === change && candidate !== input) {
+                  if (handler === change && changeContract === "resolved_boolean") {
                     // Workday's native input owns a React ChangeEvent, while
                     // an enclosing Checkbox component owns the already-
                     // resolved boolean. Both appear as `onChange` in the
-                    // fiber. Preserve the native event contract on the input
-                    // and present the component contract to its owner.
+                    // fiber. Preserve the event contract on the host fiber and
+                    // present the component contract to deeper owners.
                     (handler as (checked: boolean, event: unknown) => unknown)(
                       true,
                       syntheticEvent,
@@ -452,22 +455,20 @@ export async function applyMutation(
                   }
                   await new Promise<void>((resolve) => setTimeout(resolve, 0));
                 } catch {
-                  return false;
+                  return;
                 }
-                const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
-                return owner !== null && input.checked &&
-                  owner.querySelectorAll('input[type="checkbox"]:checked').length === 1;
               };
               const propsKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactProps$")
               );
-              if (
-                propsKey !== undefined && await invoke(
+              if (propsKey !== undefined) {
+                await invoke(
                   (candidate as unknown as Record<string, unknown>)[propsKey] as
                     | Record<string, unknown>
                     | undefined,
-                )
-              ) return "committed";
+                  candidate === input ? "event" : "resolved_boolean",
+                );
+              }
               const fiberKey = Object.keys(candidate).find((key) =>
                 key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
               );
@@ -477,12 +478,23 @@ export async function applyMutation(
                 pendingProps?: Record<string, unknown>;
                 return?: unknown;
               } | undefined;
+              let fiberDepth = 0;
               while (node !== undefined && node !== null) {
-                if (await invoke(node.memoizedProps ?? node.pendingProps)) return "committed";
+                await invoke(
+                  node.memoizedProps ?? node.pendingProps,
+                  candidate === input && fiberDepth === 0 ? "event" : "resolved_boolean",
+                );
                 node = node.return as typeof node;
+                fiberDepth += 1;
               }
             }
-            return handlerObserved ? "rejected" : "absent";
+            const owner = input.closest('[data-automation-id$="-CheckboxGroup"]');
+            return !handlerObserved
+              ? "absent"
+              : owner !== null && input.checked &&
+                  owner.querySelectorAll('input[type="checkbox"]:checked').length === 1
+              ? "committed"
+              : "rejected";
           });
         };
         const activate = async (
