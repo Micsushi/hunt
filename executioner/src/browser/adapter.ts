@@ -906,13 +906,37 @@ export async function applyMutation(
           // Preserve the admitted target-local option while its accessible
           // binding remains live. If Workday remounts it without that binding,
           // use the captured position only inside the one unchanged-size group.
-          if (await options.count() === 1) return options;
+          const originalOptionCount = await options.count();
           const group = stableGroup();
-          if (await group.count() !== 1) return undefined;
-          const checkbox = group.getByLabel(mutation.option, { exact: true });
-          if (await checkbox.count() === 1) return checkbox;
+          const stableGroupCount = await group.count();
           const current = group.locator('input[type="checkbox"]');
-          return await current.count() === groupCheckboxCount
+          const stableCheckboxCount = stableGroupCount === 1 ? await current.count() : 0;
+          const checkbox = group.getByLabel(mutation.option, { exact: true });
+          const stableExactLabelCount = stableGroupCount === 1 ? await checkbox.count() : 0;
+          try {
+            await page.evaluate((entry) => {
+              const root = document.documentElement as unknown as Record<string, unknown>;
+              const existing = typeof root.__huntCheckboxProbe === "object" &&
+                  root.__huntCheckboxProbe !== null
+                ? root.__huntCheckboxProbe as Record<string, number>
+                : {};
+              root.__huntCheckboxProbe = { ...existing, ...entry };
+            }, {
+              admissionCheckboxIndex: desiredCheckboxIndex,
+              admissionGroupCheckboxCount: groupCheckboxCount,
+              admissionOwnerIdCount: groupAutomationId === null ? 0 : 1,
+              originalOptionCount,
+              stableGroupCount,
+              stableCheckboxCount,
+              stableExactLabelCount,
+            });
+          } catch {
+            // Resolution diagnostics never change the admitted mutation result.
+          }
+          if (originalOptionCount === 1) return options;
+          if (stableGroupCount !== 1) return undefined;
+          if (stableExactLabelCount === 1) return checkbox;
+          return stableCheckboxCount === groupCheckboxCount
             ? current.nth(desiredCheckboxIndex)
             : undefined;
         };
