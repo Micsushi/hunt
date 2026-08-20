@@ -912,13 +912,26 @@ export class OwnedWorkdayApplicationRuntime {
           driveRequest: Parameters<FieldDriver["drive"]>[0],
           innerSignal: AbortSignal,
         ) => {
+          this.#trace?.("questionnaire_field_drive_started", {
+            fieldId: driveRequest.intent.fieldId,
+            kind: driveRequest.intent.kind,
+            uiBehavior: driveRequest.intent.behavior,
+          });
           const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
           monitoredAttempts.set(driveRequest.operationId, attempt);
           await this.#monitor(
             page, monitorPageName, "before_mutation", driveRequest.operationId, attempt, innerSignal,
           );
           this.#assertAuthorized(innerSignal);
-          return semanticDriver.drive(driveRequest, innerSignal);
+          const driven = await semanticDriver.drive(driveRequest, innerSignal);
+          this.#trace?.("questionnaire_field_drive_completed", {
+            fieldId: driveRequest.intent.fieldId,
+            kind: driveRequest.intent.kind,
+            uiBehavior: driveRequest.intent.behavior,
+            status: driven.ok ? "succeeded" : "failed",
+            ...(!driven.ok ? { code: driven.error.code } : {}),
+          });
+          return driven;
         },
       });
       const verifier: FieldVerifier = Object.freeze({
@@ -932,6 +945,13 @@ export class OwnedWorkdayApplicationRuntime {
           // be verified against the newly rendered control.
           await bindQuestionnaireTargets(page, input.pageId);
           const verified = await semanticVerifier.verify(verificationRequest, innerSignal);
+          this.#trace?.("questionnaire_field_verification_completed", {
+            fieldId: verificationRequest.intent.fieldId,
+            kind: verified.ok ? verified.value.kind : "failed",
+            uiBehavior: verificationRequest.intent.behavior,
+            status: verified.ok && verified.value.kind === "verified" ? "succeeded" : "failed",
+            ...(!verified.ok ? { code: verified.error.code } : {}),
+          });
           const operationId = verificationRequest.receipt.operationId;
           const attempt = monitoredAttempts.get(operationId);
           if (attempt === undefined) throw new TypeError("questionnaire monitor binding unavailable");
@@ -2190,6 +2210,8 @@ async function checkboxFailureDiagnostics(page: Page): Promise<object> {
       stableGroupCount: probe.stableGroupCount ?? 0,
       stableCheckboxCount: probe.stableCheckboxCount ?? 0,
       stableExactLabelCount: probe.stableExactLabelCount ?? 0,
+      adapterSelectCount: probe.adapterSelectCount ?? 0,
+      adapterExclusiveSelectCount: probe.adapterExclusiveSelectCount ?? 0,
       candidateCount: probe.candidateCount ?? 0,
       sharedSelectCount: probe.sharedSelectCount ?? 0,
       sharedOptionSelectCount: probe.sharedOptionSelectCount ?? 0,

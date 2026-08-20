@@ -84,6 +84,7 @@ const NUMBER_KEYS = new Set([
   "exactCommitCount", "exactRejectedCount", "exactThrowCount",
   "admissionCheckboxIndex", "admissionGroupCheckboxCount", "admissionOwnerIdCount",
   "originalOptionCount", "stableGroupCount", "stableCheckboxCount", "stableExactLabelCount",
+  "adapterSelectCount", "adapterExclusiveSelectCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",

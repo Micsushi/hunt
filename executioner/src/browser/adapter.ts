@@ -202,6 +202,24 @@ export async function applyMutation(
   upload: Uint8Array | undefined,
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
+  if (mutation.kind === "select") {
+    try {
+      await page.evaluate((exclusiveChoice) => {
+        const root = document.documentElement as unknown as Record<string, unknown>;
+        const current = typeof root.__huntCheckboxProbe === "object" &&
+            root.__huntCheckboxProbe !== null
+          ? root.__huntCheckboxProbe as Record<string, number>
+          : {};
+        current.adapterSelectCount = (current.adapterSelectCount ?? 0) + 1;
+        if (exclusiveChoice) {
+          current.adapterExclusiveSelectCount = (current.adapterExclusiveSelectCount ?? 0) + 1;
+        }
+        root.__huntCheckboxProbe = current;
+      }, target.interaction === "exclusive-checkbox-group");
+    } catch {
+      // Structural diagnostics never change mutation admission.
+    }
+  }
   const locator = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
