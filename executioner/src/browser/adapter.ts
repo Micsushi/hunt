@@ -430,8 +430,27 @@ export async function applyMutation(
               const props = fiber?.memoizedProps ?? fiber?.pendingProps;
               return typeof props?.checked === "boolean" ? props.checked : undefined;
             };
-            const invokeSharedIndexedListSelect = async (): Promise<void> => {
-              if (checkboxOwner === null || checkboxIndex < 0) return;
+            const liveOnlyChecked = (): boolean => {
+              const ownerAutomationId = checkboxOwner?.getAttribute("data-automation-id") ?? null;
+              const desiredLabel = input.getAttribute("aria-label");
+              const liveOwner = ownerAutomationId === null
+                ? checkboxOwner
+                : [...document.querySelectorAll('[data-automation-id]')].find((candidate) =>
+                  candidate.getAttribute("data-automation-id") === ownerAutomationId
+                ) ?? checkboxOwner;
+              if (liveOwner === null) return false;
+              const liveInputs = [...liveOwner.querySelectorAll<HTMLInputElement>(
+                'input[type="checkbox"]',
+              )];
+              return liveInputs.filter((candidate) => candidate.checked).length === 1 &&
+                liveInputs.some((candidate) =>
+                  candidate.checked && candidate.getAttribute("aria-label") === desiredLabel
+                );
+            };
+            const invokeSharedIndexedListSelect = async (
+              mode: "exact_option" | "row_item",
+            ): Promise<boolean> => {
+              if (checkboxOwner === null || checkboxIndex < 0) return false;
               const propsSeen = new Set<unknown>();
               const rowIndexOwners: Record<string, unknown>[] = [];
               const sharedSelects: ((...args: unknown[]) => unknown)[] = [];
@@ -487,50 +506,39 @@ export async function applyMutation(
                   fiber = fiber.return as typeof fiber;
                 }
               }
-              for (const { select, payload } of sharedOptionSelects) {
-                if (invoked.has(select)) continue;
-                handlerObserved = true;
-                invoked.add(select);
-                const ownerAutomationId = checkboxOwner.getAttribute("data-automation-id");
-                const desiredLabel = input.getAttribute("aria-label");
-                const liveOnlyChecked = (): boolean => {
-                  const liveOwner = ownerAutomationId === null
-                    ? checkboxOwner
-                    : [...document.querySelectorAll('[data-automation-id]')].find((candidate) =>
-                      candidate.getAttribute("data-automation-id") === ownerAutomationId
-                    ) ?? checkboxOwner;
-                  const liveInputs = [...liveOwner.querySelectorAll<HTMLInputElement>(
-                    'input[type="checkbox"]',
-                  )];
-                  return liveInputs.filter((candidate) => candidate.checked).length === 1 &&
-                    liveInputs.some((candidate) =>
-                      candidate.checked && candidate.getAttribute("aria-label") === desiredLabel
-                    );
-                };
-                const payloadRecord = typeof payload === "object" && payload !== null
-                  ? payload as Record<string, unknown>
-                  : undefined;
-                const exactPayloads = [
-                  payload,
-                  typeof payloadRecord?.id === "string" ? payloadRecord.id : undefined,
-                ].filter((candidate, index, all) =>
-                  candidate !== undefined && all.indexOf(candidate) === index
-                );
-                for (const exactPayload of exactPayloads) {
-                  checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
-                    .forEach((candidate) => { candidate.checked = false; });
-                  try {
-                    await Promise.resolve(select(exactPayload));
-                    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                    if (liveOnlyChecked() || reactHostChecked() === true || input.checked) return;
-                  } catch {
-                    // Try the other exact option representation or exact owner;
-                    // stable readback remains authoritative.
+              if (mode === "exact_option") {
+                for (const { select, payload } of sharedOptionSelects) {
+                  if (invoked.has(select)) continue;
+                  handlerObserved = true;
+                  invoked.add(select);
+                  const payloadRecord = typeof payload === "object" && payload !== null
+                    ? payload as Record<string, unknown>
+                    : undefined;
+                  const exactPayloads = [
+                    payload,
+                    typeof payloadRecord?.id === "string" ? payloadRecord.id : undefined,
+                  ].filter((candidate, index, all) =>
+                    candidate !== undefined && all.indexOf(candidate) === index
+                  );
+                  for (const exactPayload of exactPayloads) {
+                    checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+                      .forEach((candidate) => { candidate.checked = false; });
+                    try {
+                      await Promise.resolve(select(exactPayload));
+                      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                      if (liveOnlyChecked() || reactHostChecked() === true || input.checked) {
+                        return true;
+                      }
+                    } catch {
+                      // Try the other exact option representation or exact owner;
+                      // stable readback remains authoritative.
+                    }
                   }
                 }
+                return false;
               }
-              if (listItem === null) return;
-              if (rowIndexOwners.length === 0 || sharedSelects.length === 0) return;
+              if (listItem === null) return false;
+              if (rowIndexOwners.length === 0 || sharedSelects.length === 0) return false;
               const itemPayload = rowIndexOwners.flatMap((props) => {
                 const direct = [props.item, props.option, props.dataItem, props.value]
                   .filter((value) => value !== undefined && typeof value !== "function");
@@ -562,12 +570,21 @@ export async function applyMutation(
                 try {
                   select(payload);
                   await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                  if (reactHostChecked() === true || input.checked) return;
+                  if (liveOnlyChecked() || reactHostChecked() === true || input.checked) return true;
                 } catch {
                   // Try the next exact nested owner; stable readback remains authoritative.
                 }
               }
+              return false;
             };
+            // The Workday CheckboxGroup owner exposes the exact option array
+            // and the form-state onSelect callback. A virtualized row can
+            // expose that same callback under an index-bound alias; invoking
+            // the alias with row props first both uses the wrong contract and
+            // prevents the exact callback from running. Prefer the unique
+            // shared option contract before any generic row handler.
+            const exactSharedCommitted = await invokeSharedIndexedListSelect("exact_option");
+            if (exactSharedCommitted && liveOnlyChecked()) return "committed";
             for (const candidate of candidates.slice(0, 16)) {
               const invoke = async (
                 props: Record<string, unknown> | undefined,
@@ -729,7 +746,7 @@ export async function applyMutation(
                 fiberDepth += 1;
               }
             }
-            await invokeSharedIndexedListSelect();
+            await invokeSharedIndexedListSelect("row_item");
             const owner = checkboxOwner;
             return !handlerObserved
               ? "absent"

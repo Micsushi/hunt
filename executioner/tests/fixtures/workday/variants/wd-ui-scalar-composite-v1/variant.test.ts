@@ -1755,7 +1755,10 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
           enumerable: true,
           value: {
             memoizedProps: hostProps[index],
-            return: { memoizedProps: sharedProps },
+            return: {
+              memoizedProps: { index, onSelect: sharedProps.onSelect },
+              return: { memoizedProps: sharedProps },
+            },
           },
         });
       });
