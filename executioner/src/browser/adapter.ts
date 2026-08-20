@@ -363,10 +363,12 @@ export async function applyMutation(
           return stableSince !== undefined && await isOnlyChecked() &&
             Date.now() - stableSince >= stableWindow;
         };
-        const invokeReactOptionHandler = async (): Promise<"committed" | "absent" | "rejected"> => {
+        const invokeReactOptionHandler = async (
+          exactSharedOnly = false,
+        ): Promise<"committed" | "absent" | "rejected"> => {
           const checkbox = await desiredCheckbox();
           if (checkbox === undefined) return "absent";
-          const result = await checkbox.evaluate(async (element) => {
+          const result = await checkbox.evaluate(async (element, exactSharedOnly) => {
             const input = element as HTMLInputElement;
             const candidates: Element[] = [];
             const add = (candidate: Element | null | undefined): void => {
@@ -411,6 +413,7 @@ export async function applyMutation(
 
             const invoked = new Set<unknown>();
             let handlerObserved = false;
+            let exactSharedOwnerObserved = false;
             const incrementCheckboxProbe = (key: string, amount = 1): void => {
               const root = document.documentElement as unknown as Record<string, unknown>;
               const current = typeof root.__huntCheckboxProbe === "object" &&
@@ -519,6 +522,7 @@ export async function applyMutation(
               incrementCheckboxProbe("sharedSelectCount", sharedSelects.length);
               incrementCheckboxProbe("sharedOptionSelectCount", sharedOptionSelects.length);
               if (mode === "exact_option") {
+                exactSharedOwnerObserved ||= sharedOptionSelects.length > 0;
                 for (const { select, payload } of sharedOptionSelects) {
                   if (invoked.has(select)) continue;
                   handlerObserved = true;
@@ -609,6 +613,9 @@ export async function applyMutation(
             // shared option contract before any generic row handler.
             const exactSharedCommitted = await invokeSharedIndexedListSelect("exact_option");
             if (exactSharedCommitted && liveOnlyChecked()) return "committed";
+            if (exactSharedOnly) {
+              return exactSharedOwnerObserved ? "rejected" : "absent";
+            }
             for (const candidate of candidates.slice(0, 16)) {
               const invoke = async (
                 props: Record<string, unknown> | undefined,
@@ -778,7 +785,7 @@ export async function applyMutation(
                   owner.querySelectorAll('input[type="checkbox"]:checked').length === 1
               ? "committed"
               : "rejected";
-          });
+          }, exactSharedOnly);
           // Workday can replace the entire controlled CheckboxGroup while the
           // exact owner callback is still resolving. In that case the captured
           // input and owner are detached and remain unchecked even though the
@@ -884,6 +891,19 @@ export async function applyMutation(
             structure: await checkboxOwnerStructure(stableGroup()),
           })}\n`);
         }
+        // Workday's CheckboxGroup publishes the exact option array and its
+        // one-argument form-state owner before any pointer interaction. Use
+        // only that unambiguous contract first: transient trusted toggles can
+        // remount the group and remove the accessible binding needed to find
+        // the selected input for the later exact-owner fallback.
+        const preferredReact = await invokeReactOptionHandler(true);
+        const preferredReactStable = preferredReact === "committed" &&
+          await waitUntilOnlyChecked();
+        await recordCheckboxAttempt(
+          "exact_react_owner",
+          `${preferredReact}:${preferredReactStable}`,
+        );
+        if (preferredReactStable) return "applied";
         const keyboardActivation = await activate([
           async () => {
             const checkbox = await desiredCheckbox();

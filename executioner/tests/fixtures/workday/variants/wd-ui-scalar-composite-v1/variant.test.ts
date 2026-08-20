@@ -1714,6 +1714,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
         required: index === 2,
       }));
       const hostProps = inputs.map(() => ({ checked: false, onChange: () => {} }));
+      group.dataset.trustedClickCount = '0';
       const sharedProps = {
         'data-automation-id': 'disabilityStatus',
         onRemove: option => { group.dataset.removedOption = String(option?.id ?? ''); },
@@ -1738,12 +1739,14 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
       inputs.forEach((input, index) => {
         const row = input.closest('[data-uxi-widget-type="multiselectlistitem"]');
         input.addEventListener('click', event => {
+          group.dataset.trustedClickCount = String(Number(group.dataset.trustedClickCount) + 1);
           event.stopPropagation();
           setTimeout(() => {
             if (group.dataset.selectedOption !== input.id) input.checked = false;
           }, 100);
         });
         row.addEventListener('click', event => {
+          group.dataset.trustedClickCount = String(Number(group.dataset.trustedClickCount) + 1);
           event.stopPropagation();
           setTimeout(() => {
             if (group.dataset.selectedOption !== input.id) input.checked = false;
@@ -1791,6 +1794,12 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     );
     assert.equal(await variant.page.locator("#option-decline").isChecked(), true);
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-trusted-click-count"),
+      "0",
+    );
   } finally {
     await variant.close();
   }
