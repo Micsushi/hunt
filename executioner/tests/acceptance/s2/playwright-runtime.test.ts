@@ -673,12 +673,20 @@ test("each questionnaire field mutation has its own before and readback monitor 
         </div>
       </div>
       <script>
-        document.getElementById('selfIdentifiedDisabilityData--date').addEventListener('input', (event) => {
+        const bindMaskedDate = (input) => input.addEventListener('input', (event) => {
           const digits = event.target.value.replace(/\D/g, '');
-          if (digits.length === 8) {
+          if (digits.length === 2 && event.target.dataset.remounted !== 'true') {
+            const replacement = event.target.cloneNode(true);
+            replacement.dataset.remounted = 'true';
+            event.target.replaceWith(replacement);
+            bindMaskedDate(replacement);
+            replacement.focus();
+            replacement.setSelectionRange(replacement.value.length, replacement.value.length);
+          } else if (digits.length === 8) {
             event.target.value = digits.slice(0, 2) + '\u200e/\u200e' + digits.slice(2, 4) + '\u200e/\u200e' + digits.slice(4);
           }
         });
+        bindMaskedDate(document.getElementById('selfIdentifiedDisabilityData--date'));
         const languageField = document.querySelector('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"]');
         const bindLanguage = (button) => button.addEventListener('click', () => {
           const popup = document.createElement('div');

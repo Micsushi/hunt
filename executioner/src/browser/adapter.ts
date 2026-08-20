@@ -268,12 +268,10 @@ export async function applyMutation(
     if (target.interaction === "formatted-date") {
       const digits = `${mutation.isoDate.slice(5, 7)}${mutation.isoDate.slice(8, 10)}${mutation.isoDate.slice(0, 4)}`;
       await locator.click({ timeout: timeoutMs });
-      await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A", {
-        timeout: timeoutMs,
-      });
-      await locator.press("Backspace", { timeout: timeoutMs });
-      await locator.pressSequentially(digits, { delay: 20, timeout: timeoutMs });
-      await locator.blur({ timeout: timeoutMs });
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.type(digits, { delay: 20 });
+      await page.keyboard.press("Tab");
       return "applied";
     }
     await locator.fill(mutation.isoDate, { timeout: timeoutMs });
