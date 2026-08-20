@@ -647,6 +647,12 @@ export async function applyMutation(
         if (await acceptStableActivation(forcedNativeActivation)) return "applied";
         const trustedActivation = await activate([
           async () => {
+            const surface = await taggedSurfaceFor(
+              '[data-hunt-checkbox-surface="option-row"]', mutation.option,
+            );
+            return surface === undefined ? undefined : { locator: surface };
+          },
+          async () => {
             const label = await exactLabelFor(mutation.option);
             return label === undefined ? undefined : { locator: label };
           },
@@ -982,18 +988,34 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         if (checkboxes.length < 2 || options.length !== checkboxes.length ||
             new Set(options).size !== options.length) return [];
         checkboxes.forEach((checkbox, index) => {
-          checkbox.setAttribute("data-hunt-option-label", options[index]!);
+          const option = options[index]!;
+          checkbox.setAttribute("data-hunt-option-label", option);
           [...checkbox.labels ?? []].forEach((label) =>
-            label.setAttribute("data-hunt-option-label", options[index]!)
+            label.setAttribute("data-hunt-option-label", option)
           );
           checkbox.parentElement?.setAttribute("data-hunt-checkbox-surface", "owner");
-          checkbox.parentElement?.setAttribute("data-hunt-option-label", options[index]!);
+          checkbox.parentElement?.setAttribute("data-hunt-option-label", option);
           if (checkbox.nextElementSibling instanceof HTMLElement) {
             checkbox.nextElementSibling.setAttribute("data-hunt-checkbox-surface", "visual");
-            checkbox.nextElementSibling.setAttribute("data-hunt-option-label", options[index]!);
+            checkbox.nextElementSibling.setAttribute("data-hunt-option-label", option);
           }
           checkbox.closest('[data-automation-id="checkboxPanel"]')
-            ?.setAttribute("data-hunt-option-label", options[index]!);
+            ?.setAttribute("data-hunt-option-label", option);
+          for (
+            let candidate = checkbox.parentElement;
+            candidate !== null && candidate !== element;
+            candidate = candidate.parentElement
+          ) {
+            const candidateText = normalize(candidate.textContent);
+            if (
+              candidate.querySelectorAll('input[type="checkbox"]').length === 1 &&
+              candidateText === option
+            ) {
+              candidate.setAttribute("data-hunt-checkbox-surface", "option-row");
+              candidate.setAttribute("data-hunt-option-label", option);
+              break;
+            }
+          }
         });
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
         control = {

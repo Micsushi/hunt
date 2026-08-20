@@ -1101,3 +1101,73 @@ test("WD-UI-SCALAR-COMPOSITE-V1 tries native DOM activation after trusted rollba
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 activates the option row outside a no-op checkbox visual", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      .option-row { display: flex; align-items: center; width: 420px; height: 32px; }
+      .decorative-owner { width: 24px; }
+      .option-copy { flex: 1; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-option-row-disability-status">
+        <div class="option-row"><div class="decorative-owner"><input data-automation-id="checkboxPanel" id="row-yes" type="checkbox" aria-label="Yes"></div><span class="option-copy">Yes</span></div>
+        <div class="option-row"><div class="decorative-owner"><input data-automation-id="checkboxPanel" id="row-no" type="checkbox" aria-label="No"></div><span class="option-copy">No</span></div>
+        <div class="option-row"><div class="decorative-owner"><input data-automation-id="checkboxPanel" id="row-decline" type="checkbox" aria-label="Decline to self-identify"></div><span class="option-copy">Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('.option-row').forEach(row => {
+        const input = row.querySelector('input');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        Object.defineProperty(input, '__reactProps$noopVisual', {
+          enumerable: true,
+          value: { checked: false, onChange: () => { input.dataset.noopChange = 'true'; } },
+        });
+        row.addEventListener('click', () => {
+          group.dataset.optionRowActivated = input.id;
+          group.dataset.committedOption = input.id;
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+        });
+      });
+    </script>
+  `, "5988000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-option-row-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-option-row-activated"),
+      "row-decline",
+    );
+    assert.equal(await variant.page.locator("#row-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
