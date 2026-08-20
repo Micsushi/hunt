@@ -587,8 +587,11 @@ test("Self Identify reports value-free checkbox React handler structure", async 
     const diagnostic = writes.find((line) => line.includes("applicationRequiredFieldDiagnostics"));
     assert.ok(diagnostic);
     assert.match(diagnostic, /"hostAutomationId":"disabilityStatus-CheckboxGroup"/u);
+    assert.match(diagnostic, /"propsKeys":\["onBlur","onChange","value"\]/u);
     assert.match(diagnostic, /"name":"onBlur","arity":0/u);
     assert.match(diagnostic, /"name":"onChange","arity":2/u);
+    assert.match(diagnostic, /"functionId":\d+/u);
+    assert.match(diagnostic, /"objects":\[\]/u);
     assert.doesNotMatch(diagnostic, /sensitive-option-value|First option|Second option/u);
   });
 });

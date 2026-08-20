@@ -38,7 +38,18 @@ interface BrowserApplicationSnapshot {
         readonly hostAutomationId: string | null;
         readonly domDepth: number;
         readonly fiberDepth: number;
-        readonly handlers: readonly { readonly name: string; readonly arity: number }[];
+        readonly propsKeys: readonly string[];
+        readonly index: number | null;
+        readonly handlers: readonly {
+          readonly name: string;
+          readonly arity: number;
+          readonly functionId: number;
+        }[];
+        readonly objects: readonly {
+          readonly name: string;
+          readonly arrayLength: number | null;
+          readonly keys: readonly string[];
+        }[];
         readonly inputIndexes: readonly number[];
       }[];
     };
@@ -712,9 +723,20 @@ function readApplicationSnapshot(
         hostAutomationId: string | null;
         domDepth: number;
         fiberDepth: number;
-        handlers: { name: string; arity: number }[];
+        propsKeys: string[];
+        index: number | null;
+        handlers: { name: string; arity: number; functionId: number }[];
+        objects: { name: string; arrayLength: number | null; keys: string[] }[];
         inputIndexes: number[];
       }>();
+      const functionIds = new Map<unknown, number>();
+      const functionId = (value: unknown): number => {
+        const existing = functionIds.get(value);
+        if (existing !== undefined) return existing;
+        const next = functionIds.size + 1;
+        functionIds.set(value, next);
+        return next;
+      };
       const handlers = (props: unknown) =>
         typeof props === "object" && props !== null
           ? Object.entries(props)
@@ -722,23 +744,41 @@ function readApplicationSnapshot(
             .map(([name, value]) => ({
               name,
               arity: (value as (...args: unknown[]) => unknown).length,
+              functionId: functionId(value),
             }))
-            .sort((left, right) => left.name.localeCompare(right.name) || left.arity - right.arity)
+            .sort((left, right) => left.name.localeCompare(right.name) ||
+              left.arity - right.arity || left.functionId - right.functionId)
           : [];
       const addLayer = (
         inputIndex: number,
         element: Element,
         domDepth: number,
         fiberDepth: number,
-        layerHandlers: { name: string; arity: number }[],
+        props: unknown,
       ) => {
+        if (typeof props !== "object" || props === null) return;
+        const entries = Object.entries(props);
+        const layerHandlers = handlers(props);
         if (layerHandlers.length === 0) return;
+        const rawIndex = (props as Record<string, unknown>).index;
         const layer = {
           hostTag: element.tagName.toLocaleLowerCase("en-US"),
           hostAutomationId: element.getAttribute("data-automation-id"),
           domDepth,
           fiberDepth,
+          propsKeys: entries.map(([name]) => name).slice(0, 40),
+          index: typeof rawIndex === "number" && Number.isSafeInteger(rawIndex) ? rawIndex : null,
           handlers: layerHandlers,
+          objects: entries.filter(([, value]) => typeof value === "object" && value !== null)
+            .slice(0, 24).map(([name, value]) => ({
+              name,
+              arrayLength: Array.isArray(value) ? value.length : null,
+              keys: Array.isArray(value)
+                ? typeof value[0] === "object" && value[0] !== null
+                  ? Object.keys(value[0]).slice(0, 24)
+                  : []
+                : Object.keys(value as object).slice(0, 24),
+            })),
         };
         const key = JSON.stringify(layer);
         const existing = layers.get(key);
@@ -754,7 +794,7 @@ function readApplicationSnapshot(
           const record = element as unknown as Record<string, unknown>;
           Object.keys(element)
             .filter((key) => key.startsWith("__reactProps$"))
-            .forEach((key) => addLayer(inputIndex, element!, domDepth, -1, handlers(record[key])));
+            .forEach((key) => addLayer(inputIndex, element!, domDepth, -1, record[key]));
           const fiberKey = Object.keys(element).find((key) =>
             key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
           );
@@ -771,7 +811,7 @@ function readApplicationSnapshot(
               element,
               domDepth,
               fiberDepth,
-              handlers(fiber.memoizedProps ?? fiber.pendingProps),
+              fiber.memoizedProps ?? fiber.pendingProps,
             );
             fiber = fiber.return as typeof fiber;
           }
