@@ -882,6 +882,11 @@ export async function applyMutation(
           }
         }
         const desiredCheckbox = async (): Promise<Locator | undefined> => {
+          // Preserve the already-admitted target-local option while it remains
+          // unique. A Workday transition can briefly retain a second group
+          // with the same automation ID, making the broader remount locator
+          // ambiguous even though this exact target is still authoritative.
+          if (await options.count() === 1) return options;
           const checkbox = stableGroup().getByLabel(mutation.option, { exact: true });
           return await checkbox.count() === 1 ? checkbox : undefined;
         };
