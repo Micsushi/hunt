@@ -1171,3 +1171,67 @@ test("WD-UI-SCALAR-COMPOSITE-V1 activates the option row outside a no-op checkbo
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 activates the exact Workday multiselect list item", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-workday-list-item-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem"><div><input id="list-item-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span><span>Not Checked</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div><input id="list-item-no" type="checkbox" aria-label="No"></div><span>No</span><span>Not Checked</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div><input id="list-item-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span><span>Not Checked</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('[data-uxi-widget-type="multiselectlistitem"]').forEach(row => {
+        const input = row.querySelector('input');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', () => {
+          group.dataset.workdayListItemActivated = input.id;
+          group.dataset.committedOption = input.id;
+          group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+            candidate.checked = candidate === input;
+          });
+        });
+      });
+    </script>
+  `, "5989000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-workday-list-item-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-workday-list-item-activated"),
+      "list-item-decline",
+    );
+    assert.equal(await variant.page.locator("#list-item-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});

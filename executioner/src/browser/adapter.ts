@@ -669,6 +669,14 @@ export async function applyMutation(
         if (await acceptStableActivation(forcedNativeActivation)) return "applied";
         const trustedActivation = await activate([
           async () => {
+            const checkbox = await desiredCheckbox();
+            if (checkbox === undefined) return undefined;
+            const listItem = checkbox.locator(
+              'xpath=ancestor::*[@data-uxi-widget-type="multiselectlistitem"][1]',
+            );
+            return await listItem.count() === 1 ? { locator: listItem } : undefined;
+          },
+          async () => {
             const surface = await taggedSurfaceFor(
               '[data-hunt-checkbox-surface="option-row"]', mutation.option,
             );
