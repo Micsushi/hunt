@@ -1720,12 +1720,14 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
         onSelect: option => {
           const selectedIndex = options.indexOf(option);
           if (selectedIndex < 0) return;
-          const replacement = group.cloneNode(true);
-          replacement.dataset.selectedOption = String(option?.id ?? '');
-          replacement.querySelectorAll('input[type="checkbox"]').forEach((input, candidateIndex) => {
-            input.checked = candidateIndex === selectedIndex;
-          });
-          group.replaceWith(replacement);
+          setTimeout(() => {
+            const replacement = group.cloneNode(true);
+            replacement.dataset.selectedOption = String(option?.id ?? '');
+            replacement.querySelectorAll('input[type="checkbox"]').forEach((input, candidateIndex) => {
+              input.checked = candidateIndex === selectedIndex;
+            });
+            group.replaceWith(replacement);
+          }, 250);
         },
         value: {},
         options,

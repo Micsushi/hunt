@@ -78,7 +78,10 @@ const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
   "requiredFields", "verifiedFields", "duplicateRows", "inputCount", "itemCount",
   "successCount", "removeCount", "errorCount", "inputFileCount", "buttonCount",
-  "progressCount",
+  "progressCount", "groupCount", "checkboxCount", "checkedCount", "optionRowCount",
+  "ownerSurfaceCount", "visualSurfaceCount", "candidateCount", "sharedSelectCount",
+  "sharedOptionSelectCount", "exactObjectCallCount", "exactIdCallCount",
+  "exactCommitCount", "exactRejectedCount", "exactThrowCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",

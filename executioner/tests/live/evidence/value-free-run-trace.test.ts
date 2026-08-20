@@ -38,6 +38,15 @@ test("durable run trace retains ordered structural state and drops applicant val
       submitPresent: false,
       submitActivated: false,
     });
+    trace("questionnaire_checkbox_diagnostics", {
+      groupCount: 1,
+      checkboxCount: 3,
+      checkedCount: 0,
+      sharedOptionSelectCount: 2,
+      exactObjectCallCount: 2,
+      exactCommitCount: 0,
+      nested: { answer: "private answer" },
+    });
 
     const path = join(root, "value-free-trace.ndjson");
     const text = readFileSync(path, "utf8");
@@ -48,8 +57,17 @@ test("durable run trace retains ordered structural state and drops applicant val
     assert.deepEqual(records.map(({ sequence, event }) => [sequence, event]), [
       [1, "application_walk_progress"],
       [2, "external_monitor_acknowledged"],
+      [3, "questionnaire_checkbox_diagnostics"],
     ]);
     assert.deepEqual(records[0]?.details.questionTypes, ["authorization", "employment"]);
+    assert.deepEqual(records[2]?.details, {
+      groupCount: 1,
+      checkboxCount: 3,
+      checkedCount: 0,
+      sharedOptionSelectCount: 2,
+      exactObjectCallCount: 2,
+      exactCommitCount: 0,
+    });
     assert.equal(Object.isFrozen(records[0]?.details), true);
   } finally {
     rmSync(root, { recursive: true, force: true });

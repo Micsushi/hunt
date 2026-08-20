@@ -2149,32 +2149,50 @@ async function popupSelectedValue(target: import("playwright").Locator): Promise
 async function checkboxFailureDiagnostics(page: Page): Promise<object> {
   return await page.locator(
     '[data-automation-id$="-CheckboxGroup"], [data-hunt-exclusive-checkbox-group="true"]',
-  ).evaluateAll((groups) => ({
-    groupCount: groups.length,
-    groups: groups.slice(0, 4).map((group) => {
-      const record = group as unknown as Record<string, unknown>;
-      return {
-        checkboxCount: group.querySelectorAll('input[type="checkbox"]').length,
-        checkedCount: group.querySelectorAll('input[type="checkbox"]:checked').length,
-        optionRowCount: group.querySelectorAll(
+  ).evaluateAll((groups) => {
+    const probeRecord = document.documentElement as unknown as Record<string, unknown>;
+    const probe = typeof probeRecord.__huntCheckboxProbe === "object" &&
+        probeRecord.__huntCheckboxProbe !== null
+      ? probeRecord.__huntCheckboxProbe as Record<string, number>
+      : {};
+    return {
+      groupCount: groups.length,
+      checkboxCount: groups.reduce(
+        (count, group) => count + group.querySelectorAll('input[type="checkbox"]').length,
+        0,
+      ),
+      checkedCount: groups.reduce(
+        (count, group) => count + group.querySelectorAll('input[type="checkbox"]:checked').length,
+        0,
+      ),
+      optionRowCount: groups.reduce(
+        (count, group) => count + group.querySelectorAll(
           '[data-hunt-checkbox-surface="option-row"]',
         ).length,
-        ownerSurfaceCount: group.querySelectorAll(
+        0,
+      ),
+      ownerSurfaceCount: groups.reduce(
+        (count, group) => count + group.querySelectorAll(
           '[data-hunt-checkbox-surface="owner"]',
         ).length,
-        visualSurfaceCount: group.querySelectorAll(
+        0,
+      ),
+      visualSurfaceCount: groups.reduce(
+        (count, group) => count + group.querySelectorAll(
           '[data-hunt-checkbox-surface="visual"]',
         ).length,
-        attempts: Array.isArray(record.__huntCheckboxAttempts)
-          ? record.__huntCheckboxAttempts
-          : [],
-        structure: typeof record.__huntCheckboxStructure === "object" &&
-            record.__huntCheckboxStructure !== null
-          ? record.__huntCheckboxStructure
-          : null,
-      };
-    }),
-  }));
+        0,
+      ),
+      candidateCount: probe.candidateCount ?? 0,
+      sharedSelectCount: probe.sharedSelectCount ?? 0,
+      sharedOptionSelectCount: probe.sharedOptionSelectCount ?? 0,
+      exactObjectCallCount: probe.exactObjectCallCount ?? 0,
+      exactIdCallCount: probe.exactIdCallCount ?? 0,
+      exactCommitCount: probe.exactCommitCount ?? 0,
+      exactRejectedCount: probe.exactRejectedCount ?? 0,
+      exactThrowCount: probe.exactThrowCount ?? 0,
+    };
+  });
 }
 
 function structuralObservations(

@@ -411,6 +411,15 @@ export async function applyMutation(
 
             const invoked = new Set<unknown>();
             let handlerObserved = false;
+            const incrementCheckboxProbe = (key: string, amount = 1): void => {
+              const root = document.documentElement as unknown as Record<string, unknown>;
+              const current = typeof root.__huntCheckboxProbe === "object" &&
+                  root.__huntCheckboxProbe !== null
+                ? root.__huntCheckboxProbe as Record<string, number>
+                : {};
+              current[key] = (current[key] ?? 0) + amount;
+              root.__huntCheckboxProbe = current;
+            };
             const reactHostChecked = (): boolean | undefined => {
               const record = input as unknown as Record<string, unknown>;
               const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
@@ -506,6 +515,9 @@ export async function applyMutation(
                   fiber = fiber.return as typeof fiber;
                 }
               }
+              incrementCheckboxProbe("candidateCount", Math.min(candidates.length, 16));
+              incrementCheckboxProbe("sharedSelectCount", sharedSelects.length);
+              incrementCheckboxProbe("sharedOptionSelectCount", sharedOptionSelects.length);
               if (mode === "exact_option") {
                 for (const { select, payload } of sharedOptionSelects) {
                   if (invoked.has(select)) continue;
@@ -521,18 +533,30 @@ export async function applyMutation(
                     candidate !== undefined && all.indexOf(candidate) === index
                   );
                   for (const exactPayload of exactPayloads) {
+                    const isIdPayload = typeof exactPayload === "string";
+                    incrementCheckboxProbe(isIdPayload ? "exactIdCallCount" : "exactObjectCallCount");
                     checkboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
                       .forEach((candidate) => { candidate.checked = false; });
                     try {
                       await Promise.resolve(select(exactPayload));
-                      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                      const deadline = Date.now() + 1_000;
+                      do {
+                        if (liveOnlyChecked() || reactHostChecked() === true || input.checked) {
+                          incrementCheckboxProbe("exactCommitCount");
+                          return true;
+                        }
+                        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                      } while (Date.now() < deadline);
                       if (liveOnlyChecked() || reactHostChecked() === true || input.checked) {
+                        incrementCheckboxProbe("exactCommitCount");
                         return true;
                       }
                     } catch {
+                      incrementCheckboxProbe("exactThrowCount");
                       // Try the other exact option representation or exact owner;
                       // stable readback remains authoritative.
                     }
+                    incrementCheckboxProbe("exactRejectedCount");
                   }
                 }
                 return false;
