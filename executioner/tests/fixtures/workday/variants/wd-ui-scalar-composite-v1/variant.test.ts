@@ -1799,6 +1799,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     assert.ok(target !== undefined);
     await variant.page.evaluate(() => {
       (window as unknown as Record<string, unknown>).__huntArmCheckboxRemount = true;
+      document.querySelector('#option-decline')?.removeAttribute('aria-label');
     });
     assert.equal(await applyMutation(
       variant.page,

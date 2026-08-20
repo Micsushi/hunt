@@ -265,9 +265,10 @@ export async function applyMutation(
       if (matches.length !== 1) return matches.length === 0 ? "invalid" : "ambiguous";
       const options = target.interaction === "exclusive-checkbox-group"
         ? await (async () => {
-          const checkbox = locator.getByLabel(mutation.option, { exact: true });
-          if (await checkbox.count() !== 1 ||
-              await checkbox.getAttribute("type") !== "checkbox") return undefined;
+          const desiredOptionIndex = target.radioOptions?.indexOf(mutation.option) ?? -1;
+          if (desiredOptionIndex < 0) return undefined;
+          const checkbox = locator.locator('input[type="checkbox"]').nth(desiredOptionIndex);
+          if (await checkbox.count() !== 1) return undefined;
           return checkbox;
         })()
         : locator.getByRole("radio", { name: mutation.option, exact: true });
