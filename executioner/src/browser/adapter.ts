@@ -290,7 +290,7 @@ export async function applyMutation(
         if (desiredCheckboxIndex < 0) return "invalid";
         const stableGroup = groupAutomationId !== null &&
             /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(groupAutomationId)
-          ? () => page.locator(`[data-automation-id="${groupAutomationId}"]`)
+          ? () => page.locator(`[data-automation-id="${groupAutomationId}"]:visible`)
           : () => locator;
         const checkboxes = stableGroup().locator('input[type="checkbox"]');
         const taggedSurfaceFor = async (

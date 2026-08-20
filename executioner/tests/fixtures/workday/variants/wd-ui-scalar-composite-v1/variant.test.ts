@@ -1704,6 +1704,9 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-no" type="checkbox" aria-label="No"></div><span>No</span></div>
         <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="option-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
       </fieldset>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup" hidden>
+        <input type="checkbox" aria-label="Decline to self-identify">
+      </fieldset>
     </div>
     <script>
       const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
@@ -1807,7 +1810,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     ), "applied");
     assert.equal(
       await variant.page.locator(
-        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]:visible',
       ).getAttribute("data-selected-option"),
       "option-decline",
     );
@@ -1815,7 +1818,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 verifies the exact shared option after owner rep
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
     assert.equal(
       await variant.page.locator(
-        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]:visible',
       ).getAttribute("data-trusted-click-count"),
       "0",
     );
