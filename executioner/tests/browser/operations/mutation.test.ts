@@ -207,18 +207,22 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
-test("retries a Workday formatted date with separators after digit-only input is cleared", async () => {
+test("commits a controlled Workday formatted date through its React input owner", async () => {
   const fixture = await loopbackPage(`
     <label>Date <input type="tel" placeholder="MM/DD/YYYY"
       data-hunt-target-token="target-formatted-date"></label>
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
-      input.addEventListener('input', (event) => {
-        if ((event.data || '').length > 1) input.value = '';
+      let accepted = '';
+      Object.defineProperty(input, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: { value: '', onChange: (event) => {
+          accepted = event.target.value;
+          input.value = accepted;
+        } },
       });
-      input.addEventListener('blur', () => {
-        if (input.value.split('/').map((part) => part.length).join('-') !== '2-2-4') input.value = '';
-      });
+      input.addEventListener('input', () => { input.value = accepted; });
+      input.addEventListener('blur', () => { input.value = accepted; });
     </script>
   `);
   const browser = await chromium.launch();

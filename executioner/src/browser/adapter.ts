@@ -295,6 +295,51 @@ export async function applyMutation(
           await page.keyboard.press("Backspace");
           await page.keyboard.type(formatted, { delay: 20 });
           await page.keyboard.press("Tab");
+          const typed = (await locator.inputValue({ timeout: timeoutMs })).replace(
+            /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+            "",
+          );
+          if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) &&
+              !/^\d{4}-\d{2}-\d{2}$/u.test(typed)) {
+            await locator.evaluate((element, value) => {
+              if (!(element instanceof HTMLInputElement)) return false;
+              const record = element as unknown as Record<string, unknown>;
+              const handlers = [...new Set(Object.keys(element)
+                .filter((key) => key.startsWith("__reactProps$"))
+                .map((key) => (record[key] as { onChange?: unknown } | undefined)?.onChange)
+                .filter((handler): handler is (event: unknown) => unknown =>
+                  typeof handler === "function"
+                ))];
+              if (handlers.length !== 1) return false;
+              const setter = Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype,
+                "value",
+              )?.set;
+              if (setter === undefined) return false;
+              try {
+                setter.call(element, value);
+                const nativeEvent = new Event("change", { bubbles: true });
+                handlers[0]!({
+                  type: "change",
+                  target: element,
+                  currentTarget: element,
+                  nativeEvent,
+                  bubbles: true,
+                  cancelable: true,
+                  defaultPrevented: false,
+                  isDefaultPrevented: () => false,
+                  isPropagationStopped: () => false,
+                  persist: () => undefined,
+                  preventDefault: () => undefined,
+                  stopPropagation: () => undefined,
+                });
+                return true;
+              } catch {
+                return false;
+              }
+            }, formatted);
+            await page.waitForTimeout(50);
+          }
         }
       }
       return "applied";
