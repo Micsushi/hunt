@@ -1334,3 +1334,83 @@ test("WD-UI-SCALAR-COMPOSITE-V1 invokes the index-bound Workday list selection o
     await variant.close();
   }
 });
+
+test("WD-UI-SCALAR-COMPOSITE-V1 invokes the exact Workday list row React host", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 420px; height: 32px; }
+    </style>
+    <div data-automation-id="formField-disabilityStatus">
+      <span data-automation-id="required">*</span>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-list-row-react-host-disability-status">
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="row-host-yes" type="checkbox" aria-label="Yes"></div><span>Yes</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="row-host-no" type="checkbox" aria-label="No"></div><span>No</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="row-host-decline" type="checkbox" aria-label="Decline to self-identify"></div><span>Decline to self-identify</span></div>
+      </fieldset>
+    </div>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      group.querySelectorAll('[data-uxi-widget-type="multiselectlistitem"]').forEach(row => {
+        const input = row.querySelector('input');
+        input.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        row.addEventListener('click', event => {
+          event.stopPropagation();
+          setTimeout(() => {
+            if (group.dataset.committedOption !== input.id) input.checked = false;
+          }, 100);
+        });
+        Object.defineProperty(row, '__reactProps$listRowHost', {
+          enumerable: true,
+          value: {
+            onClick: event => {
+              group.dataset.rowHostArgument = [event.type, String(event.currentTarget === row)].join(':');
+              if (event.type !== 'click' || event.currentTarget !== row) return;
+              group.dataset.committedOption = input.id;
+              group.querySelectorAll('input[type="checkbox"]').forEach(candidate => {
+                candidate.checked = candidate === input;
+              });
+            },
+          },
+        });
+        Object.defineProperty(input, '__reactProps$listRowNestedCheckbox', {
+          enumerable: true,
+          value: { checked: false, onChange: () => {} },
+        });
+      });
+    </script>
+  `, "5989750000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-list-row-react-host-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Decline to self-identify"),
+      },
+      undefined,
+      5_000,
+    ), "applied");
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-row-host-argument"),
+      "click:true",
+    );
+    assert.equal(await variant.page.locator("#row-host-decline").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});

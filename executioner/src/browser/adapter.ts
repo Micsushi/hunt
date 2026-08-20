@@ -374,14 +374,21 @@ export async function applyMutation(
               }
             };
             const panel = input.closest('[data-automation-id="checkboxPanel"]');
+            const listItem = input.closest(
+              '[data-uxi-widget-type="multiselectlistitem"]',
+            );
             // Keep the exact native control and its owner chain ahead of the
             // panel subtree. Live Workday panels contain enough decorative
             // descendants to exhaust the bounded candidate budget before the
-            // input when the input is appended last.
+            // input when the input is appended last. The virtualized list row
+            // is equally important: its host onClick owns the real Canvas
+            // selection contract while the nested checkbox onChange is a
+            // deliberate no-op.
             add(input);
+            add(listItem);
             for (
               let owner = input.parentElement;
-              owner !== null && owner !== panel;
+              owner !== null && owner !== panel && owner !== listItem;
               owner = owner.parentElement
             ) add(owner);
             Array.from(input.labels ?? []).forEach((label) => {
@@ -423,9 +430,6 @@ export async function applyMutation(
                 const change = props.onChange;
                 const click = props.onClick;
                 const mouseDown = props.onMouseDown;
-                const listItem = input.closest(
-                  '[data-uxi-widget-type="multiselectlistitem"]',
-                );
                 const listItemIndex = Number(
                   listItem?.getAttribute("data-uxi-multiselectlistitem-index"),
                 );
