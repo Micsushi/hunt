@@ -394,6 +394,38 @@ export async function applyMutation(
         await recordAccepted("calendarOpened", true);
         return await commitVisibleCalendarDate();
       };
+      const commitOwnedCalendarDate = async (): Promise<boolean> => {
+        await reboundFormattedDate();
+        const point = await activeFormattedDate.evaluate((element, expectedName) => {
+          const visible = (candidate: Element): candidate is HTMLElement | SVGElement => {
+            if (!(candidate instanceof HTMLElement || candidate instanceof SVGElement)) return false;
+            const style = getComputedStyle(candidate);
+            return style.display !== "none" && style.visibility !== "hidden" &&
+              candidate.getClientRects().length > 0;
+          };
+          const normalize = (value: string | null | undefined) =>
+            (value ?? "").replace(/\s+/gu, " ").replace(/\s*\*\s*$/u, "").trim();
+          let owner = element.parentElement;
+          while (owner !== null && owner !== document.body) {
+            const labels = [...owner.querySelectorAll("label, legend")]
+              .filter(visible)
+              .filter((candidate) => normalize(candidate.textContent) === expectedName);
+            const svgs = [...owner.querySelectorAll("svg")].filter(visible);
+            if (labels.length === 1 && svgs.length === 1) {
+              const box = svgs[0]!.getBoundingClientRect();
+              if (box.width >= 8 && box.height >= 8) {
+                return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+              }
+            }
+            owner = owner.parentElement;
+          }
+          return null;
+        }, target.name);
+        if (point === null) return false;
+        await page.mouse.click(point.x, point.y);
+        await recordAccepted("calendarOpened", true);
+        return await commitVisibleCalendarDate();
+      };
       const commitAdjacentCalendarDate = async (): Promise<boolean> => {
         await reboundFormattedDate();
         const points = await activeFormattedDate.evaluate((element) => {
@@ -426,6 +458,8 @@ export async function applyMutation(
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
       // is visible, editable, and accepts keyboard focus.
+      if (await commitOwnedCalendarDate()) return "applied";
+      await page.keyboard.press("Escape").catch(() => undefined);
       if (await commitOverlaidCalendarDate()) return "applied";
       await page.keyboard.press("Escape").catch(() => undefined);
       if (await commitAdjacentCalendarDate()) return "applied";

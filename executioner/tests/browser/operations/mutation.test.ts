@@ -466,9 +466,11 @@ test("commits a Workday formatted date through an adjacent calendar segment", as
 
 test("rebinds a remounted unlabeled Workday date before opening its adjacent calendar", async () => {
   const fixture = await loopbackPage(`
-    <label for="original-date">Date</label>
-    <input id="original-date" type="tel" placeholder="MM/DD/YYYY"
-      data-hunt-target-token="target-remounted-date">
+    <div id="date-owner">
+      <label for="original-date">Date</label>
+      <input id="original-date" type="tel" placeholder="MM/DD/YYYY"
+        data-hunt-target-token="target-remounted-date">
+    </div>
     <div id="calendar-dialog" role="dialog" hidden>
       <button type="button" aria-label="Thursday, August 20, 2026">20</button>
     </div>
@@ -507,8 +509,12 @@ test("rebinds a remounted unlabeled Workday date before opening its adjacent cal
       calendar.style.width = "40px";
       calendar.style.height = "32px";
       calendar.innerHTML = '<svg aria-hidden="true"></svg>';
+      const svg = calendar.querySelector("svg");
+      if (svg instanceof SVGElement) {
+        svg.style.width = "16px";
+        svg.style.height = "16px";
+      }
       field.append(input, calendar);
-      original.previousElementSibling?.remove();
       original.style.display = "none";
       original.insertAdjacentElement("afterend", field);
       let accepted = "";
