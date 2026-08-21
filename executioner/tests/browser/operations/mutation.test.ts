@@ -388,6 +388,82 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
   }
 });
 
+test("commits a Workday formatted date through an adjacent calendar segment", async () => {
+  const fixture = await loopbackPage(`
+    <style>
+      .date-field { display: flex; width: 180px; height: 32px; }
+      .date-field input { box-sizing: border-box; width: 140px; height: 32px; }
+      .calendar-hit { display: block; width: 40px; height: 32px; }
+    </style>
+    <label for="adjacent-date">Date</label>
+    <div data-automation-id="formField-dateSignedOn" class="date-field">
+      <input id="adjacent-date" type="tel" placeholder="MM/DD/YYYY"
+        data-hunt-target-token="target-adjacent-date">
+      <span class="calendar-hit"><svg aria-hidden="true"></svg></span>
+    </div>
+    <div role="dialog" hidden>
+      <button type="button" aria-label="Thursday, August 20, 2026">20</button>
+    </div>
+    <script>
+      const input = document.querySelector('[data-hunt-target-token="target-adjacent-date"]');
+      let accepted = '';
+      Object.defineProperty(input, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: { value: '', onChange: () => {} },
+      });
+      input.addEventListener('input', () => { input.value = accepted; });
+      input.addEventListener('blur', () => { input.value = accepted; });
+      document.querySelector('.calendar-hit').addEventListener('click', () => {
+        document.querySelector('[role="dialog"]').hidden = false;
+      });
+      document.querySelector('[aria-label="Thursday, August 20, 2026"]').addEventListener('click', () => {
+        accepted = '08/20/2026';
+        input.value = accepted;
+        document.querySelector('[role="dialog"]').hidden = true;
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("bcbcbcbcbcbcbae0") });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("date target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "set_date", target, isoDate: "2026-08-20" },
+      "bcbcbcbcbcbcbae1",
+    ), new AbortController().signal);
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    const probe = await page.evaluate(() =>
+      (document.documentElement as unknown as Record<string, unknown>).__huntDateProbe
+    );
+    assert.equal(result.ok, true, JSON.stringify({ result, probe }));
+    assert.equal(await page.locator("#adjacent-date").inputValue(), "08/20/2026");
+    assert.equal(
+      await page.evaluate(() =>
+        ((document.documentElement as unknown as Record<string, unknown>)
+          .__huntDateProbe as Record<string, boolean>).calendarAccepted
+      ),
+      true,
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("commits a Workday formatted date after the control rebounds to a native date input", async () => {
   const fixture = await loopbackPage(`
     <div data-automation-id="formField-dateSignedOn">

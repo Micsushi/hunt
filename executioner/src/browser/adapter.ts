@@ -388,10 +388,41 @@ export async function applyMutation(
         await recordAccepted("calendarOpened", true);
         return await commitVisibleCalendarDate();
       };
+      const commitAdjacentCalendarDate = async (): Promise<boolean> => {
+        await reboundFormattedDate();
+        const points = await activeFormattedDate.evaluate((element) => {
+          const inputBox = element.getBoundingClientRect();
+          const y = inputBox.top + inputBox.height / 2;
+          return [8, 16, 24].flatMap((offset) => {
+            const x = inputBox.right + offset;
+            const hit = document.elementFromPoint(x, y);
+            if (!(hit instanceof Element) || hit === element || element.contains(hit)) return [];
+            let wrapper = element.parentElement;
+            while (wrapper !== null && wrapper !== document.body) {
+              const box = wrapper.getBoundingClientRect();
+              if (
+                wrapper.contains(hit) && x >= box.left && x <= box.right &&
+                y >= box.top && y <= box.bottom &&
+                box.width <= inputBox.width + 128 && box.height <= inputBox.height * 3
+              ) return [{ x, y }];
+              wrapper = wrapper.parentElement;
+            }
+            return [];
+          });
+        });
+        for (const point of points) {
+          await page.mouse.click(point.x, point.y);
+          await recordAccepted("calendarOpened", true);
+          if (await commitVisibleCalendarDate()) return true;
+        }
+        return false;
+      };
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
       // is visible, editable, and accepts keyboard focus.
       if (await commitOverlaidCalendarDate()) return "applied";
+      await page.keyboard.press("Escape").catch(() => undefined);
+      if (await commitAdjacentCalendarDate()) return "applied";
       await page.keyboard.press("Escape").catch(() => undefined);
       await locator.focus({ timeout: timeoutMs });
       await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
