@@ -464,6 +464,91 @@ test("commits a Workday formatted date through an adjacent calendar segment", as
   }
 });
 
+test("rebinds a remounted unlabeled Workday date before opening its adjacent calendar", async () => {
+  const fixture = await loopbackPage(`
+    <label for="original-date">Date</label>
+    <input id="original-date" type="tel" placeholder="MM/DD/YYYY"
+      data-hunt-target-token="target-remounted-date">
+    <div id="calendar-dialog" role="dialog" hidden>
+      <button type="button" aria-label="Thursday, August 20, 2026">20</button>
+    </div>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("bcbcbcbcbcbcbb00") });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("date target missing");
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    await page.evaluate(() => {
+      const original = document.querySelector('[data-hunt-target-token="target-remounted-date"]');
+      if (!(original instanceof HTMLInputElement)) throw new Error("original date missing");
+      const field = document.createElement("div");
+      field.style.display = "flex";
+      field.style.width = "180px";
+      field.style.height = "32px";
+      const input = document.createElement("input");
+      input.id = "remounted-date";
+      input.type = "tel";
+      input.placeholder = "MM/DD/YYYY";
+      input.style.boxSizing = "border-box";
+      input.style.width = "140px";
+      input.style.height = "32px";
+      const calendar = document.createElement("span");
+      calendar.style.display = "block";
+      calendar.style.width = "40px";
+      calendar.style.height = "32px";
+      calendar.innerHTML = '<svg aria-hidden="true"></svg>';
+      field.append(input, calendar);
+      original.previousElementSibling?.remove();
+      original.style.display = "none";
+      original.insertAdjacentElement("afterend", field);
+      let accepted = "";
+      input.addEventListener("input", () => { input.value = accepted; });
+      input.addEventListener("blur", () => { input.value = accepted; });
+      calendar.addEventListener("click", () => {
+        const dialog = document.querySelector("#calendar-dialog");
+        if (dialog instanceof HTMLElement) dialog.hidden = false;
+      });
+      document.querySelector('[aria-label="Thursday, August 20, 2026"]')?.addEventListener("click", () => {
+        accepted = "08/20/2026";
+        input.value = accepted;
+      });
+    });
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "set_date", target, isoDate: "2026-08-20" },
+      "bcbcbcbcbcbcbb01",
+    ), new AbortController().signal);
+    const probe = await page.evaluate(() =>
+      (document.documentElement as unknown as Record<string, unknown>).__huntDateProbe
+    );
+    assert.equal(result.ok, true, JSON.stringify({ result, probe }));
+    assert.equal(await page.locator("#remounted-date").inputValue(), "08/20/2026");
+    assert.equal(
+      await page.evaluate(() =>
+        ((document.documentElement as unknown as Record<string, unknown>)
+          .__huntDateProbe as Record<string, number>).formattedDateReboundCount
+      ),
+      1,
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("commits a Workday formatted date after the control rebounds to a native date input", async () => {
   const fixture = await loopbackPage(`
     <div data-automation-id="formField-dateSignedOn">

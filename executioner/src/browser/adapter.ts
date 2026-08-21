@@ -314,28 +314,34 @@ export async function applyMutation(
         const matches = await candidates.evaluateAll((elements, expectedName) => {
           const normalize = (value: string | null | undefined) =>
             (value ?? "").replace(/\s+/gu, " ").trim();
-          return elements.map((element, index) => {
-            if (!(element instanceof HTMLInputElement)) return { index, name: "" };
+          const observed = elements.map((element, index) => {
+            if (!(element instanceof HTMLInputElement)) return { index, name: "", masked: false };
             const aria = normalize(element.getAttribute("aria-label"));
-            if (aria !== "") return { index, name: aria };
+            const masked = /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(element.placeholder.trim());
+            if (aria !== "") return { index, name: aria, masked };
             const labelledBy = element.getAttribute("aria-labelledby");
             if (labelledBy !== null) {
               const name = normalize(labelledBy.split(/\s+/u)
                 .map((id) => document.getElementById(id)?.textContent ?? "").join(" "));
-              if (name !== "") return { index, name };
+              if (name !== "") return { index, name, masked };
             }
             const label = element.labels?.[0]?.cloneNode(true) as HTMLElement | undefined;
             label?.querySelectorAll("input,textarea,select,button").forEach((control) => control.remove());
             const labelName = normalize(label?.textContent);
-            if (labelName !== "") return { index, name: labelName };
+            if (labelName !== "") return { index, name: labelName, masked };
             const fieldOwner = element.closest(
               '[data-automation-id="formField"], [data-automation-id^="formField-"]',
             );
             return {
               index,
               name: normalize(fieldOwner?.querySelector("label, legend")?.textContent),
+              masked,
             };
-          }).filter(({ name }) => name === expectedName);
+          });
+          const named = observed.filter(({ name }) => name === expectedName);
+          if (named.length > 0) return named;
+          const masked = observed.filter((candidate) => candidate.masked);
+          return masked.length === 1 ? masked : [];
         }, target.name);
         await page.evaluate((count) => {
           const root = document.documentElement as unknown as Record<string, unknown>;
