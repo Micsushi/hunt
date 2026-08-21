@@ -682,6 +682,9 @@ test("each questionnaire field mutation has its own before and readback monitor 
             bindMaskedDate(replacement);
             replacement.focus();
             replacement.setSelectionRange(replacement.value.length, replacement.value.length);
+          } else if (digits.length === 8 && event.target.dataset.corrupted !== 'true') {
+            event.target.dataset.corrupted = 'true';
+            event.target.value = '08\u200e/\u200e08\u200e/\u200e2020';
           } else if (digits.length === 8) {
             event.target.value = digits.slice(0, 2) + '\u200e/\u200e' + digits.slice(2, 4) + '\u200e/\u200e' + digits.slice(4);
           }
@@ -757,7 +760,15 @@ test("each questionnaire field mutation has its own before and readback monitor 
     assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
     assert.equal(
       await page.locator("#selfIdentifiedDisabilityData--date").inputValue(),
-      "09\u200e/\u200e01\u200e/\u200e2026",
+      "08/20/2026",
+    );
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const probe = (document.documentElement as unknown as Record<string, unknown>)
+          .__huntDateProbe as Record<string, boolean>;
+        return { digitAccepted: probe.digitAccepted, fillAccepted: probe.fillAccepted };
+      }),
+      { digitAccepted: false, fillAccepted: true },
     );
     assert.deepEqual(
       await page.locator('[data-automation-id="formField-disabilityStatus"] input:checked')

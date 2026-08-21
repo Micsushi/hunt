@@ -291,6 +291,16 @@ export async function applyMutation(
         }, { key, accepted });
       };
       const digits = `${mutation.isoDate.slice(5, 7)}${mutation.isoDate.slice(8, 10)}${mutation.isoDate.slice(0, 4)}`;
+      const acceptedDateReadback = (value: string): boolean => {
+        const normalized = value.replace(
+          /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+          "",
+        );
+        if (normalized === mutation.isoDate) return true;
+        const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(normalized);
+        return match !== null &&
+          `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}` === mutation.isoDate;
+      };
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
       // is visible, editable, and accepts keyboard focus.
@@ -300,37 +310,22 @@ export async function applyMutation(
       await page.keyboard.type(digits, { delay: 20 });
       await page.keyboard.press("Tab");
       const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
-      const readback = (await locator.inputValue({ timeout: timeoutMs })).replace(
-        /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-        "",
-      );
-      await recordAccepted("digitAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(readback) ||
-        /^\d{4}-\d{2}-\d{2}$/u.test(readback));
-      if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(readback) &&
-          !/^\d{4}-\d{2}-\d{2}$/u.test(readback)) {
+      const readback = await locator.inputValue({ timeout: timeoutMs });
+      await recordAccepted("digitAccepted", acceptedDateReadback(readback));
+      if (!acceptedDateReadback(readback)) {
         await locator.fill(formatted, { timeout: timeoutMs });
         await locator.blur({ timeout: timeoutMs });
-        const committed = (await locator.inputValue({ timeout: timeoutMs })).replace(
-          /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-          "",
-        );
-        await recordAccepted("fillAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(committed) ||
-          /^\d{4}-\d{2}-\d{2}$/u.test(committed));
-        if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(committed) &&
-            !/^\d{4}-\d{2}-\d{2}$/u.test(committed)) {
+        const committed = await locator.inputValue({ timeout: timeoutMs });
+        await recordAccepted("fillAccepted", acceptedDateReadback(committed));
+        if (!acceptedDateReadback(committed)) {
           await locator.focus({ timeout: timeoutMs });
           await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
           await page.keyboard.press("Backspace");
           await page.keyboard.type(formatted, { delay: 20 });
           await page.keyboard.press("Tab");
-          const typed = (await locator.inputValue({ timeout: timeoutMs })).replace(
-            /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-            "",
-          );
-          await recordAccepted("sequentialAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) ||
-            /^\d{4}-\d{2}-\d{2}$/u.test(typed));
-          if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) &&
-              !/^\d{4}-\d{2}-\d{2}$/u.test(typed)) {
+          const typed = await locator.inputValue({ timeout: timeoutMs });
+          await recordAccepted("sequentialAccepted", acceptedDateReadback(typed));
+          if (!acceptedDateReadback(typed)) {
             await locator.focus({ timeout: timeoutMs });
             await locator.evaluate((element, value) => {
               if (!(element instanceof HTMLInputElement)) return false;
@@ -381,12 +376,8 @@ export async function applyMutation(
               }
             }, formatted);
             await locator.blur({ timeout: timeoutMs });
-            const ownerReadback = (await locator.inputValue({ timeout: timeoutMs })).replace(
-              /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-              "",
-            );
-            const ownerAccepted = /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(ownerReadback) ||
-              /^\d{4}-\d{2}-\d{2}$/u.test(ownerReadback);
+            const ownerReadback = await locator.inputValue({ timeout: timeoutMs });
+            const ownerAccepted = acceptedDateReadback(ownerReadback);
             await recordAccepted("ownerAccepted", ownerAccepted);
             if (!ownerAccepted) {
               const fieldOwner = locator.locator(
@@ -458,14 +449,10 @@ export async function applyMutation(
                   if (matches.length === 1) {
                     await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
                     await page.waitForTimeout(50);
-                    const calendarReadback = (await locator.inputValue({ timeout: timeoutMs })).replace(
-                      /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-                      "",
-                    );
+                    const calendarReadback = await locator.inputValue({ timeout: timeoutMs });
                     await recordAccepted(
                       "calendarAccepted",
-                      /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(calendarReadback) ||
-                        /^\d{4}-\d{2}-\d{2}$/u.test(calendarReadback),
+                      acceptedDateReadback(calendarReadback),
                     );
                   }
                 }
