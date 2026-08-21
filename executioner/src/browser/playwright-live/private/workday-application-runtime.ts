@@ -2254,10 +2254,18 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
     };
     const dateInputs = [...document.querySelectorAll<HTMLInputElement>(
       'input[type="text"], input[type="tel"]',
-    )].filter((input) => visible(input) &&
-      /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
-        input.placeholder.trim(),
-      ));
+    )].filter((input) => {
+      const fieldOwner = input.closest<HTMLElement>(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const label = (fieldOwner?.querySelector("label, legend")?.textContent ?? "")
+        .replace(/\s+/gu, " ").trim();
+      return visible(input) && (
+        /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+          input.placeholder.trim(),
+        ) || /^date(?:\s*\*)?$/iu.test(label)
+      );
+    });
     const dateInput = dateInputs.length === 1 ? dateInputs[0] : undefined;
     const fieldOwner = dateInput?.closest<HTMLElement>(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2300,7 +2308,7 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       fieldRoleButtonCount: fieldOwner?.querySelectorAll('[role="button"]').length ?? 0,
       fieldSvgCount: fieldOwner?.querySelectorAll("svg").length ?? 0,
       fieldAutomationCount: fieldOwner?.querySelectorAll("[data-automation-id]").length ?? 0,
-      rightHitInput: ancestry[0] === dateInput,
+      rightHitInput: dateInput !== undefined && ancestry[0] === dateInput,
       rightHitWithinField: fieldOwner !== null && fieldOwner !== undefined &&
         ancestry.includes(fieldOwner),
       rightHitButtonAncestor: ancestry.some((element) => element.tagName === "BUTTON"),
