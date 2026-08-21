@@ -85,10 +85,13 @@ const NUMBER_KEYS = new Set([
   "admissionCheckboxIndex", "admissionGroupCheckboxCount", "admissionOwnerIdCount",
   "originalOptionCount", "stableGroupCount", "stableCheckboxCount", "stableExactLabelCount",
   "adapterSelectCount", "adapterExclusiveSelectCount",
+  "directPropCount", "directOnChangeCount", "directOnChangeArity",
+  "directOnBlurCount", "directOnInputCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
   "identityResultValid", "identityMatches", "itemVisible", "itemBusy",
+  "digitAccepted", "fillAccepted", "sequentialAccepted", "ownerCallSucceeded", "ownerAccepted",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",

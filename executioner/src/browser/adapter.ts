@@ -266,6 +266,27 @@ export async function applyMutation(
       return "applied";
     }
     if (target.interaction === "formatted-date") {
+      await page.evaluate(() => {
+        (document.documentElement as unknown as Record<string, unknown>).__huntDateProbe = {
+          digitAccepted: false,
+          fillAccepted: false,
+          sequentialAccepted: false,
+          ownerCallSucceeded: false,
+          ownerAccepted: false,
+          directPropCount: 0,
+          directOnChangeCount: 0,
+          directOnChangeArity: 0,
+          directOnBlurCount: 0,
+          directOnInputCount: 0,
+        };
+      });
+      const recordAccepted = async (key: string, accepted: boolean) => {
+        await page.evaluate(({ key, accepted }) => {
+          const root = document.documentElement as unknown as Record<string, unknown>;
+          const probe = root.__huntDateProbe as Record<string, boolean | number>;
+          probe[key] = accepted;
+        }, { key, accepted });
+      };
       const digits = `${mutation.isoDate.slice(5, 7)}${mutation.isoDate.slice(8, 10)}${mutation.isoDate.slice(0, 4)}`;
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
@@ -280,6 +301,8 @@ export async function applyMutation(
         /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
         "",
       );
+      await recordAccepted("digitAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(readback) ||
+        /^\d{4}-\d{2}-\d{2}$/u.test(readback));
       if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(readback) &&
           !/^\d{4}-\d{2}-\d{2}$/u.test(readback)) {
         await locator.fill(formatted, { timeout: timeoutMs });
@@ -288,6 +311,8 @@ export async function applyMutation(
           /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
           "",
         );
+        await recordAccepted("fillAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(committed) ||
+          /^\d{4}-\d{2}-\d{2}$/u.test(committed));
         if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(committed) &&
             !/^\d{4}-\d{2}-\d{2}$/u.test(committed)) {
           await locator.focus({ timeout: timeoutMs });
@@ -299,18 +324,30 @@ export async function applyMutation(
             /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
             "",
           );
+          await recordAccepted("sequentialAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) ||
+            /^\d{4}-\d{2}-\d{2}$/u.test(typed));
           if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(typed) &&
               !/^\d{4}-\d{2}-\d{2}$/u.test(typed)) {
             await locator.focus({ timeout: timeoutMs });
             await locator.evaluate((element, value) => {
               if (!(element instanceof HTMLInputElement)) return false;
               const record = element as unknown as Record<string, unknown>;
-              const handlers = [...new Set(Object.keys(element)
+              const propRecords = Object.keys(element)
                 .filter((key) => key.startsWith("__reactProps$"))
-                .map((key) => (record[key] as { onChange?: unknown } | undefined)?.onChange)
+                .map((key) => record[key] as Record<string, unknown> | undefined)
+                .filter((props): props is Record<string, unknown> => props !== undefined);
+              const handlers = [...new Set(propRecords
+                .map((props) => props.onChange)
                 .filter((handler): handler is (event: unknown) => unknown =>
                   typeof handler === "function"
                 ))];
+              const root = document.documentElement as unknown as Record<string, unknown>;
+              const probe = root.__huntDateProbe as Record<string, boolean | number>;
+              probe.directPropCount = propRecords.length;
+              probe.directOnChangeCount = handlers.length;
+              probe.directOnChangeArity = handlers.length === 1 ? handlers[0]!.length : 0;
+              probe.directOnBlurCount = propRecords.filter(({ onBlur }) => typeof onBlur === "function").length;
+              probe.directOnInputCount = propRecords.filter(({ onInput }) => typeof onInput === "function").length;
               if (handlers.length !== 1) return false;
               const setter = Object.getOwnPropertyDescriptor(
                 HTMLInputElement.prototype,
@@ -334,12 +371,19 @@ export async function applyMutation(
                   preventDefault: () => undefined,
                   stopPropagation: () => undefined,
                 });
+                probe.ownerCallSucceeded = true;
                 return true;
               } catch {
                 return false;
               }
             }, formatted);
             await locator.blur({ timeout: timeoutMs });
+            const ownerReadback = (await locator.inputValue({ timeout: timeoutMs })).replace(
+              /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+              "",
+            );
+            await recordAccepted("ownerAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(ownerReadback) ||
+              /^\d{4}-\d{2}-\d{2}$/u.test(ownerReadback));
           }
         }
       }

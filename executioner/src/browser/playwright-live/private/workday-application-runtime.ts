@@ -992,6 +992,7 @@ export class OwnedWorkdayApplicationRuntime {
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
       if (!completed.ok) {
+        this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_failed", {
           code: completed.error.code,
@@ -999,6 +1000,7 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
+        this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_blocked", {
           code: completed.value.code,
@@ -2235,6 +2237,27 @@ async function checkboxFailureDiagnostics(page: Page): Promise<object> {
       exactCommitCount: probe.exactCommitCount ?? 0,
       exactRejectedCount: probe.exactRejectedCount ?? 0,
       exactThrowCount: probe.exactThrowCount ?? 0,
+    };
+  });
+}
+
+async function dateFailureDiagnostics(page: Page): Promise<object> {
+  return await page.evaluate(() => {
+    const root = document.documentElement as unknown as Record<string, unknown>;
+    const probe = typeof root.__huntDateProbe === "object" && root.__huntDateProbe !== null
+      ? root.__huntDateProbe as Record<string, boolean | number>
+      : {};
+    return {
+      digitAccepted: probe.digitAccepted ?? false,
+      fillAccepted: probe.fillAccepted ?? false,
+      sequentialAccepted: probe.sequentialAccepted ?? false,
+      ownerCallSucceeded: probe.ownerCallSucceeded ?? false,
+      ownerAccepted: probe.ownerAccepted ?? false,
+      directPropCount: probe.directPropCount ?? 0,
+      directOnChangeCount: probe.directOnChangeCount ?? 0,
+      directOnChangeArity: probe.directOnChangeArity ?? 0,
+      directOnBlurCount: probe.directOnBlurCount ?? 0,
+      directOnInputCount: probe.directOnInputCount ?? 0,
     };
   });
 }

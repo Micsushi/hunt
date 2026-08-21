@@ -256,6 +256,23 @@ test("commits a controlled Workday formatted date through its React input owner"
     assert.equal(result.ok, true);
     const page = context.pages()[0];
     assert.ok(page !== undefined);
+    assert.deepEqual(
+      await page.evaluate(() =>
+        (document.documentElement as unknown as Record<string, unknown>).__huntDateProbe
+      ),
+      {
+        digitAccepted: false,
+        fillAccepted: false,
+        sequentialAccepted: false,
+        ownerCallSucceeded: true,
+        ownerAccepted: true,
+        directPropCount: 1,
+        directOnChangeCount: 1,
+        directOnChangeArity: 1,
+        directOnBlurCount: 1,
+        directOnInputCount: 0,
+      },
+    );
     assert.equal(
       await page.locator('[data-hunt-target-token="target-formatted-date"]').inputValue(),
       "09/01/2026",
