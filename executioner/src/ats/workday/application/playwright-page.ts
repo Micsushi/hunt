@@ -33,6 +33,17 @@ interface BrowserApplicationSnapshot {
       readonly fieldOwnerSelectedItemCount: number;
       readonly inputNonEmpty: boolean;
       readonly ariaValueNonEmpty: boolean;
+      readonly dateReactHandlerLayers?: readonly {
+        readonly hostTag: string;
+        readonly domDepth: number;
+        readonly fiberDepth: number;
+        readonly propsKeys: readonly string[];
+        readonly handlers: readonly {
+          readonly name: string;
+          readonly arity: number;
+          readonly functionId: number;
+        }[];
+      }[];
       readonly checkboxReactHandlerLayers?: readonly {
         readonly hostTag: string;
         readonly hostAutomationId: string | null;
@@ -670,6 +681,8 @@ function readApplicationSnapshot(
     if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
     if (radioKey !== undefined) seenRadioGroups.add(radioKey);
     let verified = control.getAttribute("aria-invalid") !== "true";
+    let dateReactHandlerLayers:
+      BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["dateReactHandlerLayers"];
     let checkboxReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
     // Workday renders tokenized combobox selections beside the input inside the
@@ -735,6 +748,58 @@ function readApplicationSnapshot(
       const parsed = new Date(`${isoDate}T00:00:00.000Z`);
       verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
         !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+      if (!verified) {
+        const layers = new Map<string, NonNullable<typeof dateReactHandlerLayers>[number]>();
+        const functionIds = new Map<unknown, number>();
+        const functionId = (value: unknown): number => {
+          const existing = functionIds.get(value);
+          if (existing !== undefined) return existing;
+          const next = functionIds.size + 1;
+          functionIds.set(value, next);
+          return next;
+        };
+        const addLayer = (element: Element, domDepth: number, fiberDepth: number, props: unknown) => {
+          if (typeof props !== "object" || props === null) return;
+          const entries = Object.entries(props);
+          const handlers = entries.filter(([name, value]) =>
+            /^on[A-Z]/u.test(name) && typeof value === "function"
+          ).map(([name, value]) => ({
+            name,
+            arity: (value as (...args: unknown[]) => unknown).length,
+            functionId: functionId(value),
+          }));
+          if (handlers.length === 0) return;
+          const layer = {
+            hostTag: element.tagName.toLocaleLowerCase("en-US"),
+            domDepth,
+            fiberDepth,
+            propsKeys: entries.map(([name]) => name).slice(0, 40),
+            handlers,
+          };
+          layers.set(JSON.stringify(layer), layer);
+        };
+        let element: Element | null = input;
+        for (let domDepth = 0; element !== null && domDepth < 8; domDepth += 1) {
+          const record = element as unknown as Record<string, unknown>;
+          Object.keys(element).filter((key) => key.startsWith("__reactProps$"))
+            .forEach((key) => addLayer(element!, domDepth, -1, record[key]));
+          const fiberKey = Object.keys(element).find((key) =>
+            key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+          );
+          let fiber = fiberKey === undefined ? undefined : record[fiberKey] as {
+            memoizedProps?: unknown;
+            pendingProps?: unknown;
+            return?: unknown;
+          } | undefined;
+          for (let fiberDepth = 0; fiber !== undefined && fiber !== null && fiberDepth < 16; fiberDepth += 1) {
+            addLayer(element, domDepth, fiberDepth, fiber.memoizedProps ?? fiber.pendingProps);
+            fiber = fiber.return as typeof fiber;
+          }
+          if (element === fieldOwner) break;
+          element = element.parentElement;
+        }
+        dateReactHandlerLayers = [...layers.values()];
+      }
     } else if (
       control.matches('[data-automation-id$="-CheckboxGroup"]') ||
       control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
@@ -928,6 +993,7 @@ function readApplicationSnapshot(
         fieldOwnerSelectedItemCount: fieldOwnerSelectedItems.length,
         inputNonEmpty: input?.value.trim() !== "",
         ariaValueNonEmpty: text(control.getAttribute("aria-valuetext")) !== "",
+        ...(dateReactHandlerLayers === undefined ? {} : { dateReactHandlerLayers }),
         ...(checkboxReactHandlerLayers === undefined ? {} : { checkboxReactHandlerLayers }),
       },
     });

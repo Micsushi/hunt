@@ -596,6 +596,53 @@ test("Self Identify reports value-free checkbox React handler structure", async 
   });
 });
 
+test("Self Identify reports value-free formatted-date React handler structure", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowSelfIdentifyPage">
+        <div data-automation-id="formField-dateSignedOn">
+          <span data-automation-id="required">*</span>
+          <label>Date <input type="tel" placeholder="MM/DD/YYYY"></label>
+        </div>
+      </main>
+      <script>
+        const input = document.querySelector('input');
+        Object.defineProperty(input, '__reactProps$fixture', {
+          enumerable: true,
+          value: {
+            onBlur() {},
+            onChange(event) {},
+            value: 'sensitive-date-value',
+          },
+        });
+      </script>
+    `);
+    const previousTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+    const previousWrite = process.stderr.write;
+    const writes: string[] = [];
+    process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = "1";
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const observed = await application(page).observe(signal());
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+    } finally {
+      process.stderr.write = previousWrite;
+      if (previousTrace === undefined) delete process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+      else process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = previousTrace;
+    }
+    const diagnostic = writes.find((line) => line.includes("applicationRequiredFieldDiagnostics"));
+    assert.ok(diagnostic);
+    assert.match(diagnostic, /"dateReactHandlerLayers"/u);
+    assert.match(diagnostic, /"propsKeys":\["onBlur","onChange","value"\]/u);
+    assert.match(diagnostic, /"name":"onBlur","arity":0/u);
+    assert.match(diagnostic, /"name":"onChange","arity":1/u);
+    assert.doesNotMatch(diagnostic, /sensitive-date-value/u);
+  });
+});
+
 test("navigation reports a validation downgrade instead of claiming a transition", async () => {
   await withPage(async (page) => {
     await page.setContent(`
