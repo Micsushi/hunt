@@ -377,6 +377,24 @@ test("configured narrative falls back to a deterministic generated default", asy
   assert.deepEqual(profile.calls, []);
 });
 
+test("unknown dates use the injected local calendar date", async () => {
+  const profile = createProfileQueryFake();
+  const resolver = createAnswerResolver(profile.port, undefined, "2026-08-20");
+  const answer = await resolver.resolve(
+    request(field("Date signed", "date")),
+    new AbortController().signal,
+  );
+
+  assert.equal(answer.ok, true);
+  if (answer.ok && answer.value.kind === "resolved") {
+    assert.equal(answer.value.intent.kind, "date");
+    if (answer.value.intent.kind === "date") {
+      assert.equal(answer.value.intent.isoDate, "2026-08-20");
+      assert.equal(answer.value.intent.provenance, "reviewed_catalog");
+    }
+  }
+});
+
 test("configured narrative and selected resume artifact bypass ProfileQuery", async () => {
   const profile = createProfileQueryFake();
   const resolver = createAnswerResolver(profile.port, "One configured narrative.");

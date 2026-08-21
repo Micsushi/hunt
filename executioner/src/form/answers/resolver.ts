@@ -50,6 +50,13 @@ function isIsoDate(value: string): boolean {
   return !Number.isNaN(date.valueOf()) && date.toISOString().startsWith(value);
 }
 
+function localIsoDate(date: Date): string {
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const privacyChoiceDefaults = [
   "Prefer not to answer",
   "Prefer not to say",
@@ -182,6 +189,7 @@ const placeholderOption = /^(?:select|choose|please select|select one|choose one
 function generatedLearningIntent(
   field: FieldObservation,
   resumeArtifact: AnswerResolutionRequest["resumeArtifact"],
+  generatedDate: string,
 ): AnswerResolutionResult | undefined {
   if (field.behavior === "text" || field.behavior === "textarea") {
     return {
@@ -217,7 +225,7 @@ function generatedLearningIntent(
         behavior: "date",
         fieldId: field.fieldId,
         target: field.target,
-        isoDate: "2026-09-01",
+        isoDate: generatedDate,
         provenance: "reviewed_catalog",
       },
     };
@@ -262,10 +270,12 @@ function generatedLearningIntent(
 export function createAnswerResolver(
   profileQuery: ProfileQuery,
   narrativeTemplate: string | undefined,
+  generatedDate = localIsoDate(new Date()),
 ): AnswerResolver {
   if (narrativeTemplate !== undefined && narrativeTemplate.trim() === "") {
     throw new TypeError("narrative template must not be empty");
   }
+  if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
   return Object.freeze({
     async resolve(request: AnswerResolutionRequest, signal: AbortSignal) {
@@ -282,13 +292,13 @@ export function createAnswerResolver(
 
       const questionResolution = resolveQuestion(field.label);
       if (questionResolution.kind === "unknown") {
-        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined
           ? failure("question_unknown")
           : success(generated);
       }
       if (questionResolution.kind === "ambiguous") {
-        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined
           ? failure("question_ambiguous")
           : success(generated);
@@ -297,7 +307,7 @@ export function createAnswerResolver(
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
       const question = questionForField(field.label, field.behavior);
       if (question === undefined) {
-        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined ? unsupported(field) : success(generated);
       }
 
@@ -328,7 +338,7 @@ export function createAnswerResolver(
           const matched = matchedChoiceIntent(field, candidate);
           if (matched !== undefined) return success(matched);
         }
-        const generated = generatedLearningIntent(field, request.resumeArtifact);
+        const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined
           ? failure("protected_answer_denied")
           : success(generated);
@@ -342,7 +352,7 @@ export function createAnswerResolver(
         );
         return intended.kind === "resolved"
           ? success(intended)
-          : success(generatedLearningIntent(field, request.resumeArtifact) ?? intended);
+          : success(generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended);
       }
 
       const answer = await profileQuery.query(
@@ -368,7 +378,7 @@ export function createAnswerResolver(
           return success(
             intended.kind === "resolved"
               ? intended
-              : generatedLearningIntent(field, request.resumeArtifact) ?? intended,
+              : generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended,
           );
         }
         return success({
@@ -393,7 +403,7 @@ export function createAnswerResolver(
         return success(
           intended.kind === "resolved"
             ? intended
-            : generatedLearningIntent(field, request.resumeArtifact) ?? intended,
+            : generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended,
         );
       }
       const intent = intentFor(
@@ -404,7 +414,7 @@ export function createAnswerResolver(
       );
       return intent.kind === "resolved"
         ? success(intent)
-        : success(generatedLearningIntent(field, request.resumeArtifact) ?? intent);
+        : success(generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intent);
     },
   });
 }
