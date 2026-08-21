@@ -293,6 +293,89 @@ test("commits a controlled Workday formatted date through its visible calendar",
   }
 });
 
+test("commits a controlled Workday formatted date through its right-edge calendar overlay", async () => {
+  const fixture = await loopbackPage(`
+    <style>
+      .date-control { position: relative; width: 180px; }
+      .date-control input { box-sizing: border-box; width: 180px; height: 36px; pointer-events: none; }
+      .calendar-overlay { position: absolute; right: 0; top: 0; width: 36px; height: 36px; }
+    </style>
+    <div data-automation-id="formField-dateSignedOn">
+      <label for="overlay-date">Date</label>
+      <div class="date-control">
+        <input id="overlay-date" type="tel" placeholder="MM/DD/YYYY"
+          data-hunt-target-token="target-overlay-date">
+        <span class="calendar-overlay">Calendar</span>
+      </div>
+    </div>
+    <div role="dialog" hidden>
+      <button type="button" aria-label="Thursday, August 20, 2026">20</button>
+    </div>
+    <script>
+      const input = document.querySelector('[data-hunt-target-token="target-overlay-date"]');
+      let accepted = '';
+      Object.defineProperty(input, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: { value: '', onChange: () => {} },
+      });
+      input.addEventListener('input', () => { input.value = accepted || '08/08/2020'; });
+      input.addEventListener('blur', () => { input.value = accepted || '08/08/2020'; });
+      document.querySelector('.calendar-overlay').addEventListener('click', () => {
+        document.querySelector('[role="dialog"]').hidden = false;
+      });
+      document.querySelector('[aria-label="Thursday, August 20, 2026"]').addEventListener('click', () => {
+        accepted = '08/20/2026';
+        input.value = accepted;
+        document.querySelector('[role="dialog"]').hidden = true;
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("bcbcbcbcbcbcbace") });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("date target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "set_date", target, isoDate: "2026-08-20" },
+      "bcbcbcbcbcbcbacf",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const probe = (document.documentElement as unknown as Record<string, unknown>)
+          .__huntDateProbe as Record<string, boolean | number>;
+        return {
+          calendarOpened: probe.calendarOpened,
+          calendarCandidateCount: probe.calendarCandidateCount,
+          calendarAccepted: probe.calendarAccepted,
+        };
+      }),
+      { calendarOpened: true, calendarCandidateCount: 1, calendarAccepted: true },
+    );
+    assert.equal(
+      await page.locator('[data-hunt-target-token="target-overlay-date"]').inputValue(),
+      "08/20/2026",
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("fails stale, ambiguous, mismatched, and replayed operations closed", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
