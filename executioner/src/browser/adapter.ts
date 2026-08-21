@@ -303,6 +303,42 @@ export async function applyMutation(
         return match !== null &&
           `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}` === mutation.isoDate;
       };
+      const commitVisibleCalendarDate = async (): Promise<boolean> => {
+        await page.waitForTimeout(50);
+        const date = new Date(`${mutation.isoDate}T12:00:00`);
+        const labels = [
+          new Intl.DateTimeFormat("en-US", {
+            weekday: "long", year: "numeric", month: "long", day: "numeric",
+          }).format(date),
+          new Intl.DateTimeFormat("en-US", {
+            year: "numeric", month: "long", day: "numeric",
+          }).format(date),
+          formatted,
+          `${Number(mutation.isoDate.slice(5, 7))}/${Number(mutation.isoDate.slice(8, 10))}/${mutation.isoDate.slice(0, 4)}`,
+        ];
+        const dateSurfaces = page.locator(
+          'button[aria-label]:visible, [role="button"][aria-label]:visible, ' +
+            '[role="gridcell"][aria-label]:visible',
+        );
+        const matches = await dateSurfaces.evaluateAll((elements, admittedLabels) =>
+          elements.map((element, index) => ({
+            index,
+            label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
+          })).filter(({ label }) => admittedLabels.includes(label)),
+        labels);
+        await page.evaluate((count) => {
+          const root = document.documentElement as unknown as Record<string, unknown>;
+          const probe = root.__huntDateProbe as Record<string, boolean | number>;
+          probe.calendarCandidateCount = count;
+        }, matches.length);
+        if (matches.length !== 1) return false;
+        await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
+        await page.waitForTimeout(50);
+        const calendarReadback = await locator.inputValue({ timeout: timeoutMs });
+        const accepted = acceptedDateReadback(calendarReadback);
+        await recordAccepted("calendarAccepted", accepted);
+        return accepted;
+      };
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
       // is visible, editable, and accepts keyboard focus.
@@ -421,49 +457,22 @@ export async function applyMutation(
                 if (opener !== undefined) {
                   await opener.click({ timeout: timeoutMs });
                   await recordAccepted("calendarOpened", true);
-                  await page.waitForTimeout(50);
-                  const date = new Date(`${mutation.isoDate}T12:00:00`);
-                  const labels = [
-                    new Intl.DateTimeFormat("en-US", {
-                      weekday: "long", year: "numeric", month: "long", day: "numeric",
-                    }).format(date),
-                    new Intl.DateTimeFormat("en-US", {
-                      year: "numeric", month: "long", day: "numeric",
-                    }).format(date),
-                    formatted,
-                    `${Number(mutation.isoDate.slice(5, 7))}/${Number(mutation.isoDate.slice(8, 10))}/${mutation.isoDate.slice(0, 4)}`,
-                  ];
-                  const dateSurfaces = page.locator(
-                    'button[aria-label]:visible, [role="button"][aria-label]:visible, ' +
-                      '[role="gridcell"][aria-label]:visible',
-                  );
-                  const matches = await dateSurfaces.evaluateAll((elements, admittedLabels) =>
-                    elements.map((element, index) => ({
-                      index,
-                      label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
-                    })).filter(({ label }) => admittedLabels.includes(label)),
-                  labels);
-                  await page.evaluate((count) => {
-                    const root = document.documentElement as unknown as Record<string, unknown>;
-                    const probe = root.__huntDateProbe as Record<string, boolean | number>;
-                    probe.calendarCandidateCount = count;
-                  }, matches.length);
-                  if (matches.length === 1) {
-                    await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
-                    await page.waitForTimeout(50);
-                    const calendarReadback = await locator.inputValue({ timeout: timeoutMs });
-                    await recordAccepted(
-                      "calendarAccepted",
-                      acceptedDateReadback(calendarReadback),
-                    );
-                  }
+                  await commitVisibleCalendarDate();
                 }
               }
-              const calendarAccepted = await page.evaluate(() => {
+              let calendarAccepted = await page.evaluate(() => {
                 const root = document.documentElement as unknown as Record<string, unknown>;
                 const probe = root.__huntDateProbe as Record<string, boolean | number>;
                 return probe.calendarAccepted === true;
               });
+              if (!calendarAccepted) {
+                const box = await locator.boundingBox();
+                if (box !== null && box.width >= 24 && box.height >= 16) {
+                  await page.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
+                  await recordAccepted("calendarOpened", true);
+                  calendarAccepted = await commitVisibleCalendarDate();
+                }
+              }
               if (!calendarAccepted) {
                 const nativeDates = page.locator('input[type="date"]:visible');
                 const matches = await nativeDates.evaluateAll((elements, expectedName) =>
@@ -497,7 +506,14 @@ export async function applyMutation(
           }
         }
       }
-      return "applied";
+      const accepted = await page.evaluate(() => {
+        const root = document.documentElement as unknown as Record<string, unknown>;
+        const probe = root.__huntDateProbe as Record<string, boolean | number>;
+        return probe.digitAccepted === true || probe.fillAccepted === true ||
+          probe.sequentialAccepted === true || probe.ownerAccepted === true ||
+          probe.calendarAccepted === true || probe.nativeDateAccepted === true;
+      });
+      return accepted ? "applied" : "invalid";
     }
     await locator.fill(mutation.isoDate, { timeout: timeoutMs });
     await locator.blur({ timeout: timeoutMs });
