@@ -282,6 +282,7 @@ test("commits a controlled Workday formatted date through its visible calendar",
         calendarAccepted: true,
         nativeDateInputCount: 0,
         nativeDateAccepted: false,
+        formattedDateReboundCount: 0,
       },
     );
     assert.equal(
@@ -313,10 +314,19 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
     </div>
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-overlaid-date"]');
+      let active = input;
       let accepted = '';
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: { value: '', onChange: () => {} },
+        value: { value: '', onChange: () => {
+          const replacement = input.cloneNode(true);
+          replacement.removeAttribute('data-hunt-target-token');
+          replacement.value = '08/08/2020';
+          input.replaceWith(replacement);
+          active = replacement;
+          replacement.addEventListener('input', () => { replacement.value = '08/08/2020'; });
+          replacement.addEventListener('blur', () => { replacement.value = '08/08/2020'; });
+        } },
       });
       input.addEventListener('input', () => { input.value = '08/08/2020'; });
       input.addEventListener('blur', () => { input.value = '08/08/2020'; });
@@ -325,7 +335,7 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
       });
       document.querySelector('[aria-label="Thursday, August 20, 2026"]').addEventListener('click', () => {
         accepted = '08/20/2026';
-        input.value = accepted;
+        active.value = accepted;
         document.querySelector('[role="dialog"]').hidden = true;
       });
     </script>
@@ -354,7 +364,7 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
     const page = context.pages()[0];
     assert.ok(page !== undefined);
     assert.equal(
-      await page.locator('[data-hunt-target-token="target-overlaid-date"]').inputValue(),
+      await page.locator('#overlaid-date').inputValue(),
       "08/20/2026",
     );
     assert.equal(
@@ -363,6 +373,13 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
           .__huntDateProbe as Record<string, boolean>).calendarAccepted
       ),
       true,
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        ((document.documentElement as unknown as Record<string, unknown>)
+          .__huntDateProbe as Record<string, number>).formattedDateReboundCount
+      ),
+      1,
     );
   } finally {
     await context.close();

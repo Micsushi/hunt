@@ -2307,6 +2307,7 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       calendarAccepted: probe.calendarAccepted ?? false,
       nativeDateInputCount: probe.nativeDateInputCount ?? 0,
       nativeDateAccepted: probe.nativeDateAccepted ?? false,
+      formattedDateReboundCount: probe.formattedDateReboundCount ?? 0,
       dateInputCount: dateInputs.length,
       fieldButtonCount: fieldOwner?.querySelectorAll("button").length ?? 0,
       fieldRoleButtonCount: fieldOwner?.querySelectorAll('[role="button"]').length ?? 0,

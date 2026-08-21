@@ -283,6 +283,7 @@ export async function applyMutation(
           calendarAccepted: false,
           nativeDateInputCount: 0,
           nativeDateAccepted: false,
+          formattedDateReboundCount: 0,
         };
       });
       const recordAccepted = async (key: string, accepted: boolean) => {
@@ -302,6 +303,45 @@ export async function applyMutation(
         const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(normalized);
         return match !== null &&
           `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}` === mutation.isoDate;
+      };
+      let activeFormattedDate = locator;
+      const reboundFormattedDate = async (): Promise<void> => {
+        if (await activeFormattedDate.count() === 1 && await activeFormattedDate.isVisible()) return;
+        const candidates = page.locator(
+          'input[type="text"]:visible, input[type="tel"]:visible',
+        );
+        const matches = await candidates.evaluateAll((elements, expectedName) => {
+          const normalize = (value: string | null | undefined) =>
+            (value ?? "").replace(/\s+/gu, " ").trim();
+          return elements.map((element, index) => {
+            if (!(element instanceof HTMLInputElement)) return { index, name: "" };
+            const aria = normalize(element.getAttribute("aria-label"));
+            if (aria !== "") return { index, name: aria };
+            const labelledBy = element.getAttribute("aria-labelledby");
+            if (labelledBy !== null) {
+              const name = normalize(labelledBy.split(/\s+/u)
+                .map((id) => document.getElementById(id)?.textContent ?? "").join(" "));
+              if (name !== "") return { index, name };
+            }
+            const label = element.labels?.[0]?.cloneNode(true) as HTMLElement | undefined;
+            label?.querySelectorAll("input,textarea,select,button").forEach((control) => control.remove());
+            const labelName = normalize(label?.textContent);
+            if (labelName !== "") return { index, name: labelName };
+            const fieldOwner = element.closest(
+              '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+            );
+            return {
+              index,
+              name: normalize(fieldOwner?.querySelector("label, legend")?.textContent),
+            };
+          }).filter(({ name }) => name === expectedName);
+        }, target.name);
+        await page.evaluate((count) => {
+          const root = document.documentElement as unknown as Record<string, unknown>;
+          const probe = root.__huntDateProbe as Record<string, boolean | number>;
+          probe.formattedDateReboundCount = count;
+        }, matches.length);
+        if (matches.length === 1) activeFormattedDate = candidates.nth(matches[0]!.index);
       };
       const commitVisibleCalendarDate = async (): Promise<boolean> => {
         await page.waitForTimeout(50);
@@ -334,7 +374,7 @@ export async function applyMutation(
         if (matches.length !== 1) return false;
         await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
         await page.waitForTimeout(50);
-        const calendarReadback = await locator.inputValue({ timeout: timeoutMs });
+        const calendarReadback = await activeFormattedDate.inputValue({ timeout: timeoutMs });
         const accepted = acceptedDateReadback(calendarReadback);
         await recordAccepted("calendarAccepted", accepted);
         return accepted;
@@ -413,12 +453,15 @@ export async function applyMutation(
                 return false;
               }
             }, formatted);
-            await locator.blur({ timeout: timeoutMs });
-            const ownerReadback = await locator.inputValue({ timeout: timeoutMs });
+            await reboundFormattedDate();
+            await activeFormattedDate.blur({ timeout: timeoutMs });
+            await reboundFormattedDate();
+            const ownerReadback = await activeFormattedDate.inputValue({ timeout: timeoutMs });
             const ownerAccepted = acceptedDateReadback(ownerReadback);
             await recordAccepted("ownerAccepted", ownerAccepted);
             if (!ownerAccepted) {
-              const fieldOwner = locator.locator(
+              await reboundFormattedDate();
+              const fieldOwner = activeFormattedDate.locator(
                 "xpath=ancestor::*[@data-automation-id='formField' or " +
                   "starts-with(@data-automation-id, 'formField-')][1]",
               );
@@ -466,7 +509,7 @@ export async function applyMutation(
                 return probe.calendarAccepted === true;
               });
               if (!calendarAccepted) {
-                const box = await locator.boundingBox();
+                const box = await activeFormattedDate.boundingBox();
                 if (box !== null && box.width >= 24 && box.height >= 16) {
                   await page.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
                   await recordAccepted("calendarOpened", true);
