@@ -2258,6 +2258,9 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       directOnChangeArity: probe.directOnChangeArity ?? 0,
       directOnBlurCount: probe.directOnBlurCount ?? 0,
       directOnInputCount: probe.directOnInputCount ?? 0,
+      calendarOpened: probe.calendarOpened ?? false,
+      calendarCandidateCount: probe.calendarCandidateCount ?? 0,
+      calendarAccepted: probe.calendarAccepted ?? false,
     };
   });
 }

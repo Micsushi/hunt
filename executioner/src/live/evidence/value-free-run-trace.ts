@@ -87,11 +87,13 @@ const NUMBER_KEYS = new Set([
   "adapterSelectCount", "adapterExclusiveSelectCount",
   "directPropCount", "directOnChangeCount", "directOnChangeArity",
   "directOnBlurCount", "directOnInputCount",
+  "calendarCandidateCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
   "identityResultValid", "identityMatches", "itemVisible", "itemBusy",
   "digitAccepted", "fillAccepted", "sequentialAccepted", "ownerCallSucceeded", "ownerAccepted",
+  "calendarOpened", "calendarAccepted",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",

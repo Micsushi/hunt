@@ -278,6 +278,9 @@ export async function applyMutation(
           directOnChangeArity: 0,
           directOnBlurCount: 0,
           directOnInputCount: 0,
+          calendarOpened: false,
+          calendarCandidateCount: 0,
+          calendarAccepted: false,
         };
       });
       const recordAccepted = async (key: string, accepted: boolean) => {
@@ -382,8 +385,68 @@ export async function applyMutation(
               /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
               "",
             );
-            await recordAccepted("ownerAccepted", /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(ownerReadback) ||
-              /^\d{4}-\d{2}-\d{2}$/u.test(ownerReadback));
+            const ownerAccepted = /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(ownerReadback) ||
+              /^\d{4}-\d{2}-\d{2}$/u.test(ownerReadback);
+            await recordAccepted("ownerAccepted", ownerAccepted);
+            if (!ownerAccepted) {
+              const fieldOwner = locator.locator(
+                "xpath=ancestor::*[@data-automation-id='formField' or " +
+                  "starts-with(@data-automation-id, 'formField-')][1]",
+              );
+              if (await fieldOwner.count() === 1) {
+                const openers = fieldOwner.locator('button[aria-label]');
+                const openerIndexes = await openers.evaluateAll((elements) =>
+                  elements.map((element, index) => ({
+                    index,
+                    label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
+                  })).filter(({ label }) => /^(?:open )?(?:calendar|date picker)$/iu.test(label))
+                );
+                if (openerIndexes.length === 1) {
+                  await openers.nth(openerIndexes[0]!.index).click({ timeout: timeoutMs });
+                  await recordAccepted("calendarOpened", true);
+                  await page.waitForTimeout(50);
+                  const date = new Date(`${mutation.isoDate}T12:00:00`);
+                  const labels = [
+                    new Intl.DateTimeFormat("en-US", {
+                      weekday: "long", year: "numeric", month: "long", day: "numeric",
+                    }).format(date),
+                    new Intl.DateTimeFormat("en-US", {
+                      year: "numeric", month: "long", day: "numeric",
+                    }).format(date),
+                    formatted,
+                    `${Number(mutation.isoDate.slice(5, 7))}/${Number(mutation.isoDate.slice(8, 10))}/${mutation.isoDate.slice(0, 4)}`,
+                  ];
+                  const dateSurfaces = page.locator(
+                    'button[aria-label]:visible, [role="button"][aria-label]:visible, ' +
+                      '[role="gridcell"][aria-label]:visible',
+                  );
+                  const matches = await dateSurfaces.evaluateAll((elements, admittedLabels) =>
+                    elements.map((element, index) => ({
+                      index,
+                      label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
+                    })).filter(({ label }) => admittedLabels.includes(label)),
+                  labels);
+                  await page.evaluate((count) => {
+                    const root = document.documentElement as unknown as Record<string, unknown>;
+                    const probe = root.__huntDateProbe as Record<string, boolean | number>;
+                    probe.calendarCandidateCount = count;
+                  }, matches.length);
+                  if (matches.length === 1) {
+                    await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
+                    await page.waitForTimeout(50);
+                    const calendarReadback = (await locator.inputValue({ timeout: timeoutMs })).replace(
+                      /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+                      "",
+                    );
+                    await recordAccepted(
+                      "calendarAccepted",
+                      /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(calendarReadback) ||
+                        /^\d{4}-\d{2}-\d{2}$/u.test(calendarReadback),
+                    );
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -207,29 +207,35 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
-test("commits a controlled Workday formatted date through its React input owner", async () => {
+test("commits a controlled Workday formatted date through its visible calendar", async () => {
   const fixture = await loopbackPage(`
-    <label>Date <input type="tel" placeholder="MM/DD/YYYY"
-      data-hunt-target-token="target-formatted-date"></label>
+    <div data-automation-id="formField-dateSignedOn">
+      <label>Date <input type="tel" placeholder="MM/DD/YYYY"
+        data-hunt-target-token="target-formatted-date"></label>
+      <button type="button" aria-label="Open Calendar">Calendar</button>
+    </div>
+    <div role="dialog" hidden>
+      <button type="button" aria-label="Tuesday, September 1, 2026">1</button>
+    </div>
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
       let accepted = '';
-      let pending = '';
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
         value: {
           value: '',
-          onChange: (event) => { pending = event.target.value; },
-          onBlur: () => {
-            accepted = pending;
-            input.value = accepted;
-          },
+          onChange: () => {},
         },
       });
       input.addEventListener('input', () => { input.value = accepted; });
-      input.addEventListener('blur', () => {
-        input.__reactProps$controlledDate.onBlur();
+      input.addEventListener('blur', () => { input.value = accepted; });
+      document.querySelector('[aria-label="Open Calendar"]').addEventListener('click', () => {
+        document.querySelector('[role="dialog"]').hidden = false;
+      });
+      document.querySelector('[aria-label="Tuesday, September 1, 2026"]').addEventListener('click', () => {
+        accepted = '09/01/2026';
         input.value = accepted;
+        document.querySelector('[role="dialog"]').hidden = true;
       });
     </script>
   `);
@@ -265,12 +271,15 @@ test("commits a controlled Workday formatted date through its React input owner"
         fillAccepted: false,
         sequentialAccepted: false,
         ownerCallSucceeded: true,
-        ownerAccepted: true,
+        ownerAccepted: false,
         directPropCount: 1,
         directOnChangeCount: 1,
-        directOnChangeArity: 1,
-        directOnBlurCount: 1,
+        directOnChangeArity: 0,
+        directOnBlurCount: 0,
         directOnInputCount: 0,
+        calendarOpened: true,
+        calendarCandidateCount: 1,
+        calendarAccepted: true,
       },
     );
     assert.equal(
