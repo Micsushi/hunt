@@ -400,9 +400,14 @@ export async function applyMutation(
                     index,
                     label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
                     automationId: element.getAttribute("data-automation-id") ?? "",
-                  })).filter(({ label, automationId }) =>
+                    descendantAutomationIds: [...element.querySelectorAll("[data-automation-id]")]
+                      .map((descendant) => descendant.getAttribute("data-automation-id") ?? "")
+                      .join(" "),
+                  })).filter(({ label, automationId, descendantAutomationIds }) =>
                     /\b(?:calendar|date picker|select date|choose date)\b/iu.test(label) ||
-                    /(?:calendar|date.*picker|date.*button)/iu.test(automationId)
+                    /(?:calendar|date.*picker|date.*button)/iu.test(
+                      `${automationId} ${descendantAutomationIds}`,
+                    )
                   )
                 );
                 if (openerIndexes.length === 1) {
