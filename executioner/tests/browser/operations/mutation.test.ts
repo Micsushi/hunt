@@ -280,6 +280,8 @@ test("commits a controlled Workday formatted date through its visible calendar",
         calendarOpened: true,
         calendarCandidateCount: 1,
         calendarAccepted: true,
+        nativeDateInputCount: 0,
+        nativeDateAccepted: false,
       },
     );
     assert.equal(
@@ -293,40 +295,28 @@ test("commits a controlled Workday formatted date through its visible calendar",
   }
 });
 
-test("commits a controlled Workday formatted date through its right-edge calendar overlay", async () => {
+test("commits a Workday formatted date after the control rebounds to a native date input", async () => {
   const fixture = await loopbackPage(`
-    <style>
-      .date-control { position: relative; width: 180px; }
-      .date-control input { box-sizing: border-box; width: 180px; height: 36px; pointer-events: none; }
-      .calendar-overlay { position: absolute; right: 0; top: 0; width: 36px; height: 36px; }
-    </style>
     <div data-automation-id="formField-dateSignedOn">
-      <label for="overlay-date">Date</label>
-      <div class="date-control">
-        <input id="overlay-date" type="tel" placeholder="MM/DD/YYYY"
-          data-hunt-target-token="target-overlay-date">
-        <span class="calendar-overlay">Calendar</span>
-      </div>
-    </div>
-    <div role="dialog" hidden>
-      <button type="button" aria-label="Thursday, August 20, 2026">20</button>
+      <label for="rebound-date">Date</label>
+      <input id="rebound-date" type="tel" placeholder="MM/DD/YYYY"
+        data-hunt-target-token="target-rebound-date">
     </div>
     <script>
-      const input = document.querySelector('[data-hunt-target-token="target-overlay-date"]');
-      let accepted = '';
+      const input = document.querySelector('[data-hunt-target-token="target-rebound-date"]');
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: { value: '', onChange: () => {} },
+        value: { value: '', onChange: () => {
+          input.type = 'date';
+          input.removeAttribute('placeholder');
+          input.value = '2020-08-08';
+        } },
       });
-      input.addEventListener('input', () => { input.value = accepted || '08/08/2020'; });
-      input.addEventListener('blur', () => { input.value = accepted || '08/08/2020'; });
-      document.querySelector('.calendar-overlay').addEventListener('click', () => {
-        document.querySelector('[role="dialog"]').hidden = false;
+      input.addEventListener('input', () => {
+        if (input.type === 'tel') input.value = '08/08/2020';
       });
-      document.querySelector('[aria-label="Thursday, August 20, 2026"]').addEventListener('click', () => {
-        accepted = '08/20/2026';
-        input.value = accepted;
-        document.querySelector('[role="dialog"]').hidden = true;
+      input.addEventListener('blur', () => {
+        if (input.type === 'tel') input.value = '08/08/2020';
       });
     </script>
   `);
@@ -358,16 +348,15 @@ test("commits a controlled Workday formatted date through its right-edge calenda
         const probe = (document.documentElement as unknown as Record<string, unknown>)
           .__huntDateProbe as Record<string, boolean | number>;
         return {
-          calendarOpened: probe.calendarOpened,
-          calendarCandidateCount: probe.calendarCandidateCount,
-          calendarAccepted: probe.calendarAccepted,
+          nativeDateInputCount: probe.nativeDateInputCount,
+          nativeDateAccepted: probe.nativeDateAccepted,
         };
       }),
-      { calendarOpened: true, calendarCandidateCount: 1, calendarAccepted: true },
+      { nativeDateInputCount: 1, nativeDateAccepted: true },
     );
     assert.equal(
-      await page.locator('[data-hunt-target-token="target-overlay-date"]').inputValue(),
-      "08/20/2026",
+      await page.locator('[data-hunt-target-token="target-rebound-date"]').inputValue(),
+      "2026-08-20",
     );
   } finally {
     await context.close();
