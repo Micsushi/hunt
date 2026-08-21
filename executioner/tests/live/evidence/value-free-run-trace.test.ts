@@ -49,6 +49,21 @@ test("durable run trace retains ordered structural state and drops applicant val
       exactCommitCount: 0,
       nested: { answer: "private answer" },
     });
+    trace("questionnaire_date_diagnostics", {
+      dateInputCount: 1,
+      fieldButtonCount: 0,
+      fieldRoleButtonCount: 0,
+      fieldSvgCount: 1,
+      fieldAutomationCount: 2,
+      rightHitInput: false,
+      rightHitWithinField: true,
+      rightHitButtonAncestor: false,
+      rightHitRoleButtonAncestor: false,
+      rightHitSvgAncestor: true,
+      rightHitAutomationAncestor: true,
+      rightHitReactClickAncestorCount: 1,
+      applicantValue: "private date",
+    });
 
     const path = join(root, "value-free-trace.ndjson");
     const text = readFileSync(path, "utf8");
@@ -60,6 +75,7 @@ test("durable run trace retains ordered structural state and drops applicant val
       [1, "application_walk_progress"],
       [2, "external_monitor_acknowledged"],
       [3, "questionnaire_checkbox_diagnostics"],
+      [4, "questionnaire_date_diagnostics"],
     ]);
     assert.deepEqual(records[0]?.details.questionTypes, ["authorization", "employment"]);
     assert.deepEqual(records[2]?.details, {
@@ -71,6 +87,20 @@ test("durable run trace retains ordered structural state and drops applicant val
       sharedOptionSelectCount: 2,
       exactObjectCallCount: 2,
       exactCommitCount: 0,
+    });
+    assert.deepEqual(records[3]?.details, {
+      dateInputCount: 1,
+      fieldButtonCount: 0,
+      fieldRoleButtonCount: 0,
+      fieldSvgCount: 1,
+      fieldAutomationCount: 2,
+      rightHitInput: false,
+      rightHitWithinField: true,
+      rightHitButtonAncestor: false,
+      rightHitRoleButtonAncestor: false,
+      rightHitSvgAncestor: true,
+      rightHitAutomationAncestor: true,
+      rightHitReactClickAncestorCount: 1,
     });
     assert.equal(Object.isFrozen(records[0]?.details), true);
   } finally {

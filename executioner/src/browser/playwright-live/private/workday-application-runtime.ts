@@ -2247,6 +2247,40 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
     const probe = typeof root.__huntDateProbe === "object" && root.__huntDateProbe !== null
       ? root.__huntDateProbe as Record<string, boolean | number>
       : {};
+    const visible = (element: HTMLElement): boolean => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        element.getClientRects().length > 0;
+    };
+    const dateInputs = [...document.querySelectorAll<HTMLInputElement>(
+      'input[type="text"], input[type="tel"]',
+    )].filter((input) => visible(input) &&
+      /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+        input.placeholder.trim(),
+      ));
+    const dateInput = dateInputs.length === 1 ? dateInputs[0] : undefined;
+    const fieldOwner = dateInput?.closest<HTMLElement>(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const ancestry: HTMLElement[] = [];
+    if (dateInput !== undefined && fieldOwner !== null && fieldOwner !== undefined) {
+      const box = dateInput.getBoundingClientRect();
+      let hit = document.elementFromPoint(box.right - 16, box.top + box.height / 2);
+      while (hit instanceof HTMLElement && ancestry.length < 16) {
+        ancestry.push(hit);
+        if (hit === fieldOwner) break;
+        hit = hit.parentElement;
+      }
+    }
+    const clickHandlerCount = ancestry.filter((element) => {
+      const record = element as unknown as Record<string, unknown>;
+      return Object.keys(element).some((key) => {
+        if (!key.startsWith("__reactProps$")) return false;
+        const props = record[key];
+        return typeof props === "object" && props !== null &&
+          typeof (props as Record<string, unknown>).onClick === "function";
+      });
+    }).length;
     return {
       digitAccepted: probe.digitAccepted ?? false,
       fillAccepted: probe.fillAccepted ?? false,
@@ -2261,6 +2295,19 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       calendarOpened: probe.calendarOpened ?? false,
       calendarCandidateCount: probe.calendarCandidateCount ?? 0,
       calendarAccepted: probe.calendarAccepted ?? false,
+      dateInputCount: dateInputs.length,
+      fieldButtonCount: fieldOwner?.querySelectorAll("button").length ?? 0,
+      fieldRoleButtonCount: fieldOwner?.querySelectorAll('[role="button"]').length ?? 0,
+      fieldSvgCount: fieldOwner?.querySelectorAll("svg").length ?? 0,
+      fieldAutomationCount: fieldOwner?.querySelectorAll("[data-automation-id]").length ?? 0,
+      rightHitInput: ancestry[0] === dateInput,
+      rightHitWithinField: fieldOwner !== null && fieldOwner !== undefined &&
+        ancestry.includes(fieldOwner),
+      rightHitButtonAncestor: ancestry.some((element) => element.tagName === "BUTTON"),
+      rightHitRoleButtonAncestor: ancestry.some((element) => element.getAttribute("role") === "button"),
+      rightHitSvgAncestor: ancestry.some((element) => element.tagName === "svg"),
+      rightHitAutomationAncestor: ancestry.some((element) => element.hasAttribute("data-automation-id")),
+      rightHitReactClickAncestorCount: clickHandlerCount,
     };
   });
 }

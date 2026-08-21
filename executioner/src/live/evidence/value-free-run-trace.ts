@@ -87,13 +87,16 @@ const NUMBER_KEYS = new Set([
   "adapterSelectCount", "adapterExclusiveSelectCount",
   "directPropCount", "directOnChangeCount", "directOnChangeArity",
   "directOnBlurCount", "directOnInputCount",
-  "calendarCandidateCount",
+  "calendarCandidateCount", "dateInputCount", "fieldButtonCount", "fieldRoleButtonCount",
+  "fieldSvgCount", "fieldAutomationCount", "rightHitReactClickAncestorCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
   "identityResultValid", "identityMatches", "itemVisible", "itemBusy",
   "digitAccepted", "fillAccepted", "sequentialAccepted", "ownerCallSucceeded", "ownerAccepted",
   "calendarOpened", "calendarAccepted",
+  "rightHitInput", "rightHitWithinField", "rightHitButtonAncestor",
+  "rightHitRoleButtonAncestor", "rightHitSvgAncestor", "rightHitAutomationAncestor",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
