@@ -399,7 +399,11 @@ export async function applyMutation(
                   elements.map((element, index) => ({
                     index,
                     label: (element.getAttribute("aria-label") ?? "").replace(/\s+/gu, " ").trim(),
-                  })).filter(({ label }) => /^(?:open )?(?:calendar|date picker)$/iu.test(label))
+                    automationId: element.getAttribute("data-automation-id") ?? "",
+                  })).filter(({ label, automationId }) =>
+                    /\b(?:calendar|date picker|select date|choose date)\b/iu.test(label) ||
+                    /(?:calendar|date.*picker|date.*button)/iu.test(automationId)
+                  )
                 );
                 if (openerIndexes.length === 1) {
                   await openers.nth(openerIndexes[0]!.index).click({ timeout: timeoutMs });
