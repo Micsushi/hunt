@@ -87,7 +87,7 @@ const NUMBER_KEYS = new Set([
   "adapterSelectCount", "adapterExclusiveSelectCount",
   "directPropCount", "directOnChangeCount", "directOnChangeArity",
   "directOnBlurCount", "directOnInputCount",
-  "calendarCandidateCount", "nativeDateInputCount", "dateInputCount", "fieldButtonCount", "fieldRoleButtonCount",
+  "calendarCandidateCount", "nativeDateInputCount", "formattedDateReboundCount", "dateInputCount", "fieldButtonCount", "fieldRoleButtonCount",
   "fieldSvgCount", "fieldAutomationCount", "rightHitReactClickAncestorCount",
 ]);
 const BOOLEAN_KEYS = new Set([

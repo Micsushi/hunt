@@ -379,7 +379,7 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
         ((document.documentElement as unknown as Record<string, unknown>)
           .__huntDateProbe as Record<string, number>).formattedDateReboundCount
       ),
-      1,
+      0,
     );
   } finally {
     await context.close();

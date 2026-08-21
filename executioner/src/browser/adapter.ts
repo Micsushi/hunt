@@ -304,6 +304,7 @@ export async function applyMutation(
         return match !== null &&
           `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}` === mutation.isoDate;
       };
+      const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
       let activeFormattedDate = locator;
       const reboundFormattedDate = async (): Promise<void> => {
         if (await activeFormattedDate.count() === 1 && await activeFormattedDate.isVisible()) return;
@@ -379,15 +380,24 @@ export async function applyMutation(
         await recordAccepted("calendarAccepted", accepted);
         return accepted;
       };
+      const commitOverlaidCalendarDate = async (): Promise<boolean> => {
+        await reboundFormattedDate();
+        const box = await activeFormattedDate.boundingBox();
+        if (box === null || box.width < 24 || box.height < 16) return false;
+        await page.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
+        await recordAccepted("calendarOpened", true);
+        return await commitVisibleCalendarDate();
+      };
       // Workday places a calendar surface over some masked date inputs. A
       // pointer click can therefore fail actionability even though the input
       // is visible, editable, and accepts keyboard focus.
+      if (await commitOverlaidCalendarDate()) return "applied";
+      await page.keyboard.press("Escape").catch(() => undefined);
       await locator.focus({ timeout: timeoutMs });
       await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
       await page.keyboard.press("Backspace");
       await page.keyboard.type(digits, { delay: 20 });
       await page.keyboard.press("Tab");
-      const formatted = `${mutation.isoDate.slice(5, 7)}/${mutation.isoDate.slice(8, 10)}/${mutation.isoDate.slice(0, 4)}`;
       const readback = await locator.inputValue({ timeout: timeoutMs });
       await recordAccepted("digitAccepted", acceptedDateReadback(readback));
       if (!acceptedDateReadback(readback)) {
@@ -509,12 +519,7 @@ export async function applyMutation(
                 return probe.calendarAccepted === true;
               });
               if (!calendarAccepted) {
-                const box = await activeFormattedDate.boundingBox();
-                if (box !== null && box.width >= 24 && box.height >= 16) {
-                  await page.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
-                  await recordAccepted("calendarOpened", true);
-                  calendarAccepted = await commitVisibleCalendarDate();
-                }
+                calendarAccepted = await commitOverlaidCalendarDate();
               }
               if (!calendarAccepted) {
                 const nativeDates = page.locator('input[type="date"]:visible');

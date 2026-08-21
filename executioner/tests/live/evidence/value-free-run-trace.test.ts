@@ -51,6 +51,7 @@ test("durable run trace retains ordered structural state and drops applicant val
     });
     trace("questionnaire_date_diagnostics", {
       dateInputCount: 1,
+      formattedDateReboundCount: 1,
       fieldButtonCount: 0,
       fieldRoleButtonCount: 0,
       fieldSvgCount: 1,
@@ -90,6 +91,7 @@ test("durable run trace retains ordered structural state and drops applicant val
     });
     assert.deepEqual(records[3]?.details, {
       dateInputCount: 1,
+      formattedDateReboundCount: 1,
       fieldButtonCount: 0,
       fieldRoleButtonCount: 0,
       fieldSvgCount: 1,
