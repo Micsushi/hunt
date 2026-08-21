@@ -2268,6 +2268,48 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
         )
       );
     });
+    const allTextTelInputs = [...document.querySelectorAll<HTMLInputElement>(
+      'input[type="text"], input[type="tel"]',
+    )];
+    const maskedInputs = allTextTelInputs.filter((input) =>
+      /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
+        input.placeholder.trim(),
+      )
+    );
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").replace(/\s+/gu, " ").replace(/\s*\*\s*$/u, "").trim();
+    const exactDateLabels = [...document.querySelectorAll<HTMLElement>("label, legend")]
+      .filter(visible)
+      .filter((element) => normalize(element.textContent) === "Date");
+    const exactMaskTexts = [...document.querySelectorAll<HTMLElement>(
+      'span, div, p, [role="textbox"], [contenteditable="true"]',
+    )].filter(visible).filter((element) =>
+      /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(normalize(element.textContent))
+    );
+    const ownerCandidates: HTMLElement[] = [];
+    for (const label of exactDateLabels) {
+      let owner = label.parentElement;
+      while (owner !== null && owner !== document.body) {
+        const ownerMaskedInputs = [...owner.querySelectorAll<HTMLInputElement>(
+          'input[type="text"], input[type="tel"]',
+        )].filter((input) => maskedInputs.includes(input));
+        const ownerMaskTexts = exactMaskTexts.filter((element) => owner!.contains(element));
+        const ownerSvgs = [...owner.querySelectorAll<SVGElement>("svg")].filter((element) => {
+          const style = getComputedStyle(element);
+          return style.display !== "none" && style.visibility !== "hidden" &&
+            element.getClientRects().length > 0;
+        });
+        if (ownerMaskedInputs.length + ownerMaskTexts.length > 0 && ownerSvgs.length > 0) {
+          ownerCandidates.push(owner);
+          break;
+        }
+        owner = owner.parentElement;
+      }
+    }
+    const exactOwner = ownerCandidates.length === 1 ? ownerCandidates[0] : undefined;
+    const ownerTextTelInputs = exactOwner === undefined
+      ? []
+      : [...exactOwner.querySelectorAll<HTMLInputElement>('input[type="text"], input[type="tel"]')];
     const dateInput = dateInputs.length === 1 ? dateInputs[0] : undefined;
     const fieldOwner = dateInput?.closest<HTMLElement>(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2309,6 +2351,25 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       nativeDateAccepted: probe.nativeDateAccepted ?? false,
       formattedDateReboundCount: probe.formattedDateReboundCount ?? 0,
       dateInputCount: dateInputs.length,
+      allTextTelInputCount: allTextTelInputs.length,
+      maskedInputCount: maskedInputs.length,
+      visibleMaskedInputCount: maskedInputs.filter(visible).length,
+      exactDateLabelCount: exactDateLabels.length,
+      exactMaskTextCount: exactMaskTexts.length,
+      exactMaskTextSpanCount: exactMaskTexts.filter((element) => element.tagName === "SPAN").length,
+      exactMaskTextDivCount: exactMaskTexts.filter((element) => element.tagName === "DIV").length,
+      exactMaskTextRoleTextboxCount: exactMaskTexts.filter((element) =>
+        element.getAttribute("role") === "textbox"
+      ).length,
+      exactMaskTextContentEditableCount: exactMaskTexts.filter((element) => element.isContentEditable).length,
+      dateOwnerCandidateCount: ownerCandidates.length,
+      dateOwnerInputCount: exactOwner?.querySelectorAll("input").length ?? 0,
+      dateOwnerTextTelInputCount: ownerTextTelInputs.length,
+      dateOwnerVisibleTextTelInputCount: ownerTextTelInputs.filter(visible).length,
+      dateOwnerButtonCount: exactOwner?.querySelectorAll("button").length ?? 0,
+      dateOwnerRoleButtonCount: exactOwner?.querySelectorAll('[role="button"]').length ?? 0,
+      dateOwnerSvgCount: exactOwner?.querySelectorAll("svg").length ?? 0,
+      dateOwnerAutomationCount: exactOwner?.querySelectorAll("[data-automation-id]").length ?? 0,
       fieldButtonCount: fieldOwner?.querySelectorAll("button").length ?? 0,
       fieldRoleButtonCount: fieldOwner?.querySelectorAll('[role="button"]').length ?? 0,
       fieldSvgCount: fieldOwner?.querySelectorAll("svg").length ?? 0,

@@ -89,6 +89,11 @@ const NUMBER_KEYS = new Set([
   "directOnBlurCount", "directOnInputCount",
   "calendarCandidateCount", "nativeDateInputCount", "formattedDateReboundCount", "dateInputCount", "fieldButtonCount", "fieldRoleButtonCount",
   "fieldSvgCount", "fieldAutomationCount", "rightHitReactClickAncestorCount",
+  "allTextTelInputCount", "maskedInputCount", "visibleMaskedInputCount", "exactDateLabelCount",
+  "exactMaskTextCount", "exactMaskTextSpanCount", "exactMaskTextDivCount",
+  "exactMaskTextRoleTextboxCount", "exactMaskTextContentEditableCount", "dateOwnerCandidateCount",
+  "dateOwnerInputCount", "dateOwnerTextTelInputCount", "dateOwnerVisibleTextTelInputCount",
+  "dateOwnerButtonCount", "dateOwnerRoleButtonCount", "dateOwnerSvgCount", "dateOwnerAutomationCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
