@@ -394,7 +394,7 @@ export async function applyMutation(
                   "starts-with(@data-automation-id, 'formField-')][1]",
               );
               if (await fieldOwner.count() === 1) {
-                const openers = fieldOwner.locator('button[aria-label]');
+                const openers = fieldOwner.locator("button");
                 const openerIndexes = await openers.evaluateAll((elements) =>
                   elements.map((element, index) => ({
                     index,
