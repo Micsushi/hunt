@@ -2263,7 +2263,9 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       return visible(input) && (
         /^M{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*D{1,2}[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*\/[\s\u200E\u200F\u202A-\u202E\u2066-\u2069]*Y{2,4}$/iu.test(
           input.placeholder.trim(),
-        ) || /^date(?:\s*\*)?$/iu.test(label)
+        ) || /^date(?:\s*\*)?$/iu.test(label) || /^\d{1,2}\/\d{1,2}\/\d{4}$/u.test(
+          input.value.replace(/[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu, ""),
+        )
       );
     });
     const dateInput = dateInputs.length === 1 ? dateInputs[0] : undefined;
