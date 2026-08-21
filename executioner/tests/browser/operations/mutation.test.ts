@@ -212,7 +212,7 @@ test("commits a controlled Workday formatted date through its visible calendar",
     <div data-automation-id="formField-dateSignedOn">
       <label>Date <input type="tel" placeholder="MM/DD/YYYY"
         data-hunt-target-token="target-formatted-date"></label>
-      <button type="button"><span data-automation-id="datePickerIcon">Calendar</span></button>
+      <div data-automation-id="datePickerIcon">Calendar</div>
     </div>
     <div role="dialog" hidden>
       <button type="button" aria-label="Tuesday, September 1, 2026">1</button>
@@ -229,8 +229,7 @@ test("commits a controlled Workday formatted date through its visible calendar",
       });
       input.addEventListener('input', () => { input.value = accepted; });
       input.addEventListener('blur', () => { input.value = accepted; });
-      document.querySelector('[data-automation-id="datePickerIcon"]').closest('button')
-        .addEventListener('click', () => {
+      document.querySelector('[data-automation-id="datePickerIcon"]').addEventListener('click', () => {
         document.querySelector('[role="dialog"]').hidden = false;
       });
       document.querySelector('[aria-label="Tuesday, September 1, 2026"]').addEventListener('click', () => {

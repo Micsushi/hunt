@@ -410,8 +410,23 @@ export async function applyMutation(
                     )
                   )
                 );
-                if (openerIndexes.length === 1) {
-                  await openers.nth(openerIndexes[0]!.index).click({ timeout: timeoutMs });
+                const automationOpeners = fieldOwner.locator("[data-automation-id]");
+                const automationOpenerIndexes = openerIndexes.length === 0
+                  ? await automationOpeners.evaluateAll((elements) =>
+                    elements.map((element, index) => ({
+                      index,
+                      automationId: element.getAttribute("data-automation-id") ?? "",
+                    })).filter(({ automationId }) =>
+                      /(?:calendar|date.*picker|date.*button)/iu.test(automationId)
+                    ))
+                  : [];
+                const opener = openerIndexes.length === 1
+                  ? openers.nth(openerIndexes[0]!.index)
+                  : automationOpenerIndexes.length === 1
+                  ? automationOpeners.nth(automationOpenerIndexes[0]!.index)
+                  : undefined;
+                if (opener !== undefined) {
+                  await opener.click({ timeout: timeoutMs });
                   await recordAccepted("calendarOpened", true);
                   await page.waitForTimeout(50);
                   const date = new Date(`${mutation.isoDate}T12:00:00`);
