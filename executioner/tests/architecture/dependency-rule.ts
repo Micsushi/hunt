@@ -16,6 +16,7 @@ type ModuleReference =
 
 const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
+  [/^src\/form\/answers\/application-types\.ts$/, "application-contracts"],
   [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
   [/^src\/testing\/s2-revision\.ts$/, "test-kit"],
   [
@@ -171,6 +172,7 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       }
       if (
         targetOwner === "contracts" ||
+        targetOwner === "application-contracts" ||
         targetOwner === importerOwner ||
         importerOwner === "tests" ||
         exactPeerAssemblyImports.get(file.path)?.has(target) === true

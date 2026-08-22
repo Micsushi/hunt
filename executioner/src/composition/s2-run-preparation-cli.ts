@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  applicationProfileFactIds,
+  parseApplicationProfile,
+  type ApplicationProfile,
+  type ApplicationProfileFact,
+} from "../profile/application-profile.ts";
+import { retainedDiscoveredIntakeFields } from "../form/questions/catalog.ts";
 
 import {
   prepareStage2LiveRun,
@@ -19,6 +26,7 @@ export interface Stage2RunPreparationArgs {
   readonly targetUrl: string;
   readonly accountMode: "fresh_create" | "sign_in";
   readonly applicationProfilePath?: string;
+  readonly trustedLegacyApplicationProfilePath?: string;
   readonly applicationResumePath?: string;
 }
 
@@ -34,7 +42,8 @@ export function parseStage2RunPreparationArgs(
       key === undefined || value === undefined || parsed.has(key) ||
       ![
         "--storage-root", "--target-url", "--account-mode",
-        "--application-profile", "--application-resume",
+        "--application-profile", "--trusted-legacy-application-profile",
+        "--application-resume",
       ].includes(key) ||
       /[\0\r\n"]/u.test(value)
     ) invalid();
@@ -44,22 +53,30 @@ export function parseStage2RunPreparationArgs(
   const targetUrl = parsed.get("--target-url");
   const accountMode = parsed.get("--account-mode");
   const applicationProfilePath = parsed.get("--application-profile");
+  const trustedLegacyApplicationProfilePath = parsed.get("--trusted-legacy-application-profile");
   const applicationResumePath = parsed.get("--application-resume");
+  const sourcePath = applicationProfilePath ?? trustedLegacyApplicationProfilePath;
   if (
     storageRoot === undefined || !isAbsolute(storageRoot) || normalize(storageRoot) !== storageRoot ||
     targetUrl === undefined ||
     (accountMode !== "fresh_create" && accountMode !== "sign_in") ||
-    ((applicationProfilePath === undefined) !== (applicationResumePath === undefined)) ||
-    (applicationProfilePath !== undefined && !absoluteNormalized(applicationProfilePath)) ||
+    applicationProfilePath !== undefined && trustedLegacyApplicationProfilePath !== undefined ||
+    ((sourcePath === undefined) !== (applicationResumePath === undefined)) ||
+    (sourcePath !== undefined && !absoluteNormalized(sourcePath)) ||
     (applicationResumePath !== undefined && !absoluteNormalized(applicationResumePath))
   ) invalid();
   return Object.freeze({
     storageRoot,
     targetUrl,
     accountMode,
-    ...(applicationProfilePath === undefined
+    ...(sourcePath === undefined
       ? {}
-      : { applicationProfilePath, applicationResumePath }),
+      : {
+          ...(applicationProfilePath === undefined
+            ? { trustedLegacyApplicationProfilePath }
+            : { applicationProfilePath }),
+          applicationResumePath,
+        }),
   });
 }
 
@@ -68,13 +85,15 @@ export async function runStage2RunPreparationCli(
   protector?: Stage2StorageProtector,
 ) {
   const args = parseStage2RunPreparationArgs(values);
-  if (args.applicationProfilePath === undefined || args.applicationResumePath === undefined) {
+  const profilePath = args.applicationProfilePath ?? args.trustedLegacyApplicationProfilePath;
+  if (profilePath === undefined || args.applicationResumePath === undefined) {
     return prepareStage2LiveRun(args, protector);
   }
   const source = await loadApplicationSource(
-    args.applicationProfilePath,
+    profilePath,
     args.applicationResumePath,
     protector,
+    args.trustedLegacyApplicationProfilePath !== undefined,
   );
   try {
     return await prepareStage2LiveRun({
@@ -92,6 +111,7 @@ async function loadApplicationSource(
   profilePath: string,
   resumePath: string,
   protector?: Stage2StorageProtector,
+  trustedLegacy = false,
 ): Promise<Stage2ApplicationSourceInput> {
   const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   if (within(executionerRoot, profilePath) || within(executionerRoot, resumePath)) invalid();
@@ -106,7 +126,10 @@ async function loadApplicationSource(
   try {
     profileBytes = readStablePrivateFile(profilePath, 512 * 1024).bytes;
     resumeBytes = readStablePrivateFile(resumePath, 5 * 1024 * 1024).bytes;
-    const value = exact(JSON.parse(profileBytes.toString("utf8")), [
+    const parsed = JSON.parse(profileBytes.toString("utf8"));
+    const value = trustedLegacy
+      ? migrateTrustedLegacyApplicationProfile(parsed)
+      : exact(parsed, [
       "schemaVersion", "sourceRevision", "resumeId", "profile",
       "profilePlan", "narrative",
     ]);
@@ -115,7 +138,7 @@ async function loadApplicationSource(
       value.sourceRevision !== "s2-application-owner-profile-input-v1" ||
       typeof value.resumeId !== "string"
     ) invalid();
-    const profile = structuredClone(value.profile);
+    const profile = structuredClone(parseApplicationProfile(value.profile));
     const derivedPlan = withDerivedProfileCountry(profile, value.profilePlan);
     const profilePlan = structuredClone(derivedPlan);
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
@@ -138,6 +161,94 @@ async function loadApplicationSource(
     profileBytes?.fill(0);
     resumeBytes?.fill(0);
   }
+}
+
+const LEGACY_RESUME_FACT_IDS = new Set([
+  "given_name", "family_name", "email_address", "city", "region",
+]);
+const OWNER_BOUND_PROVENANCE = new Set([
+  "owner_provided", "resume_verified", "configured_template",
+]);
+
+export function migrateTrustedLegacyApplicationProfile(value: unknown): {
+  readonly schemaVersion: 1;
+  readonly sourceRevision: "s2-application-owner-profile-input-v1";
+  readonly resumeId: string;
+  readonly profile: ApplicationProfile;
+  readonly profilePlan: unknown;
+  readonly narrative: unknown;
+} {
+  const source = exact(value, [
+    "schemaVersion", "sourceRevision", "resumeId", "profile", "profilePlan", "narrative",
+  ]);
+  if (source.schemaVersion !== 1 ||
+      source.sourceRevision !== "s2-application-owner-profile-input-v1" ||
+      typeof source.resumeId !== "string" ||
+      typeof source.profilePlan !== "object" || source.profilePlan === null) invalid();
+  const legacy = exact(source.profile, ["profileId", "revision", "facts"]);
+  if (typeof legacy.profileId !== "string" ||
+      !Number.isSafeInteger(legacy.revision) || (legacy.revision as number) < 0 ||
+      !Array.isArray(legacy.facts)) invalid();
+  const seen = new Set<string>();
+  const facts: ApplicationProfileFact[] = [];
+  for (const candidate of legacy.facts) {
+    const fact = exact(candidate, ["factId", "value", "provenance"]);
+    if (typeof fact.factId !== "string" || seen.has(fact.factId)) invalid();
+    seen.add(fact.factId);
+    if (!LEGACY_RESUME_FACT_IDS.has(fact.factId)) continue;
+    if (!OWNER_BOUND_PROVENANCE.has(fact.provenance as string)) continue;
+    if (typeof fact.value !== "string" || fact.value.trim() === "") invalid();
+    facts.push(Object.freeze({
+      factId: fact.factId as Extract<ApplicationProfileFact, { value: string }>["factId"],
+      value: fact.value,
+      provenance: fact.provenance as ApplicationProfileFact["provenance"],
+      lane: "live_owner_fact",
+    }));
+  }
+  const profile: ApplicationProfile = Object.freeze({
+    profileId: legacy.profileId as ApplicationProfile["profileId"],
+    revision: legacy.revision as number,
+    facts: Object.freeze(facts),
+    unsetFactIds: Object.freeze(applicationProfileFactIds.filter((factId) =>
+      !facts.some((fact) => fact.factId === factId)
+    )),
+    discoveredFields: retainedDiscoveredIntakeFields(),
+  });
+  parseApplicationProfile(profile);
+  const fact = (factId: "given_name" | "family_name") =>
+    facts.find((candidate) => candidate.factId === factId);
+  const fields = ([
+    ["given_name", "identity.given_name"],
+    ["family_name", "identity.family_name"],
+  ] as const).flatMap(([factId, fieldId]) => {
+    const sourceFact = fact(factId);
+    return sourceFact === undefined ? [] : [{
+      fieldId,
+      questionType: "identity",
+      answerType: "text",
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: sourceFact.value,
+        provenance: sourceFact.provenance,
+        lane: "live_owner_fact",
+      },
+    }];
+  });
+  const profilePlan = withDerivedProfileCountry(profile, {
+    mode: "live",
+    pageType: "profile",
+    fields,
+    repeatables: [],
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    sourceRevision: "s2-application-owner-profile-input-v1",
+    resumeId: source.resumeId,
+    profile,
+    profilePlan,
+    narrative: Object.freeze({ revision: "trusted-legacy-owner-facts-only-v1" }),
+  });
 }
 
 function admitSourcePath(path: string, maximumBytes: number): void {

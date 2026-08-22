@@ -1,7 +1,8 @@
+import type { UiBehaviorId } from "../../contracts/index.ts";
 import type {
-  ProfileFactId,
-  UiBehaviorId,
-} from "../../contracts/index.ts";
+  ApplicationProfileFactId,
+  DiscoveredIntakeField,
+} from "../answers/application-types.ts";
 import {
   assertCatalogHasNoCollisions,
   resolveCatalogKeywords,
@@ -12,7 +13,7 @@ import {
 type QuestionSource =
   | {
       readonly kind: "profile";
-      readonly factId: ProfileFactId;
+      readonly factId: ApplicationProfileFactId;
       readonly ownerProvidedOnly?: true;
       readonly syntheticDefault?: string | number | boolean;
     }
@@ -95,7 +96,11 @@ const questionAliasCatalog = Object.freeze([
   ),
   aliasEntry(
     "s1-question-age-requirement-met",
-    ["Are you at least 18 years of age?", "Are you 18 years of age or older?"],
+    [
+      "Are you at least 18 years of age?",
+      "Are you 18 years of age or older?",
+      "Do you certify that you are 18 years of age or older?",
+    ],
     ["checkbox", "radio", "select", "listbox"],
   ),
   aliasEntry(
@@ -103,12 +108,13 @@ const questionAliasCatalog = Object.freeze([
     [
       "Will you now or in the future require sponsorship?",
       "Do you require employment sponsorship now or in the future?",
+      "Do you now, or will you in the future, require sponsorship to work legally for Integer in the U.S.?",
     ],
     ["radio", "select", "listbox"],
   ),
   aliasEntry(
     "s1-question-earliest-start-date",
-    ["Earliest Start Date", "Desired Start Date"],
+    ["Earliest Start Date", "Desired Start Date", "What is your availability/start date?", "When are you available to start?"],
     ["date", "text"],
   ),
   aliasEntry(
@@ -129,15 +135,15 @@ const questionAliasCatalog = Object.freeze([
   ),
   aliasEntry(
     "workday-question-desired-salary",
-    ["Desired Salary", "Salary Expectation", "Desired Compensation"],
+    ["Desired Salary", "Salary Expectation", "Desired Compensation", "What are your salary expectations?", "Salary expectations"],
     ["text", "textarea", "select", "listbox"],
-    { kind: "profile", factId: "desired_salary", ownerProvidedOnly: true },
+    { kind: "profile", factId: "salary_expectations", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-question-gender-disclosure",
     ["Gender", "Gender Identity", "Sex"],
     ["radio", "select", "listbox"],
-    { kind: "neutral_disclosure" },
+    { kind: "profile", factId: "gender_disclosure", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-question-ethnicity-disclosure",
@@ -149,19 +155,19 @@ const questionAliasCatalog = Object.freeze([
       "Are you Hispanic or Latino?",
     ],
     ["radio", "select", "listbox"],
-    { kind: "neutral_disclosure" },
+    { kind: "profile", factId: "ethnicity_disclosure", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-question-veteran-disclosure",
     ["Veteran Status", "Protected Veteran Status", "Were you ever in the military?"],
     ["radio", "select", "listbox"],
-    { kind: "neutral_disclosure" },
+    { kind: "profile", factId: "veteran_disclosure", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-question-disability-disclosure",
     ["Disability Status", "Disability Self-Identification"],
     ["radio", "select", "listbox"],
-    { kind: "neutral_disclosure" },
+    { kind: "profile", factId: "disability_disclosure", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-placeholder-terms-consent",
@@ -173,12 +179,7 @@ const questionAliasCatalog = Object.freeze([
       "Accept Terms and Agreements",
     ],
     ["checkbox"],
-    {
-      kind: "synthetic_placeholder",
-      value: true,
-      placeholderProvenance: "synthetic_ui_learning",
-      protected: true,
-    },
+    { kind: "profile", factId: "terms_consent", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-placeholder-prior-employment",
@@ -187,24 +188,20 @@ const questionAliasCatalog = Object.freeze([
       "Have you ever worked for Pyramid Global Hospitality?",
       "Have you previously worked for HRI Hospitality?",
       "Have you previously worked for HRI Hospitality? CURRENT ASSOCIATES: Please apply via your Workday account instead from Jobs Hub.",
+      "Have you previously worked for our company (this does not apply to contingent/contract work)?",
     ],
     ["radio", "select", "listbox"],
-    {
-      kind: "synthetic_placeholder",
-      value: false,
-      placeholderProvenance: "synthetic_ui_learning",
-      protected: true,
-    },
+    { kind: "profile", factId: "previously_worked_for_organization", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-placeholder-application-source",
     ["How Did You Hear About Us?"],
     ["select", "listbox"],
     {
-      kind: "synthetic_placeholder",
-      value: "LinkedIn",
-      placeholderProvenance: "synthetic_ui_learning",
-      protected: false,
+      kind: "profile",
+      factId: "application_source",
+      ownerProvidedOnly: true,
+      syntheticDefault: "LinkedIn",
     },
   ),
   aliasEntry(
@@ -212,24 +209,59 @@ const questionAliasCatalog = Object.freeze([
     [
       "Do you have any relatives currently employed by the company?",
       "Are any of your relatives employed by the company?",
+      "Do you have any relatives employed by Integer?",
+      "Do you have any relatives currently employed by Integer?",
     ],
     ["radio", "select", "listbox"],
-    {
-      kind: "synthetic_placeholder",
-      value: false,
-      placeholderProvenance: "synthetic_ui_learning",
-      protected: false,
-    },
+    { kind: "profile", factId: "relatives_employed", ownerProvidedOnly: true },
   ),
   aliasEntry(
     "workday-placeholder-associate-referral",
-    ["Have you been referred by an associate?"],
+    ["Have you been referred by an associate?", "Have you been referred by an Integer associate?"],
+    ["radio", "select", "listbox"],
+    { kind: "profile", factId: "associate_referral", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
+    "workday-question-current-associate",
+    [
+      "Are you a current Integer associate?",
+      "Are you currently an Integer associate?",
+      "Are you a current Integer associate (this does not apply to contingent/contract work)?",
+    ],
+    ["radio", "select", "listbox"],
+    { kind: "profile", factId: "current_associate", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
+    "workday-question-previously-applied",
+    [
+      "Have you previously applied to Integer?",
+      "Have you applied to Integer before?",
+      "Have you previously applied for a position with our company?",
+    ],
+    ["radio", "select", "listbox"],
+    { kind: "profile", factId: "previously_applied", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
+    "workday-question-essential-functions",
+    [
+      "Are you physically able to perform the essential functions of this position?",
+      "Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job?",
+    ],
+    ["radio", "select", "listbox"],
+    { kind: "profile", factId: "essential_functions_ability", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
+    "workday-question-employment-agreement",
+    [
+      "Are you subject to an NDA, non-compete, or company agreement that would prevent employment with Integer?",
+      "Are you subject to any NDA, non-compete, or company agreement preventing employment?",
+      "Are you currently subject to any company agreement (NDA, Non-compete, etc.) that would prevent you from working with INTEGER Holdings Corporation?",
+    ],
     ["radio", "select", "listbox"],
     {
-      kind: "synthetic_placeholder",
-      value: false,
-      placeholderProvenance: "synthetic_ui_learning",
-      protected: false,
+      kind: "profile",
+      factId: "employment_agreement_prevents_employment",
+      ownerProvidedOnly: true,
     },
   ),
 ] as const satisfies readonly QuestionAliasCatalogEntry[]);
@@ -256,6 +288,10 @@ const questionSemanticCatalog = Object.freeze([
   { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
   { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
   { id: "workday-placeholder-associate-referral", keywordGroups: [["referred", "associate"], ["referred", "employee"]] },
+  { id: "workday-question-current-associate", keywordGroups: [["current", "integer", "associate"], ["currently", "integer", "associate"]] },
+  { id: "workday-question-previously-applied", keywordGroups: [["previously", "applied"], ["applied", "before"]] },
+  { id: "workday-question-essential-functions", keywordGroups: [["able", "perform", "essential", "functions"]] },
+  { id: "workday-question-employment-agreement", keywordGroups: [["nda"], ["non", "compete"], ["company", "agreement", "prevent"]] },
 ] as const);
 
 assertCatalogHasNoCollisions([...questionCatalog, ...questionAliasCatalog]);
@@ -268,14 +304,7 @@ const generatedLearningDefaults = Object.freeze({
   "s1-question-given-name": "Test",
   "s1-question-family-name": "Candidate",
   "s1-question-phone-number": "403-555-0100",
-  "s1-question-work-authorization": true,
-  "s1-question-age-requirement-met": true,
-  "s1-question-sponsorship-required": false,
   "s1-question-country": "Canada",
-  "s1-question-earliest-start-date": "2026-09-01",
-  "workday-question-highest-education": "Bachelor's degree",
-  "workday-question-years-experience": 5,
-  "workday-question-desired-salary": 100000,
 } as const satisfies Partial<Record<CanonicalQuestionId, string | number | boolean>>);
 
 export function generatedLearningDefaultFor(
@@ -330,6 +359,7 @@ const privacyDefaults = Object.freeze([
   "Prefer not to answer",
   "Prefer not to say",
   "I do not wish to provide this information",
+  "I do not want to answer",
   "Decline to self-identify",
 ]);
 
@@ -346,13 +376,16 @@ function answerTypeFor(behavior: UiBehaviorId) {
 export interface QuestionAnswerGuideEntry {
   readonly id: CanonicalQuestionId;
   readonly labels: readonly string[];
+  readonly initialState: "unset";
+  readonly behaviors: readonly UiBehaviorId[];
   readonly answerTypes: readonly ("text" | "boolean" | "single_select" | "date" | "file")[];
-  readonly possibleAnswers: readonly string[];
+  readonly allowedOptions: readonly string[];
+  readonly allowsCustomValue: boolean;
   readonly defaultPolicy:
     | { readonly kind: "owner_required" }
     | { readonly kind: "resume_artifact" }
     | { readonly kind: "configured_template_or_generated_learning_default"; readonly value: string; readonly replaceWithOwnerAnswer: true }
-    | { readonly kind: "privacy_choice_or_first_visible_learning_option"; readonly values: readonly string[]; readonly replaceWithOwnerAnswer: true }
+    | { readonly kind: "privacy_choice_only"; readonly values: readonly string[] }
     | { readonly kind: "generated_learning_default"; readonly value: string | number | boolean; readonly replaceWithOwnerAnswer: true }
     | { readonly kind: "visible_exact_match_only"; readonly value: string | number | boolean };
 }
@@ -371,9 +404,8 @@ function guidePolicy(
   if (source?.kind === "resume") return Object.freeze({ kind: "resume_artifact" });
   if (source?.kind === "neutral_disclosure") {
     return Object.freeze({
-      kind: "privacy_choice_or_first_visible_learning_option",
+      kind: "privacy_choice_only",
       values: privacyDefaults,
-      replaceWithOwnerAnswer: true,
     });
   }
   const generatedDefault = generatedLearningDefaultFor(id);
@@ -385,6 +417,7 @@ function guidePolicy(
     });
   }
   if (source?.kind === "synthetic_placeholder") {
+    if (source.protected) return Object.freeze({ kind: "owner_required" });
     return Object.freeze({ kind: "visible_exact_match_only", value: source.value });
   }
   return Object.freeze({ kind: "owner_required" });
@@ -392,6 +425,17 @@ function guidePolicy(
 
 function createQuestionAnswerGuide(): readonly QuestionAnswerGuideEntry[] {
   const guide = new Map<string, QuestionAnswerGuideEntry>();
+  const unobservedOptionCatalogs = new Set<CanonicalQuestionId>([
+    "s1-question-age-requirement-met",
+    "s1-question-sponsorship-required",
+    "workday-placeholder-associate-referral",
+    "workday-question-current-associate",
+    "workday-question-previously-applied",
+    "workday-placeholder-relative-employment",
+    "workday-question-essential-functions",
+    "workday-question-employment-agreement",
+    "workday-question-veteran-disclosure",
+  ]);
   const rows = [
     ...questionCatalog.map((question) => ({
       id: question.id,
@@ -408,21 +452,42 @@ function createQuestionAnswerGuide(): readonly QuestionAnswerGuideEntry[] {
   ];
   for (const row of rows) {
     const previous = guide.get(row.id);
-    const possibleAnswers = row.source?.kind === "neutral_disclosure"
+    const privacyQuestion = new Set<CanonicalQuestionId>([
+      "workday-question-gender-disclosure",
+      "workday-question-ethnicity-disclosure",
+      "workday-question-veteran-disclosure",
+      "workday-question-disability-disclosure",
+    ]).has(row.id as CanonicalQuestionId);
+    const booleanQuestion = row.source?.kind === "profile" &&
+      new Set<ApplicationProfileFactId>([
+        "work_authorization", "sponsorship_required", "age_requirement_met",
+        "previously_worked_for_organization", "associate_referral",
+        "current_associate", "previously_applied", "relatives_employed",
+        "essential_functions_ability", "employment_agreement_prevents_employment",
+        "terms_consent",
+      ]).has(row.source.factId);
+    const allowedOptions = unobservedOptionCatalogs.has(row.id as CanonicalQuestionId)
+      ? Object.freeze([] as string[])
+      : privacyQuestion
       ? privacyDefaults
-      : row.id === "workday-placeholder-prior-employment" ||
-          row.id === "workday-placeholder-relative-employment" ||
-          row.behaviors.includes("checkbox")
+      : booleanQuestion || row.behaviors.includes("checkbox")
       ? Object.freeze(["Yes", "No"])
       : Object.freeze([] as string[]);
+    const answerTypes = Object.freeze([...new Set([
+      ...(previous?.answerTypes ?? []),
+      ...row.behaviors.map(answerTypeFor),
+    ])]);
     guide.set(row.id, Object.freeze({
       id: row.id as CanonicalQuestionId,
       labels: Object.freeze([...new Set([...(previous?.labels ?? []), ...row.labels])]),
-      answerTypes: Object.freeze([...new Set([
-        ...(previous?.answerTypes ?? []),
-        ...row.behaviors.map(answerTypeFor),
+      initialState: "unset",
+      behaviors: Object.freeze([...new Set([
+        ...(previous?.behaviors ?? []),
+        ...row.behaviors,
       ])]),
-      possibleAnswers,
+      answerTypes,
+      allowedOptions,
+      allowsCustomValue: answerTypes.some((type) => type === "text" || type === "date"),
       defaultPolicy: guidePolicy(row.id as CanonicalQuestionId, row.source),
     }));
   }
@@ -430,3 +495,141 @@ function createQuestionAnswerGuide(): readonly QuestionAnswerGuideEntry[] {
 }
 
 export const questionAnswerGuide = createQuestionAnswerGuide();
+
+export interface RetainedIntakeControlGuideEntry {
+  readonly page:
+    | "profile" | "questionnaire" | "voluntary_disclosures"
+    | "self_identify" | "resume";
+  readonly identity: string | "unresolved";
+  readonly sanitizedLabel: string | null;
+  readonly normalizedQuestionType: DiscoveredIntakeField["normalizedQuestionType"];
+  readonly behavior:
+    | UiBehaviorId
+    | "repeatable"
+    | "search_select";
+  readonly answerType:
+    | "text"
+    | "date"
+    | "boolean"
+    | "single_select"
+    | "file"
+    | "multi_select"
+    | "repeatable";
+  readonly required: boolean | null;
+  readonly initialState: "unset";
+  readonly uiVariant: string;
+  readonly allowedOptions: readonly string[];
+  readonly allowsCustomValue: boolean;
+  readonly constraints: DiscoveredIntakeField["constraints"];
+}
+
+export const retainedIntakeControlGuide: readonly RetainedIntakeControlGuideEntry[] =
+  Object.freeze([
+    retained("profile", "identity.given_name", "First Name", "identity", "text", "text", true, "workday_text_v2"),
+    retained("profile", "identity.middle_name", "Middle Name", "identity", "text", "text", false, "workday_text_v2"),
+    retained("profile", "identity.family_name", "Last Name", "identity", "text", "text", true, "workday_text_v2"),
+    retained("profile", "identity.preferred_name", "Preferred Name", "identity", "text", "text", false, "workday_text_v1"),
+    retained("profile", "identity.has_preferred_name", "I have a preferred name", "identity", "checkbox", "boolean", false, "workday_checkbox_v2", ["Yes", "No"]),
+    retained("profile", "address.line1", "Address Line 1", "address", "text", "text", false, "workday_text_v2"),
+    retained("profile", "address.line2", "Address Line 2", "address", "text", "text", false, "workday_text_v2"),
+    retained("profile", "address.city", "City", "address", "text", "text", false, "workday_text_v2"),
+    retained("profile", "address.country", "Country", "address", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("profile", "address.region", "Province or Territory", "address", "search_select", "single_select", false, "workday_search_select_v2"),
+    retained("profile", "address.postal_code", "Postal Code", "address", "text", "text", false, "workday_text_v2"),
+    retained("profile", "contact.email", "Email", "identity", "text", "text", true, "workday_text_v2"),
+    retained("profile", "phone.device_type", "Phone Device Type", "phone", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("profile", "phone.country_code", "Country Phone Code", "phone", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("profile", "phone.number", "Phone Number", "phone", "text", "text", true, "workday_phone_v2"),
+    retained("profile", "phone.extension", "Phone Extension", "phone", "text", "text", false, "workday_text_v2"),
+    retained("profile", "source.how_did_you_hear", "How Did You Hear About Us?", "application_source", "search_select", "single_select", true, "workday_source_select_v1"),
+    retained("profile", "employment.previously_worked_for_organization", "Have you previously worked for our company (this does not apply to contingent/contract work)?", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
+    retained("profile", "skills.values", "Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
+    retained("profile", "social.linkedin", "LinkedIn", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("profile", "social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("profile", "website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
+    retained("questionnaire", "age_requirement_met", "Do you certify that you are 18 years of age or older?", "legal", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "associate_referral", "Have you been referred by an Integer associate?", "employment", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "current_associate", "Are you a current Integer associate (this does not apply to contingent/contract work)?", "employment", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "previously_applied", "Have you previously applied for a position with our company?", "employment", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "relatives_employed", "Do you have any relatives currently employed by Integer?", "employment", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "sponsorship_required", "Do you now, or will you in the future, require sponsorship to work legally for Integer in the U.S.?", "authorization", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "essential_functions_ability", "Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job?", "legal", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "employment_agreement_prevents_employment", "Are you currently subject to any company agreement (NDA, Non-compete, etc.) that would prevent you from working with INTEGER Holdings Corporation?", "legal", "select", "single_select", null, "workday_select_v1"),
+    retained("questionnaire", "earliest_start_date", "When are you available to start?", "availability", "date", "date", null, "workday_date_v1", [], { displayFormat: "MM/DD/YYYY" }),
+    retained("questionnaire", "salary_expectations", "Salary expectations", "compensation", "textarea", "text", null, "workday_textarea_v1"),
+    retained("voluntary_disclosures", "veteran_disclosure", "Select Veteran Status", "demographic", "select", "single_select", true, "workday_select_v1"),
+    retained("voluntary_disclosures", "terms_consent", "Yes, I have read and consent to the terms and conditions", "legal", "checkbox", "boolean", true, "workday_checkbox_v2", ["Yes", "No"]),
+    retained("self_identify", "self_identification_language", "Language", "demographic", "select", "single_select", null, "workday_select_v1"),
+    retained("self_identify", "self_identification_name", "Name", "identity", "text", "text", null, "workday_text_v1"),
+    retained("self_identify", "unresolved", null, "unknown", "text", "text", null, "workday_text_v1"),
+    retained("self_identify", "self_identification_date", "Date", "demographic", "date", "date", null, "workday_date_v1", [], { displayFormat: "MM/DD/YYYY" }),
+    retained(
+      "self_identify",
+      "disability_disclosure",
+      "Please check one of the boxes below",
+      "demographic",
+      "radio",
+      "single_select",
+      null,
+      "workday_radio_v1",
+      [
+        "Yes, I have a disability, or have had one in the past",
+        "No, I do not have a disability and have not had one in the past",
+        "I do not want to answer",
+      ],
+    ),
+    retained("resume", "experience", "Work Experience Add", "employment", "repeatable", "repeatable", false, "workday_repeatable_v1"),
+    retained("resume", "education", "Education Add", "education", "repeatable", "repeatable", false, "workday_repeatable_v1"),
+    retained("resume", "skills", "Type to Add Skills", "skill", "search_select", "multi_select", false, "workday_search_select_v1"),
+    retained("resume", "resume", "Upload a file (5MB max)", "attachment", "file_upload", "file", false, "workday_resume_file_upload_v1", [], { maxBytes: 5 * 1024 * 1024 }),
+    retained("resume", "websites", "Websites Add", "website", "repeatable", "repeatable", false, "workday_repeatable_v1"),
+  ]);
+
+export function retainedDiscoveredIntakeFields(): readonly DiscoveredIntakeField[] {
+  return Object.freeze(retainedIntakeControlGuide.map((field, index) => Object.freeze({
+    discoveredFieldId: `retained-${String(index + 1).padStart(2, "0")}`,
+    page: field.page,
+    identity: field.identity,
+    sanitizedLabel: field.sanitizedLabel,
+    normalizedQuestionType: field.normalizedQuestionType,
+    behavior: field.behavior,
+    answerType: field.answerType,
+    uiVariant: field.uiVariant,
+    required: field.required,
+    allowedOptions: Object.freeze([...field.allowedOptions]),
+    allowsCustomValue: field.allowsCustomValue,
+    constraints: Object.freeze({ ...field.constraints }),
+    answer: Object.freeze({ kind: "profile_answer_missing" as const }),
+  })));
+}
+
+function retained(
+  page: RetainedIntakeControlGuideEntry["page"],
+  identity: string,
+  sanitizedLabel: string | null,
+  normalizedQuestionType: RetainedIntakeControlGuideEntry["normalizedQuestionType"],
+  behavior: RetainedIntakeControlGuideEntry["behavior"],
+  answerType: RetainedIntakeControlGuideEntry["answerType"],
+  required: boolean | null,
+  uiVariant: string,
+  allowedOptions: readonly string[] = [],
+  constraints: Partial<DiscoveredIntakeField["constraints"]> = {},
+): RetainedIntakeControlGuideEntry {
+  return Object.freeze({
+    page,
+    identity,
+    sanitizedLabel,
+    normalizedQuestionType,
+    behavior,
+    answerType,
+    required,
+    initialState: "unset",
+    uiVariant,
+    allowedOptions: Object.freeze([...allowedOptions]),
+    allowsCustomValue: answerType === "text" || answerType === "date",
+    constraints: Object.freeze({
+      maxBytes: constraints.maxBytes ?? null,
+      displayFormat: constraints.displayFormat ?? null,
+    }),
+  });
+}

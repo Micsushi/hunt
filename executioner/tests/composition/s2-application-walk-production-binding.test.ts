@@ -33,6 +33,8 @@ import {
   useResumeArtifactUpload,
   type ResolvedResumeArtifact,
 } from "../../src/contracts/index.ts";
+import { applicationProfileFactIds as profileFactIds } from
+  "../../src/profile/application-profile.ts";
 
 test("production binding resolves opaque owner sources without value leakage", async () => {
   const fixture = liveFixture();
@@ -427,17 +429,23 @@ function liveFixture() {
       profileId: "profile-owner-approved",
       revision: 3,
       facts: [
-        { factId: "given_name", value: "Ada", provenance: "owner_provided" },
-        { factId: "configured_narrative", value: "I build dependable systems.", provenance: "configured_template" },
+        { factId: "given_name", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
+        { factId: "configured_narrative", value: "I build dependable systems.", provenance: "configured_template", lane: "live_owner_fact" },
       ],
+      unsetFactIds: profileFactIds.filter((factId) =>
+        factId !== "given_name" && factId !== "configured_narrative"
+      ),
+      discoveredFields: [],
     },
     profilePlan: {
+      mode: "live",
       pageType: "profile",
-      fields: [{
+fields: [{
         fieldId: "identity.given_name",
         questionType: "identity",
         answerType: "text",
-        answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+        allowedOptions: [],
+        answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
       }],
       repeatables: [],
     },

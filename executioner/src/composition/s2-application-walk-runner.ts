@@ -9,6 +9,7 @@ import {
   type FieldObservation,
   type QuestionId,
 } from "../contracts/index.ts";
+import type { AnswerProvenanceLane } from "../profile/application-profile.ts";
 import {
   s2StableErrorPolicy,
   type S2StableErrorCode,
@@ -69,11 +70,37 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
   readonly configSha256: string;
   readonly questionLearning?: {
     record(input: {
+      readonly operationId: string;
       readonly questionId: QuestionId;
       readonly field: FieldObservation;
       readonly intent: FieldIntent;
+      readonly lane: AnswerProvenanceLane;
       readonly protectedCategory: string | null;
       readonly generatedDefault: boolean;
+    }): void;
+    recordAttempt(input: {
+      readonly operationId: string;
+      readonly questionId: QuestionId;
+      readonly field: FieldObservation;
+      readonly intent: FieldIntent;
+      readonly lane: AnswerProvenanceLane;
+      readonly protectedCategory: string | null;
+      readonly generatedDefault: boolean;
+    }): void;
+    recordUnset(input: {
+      readonly questionId: QuestionId;
+      readonly field: FieldObservation;
+    }): void;
+    recordFailure(input: {
+      readonly operationId: string;
+      readonly code: string;
+      readonly retryable: boolean;
+      readonly stage: "driver" | "verification";
+    }): void;
+    monitorAck(input: {
+      readonly operationId: string;
+      readonly attempt: number;
+      readonly moment: "before_mutation" | "after_readback";
     }): void;
     write(): string | null;
   };
@@ -158,6 +185,7 @@ export function createStage2ApplicationWalkProductionBinding(
       try {
         const questionLearning = createQuestionAnswerLearningCapture({
           root: owner.roots.evidence.path,
+          mode: "live",
           sensitiveValues: resolvedOwnerSources.sensitiveValues,
         });
         runtime = await dependencies.runtime.bind({

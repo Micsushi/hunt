@@ -13,9 +13,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import {
-  useResumeArtifactUpload,
-} from "../../src/contracts/index.ts";
+import { useResumeArtifactUpload } from "../../src/contracts/index.ts";
+import { applicationProfileFactIds as profileFactIds } from
+  "../../src/profile/application-profile.ts";
 import {
   FileBackedStage2ApplicationOwnerSourceResolver,
   type Stage2ApplicationOwnerSourceRequest,
@@ -52,12 +52,13 @@ test("resolves one immutable resume snapshot and authoritative profile/question 
     }, AbortSignal.any([]));
     assert.deepEqual(answer, {
       ok: true,
-      value: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+      value: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
     });
     assert.deepEqual(resolved.narrative.resolve("s1-question-configured-narrative"), {
       text: "I build dependable systems.",
       revision: "narrative-v1",
       provenance: "configured_template",
+      lane: "live_owner_fact",
     });
 
     writeFileSync(join(fixture.runtimeRoot, "application-profile.json"), "{}");
@@ -92,7 +93,7 @@ test("admits an omitted narrative fact as unresolved owner input", async () => {
     manifest.profile.facts = manifest.profile.facts.filter(
       ({ factId }: { readonly factId: string }) => factId !== "configured_narrative",
     );
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
     });
@@ -127,16 +128,18 @@ test("admits unresolved reusable profile owner inputs without substantive defaul
         fieldId: "source.how_did_you_hear",
         questionType: "application_source",
         answerType: "option",
+        allowedOptions: [],
         answer: { kind: "profile_answer_missing" },
       },
       {
         fieldId: "employment.previously_worked_for_organization",
         questionType: "prior_employment",
         answerType: "option",
+        allowedOptions: ["Yes", "No"],
         answer: { kind: "profile_answer_missing" },
       },
     );
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
 
     const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
@@ -166,12 +169,27 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
     writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
     const manifestPath = join(fixture.runtimeRoot, "application-profile.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.profile.facts.push(
+      {
+        factId: "application_source",
+        value: "company-website",
+        provenance: "owner_provided",
+        lane: "live_owner_fact",
+      },
+      {
+        factId: "previously_worked_for_organization",
+        value: false,
+        provenance: "owner_provided",
+        lane: "live_owner_fact",
+      },
+    );
     manifest.profilePlan.fields.push(
       {
         fieldId: "source.how_did_you_hear",
         questionType: "application_source",
         answerType: "option",
-        answer: { kind: "answered", value: "company-website", provenance: "owner_provided" },
+        allowedOptions: ["Company Website"],
+        answer: { kind: "answered", value: "company-website", provenance: "owner_provided", lane: "live_owner_fact" },
         optionMapping: {
           canonicalValue: "company-website",
           visibleOption: "Company Website",
@@ -182,7 +200,8 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
         fieldId: "employment.previously_worked_for_organization",
         questionType: "prior_employment",
         answerType: "option",
-        answer: { kind: "answered", value: "false", provenance: "owner_provided" },
+        allowedOptions: ["Yes", "No"],
+        answer: { kind: "answered", value: "false", provenance: "owner_provided", lane: "live_owner_fact" },
         optionMapping: {
           canonicalValue: "false",
           visibleOption: "No",
@@ -190,7 +209,7 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
         },
       },
     );
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
     });
@@ -202,7 +221,7 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
     assert.deepEqual(resolved.profilePlan.fields.slice(-2), manifest.profilePlan.fields.slice(-2));
 
     manifest.profilePlan.fields.at(-1).answer.provenance = "resume_verified";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     await assert.rejects(
       resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
       exactDenial,
@@ -212,7 +231,7 @@ test("admits only exact owner-provided values for reusable profile owner inputs"
   }
 });
 
-test("admits only the application source and exact region-derived country as journey-derived settings", async () => {
+test("rejects journey-derived application source and admits only owner-bound derived country", async () => {
   const fixture = ownerFixture();
   try {
     writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
@@ -222,10 +241,12 @@ test("admits only the application source and exact region-derived country as jou
       fieldId: "source.how_did_you_hear",
       questionType: "application_source",
       answerType: "option",
+      allowedOptions: ["Company Website"],
       answer: {
         kind: "answered",
         value: "company-website",
         provenance: "journey_derived",
+        lane: "live_owner_fact",
       },
       optionMapping: {
         canonicalValue: "company-website",
@@ -233,37 +254,36 @@ test("admits only the application source and exact region-derived country as jou
         provenance: "visible_option",
       },
     });
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
     });
 
-    const resolved = await resolver.resolve(
-      request(fixture.runtimeRoot),
-      AbortSignal.any([]),
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
     );
-    const derived = resolved.profilePlan.fields.at(-1)?.answer;
-    assert.equal(derived?.kind, "answered");
-    if (derived?.kind !== "answered") return;
-    assert.equal(derived.provenance, "journey_derived");
+    manifest.profilePlan.fields.pop();
 
     manifest.profile.facts.push({
       factId: "region",
       value: "Alberta",
       provenance: "owner_provided",
+      lane: "live_owner_fact",
     });
     manifest.profilePlan.fields.push({
       fieldId: "address.country",
       questionType: "address",
       answerType: "option",
-      answer: { kind: "answered", value: "CA", provenance: "journey_derived" },
+      allowedOptions: ["Canada"],
+      answer: { kind: "answered", value: "CA", provenance: "journey_derived", lane: "live_owner_fact" },
       optionMapping: {
         canonicalValue: "CA",
         visibleOption: "Canada",
         provenance: "visible_option",
       },
     });
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const countryResolved = await resolver.resolve(
       request(fixture.runtimeRoot),
       AbortSignal.any([]),
@@ -274,20 +294,31 @@ test("admits only the application source and exact region-derived country as jou
     manifest.profilePlan.fields.at(-1).answer.value = "US";
     manifest.profilePlan.fields.at(-1).optionMapping.canonicalValue = "US";
     manifest.profilePlan.fields.at(-1).optionMapping.visibleOption = "United States";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     await assert.rejects(
       resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
       exactDenial,
     );
     manifest.profilePlan.fields.pop();
 
-    manifest.profilePlan.fields.at(-1).fieldId =
-      "employment.previously_worked_for_organization";
-    manifest.profilePlan.fields.at(-1).questionType = "prior_employment";
-    manifest.profilePlan.fields.at(-1).answer.value = "false";
-    manifest.profilePlan.fields.at(-1).optionMapping.canonicalValue = "false";
-    manifest.profilePlan.fields.at(-1).optionMapping.visibleOption = "No";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    manifest.profilePlan.fields.push({
+      fieldId: "employment.previously_worked_for_organization",
+      questionType: "prior_employment",
+      answerType: "option",
+      allowedOptions: ["Yes", "No"],
+      answer: {
+        kind: "answered",
+        value: "false",
+        provenance: "journey_derived",
+        lane: "live_owner_fact",
+      },
+      optionMapping: {
+        canonicalValue: "false",
+        visibleOption: "No",
+        provenance: "visible_option",
+      },
+    });
+    writeOwnerManifest(manifestPath, manifest);
     await assert.rejects(
       resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
       exactDenial,
@@ -297,7 +328,7 @@ test("admits only the application source and exact region-derived country as jou
   }
 });
 
-test("admits explicit generated defaults without promoting them to owner facts", async () => {
+test("rejects every generated default from the production owner source", async () => {
   const fixture = ownerFixture();
   try {
     writeSources(fixture.runtimeRoot, Buffer.from("%PDF-1.7\nowner resume\n", "utf8"));
@@ -308,7 +339,8 @@ test("admits explicit generated defaults without promoting them to owner facts",
         fieldId: "employment.previously_worked_for_organization",
         questionType: "prior_employment",
         answerType: "option",
-        answer: { kind: "answered", value: "false", provenance: "generated_default" },
+        allowedOptions: ["Yes", "No"],
+        answer: { kind: "answered", value: "false", provenance: "generated_default", lane: "synthetic_test_default" },
         optionMapping: {
           canonicalValue: "false",
           visibleOption: "No",
@@ -319,18 +351,19 @@ test("admits explicit generated defaults without promoting them to owner facts",
         fieldId: "identity.has_preferred_name",
         questionType: "identity",
         answerType: "boolean",
-        answer: { kind: "answered", value: "false", provenance: "generated_default" },
+        allowedOptions: ["true", "false"],
+        answer: { kind: "answered", value: "false", provenance: "generated_default", lane: "synthetic_test_default" },
       },
     );
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
 
-    const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
+    const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
-    }).resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
-    assert.deepEqual(resolved.profilePlan.fields.slice(-2).map(({ answer }) => answer), [
-      { kind: "answered", value: "false", provenance: "generated_default" },
-      { kind: "answered", value: "false", provenance: "generated_default" },
-    ]);
+    });
+    await assert.rejects(
+      resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
+      exactDenial,
+    );
   } finally {
     fixture.cleanup();
   }
@@ -346,19 +379,22 @@ test("admits a contact email field only when it matches the authoritative email 
       factId: "email_address",
       value: "owner@example.invalid",
       provenance: "owner_provided",
+      lane: "live_owner_fact",
     };
     manifest.profile.facts.push(email);
     manifest.profilePlan.fields.push({
       fieldId: "contact.email",
       questionType: "identity",
       answerType: "text",
+      allowedOptions: [],
       answer: {
         kind: "answered",
         value: email.value,
         provenance: email.provenance,
+        lane: "live_owner_fact",
       },
     });
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
     });
@@ -367,7 +403,7 @@ test("admits a contact email field only when it matches the authoritative email 
     assert.equal(resolved.profilePlan.fields.at(-1)?.fieldId, "contact.email");
 
     manifest.profilePlan.fields.at(-1).answer.value = "different@example.invalid";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     await assert.rejects(
       resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
       exactDenial,
@@ -390,9 +426,10 @@ test("admits Unicode plain text and an exact normal email address", async () => 
       factId: "email_address",
       value: validEmail,
       provenance: "owner_provided",
+      lane: "live_owner_fact",
     });
     manifest.profilePlan.fields[0].answer.value = "Zoë 李";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     const resolver = new FileBackedStage2ApplicationOwnerSourceResolver({
       forbiddenRoots: [resolve("..")],
     });
@@ -409,6 +446,7 @@ test("admits Unicode plain text and an exact normal email address", async () => 
         kind: "answered",
         value: validEmail,
         provenance: "owner_provided",
+        lane: "live_owner_fact",
       },
     });
   } finally {
@@ -430,7 +468,7 @@ test("denies TeX markup and control characters in textual profile facts", async 
       manifest.profile.facts.find(
         ({ factId }: { readonly factId: string }) => factId === "configured_narrative",
       ).value = value;
-      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeOwnerManifest(manifestPath, manifest);
 
       await assert.rejects(
         resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
@@ -457,8 +495,9 @@ test("denies TeX markup and control characters in profile-plan browser answers",
         kind: "answered",
         value,
         provenance: "resume_verified",
+        lane: "live_owner_fact",
       };
-      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeOwnerManifest(manifestPath, manifest);
 
       await assert.rejects(
         resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
@@ -474,13 +513,14 @@ test("denies TeX markup and control characters in profile-plan browser answers",
       kind: "answered",
       value: "Canada",
       provenance: "resume_verified",
+      lane: "live_owner_fact",
     };
     manifest.profilePlan.fields[0].optionMapping = {
       canonicalValue: "Canada",
       visibleOption: "Canada\\textbf",
       provenance: "visible_option",
     };
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeOwnerManifest(manifestPath, manifest);
     await assert.rejects(
       resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
       exactDenial,
@@ -512,8 +552,9 @@ test("denies malformed email profile facts", async () => {
         factId: "email_address",
         value,
         provenance: "owner_provided",
+        lane: "live_owner_fact",
       });
-      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeOwnerManifest(manifestPath, manifest);
 
       await assert.rejects(
         resolver.resolve(request(fixture.runtimeRoot), AbortSignal.any([])),
@@ -631,6 +672,21 @@ function request(runtimeRoot: string): Stage2ApplicationOwnerSourceRequest {
   return { ...ids, runtimeRoot };
 }
 
+function writeOwnerManifest(
+  path: string,
+  manifest: Record<string, any>,
+): void {
+  const answered = new Set(
+    (manifest.profile.facts as readonly { readonly factId: string }[])
+      .map(({ factId }) => factId),
+  );
+  manifest.profile.unsetFactIds = profileFactIds.filter((factId) =>
+    !answered.has(factId)
+  );
+  manifest.profile.discoveredFields ??= [];
+  writeFileSync(path, JSON.stringify(manifest));
+}
+
 function writeSources(runtimeRoot: string, resumeBytes: Buffer): void {
   const sha256 = createHash("sha256").update(resumeBytes).digest("hex");
   writeFileSync(join(runtimeRoot, "application-resume.pdf"), resumeBytes);
@@ -649,21 +705,33 @@ function writeSources(runtimeRoot: string, resumeBytes: Buffer): void {
       profileId: "profile-owner-approved",
       revision: 3,
       facts: [
-        { factId: "given_name", value: "Ada", provenance: "owner_provided" },
+        {
+          factId: "given_name",
+          value: "Ada",
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
         {
           factId: "configured_narrative",
           value: "I build dependable systems.",
           provenance: "configured_template",
+          lane: "live_owner_fact",
         },
       ],
+      unsetFactIds: profileFactIds.filter((factId) =>
+        factId !== "given_name" && factId !== "configured_narrative"
+      ),
+      discoveredFields: [],
     },
     profilePlan: {
+      mode: "live",
       pageType: "profile",
-      fields: [{
+fields: [{
         fieldId: "identity.given_name",
         questionType: "identity",
         answerType: "text",
-        answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+        allowedOptions: [],
+        answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
       }],
       repeatables: [],
     },

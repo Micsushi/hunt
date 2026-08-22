@@ -9,6 +9,7 @@ export interface ConfiguredNarrativeProvider {
         readonly text: string;
         readonly revision: string;
         readonly provenance: "configured_template";
+        readonly lane: "live_owner_fact";
       }
     | undefined;
 }
@@ -37,6 +38,7 @@ export function createConfiguredNarrativeProvider(config: {
     text: config.template,
     revision: config.revision,
     provenance: "configured_template" as const,
+    lane: "live_owner_fact" as const,
   });
   return Object.freeze({
     resolve(questionId: string) {

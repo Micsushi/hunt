@@ -14,7 +14,12 @@ import {
 const answered = (
   value: string,
   provenance: "owner_provided" | "resume_verified" = "owner_provided",
-) => ({ kind: "answered" as const, value, provenance });
+) => ({
+  kind: "answered" as const,
+  value,
+  provenance,
+  lane: "live_owner_fact" as const,
+});
 
 const field = (
   fieldId: string,
@@ -27,6 +32,7 @@ const field = (
   fieldId,
   questionType,
   answerType,
+  allowedOptions: visibleOption === undefined ? [] : [visibleOption],
   answer: answered(value, provenance),
   ...(visibleOption === undefined
     ? {}
@@ -55,6 +61,7 @@ const control = (
 
 test("fills identity, address, phone, dates, and search-selects with independent verification", async () => {
   const plan: ProfilePagePlan = {
+    mode: "live",
     pageType: "contact",
     fields: [
       field("identity.given_name", "identity", "text", "Ada"),
@@ -95,6 +102,7 @@ test("fills identity, address, phone, dates, and search-selects with independent
       uiBehavior: "text",
       uiVariant: "workday_text_v1",
       provenance: "owner_provided",
+      lane: "live_owner_fact",
     },
     {
       fieldId: "address.country",
@@ -103,6 +111,7 @@ test("fills identity, address, phone, dates, and search-selects with independent
       uiBehavior: "search_select",
       uiVariant: "workday_search_select_v1",
       provenance: "owner_provided",
+      lane: "live_owner_fact",
       optionMappingProvenance: "visible_option",
     },
     {
@@ -112,6 +121,7 @@ test("fills identity, address, phone, dates, and search-selects with independent
       uiBehavior: "phone",
       uiVariant: "workday_phone_v1",
       provenance: "owner_provided",
+      lane: "live_owner_fact",
     },
     {
       fieldId: "experience.start_date",
@@ -120,6 +130,7 @@ test("fills identity, address, phone, dates, and search-selects with independent
       uiBehavior: "date",
       uiVariant: "workday_date_v1",
       provenance: "resume_verified",
+      lane: "live_owner_fact",
     },
   ]);
   assert.ok(port.inspections >= port.commits.length + 1);
@@ -128,11 +139,13 @@ test("fills identity, address, phone, dates, and search-selects with independent
 test("stops on a missing required fact before browser inspection or mutation", async () => {
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [{
       fieldId: "identity.family_name",
       questionType: "identity",
       answerType: "text",
+      allowedOptions: [],
       answer: { kind: "profile_answer_missing" },
     }],
     repeatables: [],
@@ -149,6 +162,7 @@ test("stops on a missing required fact before browser inspection or mutation", a
 
 test("accepts a tenant CELL readback for the canonical Mobile phone device type", async () => {
   const plan: ProfilePagePlan = {
+    mode: "live",
     pageType: "profile",
     fields: [field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile")],
     repeatables: [],
@@ -178,6 +192,7 @@ test("retries a transient read-only inspection after a committed field", async (
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [field("identity.given_name", "identity", "text", "Ada")],
     repeatables: [],
@@ -215,11 +230,13 @@ for (const missing of [
     });
 
     assert.deepEqual(await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
       fields: [{
         fieldId: missing.fieldId,
         questionType: missing.questionType,
         answerType: "option",
+        allowedOptions: missing.questionType === "prior_employment" ? ["Yes", "No"] : [],
         answer: { kind: "profile_answer_missing" },
       }],
       repeatables: [],
@@ -233,21 +250,67 @@ for (const missing of [
   });
 }
 
+test("a generated prior-employment default requires owner input before mutation", async () => {
+  const fieldId = "employment.previously_worked_for_organization";
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control(
+      fieldId,
+      "radio_group",
+      null,
+      "workday_previous_worker_radio_v1",
+    )],
+    rows: [],
+  });
+
+  assert.deepEqual(await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      fieldId,
+      questionType: "prior_employment",
+      answerType: "option",
+      allowedOptions: ["Yes", "No"],
+      answer: {
+        kind: "answered",
+        value: "false",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "false",
+        visibleOption: "No",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([])), {
+    kind: "blocked",
+    code: "profile_answer_provenance_denied",
+    fieldId,
+  });
+  assert.equal(port.inspections, 1);
+  assert.equal(port.commits.length, 0);
+});
+
 test("unresolved tenant owner inputs do not block a tenant where their controls are absent", async () => {
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [
       {
         fieldId: "source.how_did_you_hear",
         questionType: "application_source",
         answerType: "option",
+        allowedOptions: [],
         answer: { kind: "profile_answer_missing" },
       },
       {
         fieldId: "employment.previously_worked_for_organization",
         questionType: "prior_employment",
         answerType: "option",
+        allowedOptions: ["Yes", "No"],
         answer: { kind: "profile_answer_missing" },
       },
     ],
@@ -261,6 +324,7 @@ test("unresolved tenant owner inputs do not block a tenant where their controls 
 test("a derived email answer is skipped when the tenant renders email as display-only", async () => {
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [field("contact.email", "identity", "text", "owner-email-redacted")],
     repeatables: [],
@@ -291,6 +355,7 @@ test("maps exact owner source and prior-employment options", async () => {
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [
       field(
@@ -320,7 +385,7 @@ test("maps exact owner source and prior-employment options", async () => {
   ]);
 });
 
-test("accepts a journey-derived application source but no derived employment fact", async () => {
+test("rejects journey-derived source and employment answers in live mode", async () => {
   const source = field(
     "source.how_did_you_hear",
     "application_source",
@@ -331,7 +396,11 @@ test("accepts a journey-derived application source but no derived employment fac
   );
   const derivedSource = {
     ...source,
-    answer: { ...source.answer, provenance: "journey_derived" as const },
+    answer: {
+      ...source.answer,
+      provenance: "journey_derived" as const,
+      lane: "synthetic_test_default" as const,
+    },
   };
   const sourcePort = new MemoryProfilePage({
     pageType: "profile",
@@ -339,12 +408,14 @@ test("accepts a journey-derived application source but no derived employment fac
     rows: [],
   });
 
-  const accepted = await completeWorkdayProfilePage({
+  const sourceResult = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [derivedSource],
     repeatables: [],
   }, sourcePort, AbortSignal.any([]));
-  assert.equal(accepted.kind, "verified", JSON.stringify(accepted));
+  assert.equal(sourceResult.kind, "blocked", JSON.stringify(sourceResult));
+  assert.equal(sourcePort.commits.length, 0);
 
   const prior = field(
     "employment.previously_worked_for_organization",
@@ -355,6 +426,7 @@ test("accepts a journey-derived application source but no derived employment fac
     "No",
   );
   const rejected = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [{
       ...prior,
@@ -362,13 +434,14 @@ test("accepts a journey-derived application source but no derived employment fac
         kind: "answered",
         value: "false",
         provenance: "journey_derived" as const,
+        lane: "synthetic_test_default" as const,
       },
     }],
     repeatables: [],
   }, new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] }), AbortSignal.any([]));
   assert.deepEqual(rejected, {
     kind: "blocked",
-    code: "profile_plan_invalid",
+    code: "profile_answer_provenance_denied",
     fieldId: "employment.previously_worked_for_organization",
   });
 });
@@ -389,6 +462,7 @@ test("semantically correct option prefills are verified without mutation", async
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [
       field("address.country", "address", "option", "CA", "owner_provided", "Canada"),
@@ -415,6 +489,7 @@ test("rejects a driver success when fresh visible readback does not match", asyn
     rows: [],
   }, { ignoreCommits: true });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [field("identity.family_name", "identity", "text", "Lovelace")],
     repeatables: [],
@@ -439,6 +514,7 @@ test("continues after an optional tenant widget rejects its configured default",
     rows: [],
   }, { ignoreCommits: true });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [field(
       "education.field_of_study",
@@ -481,6 +557,7 @@ test("continues a repeatable row after an optional tenant widget rejects its def
     repeatableSections: ["education"],
   }, { ignoreCommits: true });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -508,6 +585,7 @@ test("reconciles repeatables without deleting foreign rows or creating duplicate
     field("skills.name", "skill", "option", "TypeScript", "resume_verified", "TypeScript"),
   ];
   const plan: ProfilePagePlan = {
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [
@@ -550,6 +628,7 @@ test("reconciles repeatables without deleting foreign rows or creating duplicate
           uiBehavior: "search_select",
           uiVariant: "workday_search_select_v1",
           provenance: "resume_verified",
+          lane: "live_owner_fact",
           optionMappingProvenance: "visible_option",
           rowKey: "skill-1",
         },
@@ -588,6 +667,7 @@ function verifiedRow(
     uiBehavior,
     uiVariant: `workday_${uiBehavior}_v1`,
     provenance: "resume_verified",
+    lane: "live_owner_fact",
     rowKey,
   } as const;
 }
@@ -604,6 +684,7 @@ test("keeps classification layers independent and stops on an unreviewed UI vari
     rows: [],
   });
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [field("skills.name", "skill", "option", "TypeScript", "resume_verified", "TypeScript")],
     repeatables: [],
@@ -625,12 +706,19 @@ test("rejects invented provenance at runtime before inspecting the page", async 
     rows: [],
   });
   const plan = {
+    mode: "live",
     pageType: "profile",
     fields: [{
       fieldId: "identity.given_name",
       questionType: "identity",
       answerType: "text",
-      answer: { kind: "answered", value: "Ada", provenance: "invented" },
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: "Ada",
+        provenance: "invented",
+        lane: "live_owner_fact",
+      },
     }],
     repeatables: [],
   } as unknown as ProfilePagePlan;
@@ -654,6 +742,7 @@ test("stops before mutation when an observed required field has no authoritative
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "contact",
       fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
@@ -676,6 +765,7 @@ test("classifies an unknown required profile control without exposing its identi
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "contact",
       fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
@@ -717,6 +807,7 @@ test("rechecks required controls revealed after a scalar commit before the next 
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "contact",
       fields: [
         field("identity.given_name", "identity", "text", "Ada"),
@@ -742,6 +833,7 @@ test("rechecks required controls revealed after a scalar commit before the next 
 test("rejects invalid runtime classifications and non-opaque repeatable keys", async () => {
   const cases = [
     {
+      mode: "live",
       pageType: "profile",
       fields: [{
         fieldId: "identity.given_name",
@@ -752,6 +844,7 @@ test("rejects invalid runtime classifications and non-opaque repeatable keys", a
       repeatables: [],
     },
     {
+      mode: "live",
       pageType: "profile",
       fields: [],
       repeatables: [{
@@ -783,6 +876,7 @@ test("reports exact cancellation when the signal aborts during a field effect", 
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
       fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
@@ -811,6 +905,7 @@ test("stops when a repeatable row exposes an unplanned required subfield", async
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
       fields: [],
       repeatables: [{
@@ -852,6 +947,7 @@ test("preflights required repeatable fields before cleaning any owned row", asyn
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
       fields: [],
       repeatables: [{
@@ -895,6 +991,7 @@ test("binds heterogeneous repeatable requirements only to each selected row", as
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -938,6 +1035,7 @@ test("reuses one semantic job when the tenant omits an optional subfield", async
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -1000,6 +1098,7 @@ test("checks a current role and does not invent an end date after Workday remove
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -1027,6 +1126,7 @@ test("defers repeatable data when the current UI state has no matching section",
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -1063,6 +1163,7 @@ test("rechecks required controls revealed by a repeatable add before filling the
 
   assert.deepEqual(
     await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
       fields: [],
       repeatables: [{
@@ -1102,6 +1203,7 @@ test("fills the tenant-provided blank first repeatable row before adding another
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -1135,6 +1237,7 @@ test("accepts an unpadded Workday month readback for a zero-padded plan month", 
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [],
     repeatables: [{
@@ -1177,6 +1280,7 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
   }, { rowTemplates: { websites: [portfolio] } });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [linkedin],
     repeatables: [{
@@ -1213,6 +1317,7 @@ test("canonicalizes a bare LinkedIn host for Workday URL validation", async () =
   });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [linkedin],
     repeatables: [],
@@ -1245,6 +1350,7 @@ test("falls back from an absent dedicated social control to a generic website ro
   }, { rowTemplates: { websites: [generic] } });
 
   const result = await completeWorkdayProfilePage({
+    mode: "live",
     pageType: "profile",
     fields: [linkedin],
     repeatables: [],

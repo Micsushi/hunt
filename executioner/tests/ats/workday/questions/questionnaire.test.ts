@@ -12,7 +12,6 @@ import {
   optionId,
   upstreamProfileId,
   upstreamResumeId,
-  type AnswerResolver,
   type BrowserSessionId,
   type FieldDriver,
   type FieldObservation,
@@ -20,6 +19,8 @@ import {
   type OperationId,
   type ProfileQuery,
 } from "../../../../src/contracts/index.ts";
+import type { ApplicationAnswerResolver } from
+  "../../../../src/form/answers/application-types.ts";
 import type {
   ClassificationLayer,
   SanitizedStructuralObservationV1,
@@ -86,6 +87,7 @@ const countryField = field(
 
 function request(fields: readonly FieldObservation[]) {
   return {
+    mode: "live" as const,
     journeyId: journeyId("journey_questionnaire_fixture_1"),
     sessionId: "browser_session_questionnaire_fixture_1" as BrowserSessionId,
     pageId: browserPageId("page-questionnaire"),
@@ -109,7 +111,7 @@ function request(fields: readonly FieldObservation[]) {
 
 function dependencies(options: {
   readonly profile?: ProfileQuery;
-  readonly resolver?: AnswerResolver;
+    readonly resolver?: ApplicationAnswerResolver;
   readonly driver?: FieldDriver;
   readonly verifier?: FieldVerifier;
   readonly observation?: SanitizedStructuralObservationV1;
@@ -122,11 +124,22 @@ function dependencies(options: {
       const values = {
         work_authorization: false,
         country: "United States",
+        configured_narrative: "Exact configured interest statement.",
       } as const;
       const value = values[input.factId as keyof typeof values];
       return value === undefined
         ? { ok: true, value: { kind: "profile_answer_missing" } }
-        : { ok: true, value: { kind: "answered", value, provenance: "owner_provided" } };
+        : {
+            ok: true,
+            value: {
+              kind: "answered",
+              value,
+              provenance: input.factId === "configured_narrative"
+                ? "configured_template"
+                : "owner_provided",
+              lane: "live_owner_fact",
+            },
+          };
     },
   };
   const driver: FieldDriver = options.driver ?? {
@@ -193,6 +206,7 @@ test("required narrative and fixed choices resolve canonically and independently
           fieldId: narrativeField.fieldId,
           questionId: "s1-question-configured-narrative",
           provenance: "configured_template",
+          lane: "live_owner_fact",
           protectedCategory: null,
           templateRevision: "narrative-questionnaire-v1",
           verification: "independent",
@@ -201,6 +215,7 @@ test("required narrative and fixed choices resolve canonically and independently
           fieldId: authorizationField.fieldId,
           questionId: "s1-question-work-authorization",
           provenance: "owner_provided",
+          lane: "live_owner_fact",
           protectedCategory: "authorization",
           templateRevision: null,
           verification: "independent",
@@ -209,6 +224,7 @@ test("required narrative and fixed choices resolve canonically and independently
           fieldId: countryField.fieldId,
           questionId: "s1-question-country",
           provenance: "owner_provided",
+          lane: "live_owner_fact",
           protectedCategory: null,
           templateRevision: null,
           verification: "independent",
@@ -220,12 +236,12 @@ test("required narrative and fixed choices resolve canonically and independently
   assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
 });
 
-test("protected non-owner answers use a replacement-required learning default", async () => {
+test("protected non-owner answers fail closed before mutation", async () => {
   const profile: ProfileQuery = {
     async query() {
       return {
         ok: true,
-        value: { kind: "answered", value: true, provenance: "resume_verified" },
+        value: { kind: "answered", value: true, provenance: "resume_verified", lane: "live_owner_fact" },
       };
     },
   };
@@ -235,13 +251,17 @@ test("protected non-owner answers use a replacement-required learning default", 
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (result.ok && result.value.kind === "verified") {
-    assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
-    assert.equal(result.value.answers[0]?.protectedCategory, "authorization");
-  }
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "blocked",
+      code: "protected_answer_denied",
+      fieldId: authorizationField.fieldId,
+      protectedCategory: "authorization",
+    },
+  });
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
 test("listbox mutations rely on the driver's exact owned-popup binding", async () => {
@@ -256,7 +276,7 @@ test("listbox mutations rely on the driver's exact owned-popup binding", async (
   assert.deepEqual(calls, { resolved: 0, driven: 1, verified: 1 });
 });
 
-test("unknown questions use a generated learning answer", async () => {
+test("unknown questions remain unset in live mode before mutation", async () => {
   const unknown = field("s2-field-unknown", "Describe your interest in this role", "textarea");
   const profile: ProfileQuery = {
     async query() {
@@ -273,14 +293,14 @@ test("unknown questions use a generated learning answer", async () => {
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (!result.ok || result.value.kind !== "verified") return;
-  assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
-  assert.match(result.value.answers[0]?.questionId ?? "", /^observed-question-[0-9a-f]{24}$/u);
-  assert.deepEqual(calls, { resolved: 0, driven: 1, verified: 1 });
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "question_unknown");
+  }
+  assert.deepEqual(calls, { resolved: 0, driven: 0, verified: 0 });
 });
 
-test("reviewed age aliases admit explicit learning defaults", async () => {
+test("reviewed age aliases reject injected learning defaults", async () => {
   const age = field(
     "s2-field-age-requirement",
     "Are you 18 years of age or older?",
@@ -290,12 +310,14 @@ test("reviewed age aliases admit explicit learning defaults", async () => {
       { id: optionId("s2-option-age-no"), label: boundedText("No") },
     ],
   );
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "synthetic_test_default",
           intent: {
             kind: "choice",
             behavior: "radio",
@@ -315,12 +337,16 @@ test("reviewed age aliases admit explicit learning defaults", async () => {
     request([age]),
     new AbortController().signal,
   );
-  assert.equal(result.ok && result.value.kind, "verified");
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "profile_answer_missing");
+    assert.equal(result.value.protectedCategory, "legal");
+  }
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
-test("protected synthetic facts continue as learning defaults", async () => {
+test("protected synthetic employment facts fail closed", async () => {
   const priorEmployment = field(
     "s2-field-prior-employment",
     "Have you ever been employed by QTS Data Centers?",
@@ -336,16 +362,16 @@ test("protected synthetic facts continue as learning defaults", async () => {
     request([priorEmployment]),
     new AbortController().signal,
   );
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (result.ok && result.value.kind === "verified") {
-    assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
-    assert.equal(result.value.answers[0]?.protectedCategory, "legal");
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "profile_answer_missing");
+    assert.equal(result.value.protectedCategory, "legal");
   }
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
-test("Meredith compensation and relative wording use deterministic learning defaults", async () => {
+test("compensation fails closed without owner provenance", async () => {
   const compensation = field(
     "s2-field-compensation",
     "Expectations on Compensation - Please state your expectations of total compensation for this position. (Please list a value and/or range)",
@@ -356,76 +382,63 @@ test("Meredith compensation and relative wording use deterministic learning defa
     "Please indicate your annual salary and/or total compensation requirements",
     "textarea",
   );
-  const relatives = field(
-    "s2-field-relatives",
-    "Do you have any relatives currently employed by People Inc.?",
-    "radio",
-    [
-      { id: optionId("s2-option-relatives-yes"), label: boundedText("Yes") },
-      { id: optionId("s2-option-relatives-no"), label: boundedText("No") },
-    ],
-  );
   const { handler, calls } = dependencies();
 
   const result = await handler.complete(
-    request([compensation, compensationRequirements, relatives]),
+    request([compensation, compensationRequirements]),
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (!result.ok || result.value.kind !== "verified") return;
-  assert.deepEqual(
-    result.value.answers.map(({ questionId, provenance }) => ({ questionId, provenance })),
-    [
-      { questionId: "workday-question-desired-salary", provenance: "reviewed_catalog" },
-      { questionId: "workday-question-desired-salary", provenance: "reviewed_catalog" },
-      { questionId: "workday-placeholder-relative-employment", provenance: "reviewed_catalog" },
-    ],
-  );
-  assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "profile_answer_missing");
+    assert.equal(result.value.protectedCategory, "legal");
+  }
+  assert.deepEqual(calls, { resolved: 0, driven: 0, verified: 0 });
+
 });
 
-test("Integer associate referral uses the reviewed No learning default", async () => {
-  const referral = field(
-    "s2-field-associate-referral",
-    "Have you been referred by an Integer associate?",
-    "listbox",
-    [
-      { id: optionId("s2-option-referral-yes"), label: boundedText("Yes") },
-      { id: optionId("s2-option-referral-no"), label: boundedText("No") },
-    ],
-  );
-  let selected: string | undefined;
-  const driver: FieldDriver = {
-    async drive(input) {
-      selected = input.intent.kind === "choice" ? input.intent.expectedOption : undefined;
-      return {
-        ok: true,
-        value: {
-          operationId: input.operationId,
-          fieldId: input.intent.fieldId,
-          behavior: input.intent.behavior,
-          attempted: true,
-        },
-      };
-    },
-  };
-  const { handler } = dependencies({ driver });
+test("Integer truth-dependent wording families fail closed before mutation", async () => {
+  const yesNo = [
+    { id: optionId("s2-option-truth-yes"), label: boundedText("Yes") },
+    { id: optionId("s2-option-truth-no"), label: boundedText("No") },
+  ] as const;
+  const cases = [
+    field("s2-field-age", "Do you certify that you are 18 years of age or older?", "listbox", yesNo),
+    field("s2-field-referral", "Have you been referred by an Integer associate?", "listbox", yesNo),
+    field("s2-field-current-associate", "Are you a current Integer associate (this does not apply to contingent/contract work)?", "radio", yesNo),
+    field("s2-field-previously-applied", "Have you previously applied for a position with our company?", "listbox", yesNo),
+    field("s2-field-relatives", "Do you have any relatives currently employed by Integer?", "radio", yesNo),
+    field("s2-field-sponsorship", "Do you now, or will you in the future, require sponsorship to work legally for Integer in the U.S.?", "listbox", yesNo),
+    field("s2-field-essential-functions", "Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job?", "radio", yesNo),
+    field("s2-field-agreement", "Are you currently subject to any company agreement (NDA, Non-compete, etc.) that would prevent you from working with INTEGER Holdings Corporation?", "radio", yesNo),
+    field("s2-field-start-date", "When are you available to start?", "text"),
+    field("s2-field-salary", "Salary expectations", "text"),
+  ] as const;
 
-  const result = await handler.complete(
-    request([referral]),
-    new AbortController().signal,
-  );
-
-  assert.equal(result.ok && result.value.kind, "verified");
-  assert.equal(selected, "No");
-  if (result.ok && result.value.kind === "verified") {
-    assert.equal(result.value.answers[0]?.questionId, "workday-placeholder-associate-referral");
-    assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
+  for (const candidate of cases) {
+    const { handler, calls } = dependencies();
+    const result = await handler.complete(request([candidate]), new AbortController().signal);
+    assert.equal(result.ok && result.value.kind, "blocked", candidate.label);
+    if (result.ok && result.value.kind === "blocked") {
+      assert.equal(
+        result.value.code === "protected_answer_denied" || result.value.code === "profile_answer_missing",
+        true,
+        candidate.label,
+      );
+      assert.equal(
+        result.value.protectedCategory === "legal" ||
+          result.value.protectedCategory === "authorization",
+        true,
+        candidate.label,
+      );
+    }
+    assert.equal(calls.driven, 0, candidate.label);
+    assert.equal(calls.verified, 0, candidate.label);
   }
 });
 
-test("non-protected synthetic facts are independently verified without becoming owner facts", async () => {
+test("non-protected synthetic mechanics stay non-submittable and never verify live", async () => {
   const source = field(
     "s2-field-application-source",
     "How Did You Hear About Us?",
@@ -435,28 +448,22 @@ test("non-protected synthetic facts are independently verified without becoming 
   const { handler, calls } = dependencies();
 
   assert.deepEqual(await handler.complete(
-    request([source]),
+    { ...request([source]), mode: "synthetic_test_non_submittable" },
     new AbortController().signal,
   ), {
     ok: true,
     value: {
-      kind: "verified",
-      answers: [{
-        fieldId: source.fieldId,
-        questionId: "workday-placeholder-application-source",
-        provenance: "reviewed_catalog",
-        protectedCategory: null,
-        templateRevision: null,
-        verification: "independent",
-      }],
-      protectedPlaceholderCount: 0,
+      kind: "blocked",
+      code: "synthetic_test_non_submittable",
+      fieldId: source.fieldId,
+      protectedCategory: null,
     },
   });
   assert.equal(calls.driven, 1);
   assert.equal(calls.verified, 1);
 });
 
-test("missing protected facts use deterministic learning defaults", async () => {
+test("missing protected facts require owner input", async () => {
   const profile: ProfileQuery = {
     async query() {
       return { ok: true, value: { kind: "profile_answer_missing" } };
@@ -468,17 +475,33 @@ test("missing protected facts use deterministic learning defaults", async () => 
     request([authorizationField]),
     new AbortController().signal,
   );
-  assert.equal(result.ok && result.value.kind, "verified");
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "profile_answer_missing");
+    assert.equal(result.value.protectedCategory, "authorization");
+  }
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
-test("an unresolved narrative uses the reviewed default when encountered", async () => {
+test("an unresolved narrative requires owner input while other owner facts remain usable", async () => {
   const unresolved = createConfiguredNarrativeProvider({
     revision: "narrative-questionnaire-v1",
     template: undefined,
   });
-  const { handler, calls } = dependencies({ narrative: unresolved });
+  const profile: ProfileQuery = {
+    async query(input) {
+      return input.factId === "country"
+        ? { ok: true, value: {
+            kind: "answered",
+            value: "United States",
+            provenance: "owner_provided",
+            lane: "live_owner_fact",
+          } as const }
+        : { ok: true, value: { kind: "profile_answer_missing" } as const };
+    },
+  };
+  const { handler, calls } = dependencies({ narrative: unresolved, profile });
 
   assert.deepEqual(await handler.complete(
     request([countryField]),
@@ -491,6 +514,7 @@ test("an unresolved narrative uses the reviewed default when encountered", async
         fieldId: countryField.fieldId,
         questionId: "s1-question-country",
         provenance: "owner_provided",
+        lane: "live_owner_fact",
         protectedCategory: null,
         templateRevision: null,
         verification: "independent",
@@ -504,23 +528,17 @@ test("an unresolved narrative uses the reviewed default when encountered", async
   ), {
     ok: true,
     value: {
-      kind: "verified",
-      answers: [{
-        fieldId: narrativeField.fieldId,
-        questionId: "s1-question-configured-narrative",
-        provenance: "reviewed_catalog",
-        protectedCategory: null,
-        templateRevision: null,
-        verification: "independent",
-      }],
-      protectedPlaceholderCount: 0,
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: narrativeField.fieldId,
+      protectedCategory: null,
     },
   });
-  assert.equal(calls.driven, 2);
-  assert.equal(calls.verified, 2);
+  assert.equal(calls.driven, 1);
+  assert.equal(calls.verified, 1);
 });
 
-test("unknown consent prompts choose a visible learning option", async () => {
+test("unknown consent prompts reject visible learning options", async () => {
   const consent = field(
     "s2-field-consent",
     "I consent to this disclosure",
@@ -538,15 +556,16 @@ test("unknown consent prompts choose a visible learning option", async () => {
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (!result.ok || result.value.kind !== "verified") return;
-  assert.equal(result.value.answers[0]?.provenance, "visible_option");
-  assert.equal(result.value.answers[0]?.protectedCategory, "consent");
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "protected_answer_denied");
+    assert.equal(result.value.protectedCategory, "consent");
+  }
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
-test("unknown choice without options remains a learned unknown", async () => {
+test("unknown protected choice without options fails closed", async () => {
   const consent = field("s2-field-consent", "I consent to this disclosure", "select");
   const { handler, calls } = dependencies({ observation: fixture.unknownQuestionObservation });
 
@@ -556,14 +575,14 @@ test("unknown choice without options remains a learned unknown", async () => {
   );
   assert.equal(result.ok && result.value.kind, "blocked");
   if (result.ok && result.value.kind === "blocked") {
-    assert.equal(result.value.code, "question_unknown");
+    assert.equal(result.value.code, "protected_answer_denied");
     assert.equal(result.value.protectedCategory, "consent");
   }
   assert.equal(calls.driven, 0);
   assert.equal(calls.verified, 0);
 });
 
-test("fixed-choice ambiguity chooses a visible learning fallback", async () => {
+test("protected fixed-choice ambiguity cannot choose a visible learning fallback", async () => {
   const ambiguous = field(
     "s2-field-work-authorization",
     "Are you authorized to work in this location?",
@@ -577,7 +596,7 @@ test("fixed-choice ambiguity chooses a visible learning fallback", async () => {
     async query() {
       return {
         ok: true,
-        value: { kind: "answered", value: true, provenance: "owner_provided" },
+        value: { kind: "answered", value: true, provenance: "owner_provided", lane: "live_owner_fact" },
       };
     },
   };
@@ -590,20 +609,24 @@ test("fixed-choice ambiguity chooses a visible learning fallback", async () => {
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "verified");
-  if (!result.ok || result.value.kind !== "verified") return;
-  assert.equal(result.value.answers[0]?.provenance, "visible_option");
-  assert.equal(calls.driven, 1);
-  assert.equal(calls.verified, 1);
+  assert.equal(result.ok && result.value.kind, "blocked");
+  if (result.ok && result.value.kind === "blocked") {
+    assert.equal(result.value.code, "protected_answer_denied");
+    assert.equal(result.value.protectedCategory, "authorization");
+  }
+  assert.equal(calls.driven, 0);
+  assert.equal(calls.verified, 0);
 });
 
 test("configured provenance cannot smuggle a different narrative", async () => {
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "live_owner_fact",
           intent: {
             kind: "text",
             behavior: "textarea",
@@ -636,13 +659,15 @@ test("configured provenance cannot smuggle a different narrative", async () => {
 
 test("an injected resolver cannot replace the reviewed narrative default", async () => {
   let resolved = 0;
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       resolved += 1;
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "live_owner_fact",
           intent: {
             kind: "text",
             behavior: "textarea",
@@ -681,12 +706,14 @@ test("an injected resolver cannot replace the reviewed narrative default", async
 });
 
 test("resolved intents remain bound to the observed field and target", async () => {
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "live_owner_fact",
           intent: {
             kind: "text",
             behavior: "textarea",
@@ -719,12 +746,14 @@ test("resolved intents remain bound to the observed field and target", async () 
 
 test("an injected owner answer can resolve an observed unknown question", async () => {
   const consent = field("s2-field-consent", "I consent to this disclosure", "text");
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "live_owner_fact",
           intent: {
             kind: "text",
             behavior: "text",
@@ -756,12 +785,14 @@ test("an injected owner answer can resolve an observed unknown question", async 
 });
 
 test("protected text placeholders are denied even with owner provenance", async () => {
-  const resolver: AnswerResolver = {
+  const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
         ok: true,
         value: {
           kind: "resolved",
+
+          lane: "live_owner_fact",
           intent: {
             kind: "text",
             behavior: "text",
@@ -815,7 +846,11 @@ test("driver and verifier must be independently owned ports", () => {
 
   assert.throws(
     () => createQuestionnairePageHandler({
-      profileQuery: { async query() { return { ok: true, value: { kind: "profile_answer_missing" } }; } },
+      profileQuery: {
+        async query() {
+          return { ok: true, value: { kind: "profile_answer_missing" } };
+        },
+      } as ProfileQuery,
       driver: coupled,
       verifier: coupled,
       narrative: createConfiguredNarrativeProvider({
@@ -894,6 +929,7 @@ test("configured narrative provider is versioned and only serves eligible prompt
     text: "Exact configured interest statement.",
     revision: "narrative-questionnaire-v1",
     provenance: "configured_template",
+    lane: "live_owner_fact",
   });
   assert.equal(provider.resolve("s1-question-work-authorization"), undefined);
   assert.throws(

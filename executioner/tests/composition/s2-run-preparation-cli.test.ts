@@ -5,12 +5,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { parseApplicantProfile } from "../../src/contracts/index.ts";
 import {
+  migrateTrustedLegacyApplicationProfile,
   parseStage2RunPreparationArgs,
   runStage2RunPreparationCli,
 } from "../../src/composition/s2-run-preparation-cli.ts";
 import { withDerivedProfileCountry } from
   "../../src/composition/private/s2-derived-profile-country.ts";
+import {
+  applicationProfileFactIds as profileFactIds,
+  parseApplicationProfile,
+} from "../../src/profile/application-profile.ts";
 
 const storageRoot = resolve("C:\\protected\\hunt-c3-storage");
 const targetUrl = "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422";
@@ -21,6 +27,71 @@ test("run preparation CLI accepts only the storage root, exact target, and accou
     "--target-url", targetUrl,
     "--account-mode", "sign_in",
   ]), { storageRoot, targetUrl, accountMode: "sign_in" });
+});
+
+test("trusted legacy preparation preserves only owner-bound resume facts and makes every other control unset", () => {
+  const legacy = {
+    schemaVersion: 1,
+    sourceRevision: "s2-application-owner-profile-input-v1",
+    resumeId: "resume-trusted-legacy",
+    profile: {
+      profileId: "profile-trusted-legacy",
+      revision: 99,
+      facts: [
+        ...["given_name", "family_name", "email_address", "city", "region"].map(
+          (factId) => ({ factId, value: `synthetic-${factId}`, provenance: "resume_verified" }),
+        ),
+        { factId: "address_line_1", value: "generated address", provenance: "generated_default" },
+        { factId: "phone_number", value: "generated phone", provenance: "generated_default" },
+        { factId: "source", value: "generated source", provenance: "generated_default" },
+        { factId: "previously_worked_for_organization", value: "No", provenance: "generated_default" },
+      ],
+    },
+    profilePlan: {
+      pageType: "profile",
+      fields: [{
+        fieldId: "employment.previously_worked_for_organization",
+        answer: { value: "No", provenance: "generated_default" },
+      }],
+    },
+    narrative: { revision: "legacy-generated-plan" },
+  };
+
+  assert.throws(() => parseApplicantProfile(legacy.profile));
+  const current = migrateTrustedLegacyApplicationProfile(legacy);
+  assert.doesNotThrow(() => parseApplicationProfile(current.profile));
+  assert.deepEqual(current.profile.facts.map(({ factId, lane }) => ({ factId, lane })),
+    ["given_name", "family_name", "email_address", "city", "region"].map((factId) => ({
+      factId,
+      lane: "live_owner_fact",
+    })));
+  assert.equal(current.profile.unsetFactIds.length, profileFactIds.length - 5);
+  assert.equal(current.profile.discoveredFields.length, 44);
+  assert.equal(current.profile.discoveredFields.every(({ answer }) =>
+    answer.kind === "profile_answer_missing"
+  ), true);
+  assert.equal(JSON.stringify(current).includes("generated_default"), false);
+  assert.equal(JSON.stringify(current).includes("previously_worked_for_organization"), true);
+  assert.equal((current.profilePlan as { fields: Array<{ fieldId: string }> }).fields.some(
+    ({ fieldId }) => fieldId === "employment.previously_worked_for_organization"
+  ), false);
+  assert.deepEqual(current.narrative, { revision: "trusted-legacy-owner-facts-only-v1" });
+
+  const legacyPath = resolve("C:\\protected\\trusted-legacy.json");
+  const resumePath = resolve("C:\\protected\\trusted-resume.pdf");
+  assert.deepEqual(parseStage2RunPreparationArgs([
+    "--storage-root", storageRoot,
+    "--target-url", targetUrl,
+    "--account-mode", "sign_in",
+    "--trusted-legacy-application-profile", legacyPath,
+    "--application-resume", resumePath,
+  ]), {
+    storageRoot,
+    targetUrl,
+    accountMode: "sign_in",
+    trustedLegacyApplicationProfilePath: legacyPath,
+    applicationResumePath: resumePath,
+  });
 });
 
 test("run preparation CLI captures protected source paths without raw values on argv", async () => {
@@ -38,20 +109,27 @@ test("run preparation CLI captures protected source paths without raw values on 
         profileId: "profile-owner-approved",
         revision: 1,
         facts: [
-          { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
-          { factId: "email_address", value: "synthetic@example.invalid", provenance: "owner_provided" },
-          { factId: "city", value: "Calgary", provenance: "resume_verified" },
-          { factId: "region", value: "Alberta", provenance: "owner_provided" },
-          { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
+          { factId: "given_name", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
+          { factId: "email_address", value: "synthetic@example.invalid", provenance: "owner_provided", lane: "live_owner_fact" },
+          { factId: "city", value: "Calgary", provenance: "resume_verified", lane: "live_owner_fact" },
+          { factId: "region", value: "Alberta", provenance: "owner_provided", lane: "live_owner_fact" },
+          { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template", lane: "live_owner_fact" },
         ],
+        unsetFactIds: profileFactIds.filter((factId) =>
+          !new Set(["given_name", "email_address", "city", "region", "configured_narrative"])
+            .has(factId)
+        ),
+        discoveredFields: [],
       },
       profilePlan: {
+        mode: "live",
         pageType: "profile",
-        fields: [{
+fields: [{
           fieldId: "identity.given_name",
           questionType: "identity",
           answerType: "text",
-          answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided" },
+          allowedOptions: [],
+          answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
         }],
         repeatables: [],
       },
@@ -76,7 +154,8 @@ test("run preparation CLI captures protected source paths without raw values on 
       fieldId: "address.country",
       questionType: "address",
       answerType: "option",
-      answer: { kind: "answered", value: "CA", provenance: "journey_derived" },
+      allowedOptions: ["Canada"],
+      answer: { kind: "answered", value: "CA", provenance: "journey_derived", lane: "live_owner_fact" },
       optionMapping: {
         canonicalValue: "CA",
         visibleOption: "Canada",
@@ -88,30 +167,36 @@ test("run preparation CLI captures protected source paths without raw values on 
         fieldId: "contact.email",
         questionType: "identity",
         answerType: "text",
+        allowedOptions: [],
         answer: {
           kind: "answered",
           value: "synthetic@example.invalid",
           provenance: "owner_provided",
+          lane: "live_owner_fact",
         },
       },
       {
         fieldId: "address.city",
         questionType: "address",
         answerType: "text",
+        allowedOptions: [],
         answer: {
           kind: "answered",
           value: "Calgary",
           provenance: "resume_verified",
+          lane: "live_owner_fact",
         },
       },
       {
         fieldId: "address.region",
         questionType: "address",
         answerType: "option",
+        allowedOptions: ["Alberta"],
         answer: {
           kind: "answered",
           value: "Alberta",
           provenance: "owner_provided",
+          lane: "live_owner_fact",
         },
         optionMapping: {
           canonicalValue: "Alberta",
@@ -134,20 +219,22 @@ test("run preparation CLI captures protected source paths without raw values on 
 
 test("profile fact projection preserves planned fields and leaves missing facts unresolved", () => {
   const plan = {
+    mode: "live",
     pageType: "profile",
-    fields: [{
+fields: [{
       fieldId: "contact.email",
       questionType: "identity",
       answerType: "text",
-      answer: { kind: "answered", value: "planned@example.invalid", provenance: "owner_provided" },
+      allowedOptions: [],
+      answer: { kind: "answered", value: "planned@example.invalid", provenance: "owner_provided", lane: "live_owner_fact" },
     }],
     repeatables: [],
   };
 
   const projected = withDerivedProfileCountry({
     facts: [
-      { factId: "email_address", value: "fact@example.invalid", provenance: "owner_provided" },
-      { factId: "city", value: "Edmonton", provenance: "configured_template" },
+      { factId: "email_address", value: "fact@example.invalid", provenance: "owner_provided", lane: "live_owner_fact" },
+      { factId: "city", value: "Edmonton", provenance: "configured_template", lane: "live_owner_fact" },
     ],
   }, plan) as typeof plan;
 
@@ -157,10 +244,12 @@ test("profile fact projection preserves planned fields and leaves missing facts 
       fieldId: "address.city",
       questionType: "address",
       answerType: "text",
+      allowedOptions: [],
       answer: {
         kind: "answered",
         value: "Edmonton",
         provenance: "configured_template",
+        lane: "live_owner_fact",
       },
     },
   ]);
@@ -169,7 +258,7 @@ test("profile fact projection preserves planned fields and leaves missing facts 
 
 test("profile fact projection maps a Canadian region code to its exact visible option", () => {
   const projected = withDerivedProfileCountry({
-    facts: [{ factId: "region", value: "AB", provenance: "resume_verified" }],
+    facts: [{ factId: "region", value: "AB", provenance: "resume_verified", lane: "live_owner_fact" }],
   }, { pageType: "profile", fields: [], repeatables: [] }) as {
     fields: Array<{ fieldId: string; answer: { value: string }; optionMapping: { visibleOption: string } }>;
   };
@@ -185,6 +274,14 @@ test("run preparation CLI rejects caller-supplied IDs and malformed argument set
     ["--storage-root", "relative", "--target-url", targetUrl, "--account-mode", "sign_in"],
     ["--storage-root", storageRoot, "--target-url", targetUrl, "--run-key", "remember-me"],
     ["--storage-root", storageRoot, "--target-url", targetUrl],
+    [
+      "--storage-root", storageRoot,
+      "--target-url", targetUrl,
+      "--account-mode", "sign_in",
+      "--application-profile", resolve("C:\\protected\\current.json"),
+      "--trusted-legacy-application-profile", resolve("C:\\protected\\legacy.json"),
+      "--application-resume", resolve("C:\\protected\\resume.pdf"),
+    ],
   ]) {
     assert.throws(() => parseStage2RunPreparationArgs(values), /invalid Stage 2 run preparation arguments/u);
   }

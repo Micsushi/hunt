@@ -43,8 +43,15 @@ export function createImmutableApplicationLaneSources(
   if (!isWorkdayResumeFileIntent(values.resumeIntent)) {
     throw new TypeError("resume source must contain an admitted immutable intent");
   }
+  if (
+    values.profilePlan.mode !== "live" ||
+    values.questionnaireRequest.mode !== "live"
+  ) {
+    throw new TypeError("production application lanes require live owner mode");
+  }
   const profilePlan = deepFreeze(structuredClone(values.profilePlan));
   const requestClone = structuredClone({
+    mode: values.questionnaireRequest.mode,
     journeyId: values.questionnaireRequest.journeyId,
     sessionId: values.questionnaireRequest.sessionId,
     pageId: values.questionnaireRequest.pageId,
@@ -120,6 +127,9 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
   const records: ApplicationLaneAcceptance[] = [];
   return Object.freeze({
     record(acceptance: ApplicationLaneAcceptance): void {
+      if (!liveLaneAcceptance(acceptance)) {
+        throw new TypeError("application lane acceptance provenance is invalid");
+      }
       const candidate = [...records, acceptance];
       if (!isValidApplicationPageSequence(candidate.map(({ checkpoint }) =>
         applicationPageForCheckpoint(checkpoint)
@@ -206,7 +216,7 @@ function profileHandler(
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
         ownedDuplicateRows: 0,
-      independentlyVerified: true,
+        independentlyVerified: true,
         submitActivated: false,
         privacyScan: "pass",
       })) return laneFailure("profile", { code: "evidence_denied" });
@@ -257,11 +267,25 @@ function recordAcceptance(
   acceptance: ApplicationLaneAcceptance,
 ): boolean {
   try {
+    if (!liveLaneAcceptance(acceptance)) return false;
     sink?.record(deepFreeze(structuredClone(acceptance)));
     return true;
   } catch {
     return false;
   }
+}
+
+function liveLaneAcceptance(acceptance: ApplicationLaneAcceptance): boolean {
+  if (acceptance.checkpoint === "resume_verified") return true;
+  if (acceptance.checkpoint === "profile_verified") {
+    return acceptance.verifiedFields.every((field) =>
+      field.lane === "live_owner_fact" && field.provenance !== "generated_default"
+    );
+  }
+  return acceptance.answers.every((answer) =>
+    answer.lane === "live_owner_fact" &&
+    answer.provenance !== "reviewed_catalog" && answer.provenance !== "visible_option"
+  );
 }
 
 function verified<

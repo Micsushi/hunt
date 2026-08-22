@@ -11,6 +11,7 @@ import {
   questionAnswerGuide,
   questionFor,
   questionForField,
+  retainedIntakeControlGuide,
   resolveQuestion,
 } from "../../../src/form/questions/catalog.ts";
 import {
@@ -32,11 +33,13 @@ test("normalization removes only Workday presentation noise", () => {
 test("exact and reviewed keyword variants resolve deterministically", () => {
   assert.deepEqual(resolveQuestion("Given Name (Required) *"), {
     kind: "resolved",
+
     id: "s1-question-given-name",
     provenance: "reviewed_catalog",
   });
   assert.deepEqual(resolveQuestion("Family name"), {
     kind: "resolved",
+
     id: "s1-question-family-name",
     provenance: "reviewed_catalog",
   });
@@ -51,6 +54,7 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
   for (const [label, id] of semanticCases) {
     assert.deepEqual(resolveQuestion(label), {
       kind: "resolved",
+
       id,
       provenance: "reviewed_catalog",
     });
@@ -127,6 +131,7 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
   for (const [label, id] of cases) {
     assert.deepEqual(resolveQuestion(label), {
       kind: "resolved",
+
       id,
       provenance: "reviewed_catalog",
     });
@@ -134,6 +139,7 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
 
   assert.deepEqual(resolveQuestion("How Did You Hear About Us? Required"), {
     kind: "resolved",
+
     id: "workday-placeholder-application-source",
     provenance: "reviewed_catalog",
   });
@@ -158,77 +164,146 @@ test("every resolved alias-only ID has one retrievable canonical definition", ()
   });
 });
 
-test("synthetic placeholders retain explicit source provenance", () => {
+test("application source is modeled as explicit owner input with synthetic fixture metadata", () => {
   const resolution = resolveQuestion("How Did You Hear About Us?");
   assert.equal(resolution.kind, "resolved");
   if (resolution.kind !== "resolved") return;
   const definition = questionFor(resolution.id);
-  assert.equal(definition?.source?.kind, "synthetic_placeholder");
-  if (definition?.source?.kind !== "synthetic_placeholder") return;
-  assert.equal(definition.source.placeholderProvenance, "synthetic_ui_learning");
-  assert.equal(definition.source.protected, false);
+  assert.deepEqual(definition?.source, {
+    kind: "profile",
+    factId: "application_source",
+    ownerProvidedOnly: true,
+    syntheticDefault: "LinkedIn",
+  });
 });
 
 test("answer guide exposes types, options, and replacement-required learning defaults", () => {
   const byId = new Map(questionAnswerGuide.map((entry) => [entry.id, entry]));
-  assert.deepEqual(byId.get("s1-question-work-authorization"), {
-    id: "s1-question-work-authorization",
-    labels: [
-      "Are you authorized to work in this location?",
-      "Are you legally authorized to work in this country?",
+  for (const id of [
+    "s1-question-work-authorization",
+    "workday-question-gender-disclosure",
+    "workday-placeholder-relative-employment",
+    "workday-placeholder-terms-consent",
+  ]) {
+    const entry = byId.get(id as never);
+    assert.equal(entry?.initialState, "unset");
+    assert.ok((entry?.behaviors.length ?? 0) > 0);
+    assert.ok((entry?.answerTypes.length ?? 0) > 0);
+    assert.equal(entry?.allowsCustomValue, false);
+    assert.equal(entry?.defaultPolicy.kind, "owner_required");
+  }
+  assert.deepEqual(byId.get("s1-question-work-authorization")?.allowedOptions, ["Yes", "No"]);
+  assert.ok(byId.get("workday-question-gender-disclosure")?.allowedOptions.includes(
+    "I do not want to answer",
+  ));
+  for (const id of [
+    "s1-question-age-requirement-met",
+    "s1-question-sponsorship-required",
+    "workday-placeholder-associate-referral",
+    "workday-question-current-associate",
+    "workday-question-previously-applied",
+    "workday-placeholder-relative-employment",
+    "workday-question-essential-functions",
+    "workday-question-employment-agreement",
+    "workday-question-veteran-disclosure",
+  ]) assert.deepEqual(byId.get(id as never)?.allowedOptions, [], id);
+});
+
+test("retained Integer page shapes expose editable explicit-unset control metadata", () => {
+  assert.equal(retainedIntakeControlGuide.length, 44);
+  assert.equal(retainedIntakeControlGuide.every((entry) =>
+    entry.initialState === "unset" && entry.uiVariant.length > 0 &&
+    Array.isArray(entry.allowedOptions) && typeof entry.allowsCustomValue === "boolean" &&
+    Object.hasOwn(entry.constraints, "maxBytes") &&
+    Object.hasOwn(entry.constraints, "displayFormat")
+  ), true);
+  assert.equal(retainedIntakeControlGuide.find(({ identity }) => identity === "resume")
+    ?.constraints.maxBytes, 5 * 1024 * 1024);
+  assert.deepEqual(
+    retainedIntakeControlGuide.find(({ identity }) => identity === "disability_disclosure")?.allowedOptions,
+    [
+      "Yes, I have a disability, or have had one in the past",
+      "No, I do not have a disability and have not had one in the past",
+      "I do not want to answer",
     ],
-    answerTypes: ["single_select"],
-    possibleAnswers: [],
-    defaultPolicy: {
-      kind: "generated_learning_default",
-      value: true,
-      replaceWithOwnerAnswer: true,
-    },
-  });
-  assert.deepEqual(byId.get("workday-question-gender-disclosure"), {
-    id: "workday-question-gender-disclosure",
-    labels: ["Gender", "Gender Identity", "Sex"],
-    answerTypes: ["single_select"],
-    possibleAnswers: [
-      "Prefer not to answer",
-      "Prefer not to say",
-      "I do not wish to provide this information",
-      "Decline to self-identify",
+  );
+  const shapeA = retainedIntakeControlGuide.filter(({ page }) => page === "questionnaire");
+  assert.equal(shapeA.length, 10);
+  assert.equal(shapeA.every(({ required, allowedOptions }) =>
+    required === null && allowedOptions.length === 0
+  ), true);
+  const shapeC = retainedIntakeControlGuide.filter(({ page }) => page === "self_identify");
+  assert.equal(shapeC.length, 5);
+  assert.equal(shapeC.every(({ required }) => required === null), true);
+  assert.equal(retainedIntakeControlGuide.filter(({ page }) =>
+    page === "voluntary_disclosures"
+  ).every(({ required }) => required === true), true);
+  assert.equal(retainedIntakeControlGuide.filter(({ page }) =>
+    page === "resume"
+  ).every(({ required }) => required === false), true);
+});
+
+test("exact retained Integer labels resolve or remain deliberately unidentified", () => {
+  const questionnaire = [
+    ["Do you certify that you are 18 years of age or older?", "s1-question-age-requirement-met"],
+    ["Have you been referred by an Integer associate?", "workday-placeholder-associate-referral"],
+    ["Are you a current Integer associate (this does not apply to contingent/contract work)?", "workday-question-current-associate"],
+    ["Have you previously applied for a position with our company?", "workday-question-previously-applied"],
+    ["Do you have any relatives currently employed by Integer?", "workday-placeholder-relative-employment"],
+    ["Do you now, or will you in the future, require sponsorship to work legally for Integer in the U.S.?", "s1-question-sponsorship-required"],
+    ["Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job?", "workday-question-essential-functions"],
+    ["Are you currently subject to any company agreement (NDA, Non-compete, etc.) that would prevent you from working with INTEGER Holdings Corporation?", "workday-question-employment-agreement"],
+    ["When are you available to start?", "s1-question-earliest-start-date"],
+    ["Salary expectations", "workday-question-desired-salary"],
+  ] as const;
+  for (const [label, id] of questionnaire) {
+    assert.deepEqual(resolveQuestion(label), { kind: "resolved", id, provenance: "reviewed_catalog" });
+  }
+  const labels = new Set(retainedIntakeControlGuide.map(({ sanitizedLabel }) => sanitizedLabel));
+  for (const label of [
+    "Select Veteran Status",
+    "Yes, I have read and consent to the terms and conditions",
+    "Language", "Name", "Date", "Please check one of the boxes below",
+    "Work Experience Add", "Education Add", "Type to Add Skills",
+    "Upload a file (5MB max)", "Websites Add",
+  ]) assert.equal(labels.has(label), true, label);
+  const unresolved = retainedIntakeControlGuide.find(({ identity }) => identity === "unresolved");
+  assert.equal(unresolved?.sanitizedLabel, null);
+  assert.equal(unresolved?.normalizedQuestionType, "unknown");
+  assert.equal(unresolved?.required, null);
+});
+
+test("retained run-99 Profile labels and requiredness stay evidence-bound", () => {
+  const profile = retainedIntakeControlGuide.filter(({ page }) => page === "profile");
+  const retained = new Map(profile.map(({ sanitizedLabel, required, allowedOptions }) => [
+    sanitizedLabel,
+    { required, allowedOptions },
+  ]));
+  assert.deepEqual([...retained.entries()].filter(([label]) => new Set([
+    "How Did You Hear About Us?",
+    "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+    "Country", "First Name", "Last Name", "Address Line 1", "City",
+    "Province or Territory", "Postal Code", "Email", "Phone Device Type",
+    "Country Phone Code", "Phone Number", "Phone Extension",
+  ]).has(label ?? "")), [
+    ["First Name", { required: true, allowedOptions: [] }],
+    ["Last Name", { required: true, allowedOptions: [] }],
+    ["Address Line 1", { required: false, allowedOptions: [] }],
+    ["City", { required: false, allowedOptions: [] }],
+    ["Country", { required: true, allowedOptions: [] }],
+    ["Province or Territory", { required: false, allowedOptions: [] }],
+    ["Postal Code", { required: false, allowedOptions: [] }],
+    ["Email", { required: true, allowedOptions: [] }],
+    ["Phone Device Type", { required: true, allowedOptions: [] }],
+    ["Country Phone Code", { required: true, allowedOptions: [] }],
+    ["Phone Number", { required: true, allowedOptions: [] }],
+    ["Phone Extension", { required: false, allowedOptions: [] }],
+    ["How Did You Hear About Us?", { required: true, allowedOptions: [] }],
+    [
+      "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+      { required: true, allowedOptions: ["Yes", "No"] },
     ],
-    defaultPolicy: {
-      kind: "privacy_choice_or_first_visible_learning_option",
-      values: [
-        "Prefer not to answer",
-        "Prefer not to say",
-        "I do not wish to provide this information",
-        "Decline to self-identify",
-      ],
-      replaceWithOwnerAnswer: true,
-    },
-  });
-  assert.deepEqual(byId.get("workday-placeholder-relative-employment"), {
-    id: "workday-placeholder-relative-employment",
-    labels: [
-      "Do you have any relatives currently employed by the company?",
-      "Are any of your relatives employed by the company?",
-    ],
-    answerTypes: ["single_select"],
-    possibleAnswers: ["Yes", "No"],
-    defaultPolicy: { kind: "visible_exact_match_only", value: false },
-  });
-  assert.deepEqual(byId.get("workday-placeholder-terms-consent"), {
-    id: "workday-placeholder-terms-consent",
-    labels: [
-      "Yes, I have read and consent to the terms and conditions",
-      "I have read and agree to the terms and conditions",
-      "I acknowledge and consent to the terms and conditions",
-      "I Agree",
-      "Accept Terms and Agreements",
-    ],
-    answerTypes: ["boolean"],
-    possibleAnswers: ["Yes", "No"],
-    defaultPolicy: { kind: "visible_exact_match_only", value: true },
-  });
+  ]);
 });
 
 test("question catalog is exactly the frozen ten-row S1 matrix", () => {
@@ -254,11 +329,13 @@ test("question catalog is exactly the frozen ten-row S1 matrix", () => {
 test("option aliases resolve to canonical option IDs", () => {
   assert.deepEqual(resolveOption(" YES. * "), {
     kind: "resolved",
+
     id: "yes",
     provenance: "reviewed_catalog",
   });
   assert.deepEqual(resolveOption("False"), {
     kind: "resolved",
+
     id: "no",
     provenance: "reviewed_catalog",
   });

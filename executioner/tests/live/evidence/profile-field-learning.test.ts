@@ -26,11 +26,13 @@ test("retains value-free field learning through prefill, driver, and readback", 
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("country-control", 1, "before_mutation"));
     await capture.page.commit({
       controlId: "country-control",
       uiBehavior: "search_select",
       value: "United States",
     }, AbortSignal.any([]));
+    capture.monitorAck(monitor("country-control", 1, "after_readback"));
     port.current = snapshot("United States");
     await capture.page.inspect(AbortSignal.any([]));
 
@@ -42,9 +44,13 @@ test("retains value-free field learning through prefill, driver, and readback", 
       "Software Engineer", "C:\\private\\resume.pdf",
     ]) assert.equal(text.includes(forbidden), false);
     assert.deepEqual(JSON.parse(text), {
-      schemaVersion: 1,
-      evidenceRevision: "s2-profile-field-learning-v1",
+      schemaVersion: 4,
+      evidenceRevision: "s2-profile-field-learning-v4",
       page: "profile",
+      executionMode: "live",
+      testOnly: false,
+      liveAcceptanceEligible: false,
+      visibleControlCount: 3,
       fields: [
         {
           fieldIdentity: "profile.identity.given_name",
@@ -53,11 +59,15 @@ test("retains value-free field learning through prefill, driver, and readback", 
           questionCategory: "identity",
           answerCategory: "text",
           required: true,
+          answerState: "answered",
+          lane: "live_owner_fact",
           visibleOptionIds: [],
           selectedOptionId: null,
           optionMapping: "not_applicable",
           prefillDisposition: "already_correct",
           driverAttempt: "none",
+          monitorBinding: null,
+          terminalDisposition: "verified_without_mutation",
           mechanics: mechanics("text", "not_attempted"),
         },
         {
@@ -67,11 +77,15 @@ test("retains value-free field learning through prefill, driver, and readback", 
           questionCategory: "address",
           answerCategory: "option",
           required: true,
+          answerState: "answered",
+          lane: "live_owner_fact",
           visibleOptionIds: ["option_ref_01", "option_ref_02"],
           selectedOptionId: "option_ref_02",
           optionMapping: "owner_visible_option",
           prefillDisposition: "conflict",
           driverAttempt: "search_select",
+          monitorBinding: binding(1),
+          terminalDisposition: "verified",
           mechanics: {
             popupBound: "observed",
             optionFocused: "observed",
@@ -89,11 +103,15 @@ test("retains value-free field learning through prefill, driver, and readback", 
           questionCategory: "unknown",
           answerCategory: "unknown",
           required: true,
+          answerState: "unset",
+          lane: null,
           visibleOptionIds: [],
           selectedOptionId: null,
           optionMapping: "unresolved",
           prefillDisposition: "needs_owner_input",
           driverAttempt: "none",
+          monitorBinding: null,
+          terminalDisposition: "required_unset",
           mechanics: mechanics("text", "not_attempted"),
         },
       ],
@@ -115,6 +133,7 @@ test("records a failed driver without changing the delegated failure", async () 
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("country-control", 2, "before_mutation"));
     await assert.rejects(
       capture.page.commit({
         controlId: "country-control",
@@ -123,6 +142,7 @@ test("records a failed driver without changing the delegated failure", async () 
       }, AbortSignal.any([])),
       (error) => error === expected,
     );
+    capture.monitorAck(monitor("country-control", 2, "after_readback"));
     assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
     const evidence = JSON.parse(readFileSync(
       join(root, "profile-field-learning.json"), "utf8",
@@ -130,6 +150,7 @@ test("records a failed driver without changing the delegated failure", async () 
     assert.equal(evidence.fields[1].prefillDisposition, "blank");
     assert.equal(evidence.fields[1].driverAttempt, "search_select");
     assert.equal(evidence.fields[1].mechanics.persistentReadback, "driver_failed");
+    assert.equal(evidence.fields[1].terminalDisposition, "driver_failed");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -148,11 +169,13 @@ test("repeatable learning identity survives DOM row reordering", async () => {
     await capture.page.inspect(AbortSignal.any([]));
     port.current = repeatableSnapshot(["row-b", "row-a"]);
     await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("row-a-company", 3, "before_mutation"));
     await capture.page.commit({
       controlId: "row-a-company",
       uiBehavior: "text",
       value: "Changed",
     }, AbortSignal.any([]));
+    capture.monitorAck(monitor("row-a-company", 3, "after_readback"));
     port.current = repeatableSnapshot(["row-b", "row-a"], "Changed");
     await capture.page.inspect(AbortSignal.any([]));
     assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
@@ -223,12 +246,19 @@ test("fixed structural vocabulary does not collide with an equal private answer"
       rows: [],
     }),
     plan: {
+      mode: "synthetic_test_non_submittable",
       pageType: "profile",
-      fields: [{
+fields: [{
         fieldId: "social.linkedin",
         questionType: "social_network",
         answerType: "url",
-        answer: { kind: "answered", value: "linkedin", provenance: "generated_default" },
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "linkedin",
+          provenance: "generated_default",
+          lane: "synthetic_test_default",
+        },
       }],
       repeatables: [],
     },
@@ -241,6 +271,11 @@ test("fixed structural vocabulary does not collide with an equal private answer"
     const text = readFileSync(join(root, "profile-field-learning.json"), "utf8");
     assert.equal(text.includes('"linkedin"'), false);
     assert.equal(text.includes("profile.social.linkedin"), true);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
+    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
+    assert.equal(evidence.testOnly, true);
+    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.fields[0]?.lane, "synthetic_test_default");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -248,9 +283,13 @@ test("fixed structural vocabulary does not collide with an equal private answer"
 
 test("admits reviewed website repeatable identities", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 1,
-    evidenceRevision: "s2-profile-field-learning-v1",
+    schemaVersion: 4,
+    evidenceRevision: "s2-profile-field-learning-v4",
     page: "profile",
+    executionMode: "live",
+    testOnly: false,
+    liveAcceptanceEligible: true,
+    visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.websites.1.website.url",
       uiType: "text",
@@ -258,11 +297,15 @@ test("admits reviewed website repeatable identities", () => {
       questionCategory: "website",
       answerCategory: "url",
       required: false,
+      answerState: "unset",
+      lane: null,
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: "not_applicable",
       prefillDisposition: "blank",
       driverAttempt: "none",
+      monitorBinding: observationBinding(1),
+      terminalDisposition: "optional_unset",
       mechanics: mechanics("text", "not_attempted"),
     }],
   });
@@ -285,7 +328,7 @@ test("retains the maximum admitted field inventory", async () => {
   });
   const capture = createProfileFieldLearningCapture({
     page: port,
-    plan: { pageType: "profile", fields: [], repeatables: [] },
+    plan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
     root,
     sensitiveValues: [],
   });
@@ -303,9 +346,13 @@ test("retains the maximum admitted field inventory", async () => {
 
 test("admits reviewed owner-input source and prior-employment controls", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 1,
-    evidenceRevision: "s2-profile-field-learning-v1",
+    schemaVersion: 4,
+    evidenceRevision: "s2-profile-field-learning-v4",
     page: "profile",
+    executionMode: "live",
+    testOnly: false,
+    liveAcceptanceEligible: true,
+    visibleControlCount: 2,
     fields: [
       learningField({
         fieldIdentity: "profile.source.how_did_you_hear",
@@ -326,9 +373,13 @@ test("admits reviewed owner-input source and prior-employment controls", () => {
 
 test("admits a reviewed v2 variant for a duplicated scalar field identity", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 1,
-    evidenceRevision: "s2-profile-field-learning-v1",
+    schemaVersion: 4,
+    evidenceRevision: "s2-profile-field-learning-v4",
     page: "profile",
+    executionMode: "live",
+    testOnly: false,
+    liveAcceptanceEligible: false,
+    visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
       uiType: "text",
@@ -336,11 +387,15 @@ test("admits a reviewed v2 variant for a duplicated scalar field identity", () =
       questionCategory: "identity",
       answerCategory: "text",
       required: true,
+      answerState: "unset",
+      lane: null,
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: "not_applicable",
       prefillDisposition: "blank",
       driverAttempt: "none",
+      monitorBinding: null,
+      terminalDisposition: "required_unset",
       mechanics: mechanics("text", "not_attempted"),
     }],
   });
@@ -350,9 +405,13 @@ test("admits a reviewed v2 variant for a duplicated scalar field identity", () =
 
 test("admits privacy-safe optional checkbox and required file inventory", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 1,
-    evidenceRevision: "s2-profile-field-learning-v1",
+    schemaVersion: 4,
+    evidenceRevision: "s2-profile-field-learning-v4",
     page: "profile",
+    executionMode: "live",
+    testOnly: false,
+    liveAcceptanceEligible: false,
+    visibleControlCount: 2,
     fields: [
       {
         fieldIdentity: "profile.unknown.optional.1",
@@ -361,11 +420,15 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
         questionCategory: "unknown",
         answerCategory: "unknown",
         required: false,
+        answerState: "unset",
+        lane: null,
         visibleOptionIds: [],
         selectedOptionId: null,
         optionMapping: "unresolved",
         prefillDisposition: "needs_owner_input",
         driverAttempt: "none",
+        monitorBinding: null,
+        terminalDisposition: "optional_unset",
         mechanics: mechanics("text", "not_attempted"),
       },
       {
@@ -375,11 +438,15 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
         questionCategory: "unknown",
         answerCategory: "unknown",
         required: true,
+        answerState: "unset",
+        lane: null,
         visibleOptionIds: [],
         selectedOptionId: null,
         optionMapping: "unresolved",
         prefillDisposition: "needs_owner_input",
         driverAttempt: "none",
+        monitorBinding: null,
+        terminalDisposition: "required_unset",
         mechanics: mechanics("text", "not_attempted"),
       },
     ],
@@ -397,9 +464,13 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
 
 test("denies widened, duplicate, and non-opaque learning records", () => {
   const base = {
-    schemaVersion: 1 as const,
-    evidenceRevision: "s2-profile-field-learning-v1" as const,
+    schemaVersion: 4 as const,
+    evidenceRevision: "s2-profile-field-learning-v4" as const,
     page: "profile" as const,
+    executionMode: "live" as const,
+    testOnly: false as const,
+    liveAcceptanceEligible: false as const,
+    visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
       uiType: "text" as const,
@@ -407,17 +478,33 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
       questionCategory: "identity" as const,
       answerCategory: "text" as const,
       required: true,
+      answerState: "answered" as const,
+      lane: "live_owner_fact" as const,
       visibleOptionIds: [] as const,
       selectedOptionId: null,
       optionMapping: "not_applicable" as const,
       prefillDisposition: "blank" as const,
       driverAttempt: "none" as const,
+      monitorBinding: null,
+      terminalDisposition: "pending" as const,
       mechanics: mechanics("text", "not_attempted"),
     }],
   };
-  for (const invalid of [
+  const invalidEvidence = [
     { ...base, rawLabel: "Full legal name" },
     { ...base, fields: [...base.fields, ...base.fields] },
+    { ...base, fields: [(() => {
+      const { lane: _lane, ...field } = base.fields[0]!;
+      return field;
+    })()] },
+    { ...base, fields: [{ ...base.fields[0], lane: "invalid" }] },
+    { ...base, fields: [{ ...base.fields[0], lane: "synthetic_test_default" }] },
+    {
+      ...base,
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
+      liveAcceptanceEligible: false,
+    },
     {
       ...base,
       fields: [{ ...base.fields[0], visibleOptionIds: ["Canada"] }],
@@ -476,7 +563,88 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
         mechanics: mechanics("text", "verified_after_rescan"),
       }],
     },
-  ]) assert.throws(() => admitProfileFieldLearningEvidence(invalid as never));
+  ];
+  invalidEvidence.forEach((invalid, index) => {
+    assert.throws(
+      () => admitProfileFieldLearningEvidence(invalid as never),
+      (error) => error instanceof TypeError,
+      `invalid evidence ${index} was admitted`,
+    );
+  });
+});
+
+test("already-correct and optional-unset controls require truthful observation bindings", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-observation-"));
+  const port = new FakeProfilePort({
+    pageType: "profile",
+    controls: [
+      {
+        controlId: "given-control",
+        fieldId: "identity.given_name",
+        required: true,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v1",
+        readback: "Ada",
+      },
+      {
+        controlId: "address-control",
+        fieldId: "address.line1",
+        required: false,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v1",
+        readback: null,
+      },
+    ],
+    rows: [],
+  });
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: {
+      mode: "live",
+      pageType: "profile",
+      fields: [{
+        fieldId: "identity.given_name",
+        questionType: "identity",
+        answerType: "text",
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "Ada",
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["Ada"],
+    observationBinding: observationBinding(9),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
+      join(root, "profile-field-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.liveAcceptanceEligible, true);
+    assert.deepEqual(evidence.fields.map(({ terminalDisposition }) => terminalDisposition), [
+      "verified_without_mutation", "optional_unset",
+    ]);
+    assert.deepEqual(evidence.fields.map(({ monitorBinding }) => monitorBinding), [
+      observationBinding(9), observationBinding(9),
+    ]);
+    for (const mutate of [
+      (value: any) => { value.fields[0].monitorBinding = null; },
+      (value: any) => { value.fields[0].monitorBinding.operationId = "bad"; },
+      (value: any) => { value.fields[0].monitorBinding.stateObservedAck = false; },
+    ]) {
+      const tampered = structuredClone(evidence) as any;
+      mutate(tampered);
+      assert.throws(() => admitProfileFieldLearningEvidence(tampered));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 class FakeProfilePort implements WorkdayProfilePagePort {
@@ -545,13 +713,46 @@ function learningField(input: {
     ...input,
     answerCategory: "option" as const,
     required: true,
+    answerState: "answered" as const,
+    lane: "live_owner_fact" as const,
     visibleOptionIds: [] as const,
     selectedOptionId: null,
     optionMapping: "owner_visible_option" as const,
-    prefillDisposition: "blank" as const,
+    prefillDisposition: "already_correct" as const,
     driverAttempt: "none" as const,
+    monitorBinding: observationBinding(1),
+    terminalDisposition: "verified_without_mutation" as const,
     mechanics: mechanics(input.uiType, "not_attempted"),
   };
+}
+
+function operation(index: number): string {
+  return `operation_profile_learning_${String(index).padStart(4, "0")}`;
+}
+
+function monitor(
+  controlId: string,
+  index: number,
+  moment: "before_mutation" | "after_readback",
+) {
+  return { controlId, operationId: operation(index), attempt: index, moment } as const;
+}
+
+function binding(index: number) {
+  return {
+    operationId: operation(index),
+    attempt: index,
+    beforeMutationAck: true,
+    afterReadbackAck: true,
+  } as const;
+}
+
+function observationBinding(index: number) {
+  return {
+    operationId: operation(index),
+    attempt: index,
+    stateObservedAck: true,
+  } as const;
 }
 
 function mechanics(
@@ -629,22 +830,31 @@ function repeatableSnapshot(
 
 function profilePlan(): ProfilePagePlan {
   return {
+    mode: "live",
     pageType: "profile",
-    fields: [
+fields: [
       {
         fieldId: "identity.given_name",
         questionType: "identity",
         answerType: "text",
-        answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "Ada",
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
       },
       {
         fieldId: "address.country",
         questionType: "address",
         answerType: "option",
+        allowedOptions: ["United States"],
         answer: {
           kind: "answered",
           value: "US",
           provenance: "owner_provided",
+          lane: "live_owner_fact",
         },
         optionMapping: {
           canonicalValue: "US",
@@ -661,10 +871,12 @@ function profilePlan(): ProfilePagePlan {
           fieldId: "experience.company",
           questionType: "employment",
           answerType: "text",
+          allowedOptions: [],
           answer: {
             kind: "answered",
             value: "Original",
             provenance: "resume_verified",
+            lane: "live_owner_fact",
           },
         }],
       }],

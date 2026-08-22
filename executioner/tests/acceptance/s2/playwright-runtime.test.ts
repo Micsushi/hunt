@@ -257,12 +257,14 @@ test("a profile preflight owner-input block remains a deterministic page failure
       owner: { roots: { evidence: { path: evidenceRoot } } },
       ownerSources: {
         profilePlan: {
+          mode: "live",
           pageType: "profile",
-          fields: [{
+fields: [{
             fieldId: "identity.given_name",
             questionType: "identity",
             answerType: "text",
-            answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+            allowedOptions: [],
+            answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
           }],
           repeatables: [],
         },
@@ -319,11 +321,151 @@ test("a profile preflight owner-input block remains a deterministic page failure
     assert.deepEqual(traces, [{
       event: "profile_reconciliation_blocked",
       details: {
+        pageId: "page-profile",
         code: "answer_type_unknown",
         fieldId: "unknown.required.1",
         uiBehavior: "text",
         uiVariant: "workday_unknown_required_v1",
         mutationAttempted: false,
+        retryable: false,
+      },
+    }]);
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
+test("generated prior-employment defaults fail closed before mutation", async () => {
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-prior-employment-runtime-"));
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile" data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+    <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span><fieldset role="radiogroup"><legend>Have you previously worked for our company (this does not apply to contingent/contract work)?</legend>
+      <input id="previous-yes" type="radio" name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
+      <input id="previous-no" type="radio" name="candidateIsPreviousWorker" value="false"><label for="previous-no">No</label>
+    </fieldset></div>
+  </main></body></html>`);
+  const accepted: string[] = [];
+  const monitored: string[] = [];
+  const traces: { readonly event: string; readonly details?: object }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      owner: { roots: { evidence: { path: evidenceRoot } } },
+      ownerSources: {
+        profilePlan: {
+          mode: "live",
+          pageType: "profile",
+fields: [{
+            fieldId: "employment.previously_worked_for_organization",
+            questionType: "prior_employment",
+            answerType: "option",
+            allowedOptions: ["Yes", "No"],
+            answer: { kind: "answered", value: "false", provenance: "generated_default", lane: "synthetic_test_default" },
+            optionMapping: {
+              canonicalValue: "false",
+              visibleOption: "No",
+              provenance: "visible_option",
+            },
+          }],
+          repeatables: [],
+        },
+        sensitiveValues: ["false", "No"],
+      },
+    } as never,
+    acceptances: { record(value) { accepted.push(value.checkpoint); } },
+    nextOperationId: () => generatedOperationId("operation_prior_employment_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: {
+      async auth() {},
+      async application(_page, _pageName, moment) { monitored.push(moment); },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+    trace: (event, details) => traces.push({ event, ...(details === undefined ? {} : { details }) }),
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_prior_employment_01"),
+    sessionId: "live_session_prior_employment_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_prior_employment_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_prior_employment_01"),
+      operationId: generatedOperationId("operation_prior_employment_02"),
+      sessionId: "live_session_prior_employment_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_profile",
+      input: { attempt: 1, pageId: "page-profile" } as never,
+    }, new AbortController().signal);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: "page_incomplete",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "required_field",
+      },
+    });
+    assert.equal(await page.locator("#previous-yes").isChecked(), false);
+    assert.equal(await page.locator("#previous-no").isChecked(), false);
+    assert.equal(await page.getByRole("button", { name: /^Submit(?: application)?$/iu }).count(), 0);
+    assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
+    assert.deepEqual(accepted, []);
+    assert.deepEqual(monitored, ["state_observed"]);
+    const learning = JSON.parse(readFileSync(
+      join(evidenceRoot, "profile-field-learning.json"),
+      "utf8",
+    ));
+    assert.deepEqual(learning.fields, [{
+      fieldIdentity: "profile.employment.previously_worked_for_organization",
+      uiType: "radio_group",
+      uiVariant: "workday_previous_worker_radio_v1",
+      questionCategory: "prior_employment",
+      answerCategory: "option",
+      required: true,
+      answerState: "unset",
+      lane: null,
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "owner_visible_option",
+      prefillDisposition: "needs_owner_input",
+      driverAttempt: "none",
+        monitorBinding: {
+          operationId: "operation_prior_employment_02",
+          attempt: 1,
+          stateObservedAck: true,
+        },
+      terminalDisposition: "required_unset",
+      mechanics: {
+        popupBound: "not_applicable",
+        optionFocused: "not_applicable",
+        optionActivated: "not_observed",
+        popupClosed: "not_applicable",
+        backingValueCommitted: "not_observed",
+        validationCleared: "not_observed",
+        persistentReadback: "not_attempted",
+      },
+    }]);
+    assert.deepEqual(traces, [{
+      event: "profile_reconciliation_blocked",
+      details: {
+        pageId: "page-profile",
+        code: "profile_answer_provenance_denied",
+        fieldId: "employment.previously_worked_for_organization",
+        mutationAttempted: false,
+        retryable: false,
       },
     }]);
   } finally {
@@ -343,19 +485,22 @@ test("a profile block after a commit remains browser-effect uncertain", async ()
     request: {
       ownerSources: {
         profilePlan: {
+          mode: "live",
           pageType: "profile",
-          fields: [
+fields: [
             {
               fieldId: "identity.given_name",
               questionType: "identity",
               answerType: "text",
-              answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "identity.family_name",
               questionType: "identity",
               answerType: "text",
-              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided", lane: "live_owner_fact" },
             },
           ],
           repeatables: [],
@@ -416,46 +561,53 @@ test("each profile field mutation has its own before and readback monitor pair",
     request: {
       ownerSources: {
         profilePlan: {
+          mode: "live",
           pageType: "profile",
-          fields: [
+fields: [
             {
               fieldId: "identity.given_name",
               questionType: "identity",
               answerType: "text",
-              answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "identity.family_name",
               questionType: "identity",
               answerType: "text",
-              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "identity.middle_name",
               questionType: "identity",
               answerType: "text",
-              answer: { kind: "answered", value: "Byron", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Byron", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "address.line2",
               questionType: "address",
               answerType: "text",
-              answer: { kind: "answered", value: "Unit 1", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Unit 1", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "address.postal_code",
               questionType: "address",
               answerType: "text",
-              answer: { kind: "answered", value: "T2P 1A1", provenance: "owner_provided" },
+              allowedOptions: [],
+              answer: { kind: "answered", value: "T2P 1A1", provenance: "owner_provided", lane: "live_owner_fact" },
             },
             {
               fieldId: "source.how_did_you_hear",
               questionType: "application_source",
               answerType: "option",
-              answer: { kind: "answered", value: "LinkedIn", provenance: "generated_default" },
+              allowedOptions: ["Referral"],
+              answer: { kind: "answered", value: "Referral", provenance: "owner_provided", lane: "live_owner_fact" },
               optionMapping: {
-                canonicalValue: "LinkedIn",
-                visibleOption: "LinkedIn",
+                canonicalValue: "Referral",
+                visibleOption: "Referral",
                 provenance: "visible_option",
               },
             },
@@ -551,7 +703,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
     <div data-automation-id="formField-authorization"><label>Are you legally authorized to work in this country? <span aria-hidden="true">*</span></label><button type="button" aria-label="Select One Required" aria-haspopup="listbox">Yes</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <div data-automation-id="formField-sponsorship"><label>Will you now or in the future require sponsorship? <span aria-hidden="true">*</span></label><button type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label>
-    <div data-automation-id="formField-relatives"><label>Do you have any relatives currently employed by the company? <span aria-hidden="true">*</span></label><button type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
+    <div data-automation-id="formField-source"><label>How Did You Hear About Us? <span aria-hidden="true">*</span></label><button type="button" aria-label="Select One Required" aria-haspopup="listbox">Select One</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">LinkedIn</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Indeed</div></div></div></div>
     <script>
       const originalScrollIntoView = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = function(options) {
@@ -597,8 +749,26 @@ test("each questionnaire field mutation has its own before and readback monitor 
         profileId: upstreamProfileId("profile-questionnaire-monitor"),
         profileRevision: 1,
         profileQuery: {
-          async query() {
-            return { ok: true as const, value: { kind: "profile_answer_missing" as const } };
+          async query(input: ProfileQueryRequest) {
+            const facts = {
+              work_authorization: { value: true, provenance: "owner_provided" },
+              sponsorship_required: { value: false, provenance: "owner_provided" },
+              application_source: { value: "LinkedIn", provenance: "owner_provided" },
+              configured_narrative: {
+                value: "Exact configured interest statement.",
+                provenance: "configured_template",
+              },
+              gender_disclosure: { value: "Prefer not to answer", provenance: "owner_provided" },
+              ethnicity_disclosure: { value: "Prefer not to answer", provenance: "owner_provided" },
+              veteran_disclosure: { value: "Prefer not to answer", provenance: "owner_provided" },
+            } as const;
+            const fact = facts[input.factId as keyof typeof facts];
+            return fact === undefined
+              ? { ok: true as const, value: { kind: "profile_answer_missing" as const } }
+              : {
+                ok: true as const,
+                value: { kind: "answered" as const, ...fact, lane: "live_owner_fact" as const },
+              };
           },
         },
         narrative: createConfiguredNarrativeProvider({
@@ -624,8 +794,11 @@ test("each questionnaire field mutation has its own before and readback monitor 
       async application(_page, _pageName, moment, taxonomy, event) {
         monitored.push({ moment, operationId: event.operationId, attempt: event.attempt });
         if (taxonomy.fieldCount === 4 && taxonomy.questionTypes.includes("authorization")) {
-          assert.deepEqual(taxonomy.questionTypes, ["authorization", "employment", "narrative"]);
+          assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
+        } else if (taxonomy.fieldCount === 4 && taxonomy.requiredFieldCount === 0) {
+          assert.deepEqual(taxonomy.questionTypes, ["demographic"]);
+          assert.equal(taxonomy.requiredFieldCount, 0);
         } else if (taxonomy.fieldCount === 4) {
           assert.deepEqual(taxonomy.questionTypes, ["demographic", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
@@ -701,11 +874,6 @@ test("each questionnaire field mutation has its own before and readback monitor 
       <div data-automation-id="formField-hispanic"><label>Are you Hispanic or Latino?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
       <div data-automation-id="formField-race"><label>What is your race/ethnicity?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
       <div data-automation-id="formField-military"><label>Were you ever in the military?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
-      <div data-automation-id="formField-termsAndConditions--acceptTermsAndAgreements">
-        <p>I had the opportunity to self-identify.</p>
-        <p>Yes, I have read and consent to the terms and conditions <span data-automation-id="required">*</span></p>
-        <input id="termsAndConditions--acceptTermsAndAgreements" name="termsAndConditions--acceptTermsAndAgreements" type="checkbox">
-      </div>
       <script>
         const choices = [
           ['Prefer not to answer', 'Woman', 'Man'],
@@ -747,7 +915,6 @@ test("each questionnaire field mutation has its own before and readback monitor 
       input: { attempt: 1, pageId: "page-voluntary" } as never,
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(voluntaryResult.ok, true);
-    assert.equal(await page.locator("#termsAndConditions--acceptTermsAndAgreements").isChecked(), true);
     assert.equal(await page.locator('button[data-committed="true"]').count(), 4);
     assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').allInnerTexts(), [
       "Prefer not to answer",
@@ -766,16 +933,16 @@ test("each questionnaire field mutation has its own before and readback monitor 
       !fieldEvents.some((event) => event.operationId === operationId)
     );
     const voluntaryOperations = [...new Set(voluntaryFieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(voluntaryOperations.length, 9);
+    assert.equal(voluntaryOperations.length, 8);
     assert.deepEqual(
       voluntaryOperations.map((operationId) => voluntaryFieldEvents
         .filter((event) => event.operationId === operationId)
         .map(({ moment }) => moment)),
-      Array.from({ length: 9 }, () => ["before_mutation", "after_readback"]),
+      Array.from({ length: 8 }, () => ["before_mutation", "after_readback"]),
     );
     assert.deepEqual(
       [...new Set(voluntaryFieldEvents.map(({ attempt }) => attempt))],
-      [5, 6, 7, 8, 9, 10, 11, 12, 13],
+      [5, 6, 7, 8, 9, 10, 11, 12],
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }.date-shell { display: flex; align-items: center; }.date-opener { margin-left: 48px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
@@ -875,22 +1042,23 @@ test("each questionnaire field mutation has its own before and readback monitor 
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-self-identify" } as never,
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
-    assert.equal(selfIdentifyResult.ok, true, JSON.stringify(selfIdentifyResult));
+    assert.equal(selfIdentifyResult.ok, false, JSON.stringify(selfIdentifyResult));
+    assert.equal(selfIdentifyResult.error?.code, "page_incomplete");
     assert.equal(
       await page.locator('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"] button').innerText(),
-      "English",
+      "Select One",
     );
-    assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
+    assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "");
     assert.deepEqual(
       await page.locator('[data-automation-id="dateInputWrapper"] input').evaluateAll((inputs) =>
         inputs.map((input) => (input as HTMLInputElement).value)
       ),
-      ["08", "21", "2026"],
+      ["", "", ""],
     );
     assert.deepEqual(
       await page.locator('[data-automation-id="formField-disabilityStatus"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.closest('[role="row"]')?.textContent?.trim())),
-      ["I do not want to answer"],
+      [],
     );
     const selfIdentifyExpectations = await runtime.run(page as never, {
       schemaVersion: 1,
@@ -924,10 +1092,30 @@ test("each questionnaire field mutation has its own before and readback monitor 
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(learningGap.ok, false);
     assert.equal(learningGap.error?.code, "page_incomplete");
-    assert.deepEqual(traces.filter(({ event }) => event === "questionnaire_reconciliation_blocked"), [{
-      event: "questionnaire_reconciliation_blocked",
-      details: { code: "option_no_match", candidatePresent: true },
-    }]);
+    assert.deepEqual(traces.filter(({ event }) => event === "questionnaire_reconciliation_blocked"), [
+      {
+        event: "questionnaire_reconciliation_blocked",
+        details: {
+          pageId: "page-self-identify",
+          fieldId: "field-workday-16ba06e3-1",
+          code: "profile_answer_missing",
+          protectedCategory: "legal",
+          candidatePresent: false,
+          retryable: false,
+        },
+      },
+      {
+        event: "questionnaire_reconciliation_blocked",
+        details: {
+          pageId: "page-learning-gap",
+          fieldId: "field-workday-0cbbbffc-1",
+          code: "profile_answer_missing",
+          protectedCategory: "legal",
+          candidatePresent: false,
+          retryable: false,
+        },
+      },
+    ]);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-unsupported"><label>Required unsupported control</label><span data-automation-id="required">*</span><div role="slider" tabindex="0" data-hunt-field-id="unsupported-required"></div></div>
@@ -943,7 +1131,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
-    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 3);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 2);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
@@ -1124,12 +1312,14 @@ test("profile cancellation before mutation remains operation_cancelled", async (
     request: {
       ownerSources: {
         profilePlan: {
+          mode: "live",
           pageType: "profile",
-          fields: [{
+fields: [{
             fieldId: "identity.given_name",
             questionType: "identity",
             answerType: "text",
-            answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+            allowedOptions: [],
+            answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
           }],
           repeatables: [],
         },
@@ -1329,6 +1519,7 @@ import {
   upstreamProfileId,
   upstreamResumeId,
   type OperationId,
+  type ProfileQueryRequest,
 } from "../../../src/contracts/index.ts";
 import type {
   LiveBrowserSessionV1,
@@ -1482,12 +1673,22 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       } as never,
       ownerSources: {
         resumeIntent: intent.value,
-        profilePlan: { pageType: "profile", fields: [], repeatables: [] },
+        profilePlan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
         profileId: upstreamProfileId("profile-runtime-fixture"),
         profileRevision: 1,
         profileQuery: {
-          async query() {
-            return { ok: true as const, value: { kind: "profile_answer_missing" as const } };
+          async query(input: ProfileQueryRequest) {
+            return input.factId === "configured_narrative"
+              ? {
+                ok: true as const,
+                value: {
+                  kind: "answered" as const,
+                  value: "Exact configured interest statement.",
+                  provenance: "configured_template" as const,
+                  lane: "live_owner_fact" as const,
+                },
+              }
+              : { ok: true as const, value: { kind: "profile_answer_missing" as const } };
           },
         },
         narrative: createConfiguredNarrativeProvider({
@@ -1708,7 +1909,7 @@ test("unexpected auth UI fails closed before any application mutation", async ()
       } as never,
       ownerSources: {
         resumeIntent: intent.value,
-        profilePlan: { pageType: "profile", fields: [], repeatables: [] },
+        profilePlan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
         profileId: upstreamProfileId("profile-auth-stop"),
         profileRevision: 1,
         profileQuery: { async query() { return { ok: true as const, value: { kind: "profile_answer_missing" as const } }; } },

@@ -24,6 +24,7 @@ interface AuthoritativeTextFact {
   readonly factId: string;
   readonly value: string;
   readonly provenance: "owner_provided" | "resume_verified" | "configured_template";
+  readonly lane: "live_owner_fact";
 }
 
 const AUTHORITATIVE_PROVENANCE = new Set<AuthoritativeTextFact["provenance"]>([
@@ -67,7 +68,13 @@ export function withDerivedProfileCountry(
       fieldId: "address.country",
       questionType: "address",
       answerType: "option",
-      answer: { kind: "answered", value: country.canonicalValue, provenance: "journey_derived" },
+      allowedOptions: [country.visibleOption],
+      answer: {
+        kind: "answered",
+        value: country.canonicalValue,
+        provenance: "journey_derived",
+        lane: "live_owner_fact",
+      },
       optionMapping: {
         canonicalValue: country.canonicalValue,
         visibleOption: country.visibleOption,
@@ -84,7 +91,13 @@ export function withDerivedProfileCountry(
       fieldId: "address.region",
       questionType: "address",
       answerType: "option",
-      answer: { kind: "answered", value: region.value, provenance: region.provenance },
+      allowedOptions: [visibleOption],
+      answer: {
+        kind: "answered",
+        value: region.value,
+        provenance: region.provenance,
+        lane: "live_owner_fact",
+      },
       optionMapping: {
         canonicalValue: region.value,
         visibleOption,
@@ -119,7 +132,13 @@ function addTextFact(
     fieldId,
     questionType,
     answerType: "text",
-    answer: { kind: "answered", value: fact.value, provenance: fact.provenance },
+    allowedOptions: [],
+    answer: {
+      kind: "answered",
+      value: fact.value,
+      provenance: fact.provenance,
+      lane: "live_owner_fact",
+    },
   });
 }
 
@@ -132,6 +151,7 @@ function uniqueTextFact(
     const fact = value as Record<string, unknown>;
     return fact.factId === factId &&
       typeof fact.value === "string" && fact.value.trim() !== "" &&
+      fact.lane === "live_owner_fact" &&
       AUTHORITATIVE_PROVENANCE.has(fact.provenance as AuthoritativeTextFact["provenance"]);
   });
   return matches.length === 1 ? matches[0] : undefined;

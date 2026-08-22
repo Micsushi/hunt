@@ -48,6 +48,8 @@ function field(
 
 function request(observed: FieldObservation) {
   return Object.freeze({
+    mode: "live",
+
     field: observed,
     profileId: upstreamProfileId("profile-acceptance"),
     profileRevision: 7,
@@ -56,6 +58,13 @@ function request(observed: FieldObservation) {
       sha256: "6a5c5b7838b3f7a7bf24b7e9ca49141f10ee68b2e14c9ee43eba3fdecf7173cc",
     }),
     resumeArtifact: createResumeArtifactFixture(),
+  });
+}
+
+function syntheticRequest(observed: FieldObservation) {
+  return Object.freeze({
+    ...request(observed),
+    mode: "synthetic_test_non_submittable" as const,
   });
 }
 
@@ -131,6 +140,7 @@ test("all ten exact F5 observations resolve through F6 without an unknown row", 
     work_authorization: true,
     sponsorship_required: true,
     age_requirement_met: true,
+    configured_narrative: "Narrative.",
   };
   const profile = createProfileQueryFake({
     query: (call) => {
@@ -142,7 +152,9 @@ test("all ten exact F5 observations resolve through F6 without an unknown row", 
         value: {
           kind: "answered",
           value,
-          provenance: "owner_provided",
+          provenance: factId === "configured_narrative"
+            ? "configured_template"
+            : "owner_provided",
         },
       } as const;
     },
@@ -183,7 +195,7 @@ test("all ten exact F5 observations resolve through F6 without an unknown row", 
     profile.calls.map(({ request: call }) => (call as { factId: ProfileFactId }).factId),
     questionCatalog.flatMap((entry) => entry.source.kind === "profile"
       ? [entry.source.factId]
-      : []),
+      : entry.source.kind === "narrative" ? ["configured_narrative"] : []),
   );
 });
 
@@ -204,7 +216,7 @@ test("resolver preserves all F4 errors byte-for-byte without throwing", async ()
   }
 });
 
-test("protected controls replace non-owner facts with learning defaults", async () => {
+test("protected controls reject non-owner facts without learning defaults", async () => {
   const cases = [
     ["Available start date", "date", "2026-09-01"],
     ["Are you authorized to work in this location?", "radio", true],
@@ -230,20 +242,20 @@ test("protected controls replace non-owner facts with learning defaults", async 
         request(field(label, behavior, options)),
         new AbortController().signal,
       );
-      assert.equal(result.ok && result.value.kind, "resolved");
-      if (result.ok && result.value.kind === "resolved") {
-        assert.equal(result.value.intent.provenance, "reviewed_catalog");
-      }
+      assert.deepEqual(result, {
+        ok: false,
+        error: { code: "protected_answer_denied", retryable: false },
+      });
     }
   }
 });
 
-test("unresolved and unmatched facts become explicit learning intents", async () => {
+test("unresolved and unmatched live facts fail closed while synthetic mode learns mechanics", async () => {
   const missing = createAnswerResolver(createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   }).port, "Narrative.");
   assert.deepEqual(
-    await missing.resolve(request(field("Given name")), new AbortController().signal),
+    await missing.resolve(syntheticRequest(field("Given name")), new AbortController().signal),
     {
       ok: true,
       value: {
@@ -263,7 +275,11 @@ test("unresolved and unmatched facts become explicit learning intents", async ()
   const answered = createProfileQueryFake({
     query: {
       ok: true,
-      value: { kind: "answered", value: true, provenance: "owner_provided" },
+      value: {
+        kind: "answered",
+        value: true,
+        provenance: "owner_provided",
+      },
     },
   });
   const resolver = createAnswerResolver(answered.port, "Exact narrative.");
@@ -275,21 +291,7 @@ test("unresolved and unmatched facts become explicit learning intents", async ()
       ])),
       new AbortController().signal,
     ),
-    {
-      ok: true,
-      value: {
-        kind: "resolved",
-        intent: {
-          kind: "choice",
-          behavior: "radio",
-          fieldId: "s1-field-given-name",
-          target: "target-acceptance",
-          optionId: "no",
-          expectedOption: "No",
-          provenance: "visible_option",
-        },
-      },
-    },
+    { ok: false, error: { code: "protected_answer_denied", retryable: false } },
   );
   assert.deepEqual(
     await resolver.resolve(
@@ -299,21 +301,7 @@ test("unresolved and unmatched facts become explicit learning intents", async ()
       ])),
       new AbortController().signal,
     ),
-    {
-      ok: true,
-      value: {
-        kind: "resolved",
-        intent: {
-          kind: "choice",
-          behavior: "radio",
-          fieldId: "s1-field-given-name",
-          target: "target-acceptance",
-          optionId: "yes",
-          expectedOption: "Yes",
-          provenance: "visible_option",
-        },
-      },
-    },
+    { ok: false, error: { code: "protected_answer_denied", retryable: false } },
   );
   assert.deepEqual(
     await resolver.resolve(
@@ -323,7 +311,7 @@ test("unresolved and unmatched facts become explicit learning intents", async ()
     { ok: true, value: { kind: "unsupported", fieldId: "s1-field-given-name" } },
   );
   assert.deepEqual(
-    await resolver.resolve(request(field("Unreviewed")), new AbortController().signal),
+  await resolver.resolve(syntheticRequest(field("Unreviewed")), new AbortController().signal),
     {
       ok: true,
       value: {
@@ -342,7 +330,13 @@ test("unresolved and unmatched facts become explicit learning intents", async ()
 });
 
 test("configured narrative and artifact upload are exact", async () => {
-  const resolver = createAnswerResolver(createProfileQueryFake().port, "Exact narrative.");
+  const resolver = createAnswerResolver(createProfileQueryFake({
+    query: { ok: true, value: {
+      kind: "answered",
+      value: "Exact narrative.",
+      provenance: "configured_template",
+    } },
+  }).port, "Exact narrative.");
 
   const narrative = await resolver.resolve(
     request(field("Brief interest statement", "textarea")),

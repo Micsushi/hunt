@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+import { parseApplicationProfile } from "../profile/application-profile.ts";
 import type { RealRunAccountMode, RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   protectStage2StoragePaths,
@@ -284,6 +285,37 @@ function validateApplicationSource(value: Stage2ApplicationSourceInput): void {
     typeof value.narrative !== "object" || value.narrative === null ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value.narrative.revision)
   ) denied();
+  try {
+    parseApplicationProfile(value.profile);
+  } catch {
+    denied();
+  }
+  const plan = value.profilePlan as Record<string, unknown>;
+  if (plan.mode !== "live" || !Array.isArray(plan.fields) || !Array.isArray(plan.repeatables)) {
+    denied();
+  }
+  const fields = [
+    ...plan.fields,
+    ...plan.repeatables.flatMap((repeatable) =>
+      typeof repeatable === "object" && repeatable !== null &&
+        Array.isArray((repeatable as { rows?: unknown }).rows)
+        ? (repeatable as { rows: unknown[] }).rows.flatMap((row) =>
+            typeof row === "object" && row !== null &&
+              Array.isArray((row as { fields?: unknown }).fields)
+              ? (row as { fields: unknown[] }).fields
+              : []
+          )
+        : []
+    ),
+  ];
+  if (fields.some((field) => {
+    if (typeof field !== "object" || field === null) return true;
+    const answer = (field as { answer?: unknown }).answer;
+    if (typeof answer !== "object" || answer === null) return true;
+    const candidate = answer as { kind?: unknown; lane?: unknown; provenance?: unknown };
+    return candidate.kind === "answered" &&
+      (candidate.lane !== "live_owner_fact" || candidate.provenance === "generated_default");
+  })) denied();
 }
 
 function snapshotApplicationSource(

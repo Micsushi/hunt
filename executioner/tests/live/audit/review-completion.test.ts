@@ -104,6 +104,35 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
   }
 });
 
+test("Review completion rejects a required control retained as explicit unset", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-required-unset-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_requiredunsetxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    const path = join(layout.evidenceRoot, "profile-field-learning.json");
+    const learning = JSON.parse(readFileSync(path, "utf8"));
+    learning.liveAcceptanceEligible = false;
+    learning.fields[1] = {
+      ...learning.fields[1],
+      fieldIdentity: "profile.unknown.required.1",
+      uiVariant: "workday_unknown_required_v1",
+      questionCategory: "unknown",
+      answerCategory: "unknown",
+      required: true,
+      optionMapping: "unresolved",
+      terminalDisposition: "required_unset",
+    };
+    writeFileSync(path, `${JSON.stringify(learning)}\n`);
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Review completion admits one exact value-free application trace and rejects drift", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-trace-audit-"));
   try {
@@ -199,6 +228,7 @@ test("Review finalization rejects schema-valid profile learning replaced after a
     const learning = JSON.parse(readFileSync(path, "utf8"));
     const replacement = {
       ...learning,
+      visibleControlCount: 1,
       fields: [{ ...learning.fields[0], required: false }],
     };
     assert.doesNotThrow(() => admitProfileFieldLearningEvidence(replacement));
@@ -395,7 +425,7 @@ test("Review completion rejects an external monitor ACK crossed from another jou
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0013-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -420,7 +450,7 @@ test("Review completion rejects a reviewed structure bound to the wrong page", a
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0013-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -445,7 +475,7 @@ test("Review completion rejects a monitor ACK that claims Submit activation", as
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0013-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -458,7 +488,7 @@ test("Review completion rejects a monitor ACK that claims Submit activation", as
   }
 });
 
-test("Review completion accepts a bounded monitored recovery and retry sequence", async () => {
+test("Review completion rejects an unbound recovered mutation attempt", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-audit-"));
   try {
     const layout = await prepareStage2RunStorage({
@@ -466,7 +496,16 @@ test("Review completion accepts a bounded monitored recovery and retry sequence"
       runKey: "run_20260810_reviewretryxxxxx",
     }, noProtection);
     const configSha256 = writeOwnerConfig(layout);
-    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    await writeReviewEvidence(
+      layout.evidenceRoot,
+      configSha256,
+      journeyId,
+      false,
+      false,
+      true,
+      false,
+      2,
+    );
     rmSync(join(layout.evidenceRoot, "monitor"), { recursive: true });
     const moments = [...applicationMoments()];
     moments.splice(2, 0,
@@ -483,9 +522,102 @@ test("Review completion accepts a bounded monitored recovery and retry sequence"
       configSha256,
     );
     writeProcessAudit(layout.evidenceRoot, "2026-08-10T12:01:00.000Z", configSha256);
-    await auditStage2Completion(layout.evidenceRoot);
+    await assert.rejects(
+      auditStage2Completion(layout.evidenceRoot),
+      /completion audit denied/u,
+    );
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion rejects incomplete Profile bindings, verification, and inventory", async (t) => {
+  const cases = [
+    ["bindingmissingxx", (learning: any) => {
+      learning.fields[0] = {
+        ...learning.fields[0],
+        prefillDisposition: "already_correct",
+        driverAttempt: "none",
+        monitorBinding: null,
+        terminalDisposition: "verified_without_mutation",
+        mechanics: {
+          popupBound: "not_applicable",
+          optionFocused: "not_applicable",
+          optionActivated: "not_applicable",
+          popupClosed: "not_applicable",
+          backingValueCommitted: "not_observed",
+          validationCleared: "not_observed",
+          persistentReadback: "not_attempted",
+        },
+      };
+    }],
+    ["bindingmismatchx", (learning: any) => {
+      learning.fields[0].monitorBinding.attempt = 2;
+    }],
+    ["observationmissx", (learning: any) => {
+      learning.fields[1].monitorBinding = null;
+    }],
+    ["observationbadxx", (learning: any) => {
+      learning.fields[1].monitorBinding.attempt = 2;
+    }],
+    ["bindingduplicate", (learning: any) => {
+      learning.fields[1] = {
+        ...learning.fields[1],
+        answerState: "answered",
+        lane: "live_owner_fact",
+        prefillDisposition: "conflict",
+        driverAttempt: "text",
+        monitorBinding: { ...learning.fields[0].monitorBinding },
+        terminalDisposition: "verified",
+        mechanics: { ...learning.fields[0].mechanics },
+      };
+    }],
+    ["optionalomittedx", (learning: any) => {
+      learning.visibleControlCount = 1;
+      learning.fields = learning.fields.slice(0, 1);
+    }],
+    ["answeredunlisted", (learning: any) => {
+      learning.fields[1] = {
+        ...learning.fields[1],
+        answerState: "answered",
+        lane: "live_owner_fact",
+        prefillDisposition: "already_correct",
+        terminalDisposition: "verified_without_mutation",
+      };
+    }],
+    ["requiredmismatch", (learning: any) => {
+      learning.fields[1] = {
+        ...learning.fields[1],
+        required: true,
+        answerState: "answered",
+        lane: "live_owner_fact",
+        prefillDisposition: "already_correct",
+        terminalDisposition: "verified_without_mutation",
+      };
+    }],
+  ] as const;
+  for (const [suffix, mutate] of cases) {
+    await t.test(suffix, async () => {
+      const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-profile-binding-"));
+      try {
+        const layout = await prepareStage2RunStorage({
+          storageRoot,
+          runKey: `run_20260810_${suffix}`,
+        }, noProtection);
+        const configSha256 = writeOwnerConfig(layout);
+        await writeReviewEvidence(layout.evidenceRoot, configSha256);
+        const path = join(layout.evidenceRoot, "profile-field-learning.json");
+        const learning = JSON.parse(readFileSync(path, "utf8"));
+        mutate(learning);
+        writeFileSync(path, `${JSON.stringify(learning)}\n`);
+        await assert.rejects(
+          auditStage2Completion(layout.evidenceRoot),
+          /completion audit denied/u,
+        );
+      } finally {
+        rmSync(storageRoot, { recursive: true, force: true });
+      }
+    });
   }
 });
 
@@ -638,7 +770,7 @@ test("Review completion rejects an ACK observed after production process close",
     const ackPath = join(
       layout.evidenceRoot,
       "monitor",
-      "0013-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(ackPath, "utf8"));
     writeFileSync(ackPath, JSON.stringify({ ...ack, observedAt: "2026-08-10T12:02:00.000Z" }));
@@ -707,11 +839,16 @@ async function writeReviewEvidence(
   directReview = false,
   writeTrace = true,
   repeatedQuestionnaire = false,
+  profileMutationAttempt = 1,
 ): Promise<void> {
   const learningBytes = Buffer.from(`${JSON.stringify({
-    schemaVersion: 1,
-    evidenceRevision: "s2-profile-field-learning-v1",
+    schemaVersion: 4,
+    evidenceRevision: "s2-profile-field-learning-v4",
     page: "profile",
+    executionMode: "live",
+    testOnly: false,
+    liveAcceptanceEligible: true,
+    visibleControlCount: 2,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
       uiType: "text",
@@ -719,11 +856,49 @@ async function writeReviewEvidence(
       questionCategory: "identity",
       answerCategory: "text",
       required: true,
+      answerState: "answered",
+      lane: "live_owner_fact",
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: "not_applicable",
-      prefillDisposition: "already_correct",
+      prefillDisposition: "conflict",
+      driverAttempt: "text",
+      monitorBinding: {
+        operationId: `operation_profile_mutation_0${profileMutationAttempt}`,
+        attempt: profileMutationAttempt,
+        beforeMutationAck: true,
+        afterReadbackAck: true,
+      },
+      terminalDisposition: "verified",
+      mechanics: {
+        popupBound: "not_applicable",
+        optionFocused: "not_applicable",
+        optionActivated: "not_applicable",
+        popupClosed: "not_applicable",
+        backingValueCommitted: "observed",
+        validationCleared: "observed",
+        persistentReadback: "verified_after_rescan",
+      },
+    }, {
+      fieldIdentity: "profile.social.linkedin",
+      uiType: "text",
+      uiVariant: "workday_text_v2",
+      questionCategory: "social_network",
+      answerCategory: "url",
+      required: false,
+      answerState: "unset",
+      lane: null,
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "not_applicable",
+      prefillDisposition: "needs_owner_input",
       driverAttempt: "none",
+      monitorBinding: {
+        operationId: "operation_profile_observation_01",
+        attempt: 1,
+        stateObservedAck: true,
+      },
+      terminalDisposition: "optional_unset",
       mechanics: {
         popupBound: "not_applicable",
         optionFocused: "not_applicable",
@@ -741,9 +916,12 @@ async function writeReviewEvidence(
   const profileFieldLearningSha256 = digest(learningBytes);
   if (!directReview) {
     writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
-      schemaVersion: 1,
-      evidenceRevision: "s2-question-answer-learning-v1",
+      schemaVersion: 4,
+      evidenceRevision: "s2-question-answer-learning-v4",
       page: "questionnaire",
+      executionMode: "live",
+      testOnly: false,
+      liveAcceptanceEligible: true,
       questions: [{
         questionId: "s1-question-work-authorization",
         fieldId: "authorization-answer",
@@ -752,10 +930,32 @@ async function writeReviewEvidence(
         uiType: "radio",
         answerType: "single_select",
         possibleAnswers: ["Yes", "No"],
+        answerState: "answered",
+        lane: "live_owner_fact",
         chosenAnswer: "owner_answer_applied",
         strategy: "owner_answer",
         provenance: "owner_provided",
         replaceWithOwnerAnswer: false,
+        interactionState: "attempted",
+        monitorBinding: {
+          operationId: "operation_question_mutation_01",
+          attempt: 1,
+          beforeMutationAck: true,
+          afterReadbackAck: true,
+        },
+        verificationResult: "verified",
+        failureCode: null,
+        retryable: false,
+        terminalDisposition: "verified",
+        attemptHistory: [{
+          operationId: "operation_question_mutation_01",
+          attempt: 1,
+          beforeMutationAck: true,
+          afterReadbackAck: true,
+          outcome: "verified",
+          failureCode: null,
+          retryable: false,
+        }],
       }, ...(repeatedQuestionnaire ? [{
         questionId: "observed-question-0123456789abcdef01234567",
         fieldId: "privacy-answer",
@@ -764,10 +964,32 @@ async function writeReviewEvidence(
         uiType: "select",
         answerType: "single_select",
         possibleAnswers: ["Prefer not to answer"],
-        chosenAnswer: "Prefer not to answer",
-        strategy: "privacy_match",
-        provenance: "reviewed_catalog",
-        replaceWithOwnerAnswer: true,
+        answerState: "answered",
+        lane: "live_owner_fact",
+        chosenAnswer: "owner_answer_applied",
+        strategy: "owner_answer",
+        provenance: "owner_provided",
+        replaceWithOwnerAnswer: false,
+        interactionState: "attempted",
+        monitorBinding: {
+          operationId: "operation_question_mutation_02",
+          attempt: 2,
+          beforeMutationAck: true,
+          afterReadbackAck: true,
+        },
+        verificationResult: "verified",
+        failureCode: null,
+        retryable: false,
+        terminalDisposition: "verified",
+        attemptHistory: [{
+          operationId: "operation_question_mutation_02",
+          attempt: 2,
+          beforeMutationAck: true,
+          afterReadbackAck: true,
+          outcome: "verified",
+          failureCode: null,
+          retryable: false,
+        }],
       }] : [])],
     }, null, 2)}\n`);
   }
@@ -951,6 +1173,7 @@ function applicationMoments(
     ["review", "review_readback", "operation_review_readback_01", 1],
   ];
   if (skipResume) return [
+    ["profile", "state_observed", "operation_profile_observation_01", 1],
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],
@@ -962,6 +1185,7 @@ function applicationMoments(
     ["review", "review_readback", "operation_review_readback_01", 1],
   ];
   const moments: Array<readonly [string, string, string, number]> = [
+    ["profile", "state_observed", "operation_profile_observation_01", 1],
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],
@@ -1029,7 +1253,7 @@ function writeExternalMonitorChain(
       ordinal: index + 1,
       page,
       moment,
-      fieldCount: page === "review" ? 3 : 1,
+      fieldCount: page === "review" ? 3 : page === "profile" ? 2 : 1,
       requiredFieldCount: 1,
       controlTypes: ["text"],
       questionTypes: page === "application_ready" || page === "profile"
@@ -1221,7 +1445,7 @@ function applicationWalk(
     laneAcceptances.push(questionnaireAcceptance(
       "privacy-answer",
       "observed-question-0123456789abcdef01234567",
-      "reviewed_catalog",
+      "owner_provided",
       "consent",
     ));
   }
@@ -1262,6 +1486,7 @@ function profileAcceptance(profileFieldLearningSha256: string) {
       uiBehavior: "text" as const,
       uiVariant: "workday_text_v1",
       provenance: "owner_provided" as const,
+      lane: "live_owner_fact" as const,
     }],
     ownedDuplicateRows: 0 as const,
     independentlyVerified: true as const,
@@ -1307,6 +1532,7 @@ function questionnaireAcceptance(
       fieldId: fieldId(answerFieldId),
       questionId: questionId(answerQuestionId),
       provenance,
+      lane: "live_owner_fact" as const,
       protectedCategory,
       templateRevision: null,
       verification: "independent" as const,

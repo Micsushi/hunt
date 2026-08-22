@@ -1,4 +1,8 @@
 import type { ProfileAnswerProvenance } from "../../../../contracts/index.ts";
+import type {
+  AnswerExecutionMode,
+  AnswerProvenanceLane,
+} from "../../../../form/answers/application-types.ts";
 
 export type ProfileFieldAnswerProvenance =
   | ProfileAnswerProvenance
@@ -62,6 +66,7 @@ export type ProfileFieldAnswer =
       readonly kind: "answered";
       readonly value: string;
       readonly provenance: ProfileFieldAnswerProvenance;
+      readonly lane: AnswerProvenanceLane;
     }
   | { readonly kind: "profile_answer_missing" };
 
@@ -75,6 +80,7 @@ export interface ProfileFieldPlan {
   readonly fieldId: string;
   readonly questionType: ProfileQuestionType;
   readonly answerType: ProfileCanonicalAnswerType;
+  readonly allowedOptions: readonly string[];
   readonly answer: ProfileFieldAnswer;
   readonly optionMapping?: ProfileOptionMapping;
 }
@@ -90,6 +96,7 @@ export interface ProfileRepeatablePlan {
 }
 
 export interface ProfilePagePlan {
+  readonly mode: AnswerExecutionMode;
   readonly pageType: ProfilePageType;
   readonly fields: readonly ProfileFieldPlan[];
   readonly repeatables: readonly ProfileRepeatablePlan[];
@@ -157,6 +164,7 @@ export interface VerifiedProfileField {
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
   readonly provenance: ProfileFieldAnswerProvenance;
+  readonly lane: AnswerProvenanceLane;
   readonly optionMappingProvenance?: "visible_option";
   readonly rowKey?: string;
 }
@@ -174,6 +182,7 @@ export type ProfilePageCompletionResult =
         | "answer_type_unknown"
         | "operation_cancelled"
         | "profile_answer_missing"
+        | "profile_answer_provenance_denied"
         | "profile_commit_unverified"
         | "profile_control_ambiguous"
         | "profile_control_missing"

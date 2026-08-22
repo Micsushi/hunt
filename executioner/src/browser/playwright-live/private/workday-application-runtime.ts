@@ -515,16 +515,21 @@ export class OwnedWorkdayApplicationRuntime {
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
         const monitorPageName = await this.#monitorPageForLane(page, "profile");
+        const observationAttempt = this.#nextObservationMonitorAttempt(
+          monitorPageName,
+          "state_observed",
+        );
         await this.#monitor(
           page,
           monitorPageName,
           "state_observed",
           ownedRequest.operationId,
-          this.#nextObservationMonitorAttempt(monitorPageName, "state_observed"),
+          observationAttempt,
           signal,
         );
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
+        let learning: ReturnType<typeof createProfileFieldLearningCapture> | undefined;
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
           pageType: request.ownerSources.profilePlan.pageType,
           timeoutMs: this.#timeoutMs,
@@ -538,6 +543,12 @@ export class OwnedWorkdayApplicationRuntime {
             await this.#monitor(
               page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
             );
+            learning?.monitorAck({
+              controlId: commit.controlId,
+              operationId,
+              attempt,
+              moment: "before_mutation",
+            });
             this.#assertAuthorized(innerSignal);
             try {
               return await playwrightProfilePage.commit(commit, innerSignal);
@@ -545,6 +556,12 @@ export class OwnedWorkdayApplicationRuntime {
               await this.#monitor(
                 page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
               );
+              learning?.monitorAck({
+                controlId: commit.controlId,
+                operationId,
+                attempt,
+                moment: "after_readback",
+              });
               this.#assertAuthorized(innerSignal);
             }
           },
@@ -580,7 +597,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           interaction: (controlId) => playwrightProfilePage.interaction(controlId),
         };
-        const learning = createProfileFieldLearningCapture({
+        learning = createProfileFieldLearningCapture({
           page: profilePage,
           plan: request.ownerSources.profilePlan,
           root: request.owner?.roots?.evidence?.path,
@@ -588,6 +605,11 @@ export class OwnedWorkdayApplicationRuntime {
             ? "profile-field-learning.json"
             : "profile-field-learning-02.json",
           sensitiveValues: request.ownerSources.sensitiveValues,
+          observationBinding: {
+            operationId: ownedRequest.operationId,
+            attempt: observationAttempt,
+            stateObservedAck: true,
+          },
         });
         let learningSha256: string | null = null;
         let result;
@@ -604,11 +626,13 @@ export class OwnedWorkdayApplicationRuntime {
           if (result.kind === "blocked") {
             try {
               this.#trace?.("profile_reconciliation_blocked", {
+                pageId: input.pageId,
                 code: result.code,
                 ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
                 ...(result.uiBehavior === undefined ? {} : { uiBehavior: result.uiBehavior }),
                 ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),
                 mutationAttempted,
+                retryable: false,
               });
             } catch {
               // Diagnostics never change application behavior.
@@ -623,7 +647,8 @@ export class OwnedWorkdayApplicationRuntime {
               result.code === "operation_cancelled"
                 ? "none"
                 : result.code === "answer_type_unknown" ||
-                  result.code === "profile_answer_missing"
+                  result.code === "profile_answer_missing" ||
+                  result.code === "profile_answer_provenance_denied"
                 ? "required_field"
                 : "ui_behavior",
             );
@@ -928,6 +953,11 @@ export class OwnedWorkdayApplicationRuntime {
           await this.#monitor(
             page, monitorPageName, "before_mutation", driveRequest.operationId, attempt, innerSignal,
           );
+          request.questionLearning?.monitorAck({
+            operationId: driveRequest.operationId,
+            attempt,
+            moment: "before_mutation",
+          });
           this.#assertAuthorized(innerSignal);
           const driven = await semanticDriver.drive(driveRequest, innerSignal);
           this.#trace?.("questionnaire_field_drive_completed", {
@@ -937,6 +967,18 @@ export class OwnedWorkdayApplicationRuntime {
             status: driven.ok ? "succeeded" : "failed",
             ...(!driven.ok ? { code: driven.error.code } : {}),
           });
+          if (!driven.ok) {
+            await this.#monitor(
+              page, monitorPageName, "after_readback",
+              driveRequest.operationId, attempt, innerSignal,
+            );
+            request.questionLearning?.monitorAck({
+              operationId: driveRequest.operationId,
+              attempt,
+              moment: "after_readback",
+            });
+            monitoredAttempts.delete(driveRequest.operationId);
+          }
           return driven;
         },
       });
@@ -964,6 +1006,11 @@ export class OwnedWorkdayApplicationRuntime {
           await this.#monitor(
             page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
           );
+          request.questionLearning?.monitorAck({
+            operationId,
+            attempt,
+            moment: "after_readback",
+          });
           this.#assertAuthorized(innerSignal);
           monitoredAttempts.delete(operationId);
           return verified;
@@ -978,9 +1025,13 @@ export class OwnedWorkdayApplicationRuntime {
         nextOperationId: this.#nextOperationId,
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
+        recordAttempt: questionLearning?.recordAttempt,
         recordAnswer: questionLearning?.record,
+        recordUnset: questionLearning?.recordUnset,
+        recordFailure: questionLearning?.recordFailure,
       });
       const completed = await questionnaire.complete({
+        mode: "live",
         journeyId: session.journeyId,
         sessionId: semanticSessionId,
         pageId: input.pageId,
@@ -998,6 +1049,7 @@ export class OwnedWorkdayApplicationRuntime {
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
       if (!completed.ok) {
+        questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_failed", {
@@ -1006,11 +1058,16 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
+        questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_blocked", {
+          pageId: input.pageId,
+          fieldId: completed.value.fieldId,
           code: completed.value.code,
+          protectedCategory: completed.value.protectedCategory,
           candidatePresent: completed.value.candidate !== undefined,
+          retryable: false,
         });
         const placeholderCount = completed.value.protectedPlaceholderCount;
         if (

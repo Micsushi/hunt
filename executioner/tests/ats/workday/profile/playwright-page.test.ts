@@ -26,7 +26,13 @@ const field = (
   fieldId,
   questionType,
   answerType,
-  answer: { kind: "answered", value, provenance: "owner_provided" },
+  allowedOptions: visibleOption === undefined ? [] : [visibleOption],
+  answer: {
+    kind: "answered",
+    value,
+    provenance: "owner_provided",
+    lane: "live_owner_fact",
+  },
   ...(visibleOption === undefined
     ? {}
     : {
@@ -362,8 +368,9 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
     assert.equal(before.controls.some(({ fieldId }) => fieldId.startsWith("unknown.")), false);
 
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [
+fields: [
         field(
           "source.how_did_you_hear",
           "application_source",
@@ -453,8 +460,9 @@ test("Integer source select maps LinkedIn to its unique corporate-page leaf", as
       [{ fieldId: "source.how_did_you_hear", uiBehavior: "search_select", required: true }],
     );
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -623,8 +631,9 @@ test("canonical source aria-valuetext prefill is already correct and never reope
       ({ fieldId }) => fieldId === "source.how_did_you_hear",
     )!;
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -680,8 +689,9 @@ test("canonical source waits for its delayed owned listbox leaf", async () => {
       timeoutMs: 1_000,
     });
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -1247,8 +1257,9 @@ test("canonical source closes a committed Workday popup with Escape", async () =
     `);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -1299,8 +1310,9 @@ test("the source selector expands the uniquely matching category before selectin
     `);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -1354,8 +1366,9 @@ test("BMO source button binds its listbox after opening and commits a flat optio
     `);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field(
+fields: [field(
         "source.how_did_you_hear",
         "application_source",
         "option",
@@ -1536,8 +1549,9 @@ test("unknown visible required controls block before a reviewed control is mutat
 
     assert.deepEqual(
       await completeWorkdayProfilePage({
+        mode: "live",
         pageType: "profile",
-        fields: [field("identity.given_name", "identity", "text", "Ada")],
+fields: [field("identity.given_name", "identity", "text", "Ada")],
         repeatables: [],
       }, adapter, AbortSignal.any([])),
       {
@@ -1577,8 +1591,9 @@ test("learns and fills a generic Workday Website repeatable row", async () => {
     `);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [],
+fields: [],
       repeatables: [{
         section: "websites",
         rows: [{
@@ -1620,8 +1635,9 @@ test("custom ARIA required controls block before a reviewed field is mutated", a
 
     assert.deepEqual(
       await completeWorkdayProfilePage({
+        mode: "live",
         pageType: "profile",
-        fields: [field("identity.given_name", "identity", "text", "Ada")],
+fields: [field("identity.given_name", "identity", "text", "Ada")],
         repeatables: [],
       }, adapter, AbortSignal.any([])),
       {
@@ -1810,8 +1826,9 @@ test("required controls outside the admitted profile container do not block it",
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
 
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("identity.given_name", "identity", "text", "Ada")],
+fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 
@@ -1845,8 +1862,9 @@ test("disabled required controls inside the profile container do not block it", 
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
 
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("identity.given_name", "identity", "text", "Ada")],
+fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 
@@ -1876,8 +1894,9 @@ test("native readonly required controls inside the profile container do not bloc
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
 
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("identity.given_name", "identity", "text", "Ada")],
+fields: [field("identity.given_name", "identity", "text", "Ada")],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 
@@ -1919,8 +1938,9 @@ test("a required control enabled after an earlier commit blocks the next mutatio
 
     assert.deepEqual(
       await completeWorkdayProfilePage({
+        mode: "live",
         pageType: "profile",
-        fields: [
+fields: [
           field("identity.given_name", "identity", "text", "Ada"),
           field("identity.family_name", "identity", "text", "Lovelace"),
         ],
@@ -1960,8 +1980,9 @@ test("real adapter and handler reconcile every profile section without owned dup
     ];
     const portErrors: string[] = [];
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [
+fields: [
         field("identity.given_name", "identity", "text", "Ada"),
         field("identity.family_name", "identity", "text", "Lovelace"),
         field("address.line1", "address", "text", "123 Example Street"),
@@ -2131,8 +2152,9 @@ test("My Experience multi-select commits every exact visible skill without comma
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const options = JSON.stringify(["C++", "REST API", "TypeScript"]);
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("skills.values", "skill", "multi_select", options, options)],
+fields: [field("skills.values", "skill", "multi_select", options, options)],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 
@@ -2249,8 +2271,9 @@ test("My Experience submits a multi-select search before choosing the exact resu
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const options = JSON.stringify(["JavaScript"]);
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("skills.values", "skill", "multi_select", options, options)],
+fields: [field("skills.values", "skill", "multi_select", options, options)],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 
@@ -2400,8 +2423,9 @@ test("My Experience multi-select owns a local Workday prompt without aria-contro
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const options = JSON.stringify(["Python"]);
     const result = await completeWorkdayProfilePage({
+      mode: "live",
       pageType: "profile",
-      fields: [field("skills.values", "skill", "multi_select", options, options)],
+fields: [field("skills.values", "skill", "multi_select", options, options)],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
 

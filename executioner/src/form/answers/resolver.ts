@@ -9,7 +9,17 @@ import {
   type FieldIntent,
   type FieldObservation,
   type ProfileQuery,
+  type ProfileQueryRequest,
 } from "../../contracts/index.ts";
+import type {
+  AnswerProvenanceLane,
+  ApplicationProfileQuery,
+} from "./application-types.ts";
+import type {
+  ApplicationAnswerResolutionRequest,
+  ApplicationAnswerResolutionResult,
+  ApplicationAnswerResolver,
+} from "./application-types.ts";
 import { mapVisibleOption } from "../options/mapper.ts";
 import {
   generatedLearningDefaultFor,
@@ -17,13 +27,18 @@ import {
   resolveQuestion,
   type CanonicalQuestionId,
 } from "../questions/catalog.ts";
+import {
+  contractApprovedPrivacyChoices,
+  protectedQuestionCategory,
+} from
+  "../../ats/workday/application/questions/protected.ts";
 
 const cancelled = Object.freeze({
   ok: false as const,
   error: Object.freeze({ code: "operation_cancelled" as const, retryable: false as const }),
 });
 
-function success(value: AnswerResolutionResult) {
+function success(value: ApplicationAnswerResolutionResult) {
   return Object.freeze({ ok: true as const, value: Object.freeze(value) });
 }
 
@@ -40,8 +55,8 @@ function unsupported(field: FieldObservation) {
   return success({ kind: "unsupported", fieldId: field.fieldId });
 }
 
-function resolved(intent: FieldIntent) {
-  return success({ kind: "resolved", intent: Object.freeze(intent) });
+function resolved(intent: FieldIntent, lane: AnswerProvenanceLane) {
+  return success({ kind: "resolved", intent: Object.freeze(intent), lane });
 }
 
 function isIsoDate(value: string): boolean {
@@ -57,26 +72,20 @@ function localIsoDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-const privacyChoiceDefaults = [
-  "Prefer not to answer",
-  "Prefer not to say",
-  "I do not wish to provide this information",
-  "I do not want to answer",
-  "Decline to self-identify",
-] as const;
-
 function intentFor(
   field: FieldObservation,
   canonicalQuestionId: CanonicalQuestionId,
   value: string | number | boolean,
   provenance: AnswerProvenance,
-): AnswerResolutionResult {
+  lane: AnswerProvenanceLane,
+): ApplicationAnswerResolutionResult {
   if (
     (field.behavior === "text" || field.behavior === "textarea") &&
     typeof value !== "boolean"
   ) {
     return Object.freeze({
       kind: "resolved",
+      lane,
       intent: Object.freeze({
         kind: "text",
         behavior: field.behavior,
@@ -90,6 +99,7 @@ function intentFor(
   if (field.behavior === "date" && typeof value === "string" && isIsoDate(value)) {
     return Object.freeze({
       kind: "resolved",
+      lane,
       intent: Object.freeze({
         kind: "date",
         behavior: "date",
@@ -115,6 +125,7 @@ function intentFor(
         const expectedOption = boundedText(value ? "Yes" : "No");
         return Object.freeze({
           kind: "resolved",
+          lane,
           intent: Object.freeze({
             kind: "choice",
             behavior: field.behavior,
@@ -133,6 +144,7 @@ function intentFor(
     }
     return Object.freeze({
       kind: "resolved",
+      lane,
       intent: Object.freeze({
         kind: "choice",
         behavior: field.behavior,
@@ -147,6 +159,7 @@ function intentFor(
   if (field.behavior === "checkbox" && typeof value === "boolean") {
     return Object.freeze({
       kind: "resolved",
+      lane,
       intent: Object.freeze({
         kind: "toggle",
         behavior: "checkbox",
@@ -163,7 +176,7 @@ function intentFor(
 function matchedChoiceIntent(
   field: FieldObservation,
   value: string,
-): AnswerResolutionResult | undefined {
+): ApplicationAnswerResolutionResult | undefined {
   if (
     field.behavior !== "radio" && field.behavior !== "select" &&
     field.behavior !== "listbox"
@@ -172,6 +185,7 @@ function matchedChoiceIntent(
   if (option.kind !== "matched") return undefined;
   return {
     kind: "resolved",
+    lane: "synthetic_test_default",
     intent: {
       kind: "choice",
       behavior: field.behavior,
@@ -188,12 +202,13 @@ const placeholderOption = /^(?:select|choose|please select|select one|choose one
 
 function generatedLearningIntent(
   field: FieldObservation,
-  resumeArtifact: AnswerResolutionRequest["resumeArtifact"],
+  resumeArtifact: ApplicationAnswerResolutionRequest["resumeArtifact"],
   generatedDate: string,
-): AnswerResolutionResult | undefined {
+): ApplicationAnswerResolutionResult | undefined {
   if (field.behavior === "text" || field.behavior === "textarea") {
     return {
       kind: "resolved",
+      lane: "synthetic_test_default",
       intent: {
         kind: "text",
         behavior: field.behavior,
@@ -207,6 +222,7 @@ function generatedLearningIntent(
   if (field.behavior === "checkbox") {
     return {
       kind: "resolved",
+      lane: "synthetic_test_default",
       intent: {
         kind: "toggle",
         behavior: "checkbox",
@@ -220,6 +236,7 @@ function generatedLearningIntent(
   if (field.behavior === "date") {
     return {
       kind: "resolved",
+      lane: "synthetic_test_default",
       intent: {
         kind: "date",
         behavior: "date",
@@ -240,6 +257,7 @@ function generatedLearningIntent(
     if (option === undefined) return undefined;
     return {
       kind: "resolved",
+      lane: "synthetic_test_default",
       intent: {
         kind: "choice",
         behavior: field.behavior,
@@ -254,6 +272,7 @@ function generatedLearningIntent(
   if (field.behavior === "file_upload") {
     return {
       kind: "resolved",
+      lane: "synthetic_test_default",
       intent: {
         kind: "resume_upload",
         behavior: "file_upload",
@@ -267,21 +286,23 @@ function generatedLearningIntent(
   return undefined;
 }
 
-export function createAnswerResolver(
-  profileQuery: ProfileQuery,
+export function createApplicationAnswerResolver(
+  profileQuery: ProfileQuery | ApplicationProfileQuery,
   narrativeTemplate: string | undefined,
   generatedDate = localIsoDate(new Date()),
-): AnswerResolver {
+): ApplicationAnswerResolver {
   if (narrativeTemplate !== undefined && narrativeTemplate.trim() === "") {
     throw new TypeError("narrative template must not be empty");
   }
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
+  const query = profileQuery.query as ApplicationProfileQuery["query"];
   return Object.freeze({
-    async resolve(request: AnswerResolutionRequest, signal: AbortSignal) {
+    async resolve(request: ApplicationAnswerResolutionRequest, signal: AbortSignal) {
       if (signal.aborted) return cancelled;
 
       const { field } = request;
+      const synthetic = request.mode === "synthetic_test_non_submittable";
       if (
         field.behavior === "unsupported" ||
         field.state === "hidden" ||
@@ -291,13 +312,23 @@ export function createAnswerResolver(
       }
 
       const questionResolution = resolveQuestion(field.label);
+      const protectedCategory = protectedQuestionCategory(
+        field.label,
+        questionResolution.kind === "resolved" ? questionResolution.id : undefined,
+      );
       if (questionResolution.kind === "unknown") {
+        if (!synthetic) {
+          return failure(protectedCategory === null ? "question_unknown" : "protected_answer_denied");
+        }
         const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined
           ? failure("question_unknown")
           : success(generated);
       }
       if (questionResolution.kind === "ambiguous") {
+        if (!synthetic) {
+          return failure(protectedCategory === null ? "question_ambiguous" : "protected_answer_denied");
+        }
         const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined
           ? failure("question_ambiguous")
@@ -307,6 +338,11 @@ export function createAnswerResolver(
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
       const question = questionForField(field.label, field.behavior);
       if (question === undefined) {
+        if (!synthetic) {
+          return protectedCategory === null
+            ? unsupported(field)
+            : failure("protected_answer_denied");
+        }
         const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
         return generated === undefined ? unsupported(field) : success(generated);
       }
@@ -319,43 +355,69 @@ export function createAnswerResolver(
           target: field.target,
           artifact: request.resumeArtifact,
           provenance: "resume_verified",
-        });
+        }, synthetic ? "synthetic_test_default" : "live_owner_fact");
       }
       if (question.source.kind === "narrative") {
+        const configured = await query({
+          profileId: request.profileId,
+          profileRevision: request.profileRevision,
+          factId: "configured_narrative",
+        }, signal);
+        if (!configured.ok) return configured;
+        if (configured.value.kind === "answered") {
+          if (
+            configured.value.provenance !== "configured_template" ||
+            configured.value.lane !== "live_owner_fact" ||
+            typeof configured.value.value !== "string" ||
+            narrativeTemplate !== configured.value.value
+          ) return failure("protected_answer_denied");
+          return resolved({
+            kind: "text",
+            behavior: "textarea",
+            fieldId: field.fieldId,
+            target: field.target,
+            value: configured.value.value,
+            provenance: "configured_template",
+          }, configured.value.lane);
+        }
+        if (!synthetic) {
+          return success({
+            kind: "profile_answer_missing",
+            questionId: questionId(canonicalQuestionId),
+          });
+        }
         return resolved({
           kind: "text",
           behavior: "textarea",
           fieldId: field.fieldId,
           target: field.target,
-          value: narrativeTemplate ?? question.source.syntheticDefault,
-          provenance: narrativeTemplate === undefined
-            ? "reviewed_catalog"
-            : "configured_template",
-        });
+          value: question.source.syntheticDefault,
+          provenance: "reviewed_catalog",
+        }, "synthetic_test_default");
       }
       if (question.source.kind === "neutral_disclosure") {
-        for (const candidate of privacyChoiceDefaults) {
+        if (!synthetic) return failure("protected_answer_denied");
+        for (const candidate of contractApprovedPrivacyChoices) {
           const matched = matchedChoiceIntent(field, candidate);
           if (matched !== undefined) return success(matched);
         }
-        const generated = generatedLearningIntent(field, request.resumeArtifact, generatedDate);
-        return generated === undefined
-          ? failure("protected_answer_denied")
-          : success(generated);
+        return failure("protected_answer_denied");
       }
       if (question.source.kind === "synthetic_placeholder") {
+        if (!synthetic) return failure("protected_answer_denied");
         const intended = intentFor(
           field,
           canonicalQuestionId,
           question.source.value,
           "reviewed_catalog",
+          "synthetic_test_default",
         );
         return intended.kind === "resolved"
           ? success(intended)
           : success(generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended);
       }
 
-      const answer = await profileQuery.query(
+      const answer = await query(
         {
           profileId: request.profileId,
           profileRevision: request.profileRevision,
@@ -367,13 +429,21 @@ export function createAnswerResolver(
         return answer;
       }
       if (answer.value.kind === "profile_answer_missing") {
-        const generatedDefault = generatedLearningDefaultFor(canonicalQuestionId);
+        if (!synthetic) {
+          return success({
+            kind: "profile_answer_missing",
+            questionId: questionId(canonicalQuestionId),
+          });
+        }
+        const generatedDefault = question.source.syntheticDefault ??
+          generatedLearningDefaultFor(canonicalQuestionId);
         if (generatedDefault !== undefined) {
           const intended = intentFor(
             field,
             canonicalQuestionId,
             generatedDefault,
             "reviewed_catalog",
+            "synthetic_test_default",
           );
           return success(
             intended.kind === "resolved"
@@ -388,33 +458,71 @@ export function createAnswerResolver(
       }
       if (
         question.source.ownerProvidedOnly === true &&
-        answer.value.provenance !== "owner_provided"
+        (answer.value.provenance !== "owner_provided" ||
+          answer.value.lane !== "live_owner_fact")
       ) {
-        const generatedDefault = generatedLearningDefaultFor(canonicalQuestionId);
-        if (generatedDefault === undefined) {
-          return failure("protected_answer_denied");
-        }
-        const intended = intentFor(
-          field,
-          canonicalQuestionId,
-          generatedDefault,
-          "reviewed_catalog",
-        );
-        return success(
-          intended.kind === "resolved"
-            ? intended
-            : generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended,
-        );
+        return failure("protected_answer_denied");
       }
       const intent = intentFor(
         field,
         canonicalQuestionId,
         answer.value.value,
         answer.value.provenance,
+        answer.value.lane,
       );
-      return intent.kind === "resolved"
-        ? success(intent)
-        : success(generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intent);
+      if (intent.kind === "resolved") return success(intent);
+      if (question.source.ownerProvidedOnly === true) {
+        return failure("protected_answer_denied");
+      }
+      return synthetic
+        ? success(generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intent)
+        : success(intent);
+    },
+  });
+}
+
+/** Frozen F6 compatibility boundary. Live Workday code must use the application resolver. */
+export function createAnswerResolver(
+  profileQuery: ProfileQuery,
+  narrativeTemplate: string | undefined,
+  generatedDate = localIsoDate(new Date()),
+): AnswerResolver {
+  const applicationQuery: ApplicationProfileQuery = {
+    async query(request, signal) {
+      const result = await profileQuery.query(request as ProfileQueryRequest, signal);
+      if (!result.ok) return result;
+      if (result.value.kind === "profile_answer_missing") {
+        return { ok: true as const, value: result.value };
+      }
+      return {
+        ok: true,
+        value: {
+          ...result.value,
+          lane: "live_owner_fact",
+        },
+      };
+    },
+  };
+  const resolver = createApplicationAnswerResolver(
+    applicationQuery,
+    narrativeTemplate,
+    generatedDate,
+  );
+  return Object.freeze({
+    async resolve(request: AnswerResolutionRequest, signal: AbortSignal) {
+      const result = await resolver.resolve({
+        ...request,
+        mode: "synthetic_test_non_submittable",
+      }, signal);
+      if (!result.ok) return result;
+      if (result.value.kind !== "resolved") {
+        return { ok: true as const, value: result.value as AnswerResolutionResult };
+      }
+      const value: AnswerResolutionResult = {
+        kind: "resolved",
+        intent: result.value.intent,
+      };
+      return { ok: true as const, value };
     },
   });
 }

@@ -4,7 +4,6 @@ import {
   ContractParseError,
   type AnswerProvenance,
   type AnswerResolutionError,
-  type AnswerResolver,
   type BrowserPageId,
   type BrowserSessionId,
   type CancellationError,
@@ -27,6 +26,13 @@ import {
   type VerificationError,
 } from "../../../../contracts/index.ts";
 import {
+  answerLaneAdmitted,
+  type AnswerExecutionMode,
+  type ApplicationProfileQuery,
+} from "../../../../form/answers/application-types.ts";
+import type { ApplicationAnswerResolver } from
+  "../../../../form/answers/application-types.ts";
+import {
   deriveSanitizedUnknownCandidate,
   type ClassificationLayer,
   type SanitizedStructuralObservationV1,
@@ -34,9 +40,9 @@ import {
   type SanitizedUnknownOutcome,
   type UnknownCandidateId,
 } from "../../../../contracts/live/index.ts";
-import { createAnswerResolver } from "../../../../form/answers/resolver.ts";
+import { createApplicationAnswerResolver } from
+  "../../../../form/answers/resolver.ts";
 import {
-  generatedLearningDefaultFor,
   questionForField,
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
@@ -44,6 +50,8 @@ import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
 import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
+  isContractApprovedPrivacyChoice,
+  protectedAnswerProvenanceAllowed,
   protectedQuestionCategory,
   type ProtectedQuestionCategory,
 } from "./protected.ts";
@@ -62,6 +70,7 @@ export type { ProtectedQuestionCategory } from "./protected.ts";
 const narrativeQuestionId = "s1-question-configured-narrative" as const;
 
 export interface QuestionnairePageRequest {
+  readonly mode: AnswerExecutionMode;
   readonly journeyId: JourneyId;
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
@@ -78,6 +87,7 @@ export interface VerifiedQuestionnaireAnswer {
   readonly fieldId: FieldId;
   readonly questionId: QuestionId;
   readonly provenance: AnswerProvenance;
+  readonly lane: "live_owner_fact";
   readonly protectedCategory: ProtectedQuestionCategory | null;
   readonly templateRevision: string | null;
   readonly verification: "independent";
@@ -96,6 +106,7 @@ export type QuestionnaireStopCode =
   | "question_ambiguous"
   | "question_unknown"
   | "unsupported"
+  | "synthetic_test_non_submittable"
   | "verification_ambiguous"
   | "verification_rejected"
   | "verification_unavailable";
@@ -136,8 +147,8 @@ export interface QuestionnairePageHandler {
 }
 
 export interface QuestionnairePageHandlerDependencies {
-  readonly profileQuery: ProfileQuery;
-  readonly answerResolver?: AnswerResolver;
+  readonly profileQuery: ProfileQuery | ApplicationProfileQuery;
+  readonly answerResolver?: ApplicationAnswerResolver;
   readonly driver: FieldDriver;
   readonly verifier: FieldVerifier;
   readonly narrative: ConfiguredNarrativeProvider;
@@ -148,11 +159,32 @@ export interface QuestionnairePageHandlerDependencies {
     layer: ClassificationLayer,
   ): SanitizedStructuralObservationV1 | undefined;
   readonly recordAnswer?: (input: {
+    readonly operationId: OperationId;
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
     readonly intent: FieldIntent;
+    readonly lane: "live_owner_fact" | "synthetic_test_default";
     readonly protectedCategory: ProtectedQuestionCategory | null;
     readonly generatedDefault: boolean;
+  }) => void;
+  readonly recordAttempt?: (input: {
+    readonly operationId: OperationId;
+    readonly questionId: QuestionId;
+    readonly field: FieldObservation;
+    readonly intent: FieldIntent;
+    readonly lane: "live_owner_fact" | "synthetic_test_default";
+    readonly protectedCategory: ProtectedQuestionCategory | null;
+    readonly generatedDefault: boolean;
+  }) => void;
+  readonly recordUnset?: (input: {
+    readonly questionId: QuestionId;
+    readonly field: FieldObservation;
+  }) => void;
+  readonly recordFailure?: (input: {
+    readonly operationId: OperationId;
+    readonly code: string;
+    readonly retryable: boolean;
+    readonly stage: "driver" | "verification";
   }) => void;
 }
 
@@ -163,7 +195,7 @@ export function createQuestionnairePageHandler(
     throw new TypeError("driver and verifier must be independent ports");
   }
   const configuredNarrative = dependencies.narrative.resolve(narrativeQuestionId);
-  const resolver = dependencies.answerResolver ?? createAnswerResolver(
+  const resolver = dependencies.answerResolver ?? createApplicationAnswerResolver(
     dependencies.profileQuery,
     configuredNarrative?.text,
   );
@@ -184,6 +216,7 @@ export function createQuestionnairePageHandler(
       }
 
       const answers: VerifiedQuestionnaireAnswer[] = [];
+      const mode = request.mode;
       for (const field of request.page.fields) {
         if (field.state === "hidden") continue;
         const question = resolveQuestion(field.label);
@@ -195,7 +228,15 @@ export function createQuestionnairePageHandler(
             field.behavior !== "unsupported"
           ? questionForField(field.label, field.behavior)
           : undefined;
+        const resolvedQuestionId = question.kind === "resolved"
+          ? question.id as QuestionId
+          : observedQuestionId(field.label);
+        const recordUnset = () => dependencies.recordUnset?.({
+          questionId: resolvedQuestionId,
+          field,
+        });
         const answer = await resolver.resolve({
+          mode,
           field,
           profileId: request.profileId,
           profileRevision: request.profileRevision,
@@ -203,6 +244,7 @@ export function createQuestionnairePageHandler(
           resumeArtifact: request.resumeArtifact,
         }, signal);
         if (!answer.ok) {
+          recordUnset();
           if (
             answer.error.code === "question_unknown" ||
             answer.error.code === "question_ambiguous" ||
@@ -225,6 +267,7 @@ export function createQuestionnairePageHandler(
           return answer;
         }
         if (answer.value.kind !== "resolved") {
+          recordUnset();
           const candidate = answer.value.kind === "option_no_match" ||
               answer.value.kind === "option_ambiguous"
             ? candidateFor(
@@ -246,22 +289,20 @@ export function createQuestionnairePageHandler(
             candidate,
           );
         }
+        if (!answerLaneAdmitted(mode, answer.value.lane)) {
+          recordUnset();
+          return blocked("profile_answer_missing", field.fieldId, category);
+        }
         if (
           category !== null &&
-          !new Set<AnswerProvenance>([
-            "owner_provided", "visible_option",
-          ]).has(answer.value.intent.provenance) &&
-          !(
-            answer.value.intent.provenance === "reviewed_catalog" &&
-            definition !== undefined &&
-            (
-              definition.source.kind === "neutral_disclosure" ||
-              definition.source.kind === "synthetic_placeholder" ||
-              question.kind === "resolved" &&
-                generatedLearningDefaultFor(question.id) !== undefined
-            )
+          !protectedAnswerProvenanceAllowed(
+            answer.value.intent.provenance,
+            definition?.source.kind === "neutral_disclosure" &&
+              answer.value.intent.kind === "choice" &&
+              isContractApprovedPrivacyChoice(answer.value.intent.expectedOption),
           )
         ) {
+          recordUnset();
           return blocked("protected_answer_denied", field.fieldId, category);
         }
         if (
@@ -269,6 +310,7 @@ export function createQuestionnairePageHandler(
           answer.value.intent.kind === "text" &&
           isPlaceholder(answer.value.intent.value)
         ) {
+          recordUnset();
           return blocked("protected_answer_denied", field.fieldId, category);
         }
         if (
@@ -276,12 +318,10 @@ export function createQuestionnairePageHandler(
           answer.value.intent.target !== field.target ||
           answer.value.intent.behavior !== field.behavior
         ) {
+          recordUnset();
           return blocked("answer_intent_mismatch", field.fieldId, category);
         }
 
-        const resolvedQuestionId = question.kind === "resolved"
-          ? question.id as QuestionId
-          : observedQuestionId(field.label);
         const narrative = question.kind === "resolved"
           ? dependencies.narrative.resolve(question.id)
           : undefined;
@@ -291,6 +331,7 @@ export function createQuestionnairePageHandler(
             answer.value.intent.provenance !== "configured_template" ||
             answer.value.intent.value !== narrative.text)
         ) {
+          recordUnset();
           return blocked("narrative_template_mismatch", field.fieldId, category);
         }
         if (
@@ -304,24 +345,47 @@ export function createQuestionnairePageHandler(
             answer.value.intent.value !== definition.source.syntheticDefault
           )
         ) {
+          recordUnset();
           return blocked("narrative_template_mismatch", field.fieldId, category);
         }
         if (
           answer.value.intent.provenance === "configured_template" &&
           narrative === undefined
         ) {
+          recordUnset();
           return blocked("narrative_ineligible", field.fieldId, category);
         }
 
+        const operationId = dependencies.nextOperationId();
+        const generatedDefault = question.kind !== "resolved" ||
+          answer.value.intent.provenance === "reviewed_catalog" ||
+          answer.value.intent.provenance === "visible_option";
+        dependencies.recordAttempt?.({
+          operationId,
+          questionId: resolvedQuestionId,
+          field,
+          intent: answer.value.intent,
+          lane: answer.value.lane,
+          protectedCategory: category,
+          generatedDefault,
+        });
         const driven = await dependencies.driver.drive({
           journeyId: request.journeyId,
           sessionId: request.sessionId,
           pageId: request.pageId,
           guardRevision: request.guardRevision,
-          operationId: dependencies.nextOperationId(),
+          operationId,
           intent: answer.value.intent,
         }, signal);
-        if (!driven.ok) return driven;
+        if (!driven.ok) {
+          dependencies.recordFailure?.({
+            operationId,
+            code: driven.error.code,
+            retryable: driven.error.retryable,
+            stage: "driver",
+          });
+          return driven;
+        }
 
         const verified = await dependencies.verifier.verify({
           sessionId: request.sessionId,
@@ -329,35 +393,56 @@ export function createQuestionnairePageHandler(
           intent: answer.value.intent,
           receipt: driven.value,
         }, signal);
-        if (!verified.ok) return verified;
+        if (!verified.ok) {
+          dependencies.recordFailure?.({
+            operationId,
+            code: verified.error.code,
+            retryable: verified.error.retryable,
+            stage: "verification",
+          });
+          return verified;
+        }
         if (verified.value.kind !== "verified") {
           const code = verified.value.kind === "rejected"
             ? "verification_rejected"
             : verified.value.kind === "ambiguous"
               ? "verification_ambiguous"
               : "verification_unavailable";
+          dependencies.recordFailure?.({
+            operationId,
+            code,
+            retryable: false,
+            stage: "verification",
+          });
           return blocked(code, field.fieldId, category);
         }
 
         dependencies.recordAnswer?.({
+          operationId,
           questionId: resolvedQuestionId,
           field,
           intent: answer.value.intent,
+          lane: answer.value.lane,
           protectedCategory: category,
-          generatedDefault:
-            question.kind !== "resolved" ||
-            answer.value.intent.provenance === "reviewed_catalog" ||
-            answer.value.intent.provenance === "visible_option",
+          generatedDefault,
         });
 
-        answers.push(Object.freeze({
-          fieldId: field.fieldId,
-          questionId: resolvedQuestionId,
-          provenance: answer.value.intent.provenance,
-          protectedCategory: category,
-          templateRevision: narrative?.revision ?? null,
-          verification: "independent",
-        }));
+        if (mode === "live") {
+          answers.push(Object.freeze({
+            fieldId: field.fieldId,
+            questionId: resolvedQuestionId,
+            provenance: answer.value.intent.provenance,
+            lane: "live_owner_fact",
+            protectedCategory: category,
+            templateRevision: narrative?.revision ?? null,
+            verification: "independent",
+          }));
+        }
+      }
+      if (mode === "synthetic_test_non_submittable") {
+        const field = request.page.fields.find(({ state }) => state !== "hidden");
+        if (field === undefined) return candidateInvalid();
+        return blocked("synthetic_test_non_submittable", field.fieldId, null);
       }
       return {
         ok: true,

@@ -22,7 +22,10 @@ import {
   admitApplicationWalkAcceptance,
   type ApplicationWalkAcceptanceV1,
 } from "../../live/evidence/application-walk-evidence.ts";
-import { admitProfileFieldLearningEvidence } from
+import {
+  admitProfileFieldLearningEvidence,
+  type ProfileFieldLearningEvidenceV2,
+} from
   "../../live/evidence/profile-field-learning.ts";
 import { admitQuestionAnswerLearningEvidence } from
   "../../live/evidence/question-answer-learning.ts";
@@ -33,6 +36,7 @@ import { readWindowsProcessAudit } from "../../live/evidence/windows-process-aud
 import {
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
+  type Stage2MonitorOperationV1,
 } from "../../live/evidence/review-monitor-chain.ts";
 
 const RUN_KEY = /^run_\d{8}_[a-z0-9]{16}$/u;
@@ -104,8 +108,6 @@ export function inspectStage2ReviewCompletion(
     const tracePath = join(root, "value-free-trace.ndjson");
     if (!existsSync(tracePath)) denied();
     validateValueFreeTrace(tracePath, application);
-    const profileFieldLearningSha256 = profileLearningDigest(application, root);
-    const questionAnswerLearningSha256 = questionLearningDigest(application, root);
     const packet = readRealEvidence(root);
     const processAudit = readWindowsProcessAudit(root);
     const processBytes = readStableFile(join(root, "process-audit.json"), 16 * 1024);
@@ -134,6 +136,16 @@ export function inspectStage2ReviewCompletion(
     } as const;
     const authMonitor = readStage2AuthMonitorChain(join(root, "auth-monitor"), monitorExpected);
     const monitor = readStage2ReviewMonitorChain(join(root, "monitor"), monitorExpected);
+    const profileFieldLearningSha256 = profileLearningDigest(
+      application,
+      root,
+      monitor.operations,
+    );
+    const questionAnswerLearningSha256 = questionLearningDigest(
+      application,
+      root,
+      monitor.operations,
+    );
     const monitorFiles = [...authMonitor.files, ...monitor.files].sort();
     validateMonitorLedger(
       root,
@@ -198,6 +210,7 @@ export function inspectStage2ReviewCompletion(
 function questionLearningDigest(
   application: ApplicationWalkAcceptanceV1,
   root: string,
+  monitorOperations: readonly Stage2MonitorOperationV1[],
 ): string | null {
   const questionnaires = application.laneAcceptances.filter(
     (value) => value.checkpoint === "questionnaire_verified",
@@ -211,22 +224,35 @@ function questionLearningDigest(
   const bytes = readStableFile(path, 128 * 1024);
   const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
   if (
+    learning.executionMode !== "live" || learning.testOnly ||
+    !learning.liveAcceptanceEligible ||
     learning.questions.length !== expectedAnswers.length ||
     expectedAnswers.some((answer) => {
       const matches = learning.questions.filter((question) =>
         question.fieldId === answer.fieldId &&
         question.questionId === answer.questionId &&
-        question.provenance === answer.provenance
+        question.provenance === answer.provenance &&
+        question.answerState === "answered" &&
+        question.lane === "live_owner_fact" &&
+        question.lane === answer.lane
       );
       return matches.length !== 1;
     })
   ) denied();
+  validateControlMonitorBindings(
+    learning.questions.flatMap(({ monitorBinding }) =>
+      monitorBinding === null ? [] : [monitorBinding]
+    ),
+    monitorOperations,
+    "questionnaire",
+  );
   return digest(bytes);
 }
 
 function profileLearningDigest(
   application: ApplicationWalkAcceptanceV1,
   root: string,
+  monitorOperations: readonly Stage2MonitorOperationV1[],
 ): string | null {
   const profiles = application.laneAcceptances.filter(
     (value) => value.checkpoint === "profile_verified",
@@ -240,7 +266,12 @@ function profileLearningDigest(
     return null;
   }
   if (profiles.length > paths.length) denied();
+  const monitoredStates = monitorOperations.filter(({ page, moment }) =>
+    page === "profile" && moment === "before_navigation"
+  );
+  if (monitoredStates.length !== profiles.length) denied();
   let latest: string | null = null;
+  const bindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[] = [];
   for (const [index, profile] of profiles.entries()) {
     if (profile.checkpoint !== "profile_verified") denied();
     const sha256 = profile.profileFieldLearningSha256;
@@ -250,12 +281,107 @@ function profileLearningDigest(
     }
     if (!/^[0-9a-f]{64}$/u.test(sha256)) denied();
     const learningBytes = readStableFile(paths[index]!, 128 * 1024);
-    admitProfileFieldLearningEvidence(JSON.parse(learningBytes.toString("utf8")));
+    const learning = admitProfileFieldLearningEvidence(
+      JSON.parse(learningBytes.toString("utf8")),
+    );
+    const laneIndex = application.laneAcceptances.indexOf(profile);
+    const pageCheck = application.pageChecks[laneIndex];
+    const monitoredState = monitoredStates[index];
+    const answeredFields = learning.fields.filter(({ answerState }) =>
+      answerState === "answered"
+    );
+    const matchesVerified = (field: ProfileFieldLearningEvidenceV2["fields"][number]) =>
+      profile.verifiedFields.filter((verified) =>
+        field.fieldIdentity === `profile.${verified.fieldId}` &&
+        field.lane === verified.lane
+      ).length === 1;
+    if (
+      learning.executionMode !== "live" || learning.testOnly ||
+      !learning.liveAcceptanceEligible ||
+      pageCheck === undefined || monitoredState === undefined ||
+      learning.visibleControlCount !== monitoredState.fieldCount ||
+      learning.fields.filter(({ required }) => required).length !== pageCheck.requiredFields ||
+      pageCheck.requiredFields !== monitoredState.requiredFieldCount ||
+      answeredFields.length !== profile.verifiedFields.length ||
+      answeredFields.some((field) => !matchesVerified(field)) ||
+      profile.verifiedFields.some((verified) =>
+        learning.fields.filter((field) =>
+          field.fieldIdentity === `profile.${verified.fieldId}` &&
+          field.answerState === "answered" &&
+          field.lane === "live_owner_fact" && field.lane === verified.lane
+        ).length !== 1
+      ) || learning.fields.some(({ monitorBinding }) => monitorBinding === null)
+    ) denied();
+    bindings.push(...learning.fields.flatMap(({ monitorBinding }) =>
+      monitorBinding === null ? [] : [monitorBinding]
+    ));
     if (digest(learningBytes) !== sha256) denied();
     latest = sha256;
   }
   if (paths.slice(profiles.length).some(existsSync)) denied();
+  validateProfileMonitorBindings(bindings, monitorOperations);
   return latest;
+}
+
+function validateProfileMonitorBindings(
+  bindings: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[],
+  operations: readonly Stage2MonitorOperationV1[],
+): void {
+  const mutations = bindings.filter((binding): binding is Extract<typeof binding, {
+    readonly beforeMutationAck: true;
+  }> => "beforeMutationAck" in binding);
+  validateControlMonitorBindings(mutations, operations, "profile");
+  const observations = bindings.filter((binding): binding is Extract<typeof binding, {
+    readonly stateObservedAck: true;
+  }> => "stateObservedAck" in binding);
+  if (observations.length === 0) return;
+  for (const binding of observations) {
+    const matches = operations.filter(({ operationId, attempt, page, moment }) =>
+      operationId === binding.operationId && attempt === binding.attempt &&
+      page === "profile" && moment === "state_observed"
+    );
+    if (matches.length !== 1) denied();
+  }
+  const observedKeys = new Set(observations.map(({ operationId, attempt }) =>
+    `${operationId}\u0000${attempt}`
+  ));
+  const stateOperations = operations.filter(({ page, moment }) =>
+    page === "profile" && moment === "state_observed"
+  );
+  if (stateOperations.some(({ operationId, attempt }) =>
+    !observedKeys.has(`${operationId}\u0000${attempt}`)
+  )) denied();
+}
+
+function validateControlMonitorBindings(
+  bindings: readonly {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly beforeMutationAck: true;
+    readonly afterReadbackAck: true;
+  }[],
+  operations: readonly Stage2MonitorOperationV1[],
+  page: "profile" | "questionnaire",
+): void {
+  if (new Set(bindings.map(({ operationId }) => operationId)).size !== bindings.length) denied();
+  for (const binding of bindings) {
+    const matches = operations.filter(({ operationId, attempt }) =>
+      operationId === binding.operationId && attempt === binding.attempt
+    );
+    if (
+      matches.length !== 2 || matches[0]?.moment !== "before_mutation" ||
+      matches[1]?.moment !== "after_readback" ||
+      matches[1].ordinal !== matches[0].ordinal + 1 ||
+      matches[0].page !== page || matches[1].page !== page
+    ) denied();
+  }
+  const attempted = operations.filter((operation) =>
+    operation.page === page &&
+    (operation.moment === "before_mutation" || operation.moment === "after_readback")
+  );
+  const boundOperations = new Set(bindings.map(({ operationId }) => operationId));
+  if (attempted.length !== bindings.length * 2 ||
+      attempted.some(({ operationId }) => !boundOperations.has(operationId))) denied();
 }
 
 function validateValueFreeTrace(path: string, application: ApplicationWalkAcceptanceV1): void {

@@ -175,7 +175,7 @@ function validProfile(
       const keys = Object.keys(field);
       const required = [
         "fieldId", "questionType", "answerType", "uiBehavior", "uiVariant",
-        "provenance",
+        "provenance", "lane",
       ];
       const optional = ["optionMappingProvenance", "rowKey"];
       return required.every((key) => keys.includes(key)) &&
@@ -206,10 +206,10 @@ function validProfile(
           "workday_source_select_v1", "workday_previous_worker_radio_v1",
         ]).has(field.uiVariant) &&
         new Set([
-          "owner_provided", "resume_verified", "configured_template",
-          "generated_default", "journey_derived",
+          "owner_provided", "resume_verified", "configured_template", "journey_derived",
         ])
           .has(field.provenance) &&
+        field.lane === "live_owner_fact" &&
         (field.optionMappingProvenance === undefined ||
           field.optionMappingProvenance === "visible_option") &&
         (field.rowKey === undefined ||
@@ -228,15 +228,15 @@ function validQuestionnaire(
   ]) && value.schemaVersion === 1 &&
     value.answers.every((answer) =>
       exactKeys(answer, [
-        "fieldId", "questionId", "provenance", "protectedCategory",
+        "fieldId", "questionId", "provenance", "lane", "protectedCategory",
         "templateRevision", "verification",
       ]) &&
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.fieldId) &&
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.questionId) &&
       new Set([
         "owner_provided", "resume_verified", "configured_template",
-        "generated_default", "reviewed_catalog", "visible_option",
       ]).has(answer.provenance) &&
+      answer.lane === "live_owner_fact" &&
       (answer.protectedCategory === null ||
         new Set(["authorization", "legal", "consent"])
           .has(answer.protectedCategory)) &&

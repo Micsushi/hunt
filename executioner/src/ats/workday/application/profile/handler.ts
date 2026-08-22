@@ -15,6 +15,7 @@ import type {
   VerifiedProfileField,
   WorkdayProfilePagePort,
 } from "./types.ts";
+import { answerLaneAdmitted } from "../../../../form/answers/application-types.ts";
 
 const reviewedVariants = new Set([
   "workday_text_v1",
@@ -167,6 +168,9 @@ export async function completeWorkdayProfilePage(
   if (ownedDuplicateCount(final.snapshot.rows) !== 0) {
     return blocked("profile_row_unverified");
   }
+  if (plan.mode === "synthetic_test_non_submittable") {
+    return blocked("profile_answer_provenance_denied");
+  }
   return {
     kind: "verified",
     pageType: plan.pageType,
@@ -179,6 +183,15 @@ function preflightRequiredControls(
   plan: ProfilePagePlan,
   snapshot: ProfilePageSnapshot,
 ): BlockedResult | undefined {
+  const deniedLane = [
+    ...plan.fields,
+    ...plan.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
+  ].find(({ answer }) =>
+    answer.kind === "answered" && !answerLaneAdmitted(plan.mode, answer.lane)
+  );
+  if (deniedLane !== undefined) {
+    return blocked("profile_answer_provenance_denied", { fieldId: deniedLane.fieldId });
+  }
   const admittedScalarIds = new Set([
     ...profileScalarControlCatalog.map(({ fieldId }) => fieldId),
     ...profileRepeatableCatalog.flatMap(({ fields }) =>
@@ -197,6 +210,15 @@ function preflightRequiredControls(
   }
 
   const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
+  const unsafeProtectedScalar = snapshot.controls.find(({ fieldId }) => {
+    const field = plannedScalar.get(fieldId);
+    return field?.questionType === "prior_employment" &&
+      field.answer.kind === "answered" &&
+      field.answer.provenance !== "owner_provided";
+  });
+  if (unsafeProtectedScalar !== undefined) {
+    return blocked("profile_answer_missing", { fieldId: unsafeProtectedScalar.fieldId });
+  }
   const unplannedScalar = snapshot.controls.find(({ fieldId, required }) =>
     required && !plannedScalar.has(fieldId)
   );
@@ -277,20 +299,27 @@ async function inspectAndPreflight(
 }
 
 function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | undefined {
-  if (!pageTypes.has(plan.pageType)) return blocked("profile_plan_invalid");
+  if (
+    !pageTypes.has(plan.pageType) ||
+    !new Set(["live", "synthetic_test_non_submittable"]).has(plan.mode)
+  ) return blocked("profile_plan_invalid");
   const fieldIds = new Set<string>();
   for (const item of plan.fields) {
     if (fieldIds.has(item.fieldId)) {
       return blocked("profile_plan_invalid", { fieldId: item.fieldId });
     }
     if (item.answer.kind === "profile_answer_missing") {
-      if (!optionalOwnerInputIds.has(item.fieldId)) {
+      if (
+        !optionalOwnerInputIds.has(item.fieldId) ||
+        !Array.isArray(item.allowedOptions) ||
+        item.allowedOptions.some((value) => typeof value !== "string" || normalize(value) === "")
+      ) {
         return blocked("profile_answer_missing", { fieldId: item.fieldId });
       }
       fieldIds.add(item.fieldId);
       continue;
     }
-    if (!validField(item)) {
+    if (!validField(item, plan.mode)) {
       return blocked("profile_plan_invalid", { fieldId: item.fieldId });
     }
     fieldIds.add(item.fieldId);
@@ -317,7 +346,7 @@ function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | unde
         rowKeys.has(row.rowKey) ||
         fingerprints.has(fingerprint) ||
         row.fields.length === 0 ||
-        row.fields.some((item) => !validField(item))
+        row.fields.some((item) => !validField(item, plan.mode))
       ) return blocked("profile_plan_invalid");
       rowKeys.add(row.rowKey);
       fingerprints.add(fingerprint);
@@ -326,14 +355,25 @@ function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | unde
   return undefined;
 }
 
-function validField(field: ProfileFieldPlan): boolean {
+function validField(
+  field: ProfileFieldPlan,
+  mode: NonNullable<ProfilePagePlan["mode"]>,
+): boolean {
+  const allowedOptions = field.allowedOptions;
+  const lane = field.answer.kind === "answered"
+    ? field.answer.lane
+    : "synthetic_test_default";
   if (
     !/^[a-z][a-z0-9_.-]{0,127}$/u.test(field.fieldId) ||
     !questionTypes.has(field.questionType) ||
     !answerTypes.has(field.answerType) ||
     field.answer.kind !== "answered" ||
     !answerProvenances.has(field.answer.provenance) ||
-    normalize(field.answer.value) === ""
+    normalize(field.answer.value) === "" ||
+    allowedOptions.some((value) => typeof value !== "string" || normalize(value) === "") ||
+    new Set(allowedOptions.map(normalize)).size !== allowedOptions.length ||
+    (field.answer.provenance === "owner_provided" && lane !== "live_owner_fact") ||
+    (field.answer.provenance === "generated_default" && lane !== "synthetic_test_default")
   ) return false;
   if (field.answerType === "date" && !validIsoDate(field.answer.value)) return false;
   if (field.answerType === "month" && !/^(?:0?[1-9]|1[0-2])$/u.test(field.answer.value)) return false;
@@ -348,13 +388,6 @@ function validField(field: ProfileFieldPlan): boolean {
   }
   if (field.answerType === "boolean" &&
       field.answer.value !== "true" && field.answer.value !== "false") return false;
-  if (field.answer.provenance === "journey_derived") {
-    const source = field.fieldId === "source.how_did_you_hear" &&
-      field.questionType === "application_source" && field.answerType === "option";
-    const country = field.fieldId === "address.country" &&
-      field.questionType === "address" && field.answerType === "option";
-    if (!source && !country) return false;
-  }
   return !new Set(["option", "single_select", "multi_select"]).has(field.answerType) || (
     field.optionMapping?.provenance === "visible_option" &&
     field.optionMapping.canonicalValue === field.answer.value &&
@@ -659,6 +692,9 @@ async function reconcileField(
       provenance: field.answer.kind === "answered"
         ? field.answer.provenance
         : "owner_provided",
+      lane: field.answer.kind === "answered"
+        ? field.answer.lane
+        : "synthetic_test_default",
       ...(field.optionMapping === undefined
         ? {}
         : { optionMappingProvenance: field.optionMapping.provenance }),

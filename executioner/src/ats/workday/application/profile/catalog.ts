@@ -1,3 +1,5 @@
+import type { ApplicationProfileFactId } from
+  "../../../../form/answers/application-types.ts";
 import type {
   ProfileCanonicalAnswerType,
   ProfileQuestionType,
@@ -14,21 +16,27 @@ export interface ProfileControlCatalogEntry {
 
 export interface ProfileOwnerInputCatalogEntry {
   readonly fieldId: string;
+  readonly factId: ApplicationProfileFactId;
   readonly questionType: ProfileQuestionType;
   readonly answerType: ProfileCanonicalAnswerType;
+  readonly allowedOptions: readonly string[];
 }
 
 export const profileOwnerInputCatalog: readonly ProfileOwnerInputCatalogEntry[] =
   Object.freeze([
     {
       fieldId: "source.how_did_you_hear",
+      factId: "application_source",
       questionType: "application_source",
       answerType: "option",
+      allowedOptions: Object.freeze([]),
     },
     {
       fieldId: "employment.previously_worked_for_organization",
+      factId: "previously_worked_for_organization",
       questionType: "prior_employment",
       answerType: "option",
+      allowedOptions: Object.freeze(["Yes", "No"]),
     },
   ]);
 

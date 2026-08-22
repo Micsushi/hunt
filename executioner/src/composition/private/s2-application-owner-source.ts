@@ -17,17 +17,20 @@ import {
   disposeResumeArtifact,
   upstreamResumeId,
   type ProfileId,
-  type ProfileQuery,
   type ResolvedResumeArtifact,
 } from "../../contracts/index.ts";
 import {
-  createProfileQuery,
-  immutableApplicantProfile,
-} from "../../profile/profile.ts";
+  createApplicationProfileQuery,
+  parseApplicationProfile,
+  type ApplicationProfileQuery,
+} from "../../profile/application-profile.ts";
 import {
   profileOwnerInputCatalog,
+  type ProfileFieldPlan,
   type ProfilePagePlan,
 } from "../../ats/workday/application/profile/index.ts";
+import { protectedAnswerProvenanceAllowed } from
+  "../../ats/workday/application/questions/protected.ts";
 import { deriveProfileCountry } from "./s2-derived-profile-country.ts";
 import {
   createConfiguredNarrativeProvider,
@@ -64,7 +67,7 @@ export interface Stage2ApplicationOwnerSources {
   readonly profilePlan: ProfilePagePlan;
   readonly profileId: ProfileId;
   readonly profileRevision: number;
-  readonly profileQuery: ProfileQuery;
+  readonly profileQuery: ApplicationProfileQuery;
   readonly narrative: ConfiguredNarrativeProvider;
   readonly sensitiveValues: readonly string[];
 }
@@ -136,7 +139,10 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         fileType: "pdf",
       });
       if (!intent.ok) denied();
-      const profile = immutableApplicantProfile(manifest.profile);
+      exact(manifest.profile, [
+        "profileId", "revision", "facts", "unsetFactIds", "discoveredFields",
+      ]);
+      const profile = parseApplicationProfile(manifest.profile);
       validateProfileText(profile.facts);
       const profilePlan = validateProfileAuthority(
         manifest.profilePlan,
@@ -158,7 +164,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         profilePlan,
         profileId: profile.profileId,
         profileRevision: profile.revision,
-        profileQuery: createProfileQuery(profile),
+        profileQuery: createApplicationProfileQuery(profile),
         narrative: createConfiguredNarrativeProvider({
           revision: manifest.narrative.revision,
           template: narrativeTemplate,
@@ -300,8 +306,9 @@ function validateProfileAuthority(
   value: unknown,
   facts: readonly { readonly factId: string; readonly value: unknown; readonly provenance: string }[],
 ): ProfilePagePlan {
-  const plan = exact(value, ["pageType", "fields", "repeatables"]);
-  if ((plan.pageType !== "profile" && plan.pageType !== "contact") ||
+  const plan = exact(value, ["mode", "pageType", "fields", "repeatables"]);
+  if (plan.mode !== "live" ||
+      (plan.pageType !== "profile" && plan.pageType !== "contact") ||
       !Array.isArray(plan.fields) || plan.fields.length > 128 ||
       !Array.isArray(plan.repeatables) || plan.repeatables.length > 3) denied();
   const factByField: Readonly<Record<string, string>> = {
@@ -353,8 +360,14 @@ function validateProfileAuthority(
   if (fields.length > 512) denied();
   for (const value of fields) {
     const field = exact(value, [
-      "fieldId", "questionType", "answerType", "answer", "optionMapping",
+      "fieldId", "questionType", "answerType", "allowedOptions", "answer", "optionMapping",
     ], true);
+    if (
+      !Array.isArray(field.allowedOptions) || field.allowedOptions.length > 128 ||
+      field.allowedOptions.some((option) =>
+        typeof option !== "string" || option.trim() === "" || !browserPlainText.test(option)
+      ) || new Set(field.allowedOptions).size !== field.allowedOptions.length
+    ) denied();
     const ownerInput = ownerInputByField.get(field.fieldId as string);
     if (missingOwnerAnswer(field.answer)) {
       if (
@@ -365,7 +378,7 @@ function validateProfileAuthority(
       ) denied();
       continue;
     }
-    const answer = exact(field.answer, ["kind", "value", "provenance"]);
+    const answer = exact(field.answer, ["kind", "value", "provenance", "lane"]);
     if (
       !stringMatches(field.fieldId, /^[a-z][a-z0-9_.-]{0,127}$/u) ||
       !new Set([
@@ -380,6 +393,7 @@ function validateProfileAuthority(
       ])
         .has(field.answerType as string) ||
       answer.kind !== "answered" ||
+      answer.lane !== "live_owner_fact" ||
       typeof answer.value !== "string" ||
       answer.value.trim() === "" ||
       !browserPlainText.test(answer.value)
@@ -400,14 +414,8 @@ function validateProfileAuthority(
       if (
         field.questionType !== ownerInput.questionType ||
         field.answerType !== ownerInput.answerType ||
-        (
-          answer.provenance !== "owner_provided" &&
-          answer.provenance !== "generated_default" &&
-          !(
-            field.fieldId === "source.how_did_you_hear" &&
-            answer.provenance === "journey_derived"
-          )
-        )
+        answer.provenance !== "owner_provided" ||
+        !ownerInputValueMatches(factsById.get(ownerInput.factId), answer.value)
       ) denied();
     } else if (answer.provenance === "journey_derived") {
       const country = deriveProfileCountry(facts);
@@ -422,20 +430,50 @@ function validateProfileAuthority(
         answer.value !== country.canonicalValue ||
         mapping.visibleOption !== country.visibleOption
       ) denied();
-    } else if (answer.provenance === "generated_default") {
-      // Explicit test-only defaults are recorded for later owner replacement.
-    } else if (answer.provenance === "owner_provided" || answer.provenance === "configured_template") {
+    } else if (answer.provenance === "owner_provided" ||
+      answer.provenance === "configured_template" ||
+      answer.provenance === "resume_verified") {
       const factId = factByField[field.fieldId];
       const fact = factId === undefined ? undefined : factsById.get(factId);
       if (fact === undefined || fact.value !== answer.value || fact.provenance !== answer.provenance) {
         denied();
       }
-    } else if (answer.provenance !== "resume_verified") denied();
+    } else denied();
     if (field.answerType === "boolean" && !new Set(["true", "false"]).has(answer.value as string)) {
       denied();
     }
   }
-  return deepFreeze(structuredClone(plan)) as unknown as ProfilePagePlan;
+  const cloned = structuredClone(plan) as unknown as ProfilePagePlan;
+  return deepFreeze({
+    ...cloned,
+    fields: cloned.fields.map(failClosedProtectedProfileAnswer),
+  });
+}
+
+function ownerInputValueMatches(
+  fact: { readonly value: unknown; readonly provenance: string } | undefined,
+  answer: unknown,
+): boolean {
+  if (fact?.provenance !== "owner_provided") return false;
+  if (typeof fact.value === "boolean") {
+    return answer === (fact.value ? "Yes" : "No") || answer === String(fact.value);
+  }
+  return fact.value === answer;
+}
+
+function failClosedProtectedProfileAnswer(field: ProfileFieldPlan): ProfileFieldPlan {
+  if (
+    field.questionType !== "prior_employment" ||
+    field.answer.kind !== "answered" ||
+    protectedAnswerProvenanceAllowed(field.answer.provenance)
+  ) return field;
+  return {
+    fieldId: field.fieldId,
+    questionType: field.questionType,
+    answerType: field.answerType,
+    allowedOptions: field.allowedOptions,
+    answer: { kind: "profile_answer_missing" },
+  };
 }
 
 function validateProfileText(

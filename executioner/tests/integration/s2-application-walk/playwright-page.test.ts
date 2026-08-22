@@ -259,6 +259,7 @@ function applicationSources() {
     ],
   };
   const questionnaireRequest = {
+    mode: "live",
     journeyId: walkFixture.journeyId,
     sessionId: "browser_session_s2f3playwright01" as BrowserSessionId,
     pageId: walkFixture.pages.questionnaire,
@@ -275,12 +276,19 @@ function applicationSources() {
   return createImmutableApplicationLaneSources({
     resumeIntent: intent.value,
     profilePlan: {
+      mode: "live",
       pageType: "profile",
-      fields: [{
+fields: [{
         fieldId: "identity.given_name",
         questionType: "identity",
         answerType: "text",
-        answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "Ada",
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
       }],
       repeatables: [],
     },
@@ -293,7 +301,12 @@ function questionnaireHandler() {
     async query() {
       return {
         ok: true,
-        value: { kind: "answered", value: true, provenance: "owner_provided" },
+        value: {
+          kind: "answered",
+          value: true,
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
       };
     },
   };

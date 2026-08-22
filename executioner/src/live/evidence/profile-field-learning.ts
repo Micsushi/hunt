@@ -9,6 +9,10 @@ import type {
   WorkdayProfilePagePort,
 } from "../../ats/workday/application/profile/index.ts";
 import {
+  answerLaneAdmitted,
+  type AnswerProvenanceLane,
+} from "../../form/answers/application-types.ts";
+import {
   profileRepeatableCatalog,
   profileScalarControlCatalog,
 } from "../../ats/workday/application/profile/catalog.ts";
@@ -85,30 +89,55 @@ export interface ProfileFieldMechanicsV1 {
   readonly persistentReadback: string;
 }
 
-export interface ProfileFieldLearningRecordV1 {
+export interface ProfileFieldLearningRecordV2 {
   readonly fieldIdentity: string;
   readonly uiType: string;
   readonly uiVariant: string;
   readonly questionCategory: string;
   readonly answerCategory: string;
   readonly required: boolean;
+  readonly answerState: "answered" | "unset";
+  readonly lane: AnswerProvenanceLane | null;
   readonly visibleOptionIds: readonly string[];
   readonly selectedOptionId: string | null;
   readonly optionMapping: string;
   readonly prefillDisposition: string;
   readonly driverAttempt: string;
+  readonly monitorBinding: {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly beforeMutationAck: true;
+    readonly afterReadbackAck: true;
+  } | {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly stateObservedAck: true;
+  } | null;
+  readonly terminalDisposition:
+    | "verified" | "verified_without_mutation" | "optional_unset"
+    | "required_unset" | "driver_failed" | "verification_failed" | "pending";
   readonly mechanics: ProfileFieldMechanicsV1;
 }
 
-export interface ProfileFieldLearningEvidenceV1 {
-  readonly schemaVersion: 1;
-  readonly evidenceRevision: "s2-profile-field-learning-v1";
+export interface ProfileFieldLearningEvidenceV2 {
+  readonly schemaVersion: 4;
+  readonly evidenceRevision: "s2-profile-field-learning-v4";
   readonly page: "profile";
-  readonly fields: readonly ProfileFieldLearningRecordV1[];
+  readonly executionMode: "live" | "synthetic_test_non_submittable";
+  readonly testOnly: boolean;
+  readonly liveAcceptanceEligible: boolean;
+  readonly visibleControlCount: number;
+  readonly fields: readonly ProfileFieldLearningRecordV2[];
 }
 
 export interface ProfileFieldLearningCapture {
   readonly page: WorkdayProfilePagePort;
+  monitorAck(input: {
+    readonly controlId: string;
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly moment: "before_mutation" | "after_readback";
+  }): void;
   write(): string | null;
 }
 
@@ -118,12 +147,18 @@ export function createProfileFieldLearningCapture(input: {
   readonly root?: string;
   readonly fileName?: "profile-field-learning.json" | "profile-field-learning-02.json";
   readonly sensitiveValues: readonly string[];
+  readonly observationBinding?: {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly stateObservedAck: true;
+  };
 }): ProfileFieldLearningCapture {
   const records = new Map<string, MutableRecord>();
   const controlBindings = new Map<string, string>();
   const pending = new Map<string, string>();
   const rowOrdinals = new Map<string, number>();
   const nextRowOrdinal = new Map<string, number>();
+  const visibleIdentities = new Set<string>();
   const plans = plannedFields(input.plan);
   let written = false;
 
@@ -138,7 +173,15 @@ export function createProfileFieldLearningCapture(input: {
         pending,
         rowOrdinals,
         nextRowOrdinal,
+        visibleIdentities,
       );
+      if (input.observationBinding !== undefined) {
+        for (const record of records.values()) {
+          if (record.driverAttempt === "none" && record.monitorBinding === null) {
+            record.monitorBinding = Object.freeze({ ...input.observationBinding });
+          }
+        }
+      }
       return snapshot;
     },
     async commit(request, signal) {
@@ -160,7 +203,10 @@ export function createProfileFieldLearningCapture(input: {
         if (identity !== undefined) {
           const record = records.get(identity);
           applyInteraction(record, input.page.interaction?.(request.controlId));
-          if (record !== undefined) record.mechanics.persistentReadback = "driver_failed";
+          if (record !== undefined) {
+            record.mechanics.persistentReadback = "driver_failed";
+            record.terminalDisposition = "driver_failed";
+          }
           pending.delete(identity);
         }
         throw error;
@@ -176,17 +222,58 @@ export function createProfileFieldLearningCapture(input: {
 
   return Object.freeze({
     page,
+    monitorAck(binding: {
+      readonly controlId: string;
+      readonly operationId: string;
+      readonly attempt: number;
+      readonly moment: "before_mutation" | "after_readback";
+    }) {
+      const identity = controlBindings.get(binding.controlId);
+      const record = identity === undefined ? undefined : records.get(identity);
+      if (record === undefined) throw new TypeError("profile monitor binding unavailable");
+      if (binding.moment === "before_mutation") {
+        if (record.pendingMonitor !== null || isMutationBinding(record.monitorBinding)) {
+          throw new TypeError("profile monitor binding duplicate");
+        }
+        record.monitorBinding = null;
+        record.pendingMonitor = {
+          operationId: binding.operationId,
+          attempt: binding.attempt,
+          beforeMutationAck: true,
+        };
+        return;
+      }
+      const pendingMonitor = record.pendingMonitor;
+      if (pendingMonitor?.operationId !== binding.operationId ||
+          pendingMonitor.attempt !== binding.attempt) {
+        throw new TypeError("profile monitor binding mismatch");
+      }
+      record.monitorBinding = Object.freeze({
+        ...pendingMonitor,
+        afterReadbackAck: true,
+      });
+      record.pendingMonitor = null;
+    },
     write() {
       if (written || records.size === 0) return null;
       written = true;
       try {
+        const fields = [...records.entries()]
+          .filter(([identity]) => visibleIdentities.has(identity))
+          .map(([, record]) => freezeRecord(record));
+        const liveAcceptanceEligible = input.plan.mode === "live" &&
+          fields.every(liveEligibleField);
         return writeAtomicJsonEvidence({
           root: input.root ?? "",
           value: admitProfileFieldLearningEvidence({
-            schemaVersion: 1,
-            evidenceRevision: "s2-profile-field-learning-v1",
+            schemaVersion: 4,
+            evidenceRevision: "s2-profile-field-learning-v4",
             page: "profile",
-            fields: [...records.values()].map(freezeRecord),
+            executionMode: input.plan.mode,
+            testOnly: input.plan.mode === "synthetic_test_non_submittable",
+            liveAcceptanceEligible,
+            visibleControlCount: fields.length,
+            fields,
           }),
           sensitiveValues: input.sensitiveValues.filter((value) =>
             value.length < 3 || !reviewedStructuralStrings.some((structural) =>
@@ -209,14 +296,19 @@ export function createProfileFieldLearningCapture(input: {
 }
 
 export function admitProfileFieldLearningEvidence(
-  value: ProfileFieldLearningEvidenceV1,
-): ProfileFieldLearningEvidenceV1 {
+  value: ProfileFieldLearningEvidenceV2,
+): ProfileFieldLearningEvidenceV2 {
   if (
-    !exactKeys(value, ["schemaVersion", "evidenceRevision", "page", "fields"]) ||
-    value.schemaVersion !== 1 ||
-    value.evidenceRevision !== "s2-profile-field-learning-v1" ||
+    !exactKeys(value, [
+      "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
+      "liveAcceptanceEligible", "visibleControlCount", "fields",
+    ]) ||
+    value.schemaVersion !== 4 ||
+    value.evidenceRevision !== "s2-profile-field-learning-v4" ||
     value.page !== "profile" ||
-    value.fields.length < 1 || value.fields.length > 128
+    !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
+    value.fields.length < 1 || value.fields.length > 128 ||
+    value.visibleControlCount !== value.fields.length
   ) denied();
   const identities = new Set<string>();
   for (const field of value.fields) {
@@ -224,18 +316,27 @@ export function admitProfileFieldLearningEvidence(
     if (!validIdentityBinding(field)) {
       denied(`identity_binding:${field.fieldIdentity}:${field.uiType}:${field.uiVariant}`);
     }
+    if (!exactKeys(field, [
+      "fieldIdentity", "uiType", "uiVariant", "questionCategory",
+      "answerCategory", "required", "answerState", "lane",
+      "visibleOptionIds", "selectedOptionId",
+      "optionMapping", "prefillDisposition", "driverAttempt", "monitorBinding",
+      "terminalDisposition", "mechanics",
+    ])) denied("field_shape");
     if (
-      !exactKeys(field, [
-        "fieldIdentity", "uiType", "uiVariant", "questionCategory",
-        "answerCategory", "required", "visibleOptionIds", "selectedOptionId",
-        "optionMapping", "prefillDisposition", "driverAttempt", "mechanics",
-      ]) ||
       identities.has(field.fieldIdentity) ||
       !uiTypes.has(field.uiType) ||
       !reviewedUiVariants.has(field.uiVariant) ||
       !questionCategories.has(field.questionCategory) ||
       !answerCategories.has(field.answerCategory) ||
       typeof field.required !== "boolean" ||
+      !["answered", "unset"].includes(field.answerState) ||
+      (field.lane !== null && !["live_owner_fact", "synthetic_test_default"].includes(field.lane)) ||
+      (field.answerState === "answered" && field.lane === null) ||
+      (field.answerState === "unset" && field.lane !== null) ||
+      (field.lane === "live_owner_fact" && value.executionMode !== "live") ||
+      (field.lane === "synthetic_test_default" &&
+        value.executionMode !== "synthetic_test_non_submittable") ||
       field.visibleOptionIds.length > 64 ||
       new Set(field.visibleOptionIds).size !== field.visibleOptionIds.length ||
       field.visibleOptionIds.some((id, index) =>
@@ -246,11 +347,22 @@ export function admitProfileFieldLearningEvidence(
       !optionMappings.has(field.optionMapping) ||
       !prefillDispositions.has(field.prefillDisposition) ||
       !driverAttempts.has(field.driverAttempt) ||
-      !exactMechanics(field.mechanics) ||
-      !validMechanicsRelations(field)
-    ) denied();
+      !validMonitorBinding(field.monitorBinding) ||
+      ![
+        "verified", "verified_without_mutation", "optional_unset", "required_unset",
+        "driver_failed", "verification_failed", "pending",
+      ].includes(field.terminalDisposition) ||
+      !exactMechanics(field.mechanics)
+    ) denied("field_value");
+    if (!validMechanicsRelations(field)) denied(`mechanics_relation:${field.fieldIdentity}`);
     identities.add(field.fieldIdentity);
   }
+  const operations = value.fields.flatMap(({ monitorBinding }) =>
+    isMutationBinding(monitorBinding) ? [monitorBinding.operationId] : []
+  );
+  if (new Set(operations).size !== operations.length) denied();
+  const eligible = value.executionMode === "live" && value.fields.every(liveEligibleField);
+  if (value.liveAcceptanceEligible !== eligible) denied();
   return Object.freeze({
     ...value,
     fields: Object.freeze(value.fields.map((field) => Object.freeze({
@@ -274,7 +386,7 @@ function validFieldIdentity(value: string): boolean {
   return repeatableFields.get(section)?.has(match[3]!) === true;
 }
 
-function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
+function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
   const scalar = profileScalarControlCatalog.some(
     ({ fieldId, uiBehavior, uiVariant }) =>
       field.fieldIdentity === `profile.${fieldId}` &&
@@ -292,6 +404,7 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV1): boolean {
       field.visibleOptionIds.length === 0 && field.selectedOptionId === null &&
       field.optionMapping === "unresolved" &&
       field.prefillDisposition === "needs_owner_input" &&
+      field.answerState === "unset" && field.lane === null &&
       field.driverAttempt === "none" &&
       sameMechanics(field.mechanics, expectedMechanics);
   }
@@ -326,11 +439,20 @@ interface MutableRecord {
   questionCategory: string;
   answerCategory: string;
   required: boolean;
+  answerState: "answered" | "unset";
+  lane: AnswerProvenanceLane | null;
   visibleOptionIds: readonly string[];
   selectedOptionId: string | null;
   optionMapping: string;
   prefillDisposition: string;
   driverAttempt: string;
+  monitorBinding: ProfileFieldLearningRecordV2["monitorBinding"];
+  pendingMonitor: {
+    operationId: string;
+    attempt: number;
+    beforeMutationAck: true;
+  } | null;
+  terminalDisposition: ProfileFieldLearningRecordV2["terminalDisposition"];
   mechanics: {
     popupBound: string;
     optionFocused: string;
@@ -348,8 +470,17 @@ function plannedFields(plan: ProfilePagePlan): ReadonlyMap<string, ProfileFieldP
     ...plan.fields,
     ...plan.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
   ]) {
-    const existing = result.get(field.fieldId);
-    if (existing === undefined || sameCategories(existing, field)) result.set(field.fieldId, field);
+    const admitted = field.answer.kind === "answered" &&
+        !answerLaneAdmitted(plan.mode, field.answer.lane)
+      ? Object.freeze({
+          ...field,
+          answer: Object.freeze({ kind: "profile_answer_missing" as const }),
+        })
+      : field;
+    const existing = result.get(admitted.fieldId);
+    if (existing === undefined || sameCategories(existing, admitted)) {
+      result.set(admitted.fieldId, admitted);
+    }
   }
   return result;
 }
@@ -362,10 +493,14 @@ function observe(
   pending: Map<string, string>,
   rowOrdinals: Map<string, number>,
   nextRowOrdinal: Map<string, number>,
+  visibleIdentities: Set<string>,
 ): void {
   controlBindings.clear();
+  visibleIdentities.clear();
   for (const control of snapshot.controls) {
-    learn(control, `profile.${control.fieldId}`, plans.get(control.fieldId), records, controlBindings, pending);
+    const identity = `profile.${control.fieldId}`;
+    visibleIdentities.add(identity);
+    learn(control, identity, plans.get(control.fieldId), records, controlBindings, pending);
   }
   for (const row of snapshot.rows) {
     const key = `${row.section}\u0000${row.rowId}`;
@@ -376,6 +511,9 @@ function observe(
       rowOrdinals.set(key, ordinal);
     }
     observeRow(row, ordinal, plans, records, controlBindings, pending);
+    for (const control of row.controls) {
+      visibleIdentities.add(`profile.${row.section}.${ordinal}.${control.fieldId}`);
+    }
   }
 }
 
@@ -410,6 +548,7 @@ function learn(
   controlBindings.set(control.controlId, identity);
   let record = records.get(identity);
   if (record === undefined) {
+    const answerState = plan?.answer.kind === "answered" ? "answered" : "unset";
     record = {
       fieldIdentity: identity,
       uiType: control.uiBehavior,
@@ -417,11 +556,18 @@ function learn(
       questionCategory: plan?.questionType ?? "unknown",
       answerCategory: plan?.answerType ?? "unknown",
       required: control.required,
+      answerState,
+      lane: plan?.answer.kind === "answered" ? plan.answer.lane : null,
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: optionMapping(plan),
       prefillDisposition: prefillDisposition(plan, control.readback),
       driverAttempt: "none",
+      monitorBinding: null,
+      pendingMonitor: null,
+      terminalDisposition: answerState === "unset"
+        ? control.required ? "required_unset" : "optional_unset"
+        : "pending",
       mechanics: emptyMechanics(control.uiBehavior),
     };
     records.set(identity, record);
@@ -433,7 +579,13 @@ function learn(
       : "unverified_after_rescan";
     if (record.mechanics.persistentReadback === "verified_after_rescan") {
       pending.delete(identity);
+      record.terminalDisposition = "verified";
+    } else {
+      record.terminalDisposition = "verification_failed";
     }
+  } else if (record.answerState === "answered" &&
+      record.prefillDisposition === "already_correct") {
+    record.terminalDisposition = "verified_without_mutation";
   }
 }
 
@@ -507,7 +659,7 @@ function exactMechanics(value: unknown): value is ProfileFieldMechanicsV1 {
     persistentReadbacks.has(mechanics.persistentReadback);
 }
 
-function validMechanicsRelations(field: ProfileFieldLearningRecordV1): boolean {
+function validMechanicsRelations(field: ProfileFieldLearningRecordV2): boolean {
   const choice = field.uiType === "search_select" || field.uiType === "select" ||
     field.uiType === "multi_select" || field.uiType === "radio_group";
   const popup = field.uiType === "search_select" || field.uiType === "select" ||
@@ -518,6 +670,26 @@ function validMechanicsRelations(field: ProfileFieldLearningRecordV1): boolean {
       field.mechanics.persistentReadback !== "not_attempted" ||
     field.driverAttempt !== "none" &&
       field.mechanics.persistentReadback === "not_attempted" ||
+    field.driverAttempt === "none" && isMutationBinding(field.monitorBinding) ||
+    (field.driverAttempt !== "none") !== isMutationBinding(field.monitorBinding) ||
+    (field.answerState === "unset" && (
+      isMutationBinding(field.monitorBinding) || field.driverAttempt !== "none" ||
+      field.terminalDisposition !== (field.required ? "required_unset" : "optional_unset")
+    )) ||
+    (field.terminalDisposition === "verified_without_mutation" && (
+      field.driverAttempt !== "none" || isMutationBinding(field.monitorBinding) ||
+      field.answerState !== "answered" || field.lane === null
+    )) ||
+    (field.terminalDisposition === "verified" && (
+      !isMutationBinding(field.monitorBinding) ||
+      field.mechanics.persistentReadback !== "verified_after_rescan"
+    )) ||
+    (field.terminalDisposition === "driver_failed" &&
+      field.mechanics.persistentReadback !== "driver_failed") ||
+    (field.terminalDisposition === "verification_failed" &&
+      !["unverified_after_rescan", "pending_rescan"].includes(
+        field.mechanics.persistentReadback,
+      )) ||
     !choice && (field.visibleOptionIds.length !== 0 || field.selectedOptionId !== null) ||
     !popup && (
       field.mechanics.popupBound !== "not_applicable" ||
@@ -548,17 +720,82 @@ function prefillDisposition(
   if (plan === undefined || plan.answer.kind === "profile_answer_missing") {
     return "needs_owner_input";
   }
+  if (plan.answer.lane !== "live_owner_fact") return "needs_owner_input";
   if (readback === null || normalize(readback) === "") return "blank";
   const expected = plan.optionMapping?.visibleOption ?? plan.answer.value;
   return sameValue(expected, readback) ? "already_correct" : "conflict";
 }
 
-function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV1 {
+function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
+  if (value.pendingMonitor !== null) value.terminalDisposition = "verification_failed";
   return Object.freeze({
-    ...value,
+    fieldIdentity: value.fieldIdentity,
+    uiType: value.uiType,
+    uiVariant: value.uiVariant,
+    questionCategory: value.questionCategory,
+    answerCategory: value.answerCategory,
+    required: value.required,
+    answerState: value.answerState,
+    lane: value.lane,
     visibleOptionIds: Object.freeze([...value.visibleOptionIds]),
+    selectedOptionId: value.selectedOptionId,
+    optionMapping: value.optionMapping,
+    prefillDisposition: value.prefillDisposition,
+    driverAttempt: value.driverAttempt,
+    monitorBinding: value.monitorBinding === null
+      ? null
+      : Object.freeze({ ...value.monitorBinding }),
+    terminalDisposition: value.terminalDisposition,
     mechanics: Object.freeze({ ...value.mechanics }),
   });
+}
+
+function liveEligibleField(field: ProfileFieldLearningRecordV2): boolean {
+  if (field.answerState === "unset") {
+    return !field.required && field.lane === null && isObservationBinding(field.monitorBinding) &&
+      field.terminalDisposition === "optional_unset";
+  }
+  return field.lane === "live_owner_fact" &&
+    (field.terminalDisposition === "verified" ||
+      field.terminalDisposition === "verified_without_mutation") &&
+    (field.terminalDisposition === "verified"
+      ? isMutationBinding(field.monitorBinding)
+      : isObservationBinding(field.monitorBinding));
+}
+
+function validMonitorBinding(value: ProfileFieldLearningRecordV2["monitorBinding"]): boolean {
+  return value === null || isMutationBinding(value) || isObservationBinding(value);
+}
+
+function isMutationBinding(
+  value: ProfileFieldLearningRecordV2["monitorBinding"],
+): value is Extract<NonNullable<ProfileFieldLearningRecordV2["monitorBinding"]>, {
+  readonly beforeMutationAck: true;
+}> {
+  return value !== null && "beforeMutationAck" in value && exactKeys(value, [
+    "operationId", "attempt", "beforeMutationAck", "afterReadbackAck",
+  ]) && /^operation_[A-Za-z0-9_-]{16,64}$/u.test(value.operationId) &&
+    Number.isSafeInteger(value.attempt) && value.attempt >= 1 && value.attempt <= 256 &&
+    value.beforeMutationAck === true && value.afterReadbackAck === true;
+}
+
+function isObservationBinding(
+  value: ProfileFieldLearningRecordV2["monitorBinding"],
+): value is Extract<NonNullable<ProfileFieldLearningRecordV2["monitorBinding"]>, {
+  readonly stateObservedAck: true;
+}> {
+  return value !== null && "stateObservedAck" in value && exactKeys(value, [
+    "operationId", "attempt", "stateObservedAck",
+  ]) && /^operation_[A-Za-z0-9_-]{16,64}$/u.test(value.operationId) &&
+    Number.isSafeInteger(value.attempt) && value.attempt >= 1 && value.attempt <= 256 &&
+    value.stateObservedAck === true;
+}
+
+function validMode(mode: string, testOnly: boolean, liveAcceptanceEligible: boolean): boolean {
+  return mode === "live"
+    ? testOnly === false
+    : mode === "synthetic_test_non_submittable" &&
+      testOnly === true && liveAcceptanceEligible === false;
 }
 
 function sameCategories(left: ProfileFieldPlan, right: ProfileFieldPlan): boolean {

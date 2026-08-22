@@ -47,6 +47,17 @@ export interface Stage2ReviewMonitorChainV1 {
   readonly targetHandleId: string;
   readonly classification: "review_verified" | "account_verified";
   readonly files: readonly string[];
+  readonly operations: readonly Stage2MonitorOperationV1[];
+}
+
+export interface Stage2MonitorOperationV1 {
+  readonly ordinal: number;
+  readonly page: string;
+  readonly moment: string;
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly fieldCount: number;
+  readonly requiredFieldCount: number;
 }
 
 export function readStage2ReviewMonitorChain(
@@ -195,6 +206,8 @@ function readMonitorChain(
         moment,
         operationId: request.operationId as string,
         attempt: request.attempt as number,
+        fieldCount: taxonomy.fieldCount as number,
+        requiredFieldCount: taxonomy.requiredFieldCount as number,
       }));
       files.push(
         `${directoryName}/${ackFile}`,
@@ -210,6 +223,7 @@ function readMonitorChain(
       targetHandleId: expected.targetHandleId,
       classification: finalClassification,
       files: Object.freeze(files.sort()),
+      operations: Object.freeze(operations),
     });
   } catch {
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
@@ -230,13 +244,7 @@ interface DiscoveredRecord {
   readonly prefix: string;
 }
 
-interface MonitorOperation {
-  readonly ordinal: number;
-  readonly page: string;
-  readonly moment: string;
-  readonly operationId: string;
-  readonly attempt: number;
-}
+type MonitorOperation = Stage2MonitorOperationV1;
 
 interface OperationGroup {
   readonly fromPage: string;

@@ -148,6 +148,22 @@ test("captures profile and questionnaire inputs as immutable source snapshots", 
   assert.notEqual(plan, values.profilePlan);
   assert.notEqual(request, values.questionnaireRequest);
   assert.equal(request.resumeArtifact, values.questionnaireRequest.resumeArtifact);
+  assert.equal(request.mode, "live");
+});
+
+test("production lane sources cannot select synthetic non-submittable mode", () => {
+  const values = laneValues();
+  assert.throws(() => createImmutableApplicationLaneSources({
+    ...values,
+    profilePlan: { ...values.profilePlan, mode: "synthetic_test_non_submittable" },
+  }), /require live owner mode/u);
+  assert.throws(() => createImmutableApplicationLaneSources({
+    ...values,
+    questionnaireRequest: {
+      ...values.questionnaireRequest,
+      mode: "synthetic_test_non_submittable",
+    },
+  }), /require live owner mode/u);
 });
 
 test("maps a transient profile page-port outage to the bounded retry policy", async () => {
@@ -201,16 +217,24 @@ function laneValues(): {
   assert.equal(intent.ok, true);
   if (!intent.ok) throw new Error("fixture resume intent failed");
   const profilePlan: ProfilePagePlan = {
+    mode: "live",
     pageType: "profile",
-    fields: [{
+fields: [{
       fieldId: "identity.given_name",
       questionType: "identity",
       answerType: "text",
-      answer: { kind: "answered", value: "Ada", provenance: "owner_provided" },
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: "Ada",
+        provenance: "owner_provided",
+        lane: "live_owner_fact",
+      },
     }],
     repeatables: [],
   };
   const questionnaireRequest = {
+    mode: "live",
     journeyId: walkFixture.journeyId,
     sessionId: "browser_session_s2f3fixture0001" as BrowserSessionId,
     pageId: walkFixture.pages.questionnaire,

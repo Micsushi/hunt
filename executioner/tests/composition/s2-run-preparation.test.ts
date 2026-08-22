@@ -16,6 +16,8 @@ import { prepareStage2LiveRun } from "../../src/composition/s2-run-preparation.t
 import { FileBackedStage2ApplicationOwnerSourceResolver } from
   "../../src/composition/private/s2-application-owner-source.ts";
 import { admitRealRunPreflight } from "../../src/live/preflight/admit.ts";
+import { applicationProfileFactIds as profileFactIds } from
+  "../../src/profile/application-profile.ts";
 
 const noProtection = { protect: async () => undefined };
 
@@ -135,17 +137,23 @@ test("atomic preparation seals current protected application sources before appr
           profileId: "profile-owner-approved",
           revision: 1,
           facts: [
-            { factId: "given_name", value: "Synthetic", provenance: "owner_provided" },
-            { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template" },
+            { factId: "given_name", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
+            { factId: "configured_narrative", value: "Synthetic narrative.", provenance: "configured_template", lane: "live_owner_fact" },
           ],
+          unsetFactIds: profileFactIds.filter((factId) =>
+            factId !== "given_name" && factId !== "configured_narrative"
+          ),
+          discoveredFields: [],
         },
         profilePlan: {
+          mode: "live",
           pageType: "profile",
-          fields: [{
+fields: [{
             fieldId: "identity.given_name",
             questionType: "identity",
             answerType: "text",
-            answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided" },
+            allowedOptions: [],
+            answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
           }],
           repeatables: [],
         },
@@ -212,8 +220,25 @@ test("post-write source protection failure leaves no admitted run", async () => 
             fileType: "pdf",
             bytes: resumeBytes,
           },
-          profile: {},
-          profilePlan: {},
+          profile: {
+            profileId: "profile-owner-approved",
+            revision: 1,
+            facts: [{ factId: "given_name", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" }],
+            unsetFactIds: profileFactIds.filter((factId) => factId !== "given_name"),
+            discoveredFields: [],
+          },
+          profilePlan: {
+            mode: "live",
+            pageType: "profile",
+            fields: [{
+              fieldId: "identity.given_name",
+              questionType: "identity",
+              answerType: "text",
+              allowedOptions: [],
+              answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
+            }],
+            repeatables: [],
+          },
           narrative: { revision: "narrative-owner-approved" },
         },
       }, {
@@ -236,8 +261,35 @@ test("post-write source protection failure leaves no admitted run", async () => 
 test("application source is snapshotted before storage awaits and rejects caller time", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
   const resumeBytes = Buffer.from("%PDF-1.7\nsource before await\n");
-  const profile = { marker: "before" };
-  const profilePlan = { marker: "before" };
+  const profile = {
+    profileId: "profile-owner-approved",
+    revision: 1,
+    facts: [{
+      factId: "given_name",
+      value: "before",
+      provenance: "owner_provided",
+      lane: "live_owner_fact",
+    }],
+    unsetFactIds: profileFactIds.filter((factId) => factId !== "given_name"),
+    discoveredFields: [],
+  };
+  const profilePlan = {
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      fieldId: "identity.given_name",
+      questionType: "identity",
+      answerType: "text",
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: "before",
+        provenance: "owner_provided",
+        lane: "live_owner_fact",
+      },
+    }],
+    repeatables: [],
+  };
   const source = {
     resume: {
       resumeId: "resume-owner-approved",
@@ -265,16 +317,16 @@ test("application source is snapshotted before storage awaits and rejects caller
       accountMode: "sign_in",
       applicationSource: source,
     }, noProtection);
-    profile.marker = "after";
-    profilePlan.marker = "after";
+    profile.facts[0]!.value = "after";
+    profilePlan.fields[0]!.answer.value = "after";
     resumeBytes.fill(0x78);
     const prepared = await pending;
     const captured = JSON.parse(readFileSync(
       join(prepared.runtimeRoot, "application-profile.json"),
       "utf8",
     ));
-    assert.equal(captured.profile.marker, "before");
-    assert.equal(captured.profilePlan.marker, "before");
+    assert.equal(captured.profile.facts[0].value, "before");
+    assert.equal(captured.profilePlan.fields[0].answer.value, "before");
     assert.equal(
       readFileSync(join(prepared.runtimeRoot, "application-resume.pdf"), "ascii")
         .startsWith("%PDF-"),

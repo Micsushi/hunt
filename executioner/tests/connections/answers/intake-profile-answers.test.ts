@@ -10,8 +10,6 @@ import {
   optionId,
   upstreamProfileId,
   useResumeArtifactUpload,
-  type ApplicantProfile,
-  type AnswerResolutionRequest,
   type BrowserControl,
   type BrowserReadback,
   type BrowserTargetObservation,
@@ -20,29 +18,37 @@ import {
   type PortResult,
 } from "../../../src/contracts/index.ts";
 import { createWorkdayPageUnderstanding } from "../../../src/ats/workday/page-understanding.ts";
-import { createAnswerResolver } from "../../../src/form/answers/resolver.ts";
+import { createApplicationAnswerResolver as createAnswerResolver } from
+  "../../../src/form/answers/resolver.ts";
+import type { ApplicationAnswerResolutionRequest } from
+  "../../../src/form/answers/application-types.ts";
 import { questionCatalog } from "../../../src/form/questions/catalog.ts";
 import { createJourneyIntake } from "../../../src/intake/intake.ts";
-import { createProfileQuery } from "../../../src/profile/profile.ts";
+import {
+  createApplicationProfileQuery,
+  toFrozenApplicantProfile,
+} from "../../../src/profile/application-profile.ts";
 import { contractFixtures } from "../../../src/testing/contracts/index.ts";
+import { applicantProfileFixture } from "../../../src/testing/contracts/profile-fixture.ts";
 import { requiredFieldFlowCases } from "../../../src/testing/contracts/field-flow-cases.ts";
 
 const signal = new AbortController().signal;
 const resumeBytes = new TextEncoder().encode("synthetic resume");
-const profile = {
+const profile = applicantProfileFixture({
   profileId: upstreamProfileId("profile-answer-connection"),
   revision: 7,
   facts: [
-    { factId: "given_name", value: "Ada", provenance: "owner_provided" },
-    { factId: "family_name", value: "Lovelace", provenance: "owner_provided" },
-    { factId: "phone_number", value: "555-0100", provenance: "owner_provided" },
-    { factId: "work_authorization", value: true, provenance: "owner_provided" },
-    { factId: "age_requirement_met", value: true, provenance: "owner_provided" },
-    { factId: "sponsorship_required", value: false, provenance: "owner_provided" },
-    { factId: "country", value: "Canada", provenance: "owner_provided" },
-    { factId: "earliest_start_date", value: "2026-09-01", provenance: "owner_provided" },
+    { factId: "given_name", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "family_name", value: "Lovelace", provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "phone_number", value: "555-0100", provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "work_authorization", value: true, provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "age_requirement_met", value: true, provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "sponsorship_required", value: false, provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "country", value: "Canada", provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "earliest_start_date", value: "2026-09-01", provenance: "owner_provided", lane: "live_owner_fact" },
+    { factId: "configured_narrative", value: "Exact configured interest statement.", provenance: "configured_template", lane: "live_owner_fact" },
   ],
-} as const satisfies ApplicantProfile;
+} as const);
 
 const targets = requiredFieldFlowCases.map((row): BrowserTargetObservation => {
   let control: BrowserControl;
@@ -115,16 +121,16 @@ async function understand(fields: readonly BrowserTargetObservation[] = targets)
 
 function answerRequest(
   field: FieldObservation,
-  values: Pick<AnswerResolutionRequest, "profileId" | "profileRevision" | "resume" | "resumeArtifact">,
-): AnswerResolutionRequest {
-  return { field, ...values };
+  values: Pick<ApplicationAnswerResolutionRequest, "profileId" | "profileRevision" | "resume" | "resumeArtifact">,
+): ApplicationAnswerResolutionRequest {
+  return { mode: "live", field, ...values };
 }
 
 test("real F4 intake and F5 facts produce ten exact F6 answer intents", async () => {
   let initializationCalls = 0;
   const mutableBytes = Uint8Array.from(resumeBytes);
   const intake = createJourneyIntake(
-    { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+    { job: contractFixtures.job, resume: contractFixtures.resume, profile: toFrozenApplicantProfile(profile) },
     mutableBytes,
     contractFixtures.journeyState.journeyId,
     async (journeyId): Promise<PortResult<DurableJourneyState, never>> => {
@@ -202,7 +208,7 @@ test("real F4 intake and F5 facts produce ten exact F6 answer intents", async ()
   );
 
   const resolver = createAnswerResolver(
-    createProfileQuery(bootstrapped.value.inputs.profile),
+    createApplicationProfileQuery(profile),
     "Exact configured interest statement.",
   );
   const requests = {
@@ -223,27 +229,27 @@ test("real F4 intake and F5 facts produce ten exact F6 answer intents", async ()
   assert.deepEqual(intents.map((intent) => {
     switch (intent.kind) {
       case "text":
-        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, value: intent.value, provenance: intent.provenance };
+        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, value: intent.value, provenance: intent.provenance, lane: "live_owner_fact" };
       case "choice":
-        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, optionId: intent.optionId, expectedOption: intent.expectedOption, provenance: intent.provenance };
+        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, optionId: intent.optionId, expectedOption: intent.expectedOption, provenance: intent.provenance, lane: "live_owner_fact" };
       case "toggle":
-        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, checked: intent.checked, provenance: intent.provenance };
+        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, checked: intent.checked, provenance: intent.provenance, lane: "live_owner_fact" };
       case "date":
-        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, isoDate: intent.isoDate, provenance: intent.provenance };
+        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, isoDate: intent.isoDate, provenance: intent.provenance, lane: "live_owner_fact" };
       case "resume_upload":
-        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, artifact: intent.artifact, provenance: intent.provenance };
+        return { fieldId: intent.fieldId, kind: intent.kind, behavior: intent.behavior, artifact: intent.artifact, provenance: intent.provenance, lane: "live_owner_fact" };
     }
   }), [
-    { fieldId: "s1-field-age-requirement", kind: "toggle", behavior: "checkbox", checked: true, provenance: "owner_provided" },
-    { fieldId: "s1-field-country", kind: "choice", behavior: "listbox", optionId: "s1-option-country-ca", expectedOption: "Canada", provenance: "owner_provided" },
-    { fieldId: "s1-field-family-name", kind: "text", behavior: "text", value: "Lovelace", provenance: "owner_provided" },
-    { fieldId: "s1-field-given-name", kind: "text", behavior: "text", value: "Ada", provenance: "owner_provided" },
-    { fieldId: "s1-field-interest", kind: "text", behavior: "textarea", value: "Exact configured interest statement.", provenance: "configured_template" },
-    { fieldId: "s1-field-phone-number", kind: "text", behavior: "text", value: "555-0100", provenance: "owner_provided" },
-    { fieldId: "s1-field-resume", kind: "resume_upload", behavior: "file_upload", artifact, provenance: "resume_verified" },
-    { fieldId: "s1-field-sponsorship", kind: "choice", behavior: "select", optionId: "s1-option-sponsorship-no", expectedOption: "No", provenance: "owner_provided" },
-    { fieldId: "s1-field-start-date", kind: "date", behavior: "date", isoDate: "2026-09-01", provenance: "owner_provided" },
-    { fieldId: "s1-field-work-authorization", kind: "choice", behavior: "radio", optionId: "s1-option-work-authorization-yes", expectedOption: "Yes", provenance: "owner_provided" },
+    { fieldId: "s1-field-age-requirement", kind: "toggle", behavior: "checkbox", checked: true, provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-country", kind: "choice", behavior: "listbox", optionId: "s1-option-country-ca", expectedOption: "Canada", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-family-name", kind: "text", behavior: "text", value: "Lovelace", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-given-name", kind: "text", behavior: "text", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-interest", kind: "text", behavior: "textarea", value: "Exact configured interest statement.", provenance: "configured_template", lane: "live_owner_fact" },
+    { fieldId: "s1-field-phone-number", kind: "text", behavior: "text", value: "555-0100", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-resume", kind: "resume_upload", behavior: "file_upload", artifact, provenance: "resume_verified", lane: "live_owner_fact" },
+    { fieldId: "s1-field-sponsorship", kind: "choice", behavior: "select", optionId: "s1-option-sponsorship-no", expectedOption: "No", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-start-date", kind: "date", behavior: "date", isoDate: "2026-09-01", provenance: "owner_provided", lane: "live_owner_fact" },
+    { fieldId: "s1-field-work-authorization", kind: "choice", behavior: "radio", optionId: "s1-option-work-authorization-yes", expectedOption: "Yes", provenance: "owner_provided", lane: "live_owner_fact" },
   ]);
 
   const upload = await useResumeArtifactUpload(artifact, (bytes) => ({
@@ -260,10 +266,11 @@ test("real F4 intake and F5 facts produce ten exact F6 answer intents", async ()
 });
 
 test("real F4 intake rejects malformed identity, credentials, persistence failure, and byte mismatch", async () => {
+  const frozenProfile = toFrozenApplicantProfile(profile);
   const cases = [
     {
       name: "byte/hash mismatch",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: new TextEncoder().encode("changed resume"),
       request: { jobId: contractFixtures.job.jobId, resumeId: contractFixtures.resume.resumeId, profileId: profile.profileId },
       error: "artifact_digest_mismatch",
@@ -287,7 +294,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
     },
     {
       name: "malformed job identity",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: resumeBytes,
       request: { jobId: "bad id", resumeId: contractFixtures.resume.resumeId, profileId: profile.profileId },
       error: "journey_input_invalid",
@@ -295,7 +302,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
     },
     {
       name: "wrong job identity",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: resumeBytes,
       request: { jobId: "job-other", resumeId: contractFixtures.resume.resumeId, profileId: profile.profileId },
       error: "journey_input_invalid",
@@ -303,7 +310,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
     },
     {
       name: "wrong profile identity",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: resumeBytes,
       request: { jobId: contractFixtures.job.jobId, resumeId: contractFixtures.resume.resumeId, profileId: "profile-other" },
       error: "journey_input_invalid",
@@ -311,7 +318,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
     },
     {
       name: "wrong resume identity",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: resumeBytes,
       request: { jobId: contractFixtures.job.jobId, resumeId: "resume-other", profileId: profile.profileId },
       error: "resume_identity_mismatch",
@@ -319,7 +326,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
     },
     {
       name: "persistence unavailable",
-      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile },
+      source: { job: contractFixtures.job, resume: contractFixtures.resume, profile: frozenProfile },
       bytes: resumeBytes,
       request: { jobId: contractFixtures.job.jobId, resumeId: contractFixtures.resume.resumeId, profileId: profile.profileId },
       error: "journey_persistence_unavailable",
@@ -356,7 +363,7 @@ test("real F4 intake rejects malformed identity, credentials, persistence failur
   }
 });
 
-test("real F4 errors remain exact while missing and unmatched answers become learning intents", async () => {
+test("real F4 errors remain exact while live missing and unmatched answers never become defaults", async () => {
   const understood = await understand();
   if (!understood.ok || understood.value.kind !== "understood") assert.fail("expected facts");
   const fields = new Map(understood.value.snapshot.fields.map((field) => [field.fieldId, field]));
@@ -374,7 +381,7 @@ test("real F4 errors remain exact while missing and unmatched answers become lea
     { profileId: profile.profileId, profileRevision: profile.revision + 1, code: "profile_revision_mismatch", retryable: false },
   ] as const;
   for (const entry of exactErrors) {
-    const resolver = createAnswerResolver(createProfileQuery(profile), "Narrative.");
+    const resolver = createAnswerResolver(createApplicationProfileQuery(profile), "Narrative.");
     let result: Awaited<ReturnType<typeof resolver.resolve>> | undefined;
     await assert.doesNotReject(async () => {
       result = await resolver.resolve(answerRequest(fields.get(fieldId("s1-field-given-name"))!, {
@@ -386,42 +393,31 @@ test("real F4 errors remain exact while missing and unmatched answers become lea
     assert.deepEqual(result, { ok: false, error: { code: entry.code, retryable: entry.retryable } });
   }
 
-  const missing = createAnswerResolver(createProfileQuery({
+  const missingProfile = applicantProfileFixture({
     profileId: profile.profileId,
     revision: profile.revision,
     facts: profile.facts.filter(({ factId: fact }) => fact !== "family_name"),
-  }), "Narrative.");
+  });
+  const missing = createAnswerResolver(createApplicationProfileQuery(missingProfile), "Narrative.");
   assert.deepEqual(
     await missing.resolve(answerRequest(fields.get(fieldId("s1-field-family-name"))!, values), signal),
     {
       ok: true,
-      value: {
-        kind: "resolved",
-        intent: {
-          kind: "text",
-          behavior: "text",
-          fieldId: "s1-field-family-name",
-          target: "target-s1-field-family-name",
-          value: "Candidate",
-          provenance: "reviewed_catalog",
-        },
-      },
+      value: { kind: "profile_answer_missing", questionId: "s1-question-family-name" },
     },
   );
 
-  const noMatch = createAnswerResolver(createProfileQuery({
+  const noMatchProfile = applicantProfileFixture({
     profileId: profile.profileId,
     revision: profile.revision,
-    facts: [{ factId: "country", value: "Mexico", provenance: "owner_provided" }],
-  }), "Narrative.");
+    facts: [{ factId: "country", value: "Mexico", provenance: "owner_provided", lane: "live_owner_fact" }],
+  });
+  const noMatch = createAnswerResolver(createApplicationProfileQuery(noMatchProfile), "Narrative.");
   const noMatchResult = await noMatch.resolve(
     answerRequest(fields.get(fieldId("s1-field-country"))!, values),
     signal,
   );
-  assert.equal(noMatchResult.ok && noMatchResult.value.kind, "resolved");
-  if (noMatchResult.ok && noMatchResult.value.kind === "resolved") {
-    assert.equal(noMatchResult.value.intent.provenance, "visible_option");
-  }
+  assert.equal(noMatchResult.ok && noMatchResult.value.kind, "option_no_match");
 
   const workAuthorization = fields.get(fieldId("s1-field-work-authorization"))!;
   const ambiguousField = Object.freeze({
@@ -432,13 +428,13 @@ test("real F4 errors remain exact while missing and unmatched answers become lea
     ]),
   });
   const ambiguousResult = await createAnswerResolver(
-    createProfileQuery(profile),
+    createApplicationProfileQuery(profile),
     "Narrative.",
   ).resolve(answerRequest(ambiguousField, values), signal);
-  assert.equal(ambiguousResult.ok && ambiguousResult.value.kind, "resolved");
-  if (ambiguousResult.ok && ambiguousResult.value.kind === "resolved") {
-    assert.equal(ambiguousResult.value.intent.provenance, "visible_option");
-  }
+  assert.deepEqual(ambiguousResult, {
+    ok: false,
+    error: { code: "protected_answer_denied", retryable: false },
+  });
 
   const unsupportedTarget = Object.freeze({
     ...targets.find(({ token }) => token === "target-s1-field-given-name")!,
@@ -451,7 +447,7 @@ test("real F4 errors remain exact while missing and unmatched answers become lea
   const unsupportedField = unsupportedPage.value.snapshot.fields[0]!;
   assert.equal(unsupportedField.behavior, "unsupported");
   assert.deepEqual(
-    await createAnswerResolver(createProfileQuery(profile), "Narrative.").resolve(
+    await createAnswerResolver(createApplicationProfileQuery(profile), "Narrative.").resolve(
       answerRequest(unsupportedField, values),
       signal,
     ),
@@ -459,23 +455,24 @@ test("real F4 errors remain exact while missing and unmatched answers become lea
   );
 });
 
-test("protected F5 facts replace non-owner provenance with a learning default", async () => {
+test("protected F5 facts reject non-owner provenance without a learning default", async () => {
   const understood = await understand();
   if (!understood.ok || understood.value.kind !== "understood") assert.fail("expected facts");
   const protectedField = understood.value.snapshot.fields.find(
     ({ fieldId: id }) => id === "s1-field-start-date",
   )!;
-  const protectedProfile = {
+  const protectedProfile = applicantProfileFixture({
     profileId: profile.profileId,
     revision: profile.revision,
     facts: [{
       factId: "earliest_start_date",
       value: "2026-09-01",
       provenance: "resume_verified",
+      lane: "live_owner_fact",
     }],
-  } as const satisfies ApplicantProfile;
+  } as const);
   const result = await createAnswerResolver(
-    createProfileQuery(protectedProfile),
+    createApplicationProfileQuery(protectedProfile),
     "Narrative.",
   ).resolve(answerRequest(protectedField, {
     profileId: protectedProfile.profileId,
@@ -483,8 +480,8 @@ test("protected F5 facts replace non-owner provenance with a learning default", 
     resume: contractFixtures.resume,
     resumeArtifact: contractFixtures.resumeArtifact,
   }), signal);
-  assert.equal(result.ok && result.value.kind, "resolved");
-  if (result.ok && result.value.kind === "resolved") {
-    assert.equal(result.value.intent.provenance, "reviewed_catalog");
-  }
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: "protected_answer_denied", retryable: false },
+  });
 });

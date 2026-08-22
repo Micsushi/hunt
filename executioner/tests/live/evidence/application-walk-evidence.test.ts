@@ -80,6 +80,7 @@ test("admits derived source-select and owner-backed prior-worker radio mechanics
           uiBehavior: "search_select" as const,
           uiVariant: "workday_source_select_v1",
           provenance: "journey_derived" as const,
+          lane: "live_owner_fact" as const,
           optionMappingProvenance: "visible_option" as const,
         },
         {
@@ -89,6 +90,7 @@ test("admits derived source-select and owner-backed prior-worker radio mechanics
           uiBehavior: "radio_group" as const,
           uiVariant: "workday_previous_worker_radio_v1",
           provenance: "owner_provided" as const,
+          lane: "live_owner_fact" as const,
           optionMappingProvenance: "visible_option" as const,
         },
       ],
@@ -181,7 +183,7 @@ test("admits a short private token collision inside the reviewed profile learnin
   }
 });
 
-test("admits the observed Workday v2 text, search-select, and phone variants", async () => {
+test("rejects synthetic defaults from live Workday v2 acceptance", async () => {
   const baseline = packet();
   const profile = baseline.laneAcceptances[0];
   if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
@@ -198,6 +200,7 @@ test("admits the observed Workday v2 text, search-select, and phone variants", a
           uiBehavior: "search_select" as const,
           uiVariant: "workday_search_select_v2",
           provenance: "generated_default" as const,
+          lane: "synthetic_test_default" as const,
           optionMappingProvenance: "visible_option" as const,
         },
         {
@@ -207,13 +210,18 @@ test("admits the observed Workday v2 text, search-select, and phone variants", a
           uiBehavior: "phone" as const,
           uiVariant: "workday_phone_v2",
           provenance: "generated_default" as const,
+          lane: "synthetic_test_default" as const,
         },
       ],
     }, ...baseline.laneAcceptances.slice(1)],
   };
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-v2-ui-"));
   try {
-    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+    await assert.rejects(
+      writeApplicationWalkEvidence({ root, acceptance: acceptance as never, sensitiveValues: [] }),
+      /application-walk evidence denied/u,
+    );
+    assert.deepEqual(readdirSync(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -266,6 +274,34 @@ test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", a
               verifiedFields: lane.verifiedFields.map((field) => ({
                 ...field,
                 provenance: "invented",
+              })),
+            }
+          : lane
+      ),
+    },
+    {
+      ...packet(),
+      laneAcceptances: packet().laneAcceptances.map((lane) =>
+        lane.checkpoint === "profile_verified"
+          ? {
+              ...lane,
+              verifiedFields: lane.verifiedFields.map((field) => {
+                const { lane: _lane, ...missingLane } = field;
+                return missingLane;
+              }),
+            }
+          : lane
+      ),
+    },
+    {
+      ...packet(),
+      laneAcceptances: packet().laneAcceptances.map((lane) =>
+        lane.checkpoint === "questionnaire_verified"
+          ? {
+              ...lane,
+              answers: lane.answers.map((answer) => ({
+                ...answer,
+                lane: "synthetic_test_default",
               })),
             }
           : lane
@@ -354,6 +390,7 @@ function packet() {
           uiBehavior: "text" as const,
           uiVariant: "workday_text_v1",
           provenance: "owner_provided" as const,
+          lane: "live_owner_fact" as const,
         }],
         ownedDuplicateRows: 0 as const,
         independentlyVerified: true as const,
@@ -387,6 +424,7 @@ function packet() {
           fieldId: fieldId("authorization-answer"),
           questionId: questionId("s1-question-work-authorization"),
           provenance: "owner_provided" as const,
+          lane: "live_owner_fact" as const,
           protectedCategory: "authorization" as const,
           templateRevision: null,
           verification: "independent" as const,
