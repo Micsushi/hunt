@@ -79,7 +79,7 @@ test("absent structural matches are counted without waiting on element state", a
   });
 });
 
-test("a Submit outside the exact Review root cannot satisfy the signature", async () => {
+test("a Submit outside the exact Workday page footer cannot satisfy the signature", async () => {
   const absent = {
     count: () => Promise.resolve(0),
     isVisible: () => Promise.resolve(false),
@@ -99,7 +99,9 @@ test("a Submit outside the exact Review root cannot satisfy the signature", asyn
     getByRole: () => absent,
   };
   const pageWithOutsideSubmit = {
-    locator: (selector: string) => selector.includes("applyFlowReviewPage")
+    locator: (selector: string) => selector.includes("pageFooter")
+      ? absent
+      : selector.includes("applyFlowReviewPage")
       ? selector.includes("error") ? absent : root
       : root,
     getByRole: () => outsideSubmit,

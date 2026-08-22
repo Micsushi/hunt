@@ -20,6 +20,7 @@ import {
   type PlaywrightSessionControlTraceEvent,
 } from "./private/playwright-session-control.ts";
 import type { PersistentBrowserRuntimeBinding } from "./private/types.ts";
+import type { PersistentPage } from "./private/types.ts";
 import type { OwnedWorkdayApplicationRuntimeOptions } from
   "./private/workday-application-runtime.ts";
 import { WorkdayOwnedTargetProbe } from "./private/workday-owned-target-probe.ts";
@@ -32,6 +33,7 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
   readonly timeoutMs?: number;
   readonly inspectionHold?: () => Promise<void>;
+  readonly inspectionCapture?: (page: PersistentPage) => Promise<void>;
   readonly accountTrace?: (
     event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
       PlaywrightVerificationNavigationTraceEvent | PostingNavigationSessionTraceEvent |
@@ -53,9 +55,10 @@ export function createPlaywrightPersistentBrowserSession(
   const holdAction = options.inspectionHold ?? (inspection.holdMs === 0
     ? undefined
     : () => delay(inspection.holdMs));
-  const inspectionHold = holdAction === undefined || options.externalMonitor !== undefined
-    ? undefined
-    : oneShot(holdAction);
+  const inspectionHold = holdAction === undefined ? undefined : oneShot(holdAction);
+  const unsettledInspectionHold = options.externalMonitor === undefined
+    ? inspectionHold
+    : undefined;
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
     launcher: new PlaywrightPersistentContextLauncher({ timeoutMs: inspection.timeoutMs }),
@@ -63,7 +66,7 @@ export function createPlaywrightPersistentBrowserSession(
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter({
       trace: options.accountTrace,
-      unsettledInspectionHold: inspectionHold,
+      unsettledInspectionHold,
       externallyMonitored: options.externalMonitor !== undefined,
     }),
     postingNavigation: new PlaywrightPostingNavigationAdapter({
@@ -83,6 +86,7 @@ export function createPlaywrightPersistentBrowserSession(
     externalMonitor: options.externalMonitor,
     ids: nextSessionId,
     inspectionHoldBeforeCleanup: inspectionHold,
+    inspectionCaptureBeforeCleanup: options.inspectionCapture,
     timeoutMs: inspection.timeoutMs,
     applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs(
       options.externalMonitor !== undefined ||

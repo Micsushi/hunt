@@ -1094,13 +1094,17 @@ export class PlaywrightPersistentBrowserSession
     const profilePath = this.#profilePath;
     const marker = this.#marker;
     const closedSession = this.#session;
+    const page = this.#page;
+    const pageWasOpen = page !== undefined && !page.isClosed();
     const logoutPassed = !this.#options.logoutOnCloseForTesting ||
       await this.#logoutBeforeClose();
     const inspectionPassed = await this.#holdBeforeCleanup(context);
-    const contextCleanup = await this.#boundedCleanup(() => context.close());
+    const contextCleanupAttempt = await this.#boundedCleanup(() => context.close());
     const profileCleanup = await this.#boundedCleanup(
       () => this.#options.profiles.cleanup(profilePath, marker),
     );
+    const contextCleanup = contextCleanupAttempt ||
+      (pageWasOpen && page !== undefined && page.isClosed());
     this.#context = undefined;
     this.#page = undefined;
     this.#approvedTarget = undefined;
@@ -1199,6 +1203,11 @@ export class PlaywrightPersistentBrowserSession
   async #holdBeforeCleanup(context: PersistentContext | undefined): Promise<boolean> {
     if (context === undefined || this.#options.inspectionHoldBeforeCleanup === undefined) return true;
     try {
+      if (this.#options.inspectionCaptureBeforeCleanup !== undefined) {
+        const page = [...context.pages()].reverse().find((candidate) => !candidate.isClosed());
+        if (page === undefined) return false;
+        await this.#options.inspectionCaptureBeforeCleanup(page);
+      }
       await this.#options.inspectionHoldBeforeCleanup();
       return true;
     } catch {

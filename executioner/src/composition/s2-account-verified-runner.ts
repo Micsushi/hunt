@@ -760,6 +760,16 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       binding: admission.binding,
       accountTrace: valueFreeTrace,
       inspectionHold,
+      inspectionCapture: inspectionHold === undefined ? undefined : async (page) => {
+        const screenshot = (page as unknown as {
+          screenshot?: (options: { readonly path: string; readonly animations: "disabled" }) => Promise<unknown>;
+        }).screenshot;
+        if (typeof screenshot !== "function") throw new Error("monitor capture unavailable");
+        await screenshot.call(page, {
+          path: join(owner.roots.evidence.path, "monitor-visible.png"),
+          animations: "disabled",
+        });
+      },
     });
     const structural = createPlaywrightLiveEntryStructuralSource(browser);
     const classified = createClassifiedAccountObservationSource(

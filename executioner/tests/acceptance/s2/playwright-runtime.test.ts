@@ -18,6 +18,7 @@ import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { applyMutation, inspectPage } from "../../../src/browser/adapter.ts";
 import type {
   PersistentContext,
   PersistentPage,
@@ -32,9 +33,32 @@ import { PlaywrightPersistentBrowserSession } from
 import {
   bindQuestionnaireTargets,
   isReviewExpectedField,
+  isWorkdayReviewOmittedProfileField,
   OwnedWorkdayApplicationRuntime,
+  reviewAnswerCandidates,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("Workday Review admits only its exact omitted composites and canonical LinkedIn display", () => {
+  assert.deepEqual([
+    "identity.middle_name",
+    "address.line2",
+    "address.postal_code",
+    "address.region",
+    "phone.device_type",
+    "phone.country_code",
+  ].map((fieldId) => isWorkdayReviewOmittedProfileField(fieldId)), Array(6).fill(true));
+  assert.equal(isWorkdayReviewOmittedProfileField("address.city"), false);
+  assert.equal(isWorkdayReviewOmittedProfileField("social.linkedin"), false);
+  assert.equal(
+    reviewAnswerCandidates("https://www.linkedin.com/in/wjshi")
+      .has("https://linkedin.com/in/wjshi"),
+    true,
+  );
+  assert.equal(reviewAnswerCandidates("https://example.com/in/wjshi").has(
+    "https://linkedin.com/in/wjshi",
+  ), false);
+});
 
 test("questionnaire binding owns every admitted visible Workday question root", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -84,6 +108,64 @@ test("questionnaire binding gives unknown questions stable value-free target ide
     const token = await page.locator("fieldset").getAttribute("data-hunt-target-token");
     assert.match(token ?? "", /^target-workday-[a-f0-9]{8}-1$/u);
     assert.doesNotMatch(token ?? "", /tenant|question/u);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("questionnaire adapter fills Workday segmented signed dates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowSelfIdentifyPage">
+        <div data-automation-id="formField-dateSignedOn">
+          <label>Date Signed <span data-automation-id="required">*</span></label>
+          <div data-automation-id="dateInputWrapper">
+            <input role="spinbutton" data-automation-id="dateSectionMonth-input">
+            <input role="spinbutton" data-automation-id="dateSectionDay-input">
+            <input role="spinbutton" data-automation-id="dateSectionYear-input">
+          </div>
+        </div>
+      </main>
+    `);
+    await bindQuestionnaireTargets(page, "page-self-identify-segmented-date" as never);
+    const wrapper = page.locator('[data-automation-id="dateInputWrapper"]');
+    assert.match(
+      await wrapper.getAttribute("data-hunt-target-token") ?? "",
+      /^target-workday-[a-f0-9]{8}-1$/u,
+    );
+    assert.equal(await wrapper.locator("input[data-hunt-target-token]").count(), 0);
+
+    const inspection = await inspectPage(
+      page,
+      "live_session_segmented_date_01" as never,
+      "page-self-identify-segmented-date" as never,
+      new Map(),
+    );
+    const dateTargets = [...inspection.targets.values()].flat()
+      .filter(({ control }) => control.kind === "date");
+    assert.equal(dateTargets.length, 1);
+    assert.equal(dateTargets[0]!.interaction, "composite-date");
+    assert.equal(dateTargets[0]!.readback.kind, "empty");
+    assert.equal(
+      await applyMutation(page, dateTargets[0]!, {
+        kind: "set_date",
+        target: dateTargets[0]!.token,
+        isoDate: "2026-08-21" as never,
+      }, undefined, 1_000),
+      "applied",
+    );
+
+    const verified = await inspectPage(
+      page,
+      "live_session_segmented_date_01" as never,
+      "page-self-identify-segmented-date" as never,
+      new Map(),
+    );
+    const readback = [...verified.targets.values()].flat()
+      .find(({ control }) => control.kind === "date")?.readback;
+    assert.deepEqual(readback, { kind: "text", value: "2026-08-21" });
   } finally {
     await browser.close();
   }
@@ -327,7 +409,7 @@ test("each profile field mutation has its own before and readback monitor pair",
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label><div data-automation-id="formField-source"><button type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Middle name<input id="name--legalName--middleName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label><label>Address line 2<input id="address--addressLine2"></label><label>Postal code<input id="address--postalCode"></label><div data-automation-id="formField-source"><button type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main></body></html>`);
   let nextOperation = 0;
   const monitored: { readonly moment: string; readonly operationId: string }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
@@ -349,6 +431,24 @@ test("each profile field mutation has its own before and readback monitor pair",
               answer: { kind: "answered", value: "Lovelace", provenance: "owner_provided" },
             },
             {
+              fieldId: "identity.middle_name",
+              questionType: "identity",
+              answerType: "text",
+              answer: { kind: "answered", value: "Byron", provenance: "owner_provided" },
+            },
+            {
+              fieldId: "address.line2",
+              questionType: "address",
+              answerType: "text",
+              answer: { kind: "answered", value: "Unit 1", provenance: "owner_provided" },
+            },
+            {
+              fieldId: "address.postal_code",
+              questionType: "address",
+              answerType: "text",
+              answer: { kind: "answered", value: "T2P 1A1", provenance: "owner_provided" },
+            },
+            {
               fieldId: "source.how_did_you_hear",
               questionType: "application_source",
               answerType: "option",
@@ -362,7 +462,7 @@ test("each profile field mutation has its own before and readback monitor pair",
           ],
           repeatables: [],
         },
-        sensitiveValues: ["Ada", "Lovelace"],
+        sensitiveValues: ["Ada", "Byron", "Lovelace", "Unit 1", "T2P 1A1"],
       },
     } as never,
     acceptances: { record() {} },
@@ -412,13 +512,30 @@ test("each profile field mutation has its own before and readback monitor pair",
     );
     const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
     const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(operations.length, 3);
+    assert.equal(operations.length, 6);
     for (const operationId of operations) {
       assert.deepEqual(
         fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
         ["before_mutation", "after_readback"],
       );
     }
+    assert.equal(await page.locator('#name--legalName--middleName').inputValue(), "Byron");
+    assert.equal(await page.locator('#address--addressLine2').inputValue(), "Unit 1");
+    assert.equal(await page.locator('#address--postalCode').inputValue(), "T2P 1A1");
+    const expectations = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_profile_monitor_01"),
+      operationId: generatedOperationId("operation_profile_monitor_review_01"),
+      sessionId: "live_session_profile_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "review_expectations" } as never, new AbortController().signal) as readonly {
+      readonly fieldId: string;
+    }[];
+    assert.deepEqual(expectations.map(({ fieldId }) => fieldId), [
+      "identity.given_name",
+      "identity.family_name",
+    ]);
   } finally {
     runtime.dispose();
     await context.close();
@@ -436,6 +553,13 @@ test("each questionnaire field mutation has its own before and readback monitor 
     <label>Brief interest statement<textarea required aria-label="Brief interest statement"></textarea></label>
     <div data-automation-id="formField-relatives"><label>Do you have any relatives currently employed by the company? <span aria-hidden="true">*</span></label><button type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <script>
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function(options) {
+        if (this.matches('button[aria-haspopup="listbox"]')) {
+          this.dataset.scrollBlock = options?.block ?? '';
+        }
+        return originalScrollIntoView.call(this, options);
+      };
       document.querySelectorAll('button[aria-haspopup="listbox"]').forEach((button) => {
         const field = button.closest('[data-automation-id^="formField-"]');
         const options = field.querySelector('.options');
@@ -552,6 +676,12 @@ test("each questionnaire field mutation has its own before and readback monitor 
     assert.equal(await page.locator("textarea").inputValue(), "Exact configured interest statement.");
     assert.equal(await page.locator('button[data-committed="true"]').count(), 3);
     assert.deepEqual(
+      await page.locator('button[data-committed="true"]').evaluateAll((buttons) =>
+        buttons.map((button) => button.dataset.scrollBlock)
+      ),
+      ["center", "center", "center"],
+    );
+    assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),
       ["state_observed"],
     );
@@ -648,7 +778,7 @@ test("each questionnaire field mutation has its own before and readback monitor 
       [5, 6, 7, 8, 9, 10, 11, 12, 13],
     );
 
-    await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }.date-shell { display: flex; align-items: center; }.date-opener { margin-left: 48px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
       <div data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm">
         <label>Language <span data-automation-id="required">*</span></label>
         <button type="button" aria-haspopup="listbox">Select One</button>
@@ -657,9 +787,12 @@ test("each questionnaire field mutation has its own before and readback monitor 
         <label>Name <span data-automation-id="required">*</span><input type="text" id="selfIdentifiedDisabilityData--name"></label>
       </div>
       <div data-automation-id="formField-selfIdentifiedDisabilityData--date">
-        <label for="selfIdentifiedDisabilityData--date">Date <span data-automation-id="required">*</span></label>
-        <input type="tel" id="selfIdentifiedDisabilityData--date" style="pointer-events: none">
-        <button type="button"></button>
+        <label>Date <span data-automation-id="required">*</span></label>
+        <div data-automation-id="dateInputWrapper">
+          <input role="spinbutton" data-automation-id="dateSectionMonth-input">
+          <input role="spinbutton" data-automation-id="dateSectionDay-input">
+          <input role="spinbutton" data-automation-id="dateSectionYear-input">
+        </div>
       </div>
       <div data-automation-id="formField-disabilityStatus">
         <label>Disability Status <span data-automation-id="required">*</span></label>
@@ -673,23 +806,6 @@ test("each questionnaire field mutation has its own before and readback monitor 
         </div>
       </div>
       <script>
-        const bindMaskedDate = (input) => input.addEventListener('input', (event) => {
-          const digits = event.target.value.replace(/\D/g, '');
-          if (digits.length === 2 && event.target.dataset.remounted !== 'true') {
-            const replacement = event.target.cloneNode(true);
-            replacement.dataset.remounted = 'true';
-            event.target.replaceWith(replacement);
-            bindMaskedDate(replacement);
-            replacement.focus();
-            replacement.setSelectionRange(replacement.value.length, replacement.value.length);
-          } else if (digits.length === 8 && event.target.dataset.corrupted !== 'true') {
-            event.target.dataset.corrupted = 'true';
-            event.target.value = '08\u200e/\u200e08\u200e/\u200e2020';
-          } else if (digits.length === 8) {
-            event.target.value = digits.slice(0, 2) + '\u200e/\u200e' + digits.slice(2, 4) + '\u200e/\u200e' + digits.slice(4);
-          }
-        });
-        bindMaskedDate(document.getElementById('selfIdentifiedDisabilityData--date'));
         const languageField = document.querySelector('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"]');
         const bindLanguage = (button) => button.addEventListener('click', () => {
           const popup = document.createElement('div');
@@ -710,7 +826,14 @@ test("each questionnaire field mutation has its own before and readback monitor 
         });
         bindLanguage(languageField.querySelector('button'));
         document.addEventListener('keydown', (event) => {
-          if (event.key === 'Escape') document.querySelector('[data-automation-id="promptMenu"]')?.remove();
+          if (event.key !== 'Escape') return;
+          document.querySelector('[data-automation-id="promptMenu"]')?.remove();
+          const button = languageField.querySelector('button');
+          const replacement = button.cloneNode(true);
+          replacement.removeAttribute('data-hunt-target-token');
+          replacement.removeAttribute('data-hunt-popup-options');
+          button.replaceWith(replacement);
+          bindLanguage(replacement);
         });
         const name = document.querySelector('#selfIdentifiedDisabilityData--name');
         name.addEventListener('blur', () => {
@@ -758,23 +881,29 @@ test("each questionnaire field mutation has its own before and readback monitor 
       "English",
     );
     assert.equal(await page.locator("#selfIdentifiedDisabilityData--name").inputValue(), "Test response pending owner review.");
-    assert.equal(
-      await page.locator("#selfIdentifiedDisabilityData--date").inputValue(),
-      "08/20/2026",
-    );
     assert.deepEqual(
-      await page.evaluate(() => {
-        const probe = (document.documentElement as unknown as Record<string, unknown>)
-          .__huntDateProbe as Record<string, boolean>;
-        return { digitAccepted: probe.digitAccepted, fillAccepted: probe.fillAccepted };
-      }),
-      { digitAccepted: false, fillAccepted: true },
+      await page.locator('[data-automation-id="dateInputWrapper"] input').evaluateAll((inputs) =>
+        inputs.map((input) => (input as HTMLInputElement).value)
+      ),
+      ["08", "21", "2026"],
     );
     assert.deepEqual(
       await page.locator('[data-automation-id="formField-disabilityStatus"] input:checked')
         .evaluateAll((inputs) => inputs.map((input) => input.closest('[role="row"]')?.textContent?.trim())),
       ["I do not want to answer"],
     );
+    const selfIdentifyExpectations = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_review_expectations_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "review_expectations" } as never, new AbortController().signal) as readonly {
+      readonly valueSha256: string;
+    }[];
+    const englishSha256 = createHash("sha256").update("English", "utf8").digest("hex");
+    assert.equal(selfIdentifyExpectations.some(({ valueSha256 }) => valueSha256 === englishSha256), false);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-learning-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-highestEducation">
@@ -1452,6 +1581,23 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     });
     const realShape = await runtime.review.capture(new AbortController().signal);
     assert.equal(realShape.request.verification.length, 2);
+    await resumeRow.evaluate((node) => { node.removeAttribute("data-automation-id"); });
+    await row.evaluate((node) => { node.removeAttribute("data-automation-id"); });
+    await reviewRoot.evaluate((root) => {
+      const workdaySummaryOwner = document.createElement("div");
+      workdaySummaryOwner.setAttribute("data-automation-id", "formField-");
+      root.prepend(workdaySummaryOwner);
+    });
+    const workdaySummaryShape = await runtime.review.capture(new AbortController().signal);
+    assert.equal(workdaySummaryShape.request.verification.length, 2);
+    await row.locator("span").nth(1).evaluate((node) => { node.textContent = "summary mismatch"; });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    await row.locator("span").nth(1).evaluate((node) => {
+      node.textContent = "Exact configured interest statement.";
+    });
+    await reviewRoot.locator('[data-automation-id="formField-"]').evaluate((node) => node.remove());
+    await resumeRow.evaluate((node) => { node.setAttribute("data-automation-id", "formField-s1-field-resume"); });
+    await row.evaluate((node) => { node.setAttribute("data-automation-id", "formField-s1-field-interest"); });
     await resumeRow.locator("span").nth(1).evaluate((node) => {
       node.textContent = "Exact configured interest statement.";
     });

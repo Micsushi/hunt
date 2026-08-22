@@ -1,6 +1,7 @@
 import {
   lstat,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -9,14 +10,37 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, parse, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { ProfileMarkerV1, ProfileStore } from "./types.ts";
 
 const markerName = ".hunt-profile-v1.json";
 const partialName = ".hunt-profile-v1.tmp";
 const markerByteLimit = 4_096;
+const windowsCleanupRetries = 5;
+const windowsCleanupRetryDelayMs = 100;
+const windowsCleanupPasses = 8;
+const windowsCleanupPassDelayMs = 250;
+
+interface RemoveProfileTreeOptions {
+  recursive: true;
+  force: true;
+  maxRetries: number;
+  retryDelay: number;
+}
+
+type RemoveProfileTree = (
+  profilePath: string,
+  options: RemoveProfileTreeOptions,
+) => Promise<void>;
 
 export class FileProfileStore implements ProfileStore {
+  readonly #removeProfileTree: RemoveProfileTree;
+
+  constructor(removeProfileTree: RemoveProfileTree = rm) {
+    this.#removeProfileTree = removeProfileTree;
+  }
+
   async read(profilePath: string): Promise<unknown> {
     assertProfilePath(profilePath);
     const markerPath = resolve(profilePath, markerName);
@@ -66,13 +90,38 @@ export class FileProfileStore implements ProfileStore {
 
   async cleanupPartial(profilePath: string): Promise<void> {
     assertProfilePath(profilePath);
-    try {
-      await assertExistingProfileIsDirect(profilePath);
-    } catch (error) {
-      if (isMissing(error)) return;
-      throw error;
+    for (let pass = 0; pass < windowsCleanupPasses; pass += 1) {
+      try {
+        await assertExistingProfileIsDirect(profilePath);
+      } catch (error) {
+        if (isMissing(error)) return;
+        throw error;
+      }
+      try {
+        await this.#removeProfileTree(profilePath, {
+          recursive: true,
+          force: true,
+          maxRetries: windowsCleanupRetries,
+          retryDelay: windowsCleanupRetryDelayMs,
+        });
+        return;
+      } catch (error) {
+        if (!isRetryableRemovalError(error)) throw error;
+        if (await isEmptyDirectProfileDirectory(profilePath)) return;
+        if (pass === windowsCleanupPasses - 1) throw error;
+        await delay(windowsCleanupPassDelayMs);
+      }
     }
-    await rm(profilePath, { recursive: true, force: true });
+  }
+}
+
+async function isEmptyDirectProfileDirectory(profilePath: string): Promise<boolean> {
+  try {
+    await assertExistingProfileIsDirect(profilePath);
+    return (await readdir(profilePath)).length === 0;
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
   }
 }
 
@@ -98,4 +147,11 @@ function isMissing(error: unknown): boolean {
   return error instanceof Error &&
     "code" in error &&
     (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isRetryableRemovalError(error: unknown): boolean {
+  return error instanceof Error && "code" in error &&
+    ["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"].includes(
+      String((error as NodeJS.ErrnoException).code),
+    );
 }

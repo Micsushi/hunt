@@ -42,6 +42,14 @@ $rules = @($acl.Access | ForEach-Object { [pscustomobject]@{
         windowsHide: true,
         stdio: ["pipe", "pipe", "ignore"],
         timeout: 10_000,
+        env: {
+          SystemRoot: "C:\\Windows",
+          WINDIR: "C:\\Windows",
+          PSModulePath: [
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules",
+            "C:\\Program Files\\WindowsPowerShell\\Modules",
+          ].join(";"),
+        },
       },
     );
     assert.equal(result.status, 0);

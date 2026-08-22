@@ -157,7 +157,7 @@ async function waitForApplicationReadyPage(
         name: /^My Information$/iu,
       }).count();
       const continueCount = await owned.getByRole("button", {
-        name: /^Save and Continue$/iu,
+        name: /^(?:Save and Continue|Next)$/iu,
       }).count();
       lastDiagnostic = {
         fieldCount,
@@ -872,7 +872,7 @@ export class OwnedWorkdayApplicationRuntime {
         page, monitorPageName, "before_mutation", operationId, attempt, signal,
       );
       this.#assertAuthorized(signal);
-      await hydrateQuestionnairePopupOptions(page, targetToken, this.#timeoutMs);
+      await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
       await this.#monitor(
         page, monitorPageName, "after_readback", operationId, attempt, signal,
       );
@@ -902,7 +902,13 @@ export class OwnedWorkdayApplicationRuntime {
         application.value.requiredFields.length !== requiredFieldCount ||
         taxonomy.fieldCount !== visibleFields.length ||
         taxonomy.requiredFieldCount !== requiredFieldCount
-      ) throw new TypeError("questionnaire field coverage mismatch");
+      ) throw new TypeError(`questionnaire field coverage mismatch:${JSON.stringify({
+        semanticFields: visibleFields.length,
+        semanticRequired: requiredFieldCount,
+        applicationFields: application.ok ? application.value.requiredFields.length : -1,
+        taxonomyFields: taxonomy.fieldCount,
+        taxonomyRequired: taxonomy.requiredFieldCount,
+      })}`);
       const facts = structuralObservations(snapshot.fields);
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
@@ -1041,6 +1047,9 @@ export class OwnedWorkdayApplicationRuntime {
       const targets = new Map(after.value.targets.map((target) => [target.token, target]));
       for (const answer of completed.value.answers) {
         const field = snapshot.fields.find(({ fieldId }) => fieldId === answer.fieldId);
+        if (field !== undefined && /^Language(?:\s*\*)?$/u.test(
+          normalizeReviewValue(field.label),
+        )) continue;
         const target = field === undefined ? undefined : targets.get(field.target);
         const value = target === undefined ? undefined : reviewReadbackValue(target.readback);
         if (value === undefined) throw new TypeError("questionnaire review truth unavailable");
@@ -1065,6 +1074,7 @@ export class OwnedWorkdayApplicationRuntime {
       rows.map(({ rowKey, fields }) => ({ rowKey, fields }))
     );
     for (const verifiedField of verifiedFields) {
+      if (isWorkdayReviewOmittedProfileField(verifiedField.fieldId)) continue;
       const candidates = verifiedField.rowKey === undefined
         ? scalarPlans.filter(({ fieldId }) => fieldId === verifiedField.fieldId)
         : repeatablePlans
@@ -1088,7 +1098,7 @@ export class OwnedWorkdayApplicationRuntime {
 
   #recordReviewExpectation(field: string, provenance: string, value: string): void {
     if (this.#reviewExpected.has(field)) throw new TypeError("review field ambiguous");
-    const normalized = normalizeReviewValue(value);
+    const normalized = normalizeReviewExpectedValue(field, value);
     const rowIdentity = `formField-${field}`;
     if (normalized === "" || !isStableRowIdentity(rowIdentity) ||
         [...this.#reviewExpected.values()].some((item) => item.rowIdentity === rowIdentity)) {
@@ -1204,12 +1214,33 @@ function isExactVerifiedApplicationSource(
 function reviewReadbackValue(readback: BrowserReadback): string | undefined {
   if (readback.kind === "text") return readback.value;
   if (readback.kind === "selected") return readback.option ?? undefined;
-  if (readback.kind === "checked") return readback.checked ? "true" : "false";
+  if (readback.kind === "checked") return readback.checked ? "Yes" : "No";
   return undefined;
 }
 
 function normalizeReviewValue(value: string): string {
   return value.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
+
+function normalizeReviewExpectedValue(field: string, value: string): string {
+  const normalized = normalizeReviewValue(value);
+  if (field === "phone.number" || field === "phone.extension") {
+    return normalized.replace(/\D/gu, "");
+  }
+  if (field === "social.linkedin") return canonicalReviewUrl(normalized);
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(normalized);
+  return isoDate === null ? normalized : `${isoDate[2]}/${isoDate[3]}/${isoDate[1]}`;
+}
+
+export function isWorkdayReviewOmittedProfileField(field: string): boolean {
+  return new Set([
+    "identity.middle_name",
+    "address.line2",
+    "address.postal_code",
+    "address.region",
+    "phone.device_type",
+    "phone.country_code",
+  ]).has(field);
 }
 
 function monitorPage(
@@ -1307,7 +1338,7 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       ));
     if (roots.length !== 1) return null;
     const controls = [...new Set(roots[0]!.querySelectorAll<HTMLElement>(
-      '[data-automation-id="dateSection"], ' +
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
         'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
@@ -1336,7 +1367,7 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
         return control.querySelector('input[type="radio"], [role="radio"]') !== null;
       }
       const dateOwner = control.closest(
-        '[data-automation-id="dateSection"]',
+        '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
       );
       if (dateOwner !== null && dateOwner !== control) return false;
       const checkboxGroupOwner = control.closest(
@@ -1366,7 +1397,9 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
     for (const control of controls) {
       let type = "text";
       if (control instanceof HTMLTextAreaElement) type = "textarea";
-      else if (control.matches('[data-automation-id="dateSection"]')) type = "date";
+      else if (control.matches(
+        '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+      )) type = "date";
       else if (control instanceof HTMLInputElement &&
           (control.type === "text" || control.type === "tel") &&
           (
@@ -1435,7 +1468,8 @@ async function monitorTaxonomy(
     ["select", 'select:visible, [role=combobox]:visible, [aria-haspopup="listbox"]:visible'],
     ["radio", 'input[type="radio"]:visible, [role=radio]:visible'],
     ["checkbox", 'input[type="checkbox"]:visible, [role=checkbox]:visible'],
-    ["date", 'input[type="date"]:visible, [data-automation-id="dateSection"]:visible'],
+    ["date", 'input[type="date"]:visible, [data-automation-id="dateSection"]:visible, ' +
+      '[data-automation-id="dateInputWrapper"]:visible'],
     ["file_upload", 'input[type="file"]:visible'],
   ] as const;
   const questionnaireCoverage = pageName === "questionnaire"
@@ -1825,29 +1859,50 @@ async function captureIndependentReviewFields(
       '[data-automation-id="applyFlowReviewPage"] [data-automation-id^="formField-"]',
     );
     const realCount = await realRows.count();
-    if (realCount !== expected.size) throw new TypeError("Review rows incomplete or ambiguous");
     const byIdentity = new Map([...expected.values()].map((fact) => [fact.rowIdentity, fact]));
     if (byIdentity.size !== expected.size) throw new TypeError("Review identities ambiguous");
-    for (let index = 0; index < realCount; index += 1) {
-      const row = realRows.nth(index);
-      if (!await row.isVisible()) throw new TypeError("Review field hidden");
-      const identity = await row.getAttribute("data-automation-id");
-      if (identity === null || !isStableRowIdentity(identity)) {
-        throw new TypeError("Review field identity unavailable");
+    const identities = await realRows.evaluateAll((rows) => rows.map((row) =>
+      row.getAttribute("data-automation-id") ?? ""
+    ));
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      process.stderr.write(`${JSON.stringify({
+        applicationReviewRowDiagnostics: {
+          expectedCount: expected.size,
+          observedCount: realCount,
+          expectedIdentityCount: identities.filter((identity) => byIdentity.has(identity)).length,
+          observedIdentities: identities,
+        },
+      })}\n`);
+    }
+    const exactIdentityShape = realCount === expected.size &&
+      identities.every((identity) => byIdentity.has(identity));
+    if (exactIdentityShape) {
+      for (let index = 0; index < realCount; index += 1) {
+        const row = realRows.nth(index);
+        if (!await row.isVisible()) throw new TypeError("Review field hidden");
+        const identity = identities[index];
+        if (identity === undefined || !isStableRowIdentity(identity)) {
+          throw new TypeError("Review field identity unavailable");
+        }
+        const fact = byIdentity.get(identity);
+        if (fact === undefined) throw new TypeError("Unknown Review row identity");
+        const values = await row.evaluate((root) => {
+          const leaves = [...root.querySelectorAll<HTMLElement>("*")]
+            .filter((element) => element.children.length === 0)
+            .map((element) => element.textContent ?? "");
+          return leaves.length === 0 ? [root.textContent ?? ""] : leaves;
+        });
+        const matches = values.map(normalizeReviewValue).filter((value) =>
+          value !== "" && createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256
+        );
+        if (matches.length !== 1) throw new TypeError("Review field mismatch");
+        verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
       }
-      const fact = byIdentity.get(identity);
-      if (fact === undefined) throw new TypeError("Unknown Review row identity");
-      const values = await row.evaluate((root) => {
-        const leaves = [...root.querySelectorAll<HTMLElement>("*")]
-          .filter((element) => element.children.length === 0)
-          .map((element) => element.textContent ?? "");
-        return leaves.length === 0 ? [root.textContent ?? ""] : leaves;
-      });
-      const matches = values.map(normalizeReviewValue).filter((value) =>
-        value !== "" && createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256
-      );
-      if (matches.length !== 1) throw new TypeError("Review field mismatch");
-      verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
+    } else if (realCount === 1 && identities[0] === "formField-") {
+      await verifyWorkdayReviewSummary(page, expected);
+      expected.forEach((_fact, id) => seen.add(id));
+    } else {
+      throw new TypeError("Review rows incomplete or ambiguous");
     }
   }
   if (seen.size !== expected.size) throw new TypeError("Review fields incomplete");
@@ -1871,6 +1926,86 @@ async function captureIndependentReviewFields(
       fieldId: verifiedFieldId,
     }))),
   });
+}
+
+async function verifyWorkdayReviewSummary(
+  page: Page,
+  expected: ReadonlyMap<string, ReviewExpectedField>,
+): Promise<void> {
+  const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root) =>
+    [...root.querySelectorAll<HTMLElement>("*")]
+      .filter((element) => {
+        if (element.children.length !== 0 || element.getClientRects().length === 0 ||
+            element.closest('button, [role="button"]') !== null) return false;
+        const weight = getComputedStyle(element).fontWeight;
+        return weight === "normal" || Number.parseInt(weight, 10) < 600;
+      })
+      .map((element) => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
+      .filter(Boolean)
+  );
+  const observed = new Map<string, number>();
+  for (const answer of answers) {
+    for (const candidate of reviewAnswerCandidates(answer)) {
+      const digest = createHash("sha256").update(candidate, "utf8").digest("hex");
+      observed.set(digest, (observed.get(digest) ?? 0) + 1);
+    }
+  }
+  const required = new Map<string, number>();
+  expected.forEach(({ valueSha256 }) =>
+    required.set(valueSha256, (required.get(valueSha256) ?? 0) + 1)
+  );
+  const missing = [...required].filter(([digest, count]) => (observed.get(digest) ?? 0) < count);
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    const missingDigests = new Set(missing.map(([digest]) => digest));
+    process.stderr.write(`${JSON.stringify({
+      applicationReviewSummaryDiagnostics: {
+        expectedFieldCount: expected.size,
+        visibleAnswerLeafCount: answers.length,
+        requiredDigestCount: required.size,
+        missingDigestCount: missing.length,
+        missingFieldIds: [...expected]
+          .filter(([, { valueSha256 }]) => missingDigests.has(valueSha256))
+          .map(([fieldId]) => fieldId),
+      },
+    })}\n`);
+  }
+  if (missing.length !== 0) throw new TypeError("Review field mismatch");
+}
+
+export function reviewAnswerCandidates(value: string): ReadonlySet<string> {
+  const normalized = normalizeReviewValue(value);
+  const candidates = new Set<string>([normalized]);
+  candidates.add(canonicalReviewUrl(normalized));
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length <= 12 && !/^No Response$/iu.test(normalized)) {
+    for (let start = 0; start < words.length; start += 1) {
+      for (let length = 1; length <= 8 && start + length <= words.length; length += 1) {
+        const span = words.slice(start, start + length).join(" ")
+          .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "");
+        if (span !== "") candidates.add(span);
+      }
+    }
+  }
+  const digitGroups = normalized.match(/\d+/gu) ?? [];
+  for (let start = 0; start < digitGroups.length; start += 1) {
+    let digits = "";
+    for (let end = start; end < digitGroups.length; end += 1) {
+      digits += digitGroups[end];
+      candidates.add(digits);
+    }
+  }
+  if (/\bCELL\b/u.test(normalized)) candidates.add("Mobile");
+  return candidates;
+}
+
+function canonicalReviewUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hostname = url.hostname.replace(/^www\./iu, "");
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    return value;
+  }
 }
 
 function verifyReviewBinding(
@@ -1914,7 +2049,9 @@ async function captureReviewStructure(page: Page): Promise<WorkdayReviewStructur
   const root = page.locator(workdayReviewSignatures.reviewRoot);
   const active = page.locator(workdayReviewSignatures.activeStep);
   const errors = page.locator(workdayReviewSignatures.validationError);
-  const submit = root.getByRole("button", { name: workdayReviewSignatures.finalSubmitName });
+  const submit = page.locator(workdayReviewSignatures.finalSubmitScope).getByRole("button", {
+    name: workdayReviewSignatures.finalSubmitName,
+  });
   const [rootCount, activeCount, errorCount, submitCount] = await Promise.all([
     root.count(), active.count(), errors.count(), submit.count(),
   ]);
@@ -1999,7 +2136,8 @@ export async function bindQuestionnaireTargets(
     if (roots.length !== 1) return false;
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
     const controls = roots[0]!.querySelectorAll<HTMLElement>(
-      '[data-automation-id="dateSection"], [data-automation-id$="-CheckboxGroup"], ' +
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
+        '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
         'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
     );
@@ -2029,7 +2167,9 @@ export async function bindQuestionnaireTargets(
       } else if (control.matches(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       )) continue;
-      const dateOwner = control.closest('[data-automation-id="dateSection"]');
+      const dateOwner = control.closest(
+        '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+      );
       if (dateOwner !== null && dateOwner !== control) continue;
       const checkboxGroupOwner = control.closest('[data-automation-id$="-CheckboxGroup"]');
       if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) continue;
@@ -2134,6 +2274,7 @@ export async function questionnairePopupHydrationTargets(
 
 export async function hydrateQuestionnairePopupOptions(
   page: Page,
+  pageId: BrowserPageId,
   targetToken: string,
   timeoutMs: number,
 ): Promise<void> {
@@ -2154,14 +2295,19 @@ export async function hydrateQuestionnairePopupOptions(
     .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
     .filter(Boolean))];
   await target.press("Escape", { timeout: timeoutMs });
+  await bindQuestionnaireTargets(page, pageId);
   if (labels.length === 0 || labels.length > 128 || labels.some((label) => label.length > 512)) {
     throw new TypeError("questionnaire popup options denied");
   }
-  const selectedAfter = await popupSelectedValue(target);
+  const rebound = page.locator(`[data-hunt-target-token="${targetToken}"]`);
+  if (await rebound.count() !== 1 || !await rebound.isVisible()) {
+    throw new TypeError("questionnaire popup target unavailable after close");
+  }
+  const selectedAfter = await popupSelectedValue(rebound);
   if (selectedAfter !== selectedBefore) {
     throw new TypeError("questionnaire popup hydration changed selection");
   }
-  await target.evaluate((element, observed) => {
+  await rebound.evaluate((element, observed) => {
     element.setAttribute("data-hunt-popup-options", JSON.stringify(observed));
   }, labels);
 }
@@ -2252,6 +2398,12 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
       return style.display !== "none" && style.visibility !== "hidden" &&
         element.getClientRects().length > 0;
     };
+    const visibleElement = (element: Element): boolean => {
+      if (!(element instanceof HTMLElement || element instanceof SVGElement)) return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        element.getClientRects().length > 0;
+    };
     const dateInputs = [...document.querySelectorAll<HTMLInputElement>(
       'input[type="text"], input[type="tel"]',
     )].filter((input) => {
@@ -2286,6 +2438,75 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
     )].filter(visible).filter((element) =>
       /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(normalize(element.textContent))
     );
+    const boundDateInputs = allTextTelInputs.filter((input) =>
+      input.hasAttribute("data-hunt-target-token") && (
+        normalize(input.getAttribute("aria-label")) === "Date" ||
+        [...(input.labels ?? [])].some((label) => normalize(label.textContent) === "Date")
+      )
+    );
+    const boundDateInput = boundDateInputs.length === 1 ? boundDateInputs[0] : undefined;
+    const boundDatePropRecords = boundDateInput === undefined
+      ? []
+      : Object.keys(boundDateInput).filter((key) => key.startsWith("__reactProps$"))
+        .map((key) => (boundDateInput as unknown as Record<string, unknown>)[key])
+        .filter((value): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null
+        );
+    let dateSvgOwner: HTMLElement | undefined;
+    let dateSvgOwnerDepth = 0;
+    if (boundDateInput !== undefined) {
+      let owner = boundDateInput.parentElement;
+      let depth = 1;
+      while (owner !== null && owner !== document.body && depth <= 16) {
+        const exactLabels = [...owner.querySelectorAll<HTMLElement>("label, legend")]
+          .filter(visible).filter((label) => normalize(label.textContent) === "Date");
+        const svgs = [...owner.querySelectorAll<SVGElement>("svg")].filter(visibleElement);
+        if (exactLabels.length > 0 && svgs.length > 0) {
+          dateSvgOwner = owner;
+          dateSvgOwnerDepth = depth;
+          break;
+        }
+        owner = owner.parentElement;
+        depth += 1;
+      }
+    }
+    const dateSvgOwnerLabels = dateSvgOwner === undefined
+      ? []
+      : [...dateSvgOwner.querySelectorAll<HTMLElement>("label, legend")].filter(visible);
+    const dateSvgOwnerSvgs = dateSvgOwner === undefined
+      ? []
+      : [...dateSvgOwner.querySelectorAll<SVGElement>("svg")].filter(visibleElement);
+    const dateSvgOwnerElements = dateSvgOwner === undefined
+      ? []
+      : [dateSvgOwner, ...dateSvgOwner.querySelectorAll<HTMLElement>("*")];
+    const dateSvgOwnerReactClickCount = dateSvgOwnerElements.filter((element) => {
+      const record = element as unknown as Record<string, unknown>;
+      return Object.keys(element).some((key) => {
+        if (!key.startsWith("__reactProps$")) return false;
+        const props = record[key];
+        return typeof props === "object" && props !== null &&
+          typeof (props as Record<string, unknown>).onClick === "function";
+      });
+    }).length;
+    const boundRightAncestry: Element[] = [];
+    if (boundDateInput !== undefined) {
+      const box = boundDateInput.getBoundingClientRect();
+      let hit: Element | null = document.elementFromPoint(box.right - 12, box.top + box.height / 2);
+      while (hit !== null && boundRightAncestry.length < 16) {
+        boundRightAncestry.push(hit);
+        if (hit === dateSvgOwner) break;
+        hit = hit.parentElement;
+      }
+    }
+    const boundRightReactClickAncestorCount = boundRightAncestry.filter((element) => {
+      const record = element as unknown as Record<string, unknown>;
+      return Object.keys(element).some((key) => {
+        if (!key.startsWith("__reactProps$")) return false;
+        const props = record[key];
+        return typeof props === "object" && props !== null &&
+          typeof (props as Record<string, unknown>).onClick === "function";
+      });
+    }).length;
     const ownerCandidates: HTMLElement[] = [];
     for (const label of exactDateLabels) {
       let owner = label.parentElement;
@@ -2362,6 +2583,42 @@ async function dateFailureDiagnostics(page: Page): Promise<object> {
         element.getAttribute("role") === "textbox"
       ).length,
       exactMaskTextContentEditableCount: exactMaskTexts.filter((element) => element.isContentEditable).length,
+      boundDateInputCount: boundDateInputs.length,
+      boundDateExactLabelCount: boundDateInput === undefined ? 0 :
+        [...(boundDateInput.labels ?? [])].filter((label) => normalize(label.textContent) === "Date").length,
+      boundDateAssociatedLabelCount: boundDateInput === undefined ? 0 :
+        exactDateLabels.filter((label) =>
+          label instanceof HTMLLabelElement && label.control === boundDateInput
+        ).length,
+      boundDateClosestFormFieldCount: boundDateInput?.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      ) === null || boundDateInput === undefined ? 0 : 1,
+      boundDateClosestDateSectionCount: boundDateInput?.closest(
+        '[data-automation-id="dateSection"]',
+      ) === null || boundDateInput === undefined ? 0 : 1,
+      boundDatePlaceholderMaskCount: boundDateInput !== undefined &&
+          /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(boundDateInput.placeholder.trim()) ? 1 : 0,
+      boundDateValueMaskCount: boundDateInput !== undefined &&
+          /^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(boundDateInput.value.trim()) ? 1 : 0,
+      boundDateReactOnChangeCount: boundDatePropRecords.filter(({ onChange }) =>
+        typeof onChange === "function"
+      ).length,
+      dateSvgOwnerCandidateCount: dateSvgOwner === undefined ? 0 : 1,
+      dateSvgOwnerDepth,
+      dateSvgOwnerExactLabelCount: dateSvgOwnerLabels.filter((label) =>
+        normalize(label.textContent) === "Date"
+      ).length,
+      dateSvgOwnerLabelCount: dateSvgOwnerLabels.length,
+      dateSvgOwnerSvgCount: dateSvgOwnerSvgs.length,
+      dateSvgOwnerInputCount: dateSvgOwner?.querySelectorAll("input").length ?? 0,
+      dateSvgOwnerButtonCount: dateSvgOwner?.querySelectorAll("button").length ?? 0,
+      dateSvgOwnerRoleButtonCount: dateSvgOwner?.querySelectorAll('[role="button"]').length ?? 0,
+      dateSvgOwnerAutomationCount: dateSvgOwner?.querySelectorAll("[data-automation-id]").length ?? 0,
+      dateSvgOwnerReactClickCount,
+      boundRightHitInput: boundDateInput !== undefined && boundRightAncestry[0] === boundDateInput,
+      boundRightHitWithinSvgOwner: dateSvgOwner !== undefined && boundRightAncestry.includes(dateSvgOwner),
+      boundRightHitSvgAncestor: boundRightAncestry.some((element) => element.tagName === "svg"),
+      boundRightReactClickAncestorCount,
       dateOwnerCandidateCount: ownerCandidates.length,
       dateOwnerInputCount: exactOwner?.querySelectorAll("input").length ?? 0,
       dateOwnerTextTelInputCount: ownerTextTelInputs.length,

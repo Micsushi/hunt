@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -102,6 +102,85 @@ test("admits derived source-select and owner-backed prior-worker radio mechanics
   }
 });
 
+test("admits a reviewed profile field identifier that contains a private option token", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const acceptance = {
+    ...baseline,
+    laneAcceptances: [{
+      ...profile,
+      verifiedFields: [{
+        ...profile.verifiedFields[0]!,
+        fieldId: "social.linkedin",
+        questionType: "social_network" as const,
+        answerType: "url" as const,
+      }],
+    }, ...baseline.laneAcceptances.slice(1)],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-structural-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: ["linkedin"] });
+    const text = readFileSync(join(root, "application-walk-acceptance.json"), "utf8");
+    assert.equal(text.includes('"linkedin"'), false);
+    assert.equal(text.includes('"social.linkedin"'), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("still rejects a private option token embedded in an unreviewed field identifier", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const acceptance = {
+    ...baseline,
+    laneAcceptances: [{
+      ...profile,
+      verifiedFields: [{
+        ...profile.verifiedFields[0]!,
+        fieldId: "identity.linkedin",
+      }],
+    }, ...baseline.laneAcceptances.slice(1)],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-private-id-"));
+  try {
+    await assert.rejects(
+      writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: ["linkedin"] }),
+      /application-walk evidence denied/u,
+    );
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("admits a short private token collision inside the reviewed profile learning digest", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const { submitActivated, privacyScan, ...beforeGuard } = profile;
+  const acceptance = {
+    ...baseline,
+    laneAcceptances: [{
+      ...beforeGuard,
+      profileFieldLearningSha256: `${"a".repeat(30)}143${"b".repeat(31)}`,
+      submitActivated,
+      privacyScan,
+    }, ...baseline.laneAcceptances.slice(1)],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-reviewed-digest-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: ["143"] });
+    assert.equal(
+      statSync(join(root, "application-walk-acceptance.json")).isFile(),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("admits the observed Workday v2 text, search-select, and phone variants", async () => {
   const baseline = packet();
   const profile = baseline.laneAcceptances[0];
@@ -135,6 +214,33 @@ test("admits the observed Workday v2 text, search-select, and phone variants", a
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-v2-ui-"));
   try {
     await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("writes a bounded multi-page acceptance larger than the generic acceptance packet", async () => {
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const verifiedFields = Array.from({ length: 70 }, (_, index) => ({
+    ...profile.verifiedFields[0]!,
+    fieldId: `identity.field_${index.toString().padStart(3, "0")}_${"x".repeat(80)}`,
+  }));
+  const acceptance = {
+    ...baseline,
+    completedPages: 1,
+    pageChecks: [{
+      ...baseline.pageChecks[0]!,
+      requiredFields: verifiedFields.length,
+      verifiedFields: verifiedFields.length,
+    }],
+    laneAcceptances: [{ ...profile, verifiedFields }],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-large-route-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+    assert.ok(statSync(join(root, "application-walk-acceptance.json")).size > 16 * 1024);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

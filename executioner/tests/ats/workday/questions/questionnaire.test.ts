@@ -385,6 +385,46 @@ test("Meredith compensation and relative wording use deterministic learning defa
   assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
 });
 
+test("Integer associate referral uses the reviewed No learning default", async () => {
+  const referral = field(
+    "s2-field-associate-referral",
+    "Have you been referred by an Integer associate?",
+    "listbox",
+    [
+      { id: optionId("s2-option-referral-yes"), label: boundedText("Yes") },
+      { id: optionId("s2-option-referral-no"), label: boundedText("No") },
+    ],
+  );
+  let selected: string | undefined;
+  const driver: FieldDriver = {
+    async drive(input) {
+      selected = input.intent.kind === "choice" ? input.intent.expectedOption : undefined;
+      return {
+        ok: true,
+        value: {
+          operationId: input.operationId,
+          fieldId: input.intent.fieldId,
+          behavior: input.intent.behavior,
+          attempted: true,
+        },
+      };
+    },
+  };
+  const { handler } = dependencies({ driver });
+
+  const result = await handler.complete(
+    request([referral]),
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok && result.value.kind, "verified");
+  assert.equal(selected, "No");
+  if (result.ok && result.value.kind === "verified") {
+    assert.equal(result.value.answers[0]?.questionId, "workday-placeholder-associate-referral");
+    assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
+  }
+});
+
 test("non-protected synthetic facts are independently verified without becoming owner facts", async () => {
   const source = field(
     "s2-field-application-source",

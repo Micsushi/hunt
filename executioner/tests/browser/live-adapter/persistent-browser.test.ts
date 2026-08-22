@@ -703,6 +703,34 @@ test("cleanup attempts context and profile independently and reports either fail
   assert.equal(profiles.cleanupCount, 1);
 });
 
+test("close reconciles a Playwright rejection only when its owned open page closed", async () => {
+  const context = new FakeContext([]);
+  context.failCloseAfterClosing = true;
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+
+  const result = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_close_reconciled_1"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.equal(context.closed, true);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
 test("close bounds never-settling cleanup and starts every independent attempt", async () => {
   const context = new FakeContext([]);
   const profiles = new MemoryProfiles();
@@ -882,12 +910,17 @@ test("diagnostic hold runs before failed-open browser cleanup", async () => {
 test("diagnostic hold runs before successful browser close", async () => {
   const context = new FakeContext([]);
   let holdCount = 0;
+  let captureCount = 0;
   let closedDuringHold: boolean | undefined;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
     launcher: { async launchPersistentContext() { return context; } },
     probe: { async inspect() { return ownedMatched(); } },
     profiles: new MemoryProfiles(),
+    inspectionCaptureBeforeCleanup: async (page) => {
+      captureCount += 1;
+      assert.equal(page.isClosed(), false);
+    },
     inspectionHoldBeforeCleanup: async () => {
       holdCount += 1;
       closedDuringHold = context.closed;
@@ -908,6 +941,7 @@ test("diagnostic hold runs before successful browser close", async () => {
 
   assert.deepEqual(result, { ok: true, value: undefined });
   assert.equal(holdCount, 1);
+  assert.equal(captureCount, 1);
   assert.equal(closedDuringHold, false);
   assert.equal(context.closed, true);
 });
@@ -1341,6 +1375,7 @@ class FakeContext {
   newPageCount = 0;
   closeCount = 0;
   failClose = false;
+  failCloseAfterClosing = false;
   hangClose = false;
   delayCloseMs = 0;
   readonly ownedPages: FakePage[];
@@ -1368,6 +1403,8 @@ class FakeContext {
       await new Promise((resolve) => setTimeout(resolve, this.delayCloseMs));
     }
     this.closed = true;
+    for (const page of this.ownedPages) page.closed = true;
+    if (this.failCloseAfterClosing) throw new Error("synthetic post-close failure");
   }
 }
 

@@ -169,12 +169,15 @@ async function mutateOnce(
       const submit = request.mode === "sign_in"
         ? "submit_sign_in"
         : "submit_create_account";
-      for (const field of fields) {
-        const admitted = await uniqueActionableField(access, field);
-        if (!admitted.ok) {
-          localFailure = mapBrowserFailure(admitted.error.code);
-          return;
-        }
+      const admittedControls = await admitCredentialFields(
+        dependencies,
+        access,
+        fields,
+        signal,
+      );
+      if (!admittedControls.ok) {
+        localFailure = mapBrowserFailure(admittedControls.error.code);
+        return;
       }
       emit(dependencies, "fields_admitted");
       let acceptTerms = false;
@@ -191,12 +194,16 @@ async function mutateOnce(
         }
         acceptTerms = consent.value.cardinality === 1;
       }
-      const admittedSubmit = await uniqueActionableAction(access, submit);
+      const admittedSubmit = await admitCredentialAction(
+        dependencies,
+        access,
+        submit,
+        signal,
+      );
       if (!admittedSubmit.ok) {
         localFailure = mapBrowserFailure(admittedSubmit.error.code);
         return;
       }
-
       const resolved = await dependencies.credentials.useAccountCredentials(
         request.credential,
         signal,
@@ -639,6 +646,71 @@ async function uniqueActionableField(access: AccountPageAccess, field: AccountFi
 async function uniqueActionableAction(access: AccountPageAccess, action: AccountActionIntent) {
   const inspected = await access.inspectAction(action);
   return exactControl(inspected);
+}
+
+async function admitCredentialFields(
+  dependencies: AccountEntryDependencies,
+  access: AccountPageAccess,
+  fields: readonly AccountFieldName[],
+  signal: AbortSignal,
+): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+  const attempts = 20;
+  let last: LivePortResult<void, PersistentBrowserErrorCode> | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal.aborted) {
+      return {
+        ok: false,
+        error: { code: "operation_cancelled", retryable: false },
+      };
+    }
+    last = undefined;
+    for (const field of fields) {
+      last = await uniqueActionableField(access, field);
+      if (!last.ok) break;
+    }
+    if (last?.ok === true) return last;
+    if (last?.ok === false && last.error.code !== "browser_target_invalid") {
+      return last;
+    }
+    if (attempt + 1 < attempts) {
+      await (dependencies.controlAdmissionDelay ?? controlAdmissionDelay)();
+    }
+  }
+  return last ?? {
+    ok: false,
+    error: { code: "browser_target_invalid", retryable: false },
+  };
+}
+
+async function admitCredentialAction(
+  dependencies: AccountEntryDependencies,
+  access: AccountPageAccess,
+  action: AccountActionIntent,
+  signal: AbortSignal,
+): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+  const attempts = 20;
+  let last: LivePortResult<void, PersistentBrowserErrorCode> | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal.aborted) {
+      return {
+        ok: false,
+        error: { code: "operation_cancelled", retryable: false },
+      };
+    }
+    last = await uniqueActionableAction(access, action);
+    if (last.ok || last.error.code !== "browser_target_invalid") return last;
+    if (attempt + 1 < attempts) {
+      await (dependencies.controlAdmissionDelay ?? controlAdmissionDelay)();
+    }
+  }
+  return last ?? {
+    ok: false,
+    error: { code: "browser_target_invalid", retryable: false },
+  };
+}
+
+function controlAdmissionDelay(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 250));
 }
 
 function exactControl(

@@ -178,6 +178,39 @@ test("matching sign-in fills, independently matches, activates, and reclassifies
   assert.equal(fixture.classificationCalls, 2);
 });
 
+test("sign-in waits for the returned reset page controls to become actionable", async () => {
+  const fixture = accountFixture(["existing_account", "application_ready"]);
+  let fieldInspections = 0;
+  let actionInspections = 0;
+  const originalInspectField = fixture.access.inspectField;
+  const originalInspectAction = fixture.access.inspectAction;
+  fixture.access.inspectField = async (field) => {
+    if (fieldInspections++ < 2) {
+      fixture.operations.push(`inspectField:${field}`);
+      return { ok: true, value: { cardinality: 1, actionable: false } };
+    }
+    return originalInspectField(field);
+  };
+  fixture.access.inspectAction = async (action) => {
+    if (action === "submit_sign_in" && actionInspections++ === 0) {
+      fixture.operations.push(`inspectAction:${action}`);
+      return { ok: true, value: { cardinality: 1, actionable: false } };
+    }
+    return originalInspectAction(action);
+  };
+
+  const result = await createAccountEntryCredentialMutationAdapter({
+    ...fixture.dependencies,
+    controlAdmissionDelay: async () => {},
+  }).mutate(request("sign_in"), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "application_ready", attemptedFields: ["email", "password"] },
+  });
+  assert.equal(fixture.resolverCalls, 1);
+});
+
 test("post-submit classification retries transient page states without repeating credentials", async () => {
   const fixture = accountFixture(["existing_account", "application_ready"]);
   const observations: ClassifiedAccountObservation[] = [
@@ -1035,6 +1068,7 @@ function accountFixture(states: readonly ResolvedState[]) {
   };
   const dependencies: AccountEntryDependencies = {
     trace: (event) => traces.push(event),
+    controlAdmissionDelay: async () => {},
     classifiedAccount: {
       inspectClassifiedAccount: async () => {
         classificationCalls += 1;

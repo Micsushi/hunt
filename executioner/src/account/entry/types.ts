@@ -156,6 +156,7 @@ export interface AccountEntryDependencies {
   readonly classifiedAccount: ClassifiedAccountStateSource;
   readonly accountPage: AccountPageAccessProvider;
   readonly credentials: ScopedAccountCredentialResolver;
+  readonly controlAdmissionDelay?: () => Promise<void>;
   readonly postSubmitClassificationDelay?: () => Promise<void>;
   readonly trace?: (event: AccountEntryTraceEvent) => void;
 }

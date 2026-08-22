@@ -25,7 +25,11 @@ export interface ReviewReadOnlyPage {
 export const workdayReviewSignatures = Object.freeze({
   reviewRoot: '[data-automation-id="applyFlowReviewPage"]:visible',
   activeStep:
-    '[data-automation-id="progressBarActiveStep"]:text-is("Review"):visible',
+    '[data-automation-id="progressBarActiveStep"]:text-is("Review"):visible, ' +
+    '[data-automation-id="progressBarActiveStep"]:visible:has(label:text-is("Review"))',
+  finalSubmitScope:
+    '[data-automation-id="applyFlowReviewPage"]:visible, ' +
+    '[data-automation-id="applyFlowPage"] [data-automation-id="pageFooter"]:visible',
   validationError:
     '[data-automation-id="applyFlowReviewPage"] [aria-invalid="true"]:visible, ' +
     '[data-automation-id="applyFlowReviewPage"] [role="alert"]:visible, ' +
@@ -102,7 +106,7 @@ export async function inspectWorkdayReview(
   const root = page.locator(workdayReviewSignatures.reviewRoot);
   const activeStep = page.locator(workdayReviewSignatures.activeStep);
   const validationError = page.locator(workdayReviewSignatures.validationError);
-  const finalSubmit = root.getByRole("button", {
+  const finalSubmit = page.locator(workdayReviewSignatures.finalSubmitScope).getByRole("button", {
     name: workdayReviewSignatures.finalSubmitName,
   });
   const [

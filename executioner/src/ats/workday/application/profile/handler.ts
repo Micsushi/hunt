@@ -713,6 +713,9 @@ function readbackMatches(
     const expectedOptions = optionList(expected);
     return expectedOptions !== undefined && sameNormalizedOptions(actualOptions, expectedOptions);
   }
+  if (field.answerType === "option" || field.answerType === "single_select") {
+    return equivalentOption(actual, expected);
+  }
   return normalize(actual) === normalize(expected);
 }
 
@@ -753,10 +756,16 @@ function sameNormalizedOptions(
 }
 
 function equivalentOption(left: string, right: string): boolean {
-  const pair = new Set([normalize(left), normalize(right)]);
+  const pair = new Set([
+    normalize(left).toLocaleLowerCase("en-US"),
+    normalize(right).toLocaleLowerCase("en-US"),
+  ]);
   return pair.size === 1 || (
     pair.size === 2 &&
-    pair.has("computer science") && pair.has("computer and information science")
+    (
+      pair.has("computer science") && pair.has("computer and information science") ||
+      pair.has("linkedin") && pair.has("linkedin corporate page")
+    )
   );
 }
 

@@ -85,7 +85,11 @@ export function createLocalStage2AcceptancePorts(
         return runWindowsIsolatedStage2Acceptance(args, {
           signal,
           runnerPath,
-          environment: { ...process.env, HUNT_C3_VALUE_FREE_ACCOUNT_TRACE: "1" },
+          environment: {
+            ...process.env,
+            HUNT_C3_VALUE_FREE_ACCOUNT_TRACE: "1",
+            HUNT_C3_OUTER_PROCESS_CLEANUP: "1",
+          },
         });
       }
       return command.run(

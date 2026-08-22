@@ -161,22 +161,35 @@ export class OwnedVerificationNavigationCoordinator {
     request: OwnedVerificationNavigationAccessRequest,
     signal: AbortSignal,
   ): Promise<NavigationPortResult> {
-    if (!sameOwnership(this.#options.state(), page, approvedTarget, request)) {
-      return failure("browser_session_invalidated");
+    const deadline = Date.now() + Math.min(this.#options.timeoutMs, 30_000);
+    while (true) {
+      if (!sameOwnership(this.#options.state(), page, approvedTarget, request)) {
+        return failure("browser_session_invalidated");
+      }
+      const inspected = await this.#inspect(page, approvedTarget, request, signal);
+      if (!inspected.ok) return inspected;
+      if (inspected.value.target.kind === "posting_unavailable") {
+        return { ok: true, value: { kind: "target_unavailable" } };
+      }
+      if (inspected.value.target.kind !== "matched") {
+        return failure("browser_target_invalid");
+      }
+      if (isStablePostVerificationState(inspected.value.snapshot)) {
+        if (!await this.#monitorTransition(page, inspected.value.snapshot, request, signal)) {
+          return failure("browser_effect_uncertain");
+        }
+        return { ok: true, value: { kind: "navigated" } };
+      }
+      if (
+        signal.aborted || Date.now() >= deadline ||
+        inspected.value.snapshot.traitIds.some((trait) =>
+          trait === "structural_trait_challenge_captcha_v1" ||
+          trait === "structural_trait_challenge_mfa_v1" ||
+          trait === "structural_trait_challenge_access_control_v1"
+        )
+      ) return failure("browser_target_invalid");
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
     }
-    const inspected = await this.#inspect(page, approvedTarget, request, signal);
-    if (!inspected.ok) return inspected;
-    if (inspected.value.target.kind === "posting_unavailable") {
-      return { ok: true, value: { kind: "target_unavailable" } };
-    }
-    if (
-      inspected.value.target.kind !== "matched" ||
-      !isStablePostVerificationState(inspected.value.snapshot)
-    ) return failure("browser_target_invalid");
-    if (!await this.#monitorTransition(page, inspected.value.snapshot, request, signal)) {
-      return failure("browser_effect_uncertain");
-    }
-    return { ok: true, value: { kind: "navigated" } };
   }
 
   async #monitorBeforeNavigation(

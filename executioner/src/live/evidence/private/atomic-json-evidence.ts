@@ -15,8 +15,10 @@ import {
 import { isAbsolute, join, normalize, resolve } from "node:path";
 
 const MAX_ACCEPTANCE_BYTES = 16 * 1024;
+const MAX_APPLICATION_WALK_ACCEPTANCE_BYTES = 128 * 1024;
 const MAX_DIAGNOSTICS_BYTES = 64 * 1024;
 const MAX_PROFILE_FIELD_LEARNING_BYTES = 128 * 1024;
+const MAX_STORAGE_MANIFEST_BYTES = 512 * 1024;
 const OPAQUE_ID_PREFIXES = [
   "approval_", "checkpoint_", "event_", "host_", "journey_", "operation_",
   "posting_", "profile_lease_", "revision_", "target_ref_", "tenant_",
@@ -26,6 +28,8 @@ export interface AtomicJsonEvidenceRequest {
   readonly root: string;
   readonly value: unknown;
   readonly sensitiveValues: readonly string[];
+  readonly reviewedStructuralValues?: readonly string[];
+  readonly reviewedSha256Keys?: readonly string[];
   readonly label: string;
   readonly fileName?:
     | "acceptance.json"
@@ -45,33 +49,49 @@ export interface AtomicJsonEvidenceRequest {
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): string {
   const unavailable = () => failure(`${request.label} evidence unavailable`);
-  const denied = () => failure(`${request.label} evidence denied`);
+  const denied = (reason?: string) => failure(
+    `${request.label} evidence denied${reason === undefined ? "" : `: ${reason}`}`,
+  );
   const root = admittedRoot(request.root, unavailable);
   const target = join(root, request.fileName ?? "acceptance.json");
   if (existsSync(target)) unavailable();
-  const retainedStrings: string[] = [];
-  const serialized = JSON.stringify(request.value, (_key, value: unknown) => {
-    if (typeof value === "string") retainedStrings.push(withoutOpaquePrefix(value));
+  const retainedStrings: { readonly key: string; readonly value: string }[] = [];
+  const serialized = JSON.stringify(request.value, (key, value: unknown) => {
+    if (typeof value === "string") {
+      retainedStrings.push({ key, value: withoutOpaquePrefix(value) });
+    }
     return value;
   }, 2);
   const payload = Buffer.from(`${serialized}\n`, "utf8");
   const sha256 = createHash("sha256").update(payload).digest("hex");
-  const maxBytes = request.fileName === "profile-field-learning.json" ||
+  const maxBytes = request.fileName === "application-walk-acceptance.json"
+    ? MAX_APPLICATION_WALK_ACCEPTANCE_BYTES
+    : request.fileName === "storage-manifest.json"
+      ? MAX_STORAGE_MANIFEST_BYTES
+    : request.fileName === "profile-field-learning.json" ||
       request.fileName === "profile-field-learning-02.json" ||
       request.fileName === "question-answer-learning.json"
     ? MAX_PROFILE_FIELD_LEARNING_BYTES
     : request.fileName === "diagnostics.json"
       ? MAX_DIAGNOSTICS_BYTES
       : MAX_ACCEPTANCE_BYTES;
-  if (payload.byteLength > maxBytes) denied();
-  for (const sensitive of request.sensitiveValues) {
+  if (payload.byteLength > maxBytes) denied("payload_size");
+  for (const [sensitiveIndex, sensitive] of request.sensitiveValues.entries()) {
     const normalizedSensitive = withoutOpaquePrefix(sensitive);
-    if (
-      normalizedSensitive.length >= 3 &&
-      retainedStrings.some((value) => value.includes(normalizedSensitive))
-    ) {
+    const retainedIndex = normalizedSensitive.length < 3
+      ? -1
+      : retainedStrings.findIndex(({ key, value }) =>
+        value.includes(normalizedSensitive) &&
+        !request.reviewedStructuralValues?.includes(value) &&
+        !(
+          request.reviewedSha256Keys?.includes(key) &&
+          /^[0-9a-f]{64}$/u.test(value)
+        )
+      );
+    if (retainedIndex !== -1) {
       payload.fill(0);
-      denied();
+      const retained = retainedStrings[retainedIndex]!;
+      denied(`sensitive_${sensitiveIndex}_${retainedIndex}_${retained.key}`);
     }
   }
 

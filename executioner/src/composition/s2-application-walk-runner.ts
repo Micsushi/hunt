@@ -92,6 +92,7 @@ export interface Stage2ApplicationWalkRuntimeBinding {
 
 export interface Stage2ApplicationWalkProductionBindingOptions {
   readonly runtime: Stage2ApplicationWalkRuntimeBinding;
+  readonly outerProcessCleanup?: boolean;
   readonly resolver?: Stage2ApplicationOwnerSourceResolver;
   readonly inspectSource?: () => CleanSourceRevision;
   readonly now?: () => string;
@@ -198,7 +199,10 @@ export function createStage2ApplicationWalkProductionBinding(
               } finally {
                 if (ownerSources !== undefined) disposeOwnerResume(ownerSources);
                 ownerSources = undefined;
-                if (!cleaned || accepted !== undefined) sensitiveValues = undefined;
+                if (
+                  (!cleaned && !(accepted === true && dependencies.outerProcessCleanup === true)) ||
+                  accepted === false
+                ) sensitiveValues = undefined;
               }
             },
           }),

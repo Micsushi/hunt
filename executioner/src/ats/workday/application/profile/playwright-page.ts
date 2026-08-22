@@ -1241,7 +1241,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       const exact: { readonly option: Locator; readonly ordinal: number }[] = [];
       for (const [index, labels] of leafLabels.entries()) {
-        if (labels.some((label) => normalize(label) === normalize(value))) {
+        if (labels.some((label) => equivalentOption(label, value))) {
           exact.push({ option: leaves[index]!, ordinal: index + 1 });
         }
       }
@@ -1384,26 +1384,27 @@ async function expandableCategory(
 
 async function exactVisibleTextLeaves(listbox: Locator, value: string): Promise<Locator[]> {
   const descendants = listbox.locator("*");
-  const indexes = await descendants.evaluateAll((elements, expected) => {
+  const indexes = await descendants.evaluateAll((elements, accepted) => {
     const normalizeText = (text: string | null): string =>
       (text ?? "").normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
         .replace(/\s+/gu, " ").trim()
         .toLocaleLowerCase("en-US");
-    const target = normalizeText(expected);
+    const targets = new Set(accepted);
     return elements.flatMap((element, index) => {
       const style = getComputedStyle(element);
+      const text = normalizeText(element.textContent);
       if (
         style.display === "none" || style.visibility === "hidden" ||
         element.getClientRects().length === 0 ||
         element.closest('[data-automation-id="promptCategory"]') !== null ||
-        normalizeText(element.textContent) !== target
+        !targets.has(text)
       ) return [];
       const childMatches = [...element.children].some((child) =>
-        normalizeText(child.textContent) === target
+        normalizeText(child.textContent) === text
       );
       return childMatches ? [] : [index];
     });
-  }, value);
+  }, [...equivalentOptionLabels(value)]);
   return indexes.map((index) => descendants.nth(index));
 }
 
@@ -1439,7 +1440,7 @@ async function hasExactSelectableCandidate(listbox: Locator, value: string): Pro
   const candidates = await selectableCandidateSnapshot(pool);
   if (candidates.some(({ automationId, labels }) =>
     automationId !== "promptCategory" &&
-    labels.some((label) => normalize(label) === normalize(value))
+    labels.some((label) => equivalentOption(label, value))
   )) return true;
   return (await exactVisibleTextLeaves(listbox, value)).length === 1;
 }
@@ -1455,7 +1456,7 @@ async function exactActiveOption(
     await option.getAttribute("aria-label") ?? "",
     await option.innerText(),
   ];
-  if (!labels.some((label) => normalize(label) === normalize(value))) return undefined;
+  if (!labels.some((label) => equivalentOption(label, value))) return undefined;
   const actionable = option.locator(
     'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption" or @data-automation-id="promptLeafNode"][1]',
   );
@@ -1589,7 +1590,7 @@ async function selectionReadbackIncludes(
   const observed = await readback(locator, behavior);
   return behavior === "multi_select"
     ? optionReadbackList(observed).some((option) => equivalentOption(option, value))
-    : normalize(observed ?? "") === normalize(value);
+    : equivalentOption(observed ?? "", value);
 }
 
 function exactOptionListReadback(
@@ -1613,7 +1614,9 @@ function equivalentOption(left: string, right: string): boolean {
 
 function equivalentOptionLabels(value: string): ReadonlySet<string> {
   const normalized = normalize(value);
-  return new Set(normalized === "computer science"
+  return new Set(new Set(["linkedin", "linkedin corporate page"]).has(normalized)
+    ? ["linkedin", "linkedin corporate page"]
+    : normalized === "computer science"
     ? [normalized, "computer and information science"]
     : normalized === "computer and information science"
       ? [normalized, "computer science"]

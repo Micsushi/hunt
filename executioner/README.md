@@ -414,21 +414,29 @@ company policy; no sender allowlist is used. Gmail searches for the exact curren
 company within the preceding hour, then independently validates the exact
 recipient, Workday tenant and target, HTTPS verification link, and unique result.
 
-Use an owner-approved Google Desktop OAuth client JSON with Gmail API access.
-Keep both referenced files regular, bounded, distinct, outside every repository,
-and under protected current-user ACLs. The bootstrap file contains only their
-canonical absolute paths and the expected client ID; never copy the client
-secret or company policy contents into bootstrap arguments, environment, logs,
-or Node configuration. Enter only the verification hostname in the bootstrap
-JSON, never a full link or token. Then run:
+The normal Hunt route is the protected, noninteractive IMAP sealer. Use the
+pinned Hunt `.env` only when its exact SHA-256 is
+`5226078e7cf929846f165ce2b5498020bcb563d0eac2fc88b1d1f49a3a8d0592`, then run:
 
 ```text
-npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json
+npm run provision:s2-gmail -- --config C:\absolute\external\f2-owner-inputs.json --gmail-bootstrap C:\absolute\external\gmail-bootstrap-input.json --env-source C:\Users\sushi\Documents\Github\hunt\.env --sha256 5226078e7cf929846f165ce2b5498020bcb563d0eac2fc88b1d1f49a3a8d0592
 ```
+
+The canonical command and the explicitly named `provision:s2-gmail-imap`
+command are the same fail-closed IMAP path. Neither silently falls back to
+OAuth. Interactive OAuth is an owner-authorized fallback only after the IMAP
+command reports a deterministic failure. If the owner authorizes that fallback,
+use `npm run provision:s2-gmail-oauth -- ...` with an approved Google Desktop
+OAuth client JSON. Keep both referenced files regular, bounded, distinct,
+outside every repository, and under protected current-user ACLs. The bootstrap
+file contains only their canonical absolute paths and expected client ID; never
+copy the client secret or company policy contents into bootstrap arguments,
+environment, logs, or Node configuration. Enter only the verification hostname
+in the bootstrap JSON, never a full link or token.
 
 All path, ACL, and exact-handle checks finish before authorization begins. C3
 never opens, focuses, or controls a browser for Google consent. When interactive
-consent is required, the trusted Windows child creates the protected one-time
+consent is explicitly authorized, the trusted Windows child creates the protected one-time
 `gmail-oauth-authorization.url` handoff beside the installed-client JSON and
 waits for its loopback callback. The operator opens that file in a browser of
 their choice, completes Google sign-in, MFA, and consent, and leaves the

@@ -94,6 +94,19 @@ const NUMBER_KEYS = new Set([
   "exactMaskTextRoleTextboxCount", "exactMaskTextContentEditableCount", "dateOwnerCandidateCount",
   "dateOwnerInputCount", "dateOwnerTextTelInputCount", "dateOwnerVisibleTextTelInputCount",
   "dateOwnerButtonCount", "dateOwnerRoleButtonCount", "dateOwnerSvgCount", "dateOwnerAutomationCount",
+  "boundDateInputCount", "boundDateExactLabelCount", "boundDateAssociatedLabelCount",
+  "boundDateClosestFormFieldCount", "boundDateClosestDateSectionCount",
+  "boundDatePlaceholderMaskCount", "boundDateValueMaskCount", "boundDateReactOnChangeCount",
+  "dateSvgOwnerCandidateCount", "dateSvgOwnerDepth", "dateSvgOwnerExactLabelCount",
+  "dateSvgOwnerLabelCount", "dateSvgOwnerSvgCount", "dateSvgOwnerInputCount",
+  "dateSvgOwnerButtonCount", "dateSvgOwnerRoleButtonCount", "dateSvgOwnerAutomationCount",
+  "dateSvgOwnerReactClickCount", "boundRightReactClickAncestorCount",
+  "ownedDateLabelOwnerDepth", "ownedDateLabelOwnerVisibleLabelCount",
+  "ownedDateLabelOwnerExactLabelCount", "ownedDateLabelOwnerVisibleTextTelInputCount",
+  "ownedDateLabelOwnerSvgCount", "ownedDateLabelOwnerButtonCount",
+  "reboundDateExactLabelCount", "reboundDateLabelInputOwnerCount",
+  "reboundDateLabelSvgOwnerCount", "reboundDateDistinctInputCount",
+  "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
@@ -102,6 +115,7 @@ const BOOLEAN_KEYS = new Set([
   "calendarOpened", "calendarAccepted", "nativeDateAccepted",
   "rightHitInput", "rightHitWithinField", "rightHitButtonAncestor",
   "rightHitRoleButtonAncestor", "rightHitSvgAncestor", "rightHitAutomationAncestor",
+  "boundRightHitInput", "boundRightHitWithinSvgOwner", "boundRightHitSvgAncestor",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",

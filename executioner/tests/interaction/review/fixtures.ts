@@ -29,8 +29,11 @@ export function reviewPageFixture(
       if (selector.includes("applyFlowReviewPage") && selector.includes("error")) {
         return locator(fixture.validationError);
       }
+      if (selector.includes("pageFooter")) {
+        return locator({ count: 1, visible: true }, fixture.finalSubmit);
+      }
       if (selector.includes("applyFlowReviewPage")) {
-        return locator(fixture.reviewRoot, fixture.finalSubmit);
+        return locator(fixture.reviewRoot);
       }
       if (selector.includes("progressBarActiveStep")) {
         return locator(fixture.activeStep);

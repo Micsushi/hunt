@@ -1032,8 +1032,12 @@ function writeExternalMonitorChain(
       fieldCount: page === "review" ? 3 : 1,
       requiredFieldCount: 1,
       controlTypes: ["text"],
-      questionTypes: ["identity"],
-      answerTypes: ["text"],
+      questionTypes: page === "application_ready" || page === "profile"
+        ? ["identity", "address", "phone", "application_source", "prior_employment"]
+        : ["identity"],
+      answerTypes: page === "application_ready" || page === "profile"
+        ? ["text", "phone", "option", "boolean"]
+        : ["text"],
       validationState: "clear",
       submitPresent: page === "review",
       submitActivated: false,

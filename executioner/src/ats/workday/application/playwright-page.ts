@@ -590,6 +590,7 @@ function readApplicationSnapshot(
       : [page];
   const candidateSelector = [
     '[data-automation-id="dateSection"]',
+    '[data-automation-id="dateInputWrapper"]',
     '[data-automation-id$="-CheckboxGroup"]',
     '[data-automation-id="formField"]',
     '[data-automation-id^="formField-"]',
@@ -626,7 +627,7 @@ function readApplicationSnapshot(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       )) return false;
       const dateOwner = control.closest<HTMLElement>(
-        '[data-automation-id="dateSection"]',
+        '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
       );
       if (dateOwner !== null && dateOwner !== control) return false;
       const checkboxGroupOwner = control.closest<HTMLElement>(
@@ -711,7 +712,9 @@ function readApplicationSnapshot(
       [...fieldOwner.querySelectorAll<HTMLElement>(
         '[data-automation-id="selectedItem"]',
       )].filter((item) => visible(item) && text(item.textContent) !== "");
-    if (control.matches('[data-automation-id="dateSection"]')) {
+    if (control.matches(
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+    )) {
       const parts = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"].map(
         (automationId) => [...control.querySelectorAll<HTMLInputElement>(
           `[data-automation-id="${automationId}"]`,

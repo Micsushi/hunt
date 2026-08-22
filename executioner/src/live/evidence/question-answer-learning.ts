@@ -98,15 +98,27 @@ export function createQuestionAnswerLearningCapture(input: {
       if (written || records.size === 0) return null;
       written = true;
       try {
+        const evidence = admitQuestionAnswerLearningEvidence({
+          schemaVersion: 1,
+          evidenceRevision: "s2-question-answer-learning-v1",
+          page: "questionnaire",
+          questions: [...records.values()],
+        });
+        const publicUiStrings = evidence.questions.flatMap((question) => [
+          question.label,
+          ...question.possibleAnswers,
+          ...(typeof question.chosenAnswer === "string" &&
+              question.provenance !== "owner_provided" &&
+              question.provenance !== "configured_template"
+            ? [question.chosenAnswer]
+            : []),
+        ]);
         return writeAtomicJsonEvidence({
           root: input.root,
-          value: admitQuestionAnswerLearningEvidence({
-            schemaVersion: 1,
-            evidenceRevision: "s2-question-answer-learning-v1",
-            page: "questionnaire",
-            questions: [...records.values()],
-          }),
-          sensitiveValues: input.sensitiveValues ?? [],
+          value: evidence,
+          sensitiveValues: (input.sensitiveValues ?? []).filter((sensitive) =>
+            !publicUiStrings.some((value) => value.includes(sensitive))
+          ),
           label: "question answer learning",
           fileName: "question-answer-learning.json",
         });

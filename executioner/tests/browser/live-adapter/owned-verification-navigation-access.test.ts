@@ -222,6 +222,33 @@ test("post-navigation observation admits only exact verified lifecycle states", 
   }
 });
 
+test("verification navigation waits for the reset request to become the reset form", async () => {
+  const harness = await openedHarness({
+    observation: (check) => ownedMatched(check === 4
+      ? [
+        "structural_trait_page_account_entry_v1",
+        "structural_trait_account_password_reset_request_v1",
+      ]
+      : [
+        "structural_trait_page_account_entry_v1",
+        "structural_trait_account_password_reset_set_v1",
+      ]),
+  });
+  let operation: unknown;
+
+  const result = await harness.provider.withOwnedVerificationNavigationAccess(
+    accessRequest(harness.sessionId),
+    AbortSignal.any([]),
+    async (access) => {
+      operation = await access.navigateVerificationTarget(validValues(), AbortSignal.any([]));
+    },
+  );
+
+  assert.deepEqual(operation, { ok: true, value: { kind: "navigated" } });
+  assert.deepEqual(result, operation);
+  assert.equal(harness.ownershipChecks(), 5);
+});
+
 test("an owned unavailable destination remains an exact factual result", async () => {
   const harness = await openedHarness({
     observation: (check) => check < 4

@@ -16,3 +16,17 @@ test("Gmail bootstrap has no provider query, secret arguments, or enumeration su
   assert.match(source, /--gmail-bootstrap/u);
   assert.match(source, /process\.stdout\.write/u);
 });
+
+test("canonical Gmail provisioning is pinned IMAP and OAuth is explicit", async () => {
+  const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+    readonly scripts?: Readonly<Record<string, string>>;
+  };
+  assert.equal(
+    packageJson.scripts?.["provision:s2-gmail"],
+    "node scripts/provision-s2-gmail-imap.ts",
+  );
+  assert.equal(
+    packageJson.scripts?.["provision:s2-gmail-oauth"],
+    "node scripts/provision-s2-gmail.ts",
+  );
+});

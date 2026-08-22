@@ -9,6 +9,9 @@ import {
 } from "../../ats/workday/application/page-walk-contract.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
+const reviewedStructuralValues = ["social.linkedin"] as const;
+const reviewedSha256Keys = ["profileFieldLearningSha256"] as const;
+
 export interface ApplicationWalkAcceptanceV1 {
   readonly schemaVersion: 1;
   readonly evidenceRevision: "s2-application-walk-acceptance-v1";
@@ -40,6 +43,8 @@ export async function writeApplicationWalkEvidence(
     root: request.root,
     value: admitApplicationWalkAcceptance(request.acceptance),
     sensitiveValues: request.sensitiveValues,
+    reviewedStructuralValues,
+    reviewedSha256Keys,
     label: "application-walk",
     fileName: "application-walk-acceptance.json",
   });
@@ -55,8 +60,8 @@ export function admitApplicationWalkAcceptance(
     "submitActivated", "privacyScan", "cleanup",
   ];
   const count = value.pageChecks.length;
+  if (!exactKeys(value, expected)) denied("shape");
   if (
-    !exactKeys(value, expected) ||
     value.schemaVersion !== 1 ||
     value.evidenceRevision !== "s2-application-walk-acceptance-v1" ||
     value.status !== "passed" ||
@@ -68,14 +73,16 @@ export function admitApplicationWalkAcceptance(
     !/^journey_[A-Za-z0-9_-]{16,64}$/u.test(value.journeyId) ||
     !/^target_ref_[A-Za-z0-9_-]{16,64}$/u.test(value.targetHandleId) ||
     value.completedPages !== count ||
-    value.pageChecks.length !== count ||
-    value.laneAcceptances.length !== count ||
-    !validPageChecks(value.pageChecks) ||
-    !validLaneAcceptances(value.laneAcceptances, value.pageChecks) ||
     value.submitActivated !== false ||
     value.privacyScan !== "pass" ||
     value.cleanup !== "pass"
-  ) denied();
+  ) denied("header");
+  if (!validPageChecks(value.pageChecks)) denied("page_checks");
+  if (value.laneAcceptances.length !== count) denied("lane_count");
+  const invalidLane = value.laneAcceptances.findIndex((lane, index) =>
+    !validLaneAcceptances([lane], [value.pageChecks[index]!])
+  );
+  if (invalidLane !== -1) denied(`lane_${invalidLane}`);
   return Object.freeze({
     ...value,
     pageChecks: Object.freeze(value.pageChecks.map((item) => Object.freeze({ ...item }))),
@@ -248,6 +255,6 @@ function exactKeys(value: object, expected: readonly string[]): boolean {
     expected.every((key, index) => keys[index] === key);
 }
 
-function denied(): never {
-  throw new Error("application-walk evidence denied");
+function denied(reason = "invalid"): never {
+  throw new Error(`application-walk evidence denied: ${reason}`);
 }

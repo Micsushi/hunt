@@ -158,3 +158,26 @@ test("atomic evidence rejects JSON-escaped path, quote, and control characters",
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("atomic evidence admits a bounded storage inventory larger than a generic packet", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-storage-manifest-"));
+  try {
+    writeAtomicJsonEvidence({
+      root,
+      value: {
+        schemaVersion: 1,
+        retainedFiles: Array.from({ length: 400 }, (_, index) => ({
+          file: `monitor/${String(index).padStart(4, "0")}-record.request.json`,
+          sha256: "a".repeat(64),
+          bytes: 1024,
+        })),
+      },
+      sensitiveValues: [],
+      label: "storage-manifest-test",
+      fileName: "storage-manifest.json",
+    });
+    assert.ok(readFileSync(join(root, "storage-manifest.json")).byteLength > 16 * 1024);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

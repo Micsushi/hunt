@@ -3,12 +3,19 @@
   <head><title>Workday application review fixture</title></head>
   <body>
     <ol aria-label="Application progress">
-      <li data-automation-id="progressBarActiveStep">Review</li>
+      <li data-automation-id="progressBarActiveStep">
+        <label aria-live="polite">current step 6 of 6</label>
+        <label>Review</label>
+      </li>
     </ol>
-    <main data-automation-id="applyFlowReviewPage">
-      <h1>Review</h1>
-      <section data-automation-id="formField-summary">Application summary</section>
-      <button type="submit">Submit</button>
-    </main>
+    <div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowReviewPage">
+        <h1>Review</h1>
+        <section data-automation-id="formField-summary">Application summary</section>
+      </main>
+      <div data-automation-id="pageFooter">
+        <button data-automation-id="pageFooterNextButton" type="submit">Submit</button>
+      </div>
+    </div>
   </body>
 </html>

@@ -131,6 +131,15 @@ test("factory wires the private hold without widening the public browser facade"
   const publicFacade = await source("index.ts");
   assert.equal(factory.includes("HUNT_C3_LIVE_INSPECTION_HOLD"), true);
   assert.equal(factory.includes("unsettledInspectionHold"), true);
+  assert.match(
+    factory,
+    /const unsettledInspectionHold = options\.externalMonitor === undefined\s+\? inspectionHold\s+: undefined/u,
+  );
+  assert.doesNotMatch(
+    factory,
+    /holdAction === undefined \|\| options\.externalMonitor !== undefined/u,
+  );
+  assert.match(factory, /inspectionHoldBeforeCleanup: inspectionHold/u);
   assert.match(factory, /applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs/u);
   assert.match(factory, /applicationRuntime\?\.externalMonitor !== undefined/u);
   assert.match(session, /applicationOperationTimeoutMs \?\? this\.#options\.timeoutMs/u);

@@ -19,7 +19,10 @@ import {
 test("question learning stores observed choices, fallback, provenance, and replacement intent", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-"));
   try {
-    const capture = createQuestionAnswerLearningCapture({ root });
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      sensitiveValues: ["Woman"],
+    });
     capture.record({
       questionId: questionId("observed-question-0123456789abcdef01234567"),
       field: {

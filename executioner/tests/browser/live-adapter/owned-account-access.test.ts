@@ -19,7 +19,7 @@ import {
 import type { Stage2ExternalMonitorRuntime } from
   "../../../src/live/evidence/external-monitor-runtime.ts";
 
-test("application-ready monitoring reports the visible first-page heading and discovered controls", async () => {
+test("application-ready monitoring accepts the Workday Next footer and reports discovered controls", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -43,7 +43,7 @@ test("application-ready monitoring reports the visible first-page heading and di
         <div data-automation-id="formField-last-name"><label>Last Name*</label>
           <input id="name--legalName--lastName" type="text">
         </div>
-        <button type="button">Save and Continue</button>
+        <button type="button" data-automation-id="pageFooterNextButton">Next</button>
       </main>
     </body></html>`);
 

@@ -109,6 +109,10 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
       "Do you have any relatives currently employed by People Inc.?",
       "workday-placeholder-relative-employment",
     ],
+    [
+      "Have you been referred by an Integer associate?",
+      "workday-placeholder-associate-referral",
+    ],
     ["Gender", "workday-question-gender-disclosure"],
     ["Are you Hispanic or Latino?", "workday-question-ethnicity-disclosure"],
     ["Veteran Status", "workday-question-veteran-disclosure"],

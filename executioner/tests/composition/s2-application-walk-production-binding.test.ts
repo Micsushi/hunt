@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   linkSync,
@@ -260,19 +261,26 @@ test("outer Review binding resolves owner sources and retains only live browser 
   const fixture = liveFixture();
   const calls: string[] = [];
   try {
+    const collector = createApplicationLaneAcceptanceCollector();
     const pages = [
       truth("profile", "s2-profile"),
       truth("profile", "s2-profile"),
-      truth("resume", "s2-resume"),
-      truth("resume", "s2-resume"),
-      truth("questionnaire", "s2-questionnaire"),
-      truth("questionnaire", "s2-questionnaire"),
       truth("pre_review", "s2-review"),
     ];
     let observed = 0;
     const runtime: Stage2RealJourneyLiveRuntimeBinding = {
       async bind(request) {
         calls.push("live.bind");
+        collector.record({
+          schemaVersion: 1,
+          checkpoint: "profile_verified",
+          pageType: "profile",
+          verifiedFields: [],
+          ownedDuplicateRows: 0,
+          independentlyVerified: true,
+          submitActivated: false,
+          privacyScan: "pass",
+        });
         assert.equal(request.ownerSources.profileId, "profile-owner-approved");
         assert.equal(
           request.configSha256,
@@ -289,7 +297,7 @@ test("outer Review binding resolves owner sources and retains only live browser 
             navigation: { async next() { return { ok: true as const, value: { advanced: true as const } }; } },
             progress: { async record() { return { ok: true as const, value: undefined }; } },
           },
-          laneAcceptances: createApplicationLaneAcceptanceCollector(),
+          laneAcceptances: collector,
           account: {
             async verify() {
               return { ok: false as const, code: "account_proof_invalid" };
@@ -298,13 +306,19 @@ test("outer Review binding resolves owner sources and retains only live browser 
           recovery: { async pending() { return null; } },
           review: { async capture() { throw new Error("not used by binding test"); } },
           privacy: { async forbiddenTokens() { return ["private-owner-value"]; } },
-          cleanup: { async close() { calls.push("cleanup.close"); return true; } },
+          cleanup: {
+            async close() {
+              calls.push("cleanup.close");
+              throw new Error("Windows profile remains locked until process exit");
+            },
+          },
         };
       },
     };
     const sourceRevision = "1111111111111111111111111111111111111111";
     const binding = createStage2RealJourneyProductionBinding({
       runtime,
+      outerProcessCleanup: true,
       inspectSource: () => ({ repositoryRoot: resolve(".."), sourceRevision }),
       now: () => fixture.now,
       aclAdmission: { admit: () => ({ ok: true as const }) },
@@ -330,7 +344,8 @@ test("outer Review binding resolves owner sources and retains only live browser 
     assert.equal(walked.ok, true, JSON.stringify(walked));
     assert.equal(walked.ok && walked.value.checkpoint, "pre_review");
     assert.deepEqual(await bound.privacy.forbiddenTokens(AbortSignal.any([])), ["private-owner-value"]);
-    assert.equal(await bound.cleanup.close(AbortSignal.any([])), true);
+    assert.equal(await bound.cleanup.close(AbortSignal.any([]), true), true);
+    assert.equal(existsSync(join(fixture.evidenceRoot, "application-walk-acceptance.json")), true);
     assert.deepEqual(calls, ["live.bind", "cleanup.close"]);
   } finally {
     fixture.cleanup();

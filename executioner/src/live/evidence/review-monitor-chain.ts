@@ -32,12 +32,13 @@ const CONTROL_TYPES = new Set([
   "file_upload", "repeatable", "number", "search_select", "radio_group", "month", "year",
 ]);
 const QUESTION_TYPES = new Set([
-  "identity", "contact", "employment", "education", "authorization", "legal",
+  "identity", "contact", "address", "phone", "application_source", "prior_employment",
+  "employment", "education", "authorization", "legal",
   "compensation", "availability", "demographic", "narrative", "attachment",
   "language", "skill", "website", "social_network", "unknown",
 ]);
 const ANSWER_TYPES = new Set([
-  "text", "boolean", "single_select", "multi_select", "date", "number", "file",
+  "text", "phone", "option", "boolean", "single_select", "multi_select", "date", "number", "file",
   "month", "year", "url",
 ]);
 
@@ -84,21 +85,27 @@ function readMonitorChain(
   finalClassification: "review_verified" | "account_verified",
   directoryName: "auth-monitor" | "monitor",
 ): Stage2ReviewMonitorChainV1 {
+  let diagnosticStage = "root";
+  let diagnosticIndex = -1;
   try {
     const root = admittedDirectory(rootValue);
+    diagnosticStage = "discover";
     const records = discoverRecords(root, phase);
     let previousAckSha256: string | null = null;
     let previousObservedAt = -1;
     const files: string[] = [];
     const operations: MonitorOperation[] = [];
     for (const [index, entry] of records.entries()) {
+      diagnosticIndex = index;
       const { ordinal, page, moment, prefix } = entry;
       const screenshotFile = `${prefix}.png`;
       const taxonomyFile = `${prefix}.taxonomy.json`;
       const requestFile = `${prefix}.request.json`;
       const ackFile = `${prefix}.ack.json`;
+      diagnosticStage = "screenshot";
       const screenshot = stableFile(join(root, screenshotFile), 12 * 1024 * 1024, 8);
       validateStage2MonitorPng(screenshot);
+      diagnosticStage = "taxonomy";
       const taxonomyBytes = stableFile(join(root, taxonomyFile), 16 * 1024, 2);
       const requestBytes = stableFile(join(root, requestFile), 16 * 1024, 2);
       const ackBytes = stableFile(join(root, ackFile), 16 * 1024, 2);
@@ -120,6 +127,7 @@ function readMonitorChain(
         taxonomy.submitPresent !== (page === "review") || taxonomy.submitActivated !== false ||
         taxonomy.privacyScan !== "pass"
       ) denied();
+      diagnosticStage = "request";
       const request = record(JSON.parse(requestBytes.toString("utf8")));
       exactKeys(request, [
         "schemaVersion", "requestRevision", "journeyId", "targetHandleId", "operationId",
@@ -148,6 +156,7 @@ function readMonitorChain(
         !/^[0-9a-f]{64}$/u.test(expected.configSha256) ||
         !identityDigests(request.capturedIdentityDigests, expected)
       ) denied();
+      diagnosticStage = "ack";
       const ack = record(JSON.parse(ackBytes.toString("utf8")));
       exactKeys(ack, [
         "schemaVersion", "evidenceRevision", "status", "observer", "journeyId",
@@ -194,6 +203,7 @@ function readMonitorChain(
         `${directoryName}/${taxonomyFile}`,
       );
     }
+    diagnosticStage = "operation_sequence";
     validateOperationSequence(phase, operations);
     return Object.freeze({
       journeyId: expected.journeyId,
@@ -202,6 +212,13 @@ function readMonitorChain(
       files: Object.freeze(files.sort()),
     });
   } catch {
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      process.stderr.write(`${JSON.stringify({ monitorChainDiagnostics: {
+        phase,
+        stage: diagnosticStage,
+        recordIndex: diagnosticIndex,
+      } })}\n`);
+    }
     return denied();
   }
 }

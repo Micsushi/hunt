@@ -975,6 +975,9 @@ function reviewSnapshotPage(value: WorkdayReviewStructuralObservationV1): Review
       if (selector === workdayReviewSignatures.activeStep) {
         return snapshotLocator(value.activeStep.count, value.activeStep.visible, false);
       }
+      if (selector === workdayReviewSignatures.finalSubmitScope) {
+        return snapshotLocator(1, true, false, value.finalSubmit);
+      }
       if (selector === workdayReviewSignatures.validationError) {
         return snapshotLocator(value.validationErrorCount, value.validationErrorCount > 0, false);
       }

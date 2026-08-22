@@ -17,6 +17,7 @@ import {
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
+  '[data-automation-id="dateInputWrapper"][data-hunt-target-token]',
   '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
   '[data-hunt-exclusive-checkbox-group="true"][data-hunt-target-token]',
   "fieldset[data-hunt-target-token]",
@@ -236,12 +237,14 @@ export async function applyMutation(
     }
     if (target.interaction === "composite-date") {
       const parts = [
-        ["dateSectionMonth", mutation.isoDate.slice(5, 7)],
-        ["dateSectionDay", mutation.isoDate.slice(8, 10)],
-        ["dateSectionYear", mutation.isoDate.slice(0, 4)],
+        ["dateSectionMonth", "dateSectionMonth-input", mutation.isoDate.slice(5, 7)],
+        ["dateSectionDay", "dateSectionDay-input", mutation.isoDate.slice(8, 10)],
+        ["dateSectionYear", "dateSectionYear-input", mutation.isoDate.slice(0, 4)],
       ] as const;
-      const locators = parts.map(([automationId]) =>
-        locator.locator(`[data-automation-id="${automationId}"]`)
+      const locators = parts.map(([legacyId, currentId]) =>
+        locator.locator(
+          `[data-automation-id="${legacyId}"], [data-automation-id="${currentId}"]`,
+        )
       );
       const ready = await Promise.all(locators.map(async (part) =>
         await part.count() === 1 && await part.isVisible() && await part.isEditable()
@@ -252,7 +255,7 @@ export async function applyMutation(
       const previous = await Promise.all(locators.map((part) => part.inputValue()));
       try {
         for (const [index, part] of locators.entries()) {
-          await part.fill(parts[index]![1], { timeout: timeoutMs });
+          await part.fill(parts[index]![2], { timeout: timeoutMs });
         }
         await locators[2]!.blur({ timeout: timeoutMs });
       } catch {
@@ -343,12 +346,92 @@ export async function applyMutation(
           const masked = observed.filter((candidate) => candidate.masked);
           return masked.length === 1 ? masked : [];
         }, target.name);
+        if (matches.length === 1) {
+          activeFormattedDate = candidates.nth(matches[0]!.index);
+        } else {
+          const marked = await page.evaluate((expectedName) => {
+            const visible = (candidate: Element): candidate is HTMLElement | SVGElement => {
+              if (!(candidate instanceof HTMLElement || candidate instanceof SVGElement)) return false;
+              const style = getComputedStyle(candidate);
+              return style.display !== "none" && style.visibility !== "hidden" &&
+                candidate.getClientRects().length > 0;
+            };
+            const normalize = (value: string | null | undefined) =>
+              (value ?? "").replace(/\s+/gu, " ").replace(/\s*\*\s*$/u, "").trim();
+            const normalizedExpectedName = normalize(expectedName);
+            const owners = new Set<Element>();
+            const labels = [...document.querySelectorAll("label, legend")]
+              .filter(visible)
+              .filter((label) => normalize(label.textContent) === normalizedExpectedName);
+            const distinctInputs = new Set<Element>();
+            const distinctSvgs = new Set<Element>();
+            let labelInputOwnerCount = 0;
+            let labelSvgOwnerCount = 0;
+            for (const label of labels) {
+              let owner = label.parentElement;
+              let foundInputOwner = false;
+              let foundSvgOwner = false;
+              while (owner !== null && owner !== document.body) {
+                const ownerLabels = [...owner.querySelectorAll("label, legend")].filter(visible);
+                const inputs = [...owner.querySelectorAll('input[type="text"], input[type="tel"]')]
+                  .filter(visible);
+                const svgs = [...owner.querySelectorAll("svg")].filter(visible);
+                if (!foundInputOwner && inputs.length > 0) {
+                  foundInputOwner = true;
+                  labelInputOwnerCount += 1;
+                  inputs.forEach((input) => distinctInputs.add(input));
+                }
+                if (!foundSvgOwner && svgs.length > 0) {
+                  foundSvgOwner = true;
+                  labelSvgOwnerCount += 1;
+                  svgs.forEach((svg) => distinctSvgs.add(svg));
+                }
+                if (
+                  ownerLabels.length > 0 &&
+                  ownerLabels.every((candidate) =>
+                    normalize(candidate.textContent) === normalizedExpectedName
+                  ) &&
+                  inputs.length === 1 && svgs.length === 1
+                ) {
+                  const box = svgs[0]!.getBoundingClientRect();
+                  if (box.width >= 8 && box.height >= 8) owners.add(owner);
+                  break;
+                }
+                owner = owner.parentElement;
+              }
+            }
+            const root = document.documentElement as unknown as Record<string, unknown>;
+            const probe = root.__huntDateProbe as Record<string, boolean | number>;
+            probe.reboundDateExactLabelCount = labels.length;
+            probe.reboundDateLabelInputOwnerCount = labelInputOwnerCount;
+            probe.reboundDateLabelSvgOwnerCount = labelSvgOwnerCount;
+            probe.reboundDateDistinctInputCount = distinctInputs.size;
+            probe.reboundDateDistinctSvgCount = distinctSvgs.size;
+            probe.reboundDateJointOwnerCount = owners.size;
+            if (owners.size !== 1) return false;
+            const input = [...owners][0]!.querySelector('input[type="text"], input[type="tel"]');
+            if (!(input instanceof HTMLInputElement) || !visible(input)) return false;
+            document.querySelectorAll('[data-hunt-rebound-formatted-date="true"]')
+              .forEach((element) => element.removeAttribute("data-hunt-rebound-formatted-date"));
+            input.setAttribute("data-hunt-rebound-formatted-date", "true");
+            return true;
+          }, target.name);
+          if (marked) {
+            const rebound = page.locator('[data-hunt-rebound-formatted-date="true"]');
+            if (await rebound.count() === 1 && await rebound.isVisible()) {
+              activeFormattedDate = rebound;
+            }
+          }
+        }
+        const reboundCount = await activeFormattedDate.count() === 1 &&
+            await activeFormattedDate.isVisible()
+          ? 1
+          : 0;
         await page.evaluate((count) => {
           const root = document.documentElement as unknown as Record<string, unknown>;
           const probe = root.__huntDateProbe as Record<string, boolean | number>;
           probe.formattedDateReboundCount = count;
-        }, matches.length);
-        if (matches.length === 1) activeFormattedDate = candidates.nth(matches[0]!.index);
+        }, reboundCount);
       };
       const commitVisibleCalendarDate = async (): Promise<boolean> => {
         await page.waitForTimeout(50);
@@ -381,6 +464,7 @@ export async function applyMutation(
         if (matches.length !== 1) return false;
         await dateSurfaces.nth(matches[0]!.index).click({ timeout: timeoutMs });
         await page.waitForTimeout(50);
+        await reboundFormattedDate();
         const calendarReadback = await activeFormattedDate.inputValue({ timeout: timeoutMs });
         const accepted = acceptedDateReadback(calendarReadback);
         await recordAccepted("calendarAccepted", accepted);
@@ -396,7 +480,8 @@ export async function applyMutation(
       };
       const commitOwnedCalendarDate = async (): Promise<boolean> => {
         await reboundFormattedDate();
-        const point = await activeFormattedDate.evaluate((element, expectedName) => {
+        await activeFormattedDate.scrollIntoViewIfNeeded({ timeout: timeoutMs });
+        const marked = await activeFormattedDate.evaluate((element, expectedName) => {
           const visible = (candidate: Element): candidate is HTMLElement | SVGElement => {
             if (!(candidate instanceof HTMLElement || candidate instanceof SVGElement)) return false;
             const style = getComputedStyle(candidate);
@@ -405,26 +490,64 @@ export async function applyMutation(
           };
           const normalize = (value: string | null | undefined) =>
             (value ?? "").replace(/\s+/gu, " ").replace(/\s*\*\s*$/u, "").trim();
+          const normalizedExpectedName = normalize(expectedName);
           let owner = element.parentElement;
           while (owner !== null && owner !== document.body) {
-            const labels = [...owner.querySelectorAll("label, legend")]
-              .filter(visible)
-              .filter((candidate) => normalize(candidate.textContent) === expectedName);
+            const visibleLabels = [...owner.querySelectorAll("label, legend")]
+              .filter(visible);
+            const labels = visibleLabels
+              .filter((candidate) => normalize(candidate.textContent) === normalizedExpectedName);
             const svgs = [...owner.querySelectorAll("svg")].filter(visible);
-            if (labels.length === 1 && svgs.length === 1) {
+            if (labels.length > 0 && svgs.length > 0) {
+              const root = document.documentElement as unknown as Record<string, unknown>;
+              const probe = root.__huntDateProbe as Record<string, boolean | number>;
+              if ((probe.ownedDateLabelOwnerDepth ?? 0) === 0) {
+                const textTelInputs = [...owner.querySelectorAll(
+                  'input[type="text"], input[type="tel"]',
+                )].filter(visible);
+                let depth = 0;
+                let cursor: Element | null = element;
+                while (cursor !== null && cursor !== owner) {
+                  cursor = cursor.parentElement;
+                  depth += 1;
+                }
+                probe.ownedDateLabelOwnerDepth = depth;
+                probe.ownedDateLabelOwnerVisibleLabelCount = visibleLabels.length;
+                probe.ownedDateLabelOwnerExactLabelCount = labels.length;
+                probe.ownedDateLabelOwnerVisibleTextTelInputCount = textTelInputs.length;
+                probe.ownedDateLabelOwnerSvgCount = svgs.length;
+                probe.ownedDateLabelOwnerButtonCount = owner.querySelectorAll("button").length;
+              }
+            }
+            if (
+              labels.length >= 1 && labels.length === visibleLabels.length &&
+              svgs.length === 1
+            ) {
               const box = svgs[0]!.getBoundingClientRect();
-              if (box.width >= 8 && box.height >= 8) {
-                return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+              if (
+                box.width >= 8 && box.height >= 8 &&
+                document.querySelector('[data-hunt-owned-date-calendar="true"]') === null
+              ) {
+                svgs[0]!.setAttribute("data-hunt-owned-date-calendar", "true");
+                return true;
               }
             }
             owner = owner.parentElement;
           }
-          return null;
+          return false;
         }, target.name);
-        if (point === null) return false;
-        await page.mouse.click(point.x, point.y);
-        await recordAccepted("calendarOpened", true);
-        return await commitVisibleCalendarDate();
+        if (!marked) return false;
+        const calendarTarget = page.locator('[data-hunt-owned-date-calendar="true"]');
+        try {
+          if (await calendarTarget.count() !== 1 || !await calendarTarget.isVisible()) return false;
+          await calendarTarget.click({ timeout: timeoutMs });
+          await recordAccepted("calendarOpened", true);
+          return await commitVisibleCalendarDate();
+        } finally {
+          await calendarTarget.evaluateAll((elements) =>
+            elements.forEach((element) => element.removeAttribute("data-hunt-owned-date-calendar"))
+          ).catch(() => undefined);
+        }
       };
       const commitAdjacentCalendarDate = async (): Promise<boolean> => {
         await reboundFormattedDate();
@@ -589,6 +712,9 @@ export async function applyMutation(
                 const probe = root.__huntDateProbe as Record<string, boolean | number>;
                 return probe.calendarAccepted === true;
               });
+              if (!calendarAccepted) {
+                calendarAccepted = await commitOwnedCalendarDate();
+              }
               if (!calendarAccepted) {
                 calendarAccepted = await commitOverlaidCalendarDate();
               }
@@ -910,8 +1036,8 @@ export async function applyMutation(
               const includeSelect = (select: (...args: unknown[]) => unknown): void => {
                 if (!sharedSelects.includes(select)) sharedSelects.push(select);
               };
-              const inspect = (props: Record<string, unknown> | undefined): void => {
-                if (props === undefined || propsSeen.has(props)) return;
+              const inspect = (props: Record<string, unknown> | null | undefined): void => {
+                if (props === undefined || props === null || propsSeen.has(props)) return;
                 propsSeen.add(props);
                 if (props.index === checkboxIndex) rowIndexOwners.push(props);
                 if (
@@ -1518,6 +1644,18 @@ export async function applyMutation(
       return "applied";
     }
     if (target.interaction === "field-popup") {
+      await locator.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+      await page.waitForTimeout(50);
+      const hitOwned = await locator.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) return false;
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2,
+        );
+        return hit !== null && (hit === element || element.contains(hit));
+      });
+      if (!hitOwned) return "invalid";
       await locator.click({ timeout: timeoutMs });
       const exact = await waitForExactFieldPopupOption(page, mutation.option, timeoutMs);
       if (exact.count !== 1 || exact.locator === undefined) {
@@ -1719,13 +1857,21 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       return (field?.querySelectorAll('[data-automation-id="selectedItem"]').length ?? 0) > 1;
     };
     const compositeDateReadback = (element: Element): BrowserReadback => {
-      const selectors = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"];
-      const controls = selectors.map((id) => [...element.querySelectorAll<HTMLInputElement>(`[data-automation-id="${id}"]`)]);
+      const selectors = [
+        ["dateSectionMonth", "dateSectionMonth-input"],
+        ["dateSectionDay", "dateSectionDay-input"],
+        ["dateSectionYear", "dateSectionYear-input"],
+      ];
+      const controls = selectors.map(([legacyId, currentId]) => [
+        ...element.querySelectorAll<HTMLInputElement>(
+          `[data-automation-id="${legacyId}"], [data-automation-id="${currentId}"]`,
+        ),
+      ]);
       if (controls.some((matches) => matches.length !== 1)) return { kind: "unavailable" };
       const [month, day, year] = controls.map((matches) => normalize(matches[0]!.value));
       if (month === "" && day === "" && year === "") return { kind: "empty" };
-      if (!/^\d{2}$/u.test(month!) || !/^\d{2}$/u.test(day!) || !/^\d{4}$/u.test(year!)) return { kind: "unavailable" };
-      const isoDate = `${year}-${month}-${day}`;
+      if (!/^\d{1,2}$/u.test(month!) || !/^\d{1,2}$/u.test(day!) || !/^\d{4}$/u.test(year!)) return { kind: "unavailable" };
+      const isoDate = `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
       const date = new Date(`${isoDate}T00:00:00.000Z`);
       return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === isoDate
         ? { kind: "text", value: isoDate as never }
@@ -1747,7 +1893,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         : { kind: "unavailable" };
     };
     return elements.flatMap((element, index) => {
-      const compositeOwner = element.closest('[data-automation-id="dateSection"][data-hunt-target-token]');
+      const compositeOwner = element.closest(
+        '[data-automation-id="dateSection"][data-hunt-target-token], ' +
+          '[data-automation-id="dateInputWrapper"][data-hunt-target-token]',
+      );
       if (compositeOwner !== null && compositeOwner !== element) return [];
       const checkboxGroupOwner = element.closest(
         '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token], ' +
@@ -1767,7 +1916,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
       let interaction: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" | "exclusive-checkbox-group" | undefined;
-      if (element.getAttribute("data-automation-id") === "dateSection") {
+      if (["dateSection", "dateInputWrapper"].includes(
+        element.getAttribute("data-automation-id") ?? "",
+      )) {
         control = { kind: "date", element: "input" };
         readback = compositeDateReadback(element);
         interaction = "composite-date";

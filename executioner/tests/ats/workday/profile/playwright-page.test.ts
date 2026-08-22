@@ -411,6 +411,67 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
   }
 });
 
+test("Integer source select maps LinkedIn to its unique corporate-page leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" aria-label="How Did You Hear About Us? Select One Required"
+              aria-haspopup="listbox" name="source" id="source--source">Select One</button>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('#source--source');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            source.setAttribute('aria-controls', 'source-options');
+            const listbox = document.createElement('div');
+            listbox.id = 'source-options';
+            listbox.setAttribute('role', 'listbox');
+            listbox.innerHTML = '<div>LinkedIn corporate page</div>';
+            document.body.append(listbox);
+            listbox.firstElementChild.addEventListener('click', event => {
+              source.textContent = event.currentTarget.textContent.trim();
+              source.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+            });
+          }, { once: true });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 500,
+    });
+    assert.deepEqual(
+      (await adapter.inspect(AbortSignal.any([]))).controls.map(
+        ({ fieldId, uiBehavior, required }) => ({ fieldId, uiBehavior, required }),
+      ),
+      [{ fieldId: "source.how_did_you_hear", uiBehavior: "search_select", required: true }],
+    );
+    const result = await completeWorkdayProfilePage({
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "linkedin",
+        "LinkedIn",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    const after = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify({ result, after }));
+    assert.equal(await page.locator('#source--source').innerText(), "LinkedIn corporate page");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("source control binds through the exact Workday form-field container without sourcePrompt", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

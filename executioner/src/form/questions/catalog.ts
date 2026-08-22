@@ -221,6 +221,17 @@ const questionAliasCatalog = Object.freeze([
       protected: false,
     },
   ),
+  aliasEntry(
+    "workday-placeholder-associate-referral",
+    ["Have you been referred by an associate?"],
+    ["radio", "select", "listbox"],
+    {
+      kind: "synthetic_placeholder",
+      value: false,
+      placeholderProvenance: "synthetic_ui_learning",
+      protected: false,
+    },
+  ),
 ] as const satisfies readonly QuestionAliasCatalogEntry[]);
 
 const questionSemanticCatalog = Object.freeze([
@@ -244,6 +255,7 @@ const questionSemanticCatalog = Object.freeze([
   { id: "workday-placeholder-prior-employment", keywordGroups: [["previously", "worked"], ["ever", "employed"], ["prior", "employment"], ["previous", "employment"]] },
   { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
   { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
+  { id: "workday-placeholder-associate-referral", keywordGroups: [["referred", "associate"], ["referred", "employee"]] },
 ] as const);
 
 assertCatalogHasNoCollisions([...questionCatalog, ...questionAliasCatalog]);
