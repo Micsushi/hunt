@@ -51,6 +51,9 @@
         const options = document.getElementById(control.getAttribute('aria-controls'));
         control.addEventListener('click', () => { options.hidden = false; control.setAttribute('aria-expanded', 'true'); });
       }
+      document.getElementById('phoneNumber--countryPhoneCode').addEventListener('blur', (event) => {
+        if (event.currentTarget.value === '') event.currentTarget.setAttribute('aria-invalid', 'true');
+      });
       document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;
         for (const control of document.querySelectorAll('[aria-controls]')) {

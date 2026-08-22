@@ -110,6 +110,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async observeControl(
     controlId: string,
     signal: AbortSignal,
+    inspectInteractiveOptions = true,
   ): Promise<ProfileControlObservation> {
     abort(signal);
     const resolved = this.#controls.get(controlId);
@@ -119,7 +120,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const before = await resolvedReadback(resolved);
     const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
     const label = await observedControlLabel(controls[0]!, resolved.uiBehavior);
-    const optionLabels = await this.#observeOptionLabels(resolved, controls);
+    const optionLabels = await this.#observeOptionLabels(
+      resolved,
+      controls,
+      inspectInteractiveOptions,
+    );
     const after = await resolvedReadback(resolved);
     const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
     if (before !== after || validationBefore !== validationAfter) {
@@ -145,6 +150,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #observeOptionLabels(
     resolved: ResolvedControl,
     controls: readonly Locator[],
+    inspectInteractiveOptions: boolean,
   ): Promise<string[]> {
     if (!isChoice(resolved.uiBehavior)) return [];
     if (resolved.uiBehavior === "radio_group") {
@@ -159,6 +165,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           : []
       ));
     }
+    if (!inspectInteractiveOptions) return [];
     const before = await resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
     await control.focus({ timeout: this.#timeoutMs });

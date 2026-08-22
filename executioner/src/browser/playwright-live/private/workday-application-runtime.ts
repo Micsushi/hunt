@@ -53,6 +53,7 @@ import type {
 import type { SanitizedStructuralObservationV1 } from
   "../../../contracts/live/index.ts";
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
+import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
@@ -586,6 +587,17 @@ export class OwnedWorkdayApplicationRuntime {
           },
           interaction: (controlId) => playwrightProfilePage.interaction(controlId),
         };
+        const interactivelyInspectableFields = new Set([
+          ...request.ownerSources.profilePlan.fields,
+          ...request.ownerSources.profilePlan.repeatables.flatMap(({ rows }) =>
+            rows.flatMap(({ fields }) => fields)
+          ),
+        ]
+          .filter(({ answer }) => answer.kind === "answered" && answerLaneAdmitted(
+            request.ownerSources.profilePlan.mode,
+            answer.lane,
+          ))
+          .map(({ fieldId }) => fieldId));
         learning = createProfileFieldLearningCapture({
           page: profilePage,
           plan: request.ownerSources.profilePlan,
@@ -599,6 +611,7 @@ export class OwnedWorkdayApplicationRuntime {
               const observation = await playwrightProfilePage.observeControl(
                 control.controlId,
                 innerSignal,
+                !control.required || interactivelyInspectableFields.has(control.fieldId),
               );
               const operationId = this.#nextOperationId();
               const attempt = this.#nextObservationMonitorAttempt(

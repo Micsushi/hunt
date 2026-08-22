@@ -43,7 +43,7 @@ const identities = [
   "employment.previously_worked_for_organization",
 ] as const;
 
-test("exact Integer Profile fixture observes every control independently before prior-employment blocks", async () => {
+test("exact Integer Profile fixture observes required live-owner-unset controls without interaction", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const evidenceRoot = mkdtempSync(join(tmpdir(), "integer-profile-learning-"));
@@ -53,18 +53,23 @@ test("exact Integer Profile fixture observes every control independently before 
   let nextOperation = 0;
   try {
     await page.setContent(fixture);
+    await page.locator("#phoneNumber--countryPhoneCode").evaluate((element) => {
+      element.addEventListener("focus", () => element.setAttribute("data-test-focused", "true"));
+      element.addEventListener("click", () => element.setAttribute("data-test-clicked", "true"));
+    });
     const guide = new Map(retainedIntakeControlGuide.filter(({ page }) => page === "profile")
       .map((entry) => [entry.identity, entry]));
     const fields: ProfileFieldPlan[] = [];
     for (const [index, fieldId] of identities.entries()) {
       const entry = guide.get(fieldId);
       assert.ok(entry !== undefined);
+      if (fieldId === "phone.country_code") continue;
       if (fieldId === "employment.previously_worked_for_organization") {
         fields.push({
           fieldId,
-          questionType: "prior_employment" as const,
-          answerType: "option" as const,
-          allowedOptions: ["Yes", "No"],
+          questionType: entry.normalizedQuestionType as "phone" | "prior_employment",
+          answerType: entry.answerType as "single_select",
+          allowedOptions: entry.allowedOptions,
           answer: { kind: "profile_answer_missing" as const },
         });
         continue;
@@ -81,8 +86,8 @@ test("exact Integer Profile fixture observes every control independently before 
         answer: {
           kind: "answered" as const,
           value,
-          provenance: "generated_default" as const,
-          lane: "synthetic_test_default" as const,
+          provenance: "owner_provided" as const,
+          lane: "live_owner_fact" as const,
         },
         ...(choice ? { optionMapping: {
           canonicalValue: value,
@@ -91,12 +96,13 @@ test("exact Integer Profile fixture observes every control independently before 
         } } : {}),
       });
     }
+    assert.equal(fields.some(({ fieldId }) => fieldId === "phone.country_code"), false);
     const runtime = new OwnedWorkdayApplicationRuntime({
       request: {
         owner: { roots: { evidence: { path: evidenceRoot } } },
         ownerSources: {
           profilePlan: {
-            mode: "synthetic_test_non_submittable",
+            mode: "live",
             pageType: "profile",
             fields,
             repeatables: [],
@@ -149,24 +155,43 @@ test("exact Integer Profile fixture observes every control independently before 
     }
 
     assert.deepEqual(accepted, []);
-    assert.equal(trace.some(({ event, details }) =>
-      event === "profile_reconciliation_blocked" &&
-      (details as { readonly code?: string } | undefined)?.code === "profile_answer_missing"
-    ), true);
+    const blockedTrace = trace.find(({ event }) => event === "profile_reconciliation_blocked");
+    assert.deepEqual(blockedTrace?.details, {
+      pageId: "page-integer-profile",
+      code: "profile_answer_missing",
+      fieldId: "phone.country_code",
+      mutationAttempted: false,
+      retryable: false,
+    });
     assert.equal(await page.locator("input:checked").count(), 0);
     assert.equal(await page.locator('input:not([type="radio"])').evaluateAll((items) =>
       items.every((item) => (item as HTMLInputElement).value === "")
     ), true);
+    assert.equal(
+      await page.locator("#phoneNumber--countryPhoneCode").getAttribute("aria-invalid"),
+      null,
+    );
+    assert.equal(
+      await page.locator("#phoneNumber--countryPhoneCode").getAttribute("data-test-focused"),
+      null,
+    );
+    assert.equal(
+      await page.locator("#phoneNumber--countryPhoneCode").getAttribute("data-test-clicked"),
+      null,
+    );
     assert.equal(await page.getByRole("button", { name: /submit/i }).count(), 0);
     assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
 
     const observations = monitored.filter(({ moment }) => moment === "state_observed");
+    assert.deepEqual(new Set(monitored.map(({ moment }) => moment)), new Set(["state_observed"]));
     assert.equal(observations.length, identities.length);
     assert.equal(new Set(observations.map(({ operationId }) => operationId)).size, identities.length);
     const learning = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
       join(evidenceRoot, "profile-field-learning.json"), "utf8",
     )));
     assert.equal(learning.schemaVersion, 5);
+    assert.equal(learning.executionMode, "live");
+    assert.equal(learning.liveAcceptanceEligible, false);
     assert.equal(learning.fields.length, identities.length);
     assert.equal(new Set(learning.fields.map(({ observationBinding }) =>
       observationBinding?.operationId
@@ -185,19 +210,57 @@ test("exact Integer Profile fixture observes every control independently before 
       assert.match(field.sanitizedLabelSha256 ?? "", /^[0-9a-f]{64}$/u);
       assert.equal(field.metadataReconciliation, "matched");
       assert.equal(field.validationState, "clear");
+      assert.equal(field.observationBinding?.stateObservedAck, true);
     }
     assert.equal(learning.fields.find(({ fieldIdentity }) =>
       fieldIdentity === "profile.employment.previously_worked_for_organization"
     )?.terminalDisposition, "required_unset");
-    assert.equal(learning.fields.find(({ fieldIdentity }) =>
-      fieldIdentity === "profile.phone.device_type"
-    )?.visibleOptionIds.length, 2);
+    const countryCode = learning.fields.find(({ fieldIdentity }) =>
+      fieldIdentity === "profile.phone.country_code"
+    );
+    assert.ok(countryCode !== undefined);
+    assert.deepEqual({
+      backingState: countryCode.backingState,
+      validationState: countryCode.validationState,
+      optionCatalogState: countryCode.optionCatalogState,
+      visibleOptionIds: countryCode.visibleOptionIds,
+      prefillDisposition: countryCode.prefillDisposition,
+      driverAttempt: countryCode.driverAttempt,
+      monitorBinding: countryCode.monitorBinding,
+      terminalDisposition: countryCode.terminalDisposition,
+      persistentReadback: countryCode.mechanics.persistentReadback,
+    }, {
+      backingState: "unset",
+      validationState: "clear",
+      optionCatalogState: "unknown",
+      visibleOptionIds: [],
+      prefillDisposition: "needs_owner_input",
+      driverAttempt: "none",
+      monitorBinding: null,
+      terminalDisposition: "required_unset",
+      persistentReadback: "not_attempted",
+    });
+    for (const [identity, optionCount] of [
+      ["profile.address.country", 1],
+      ["profile.address.region", 1],
+      ["profile.phone.device_type", 2],
+      ["profile.source.how_did_you_hear", 2],
+    ] as const) {
+      assert.equal(learning.fields.find(({ fieldIdentity }) =>
+        fieldIdentity === identity
+      )?.visibleOptionIds.length, optionCount);
+    }
     const source = learning.fields.find(({ fieldIdentity }) =>
       fieldIdentity === "profile.source.how_did_you_hear"
     );
     assert.equal(source?.visibleOptionIds.length, 2);
     assert.equal(source?.visibleOptionIds.includes(
       `option_sha256_${retainedIntakeTextSha256("Crossed Popup Value")}`,
+    ), false);
+    assert.equal(learning.fields.some(({ visibleOptionIds }) =>
+      visibleOptionIds.includes(
+        `option_sha256_${retainedIntakeTextSha256("Crossed Popup Value")}`,
+      )
     ), false);
     assert.doesNotMatch(
       JSON.stringify(learning),
