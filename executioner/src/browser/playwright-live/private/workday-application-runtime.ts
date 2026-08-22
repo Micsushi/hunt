@@ -515,20 +515,9 @@ export class OwnedWorkdayApplicationRuntime {
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
         const monitorPageName = await this.#monitorPageForLane(page, "profile");
-        const observationAttempt = this.#nextObservationMonitorAttempt(
-          monitorPageName,
-          "state_observed",
-        );
-        await this.#monitor(
-          page,
-          monitorPageName,
-          "state_observed",
-          ownedRequest.operationId,
-          observationAttempt,
-          signal,
-        );
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
+        let observationMonitorFailure: unknown;
         let learning: ReturnType<typeof createProfileFieldLearningCapture> | undefined;
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
           pageType: request.ownerSources.profilePlan.pageType,
@@ -605,11 +594,37 @@ export class OwnedWorkdayApplicationRuntime {
             ? "profile-field-learning.json"
             : "profile-field-learning-02.json",
           sensitiveValues: request.ownerSources.sensitiveValues,
-          observationBinding: {
-            operationId: ownedRequest.operationId,
-            attempt: observationAttempt,
-            stateObservedAck: true,
-          },
+          ...(this.#externalMonitor === undefined ? {} : {
+            observeControl: async (control, innerSignal) => {
+              const observation = await playwrightProfilePage.observeControl(
+                control.controlId,
+                innerSignal,
+              );
+              const operationId = this.#nextOperationId();
+              const attempt = this.#nextObservationMonitorAttempt(
+                monitorPageName,
+                "state_observed",
+              );
+              try {
+                await this.#monitor(
+                  page,
+                  monitorPageName,
+                  "state_observed",
+                  operationId,
+                  attempt,
+                  innerSignal,
+                );
+                this.#assertAuthorized(innerSignal);
+              } catch (error) {
+                observationMonitorFailure = error;
+                throw error;
+              }
+              return Object.freeze({
+                observation,
+                binding: Object.freeze({ operationId, attempt, stateObservedAck: true as const }),
+              });
+            },
+          }),
         });
         let learningSha256: string | null = null;
         let result;
@@ -619,6 +634,7 @@ export class OwnedWorkdayApplicationRuntime {
             learning.page,
             signal,
           );
+          if (observationMonitorFailure !== undefined) throw observationMonitorFailure;
         } finally {
           learningSha256 = learning.write();
         }

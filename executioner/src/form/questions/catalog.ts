@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { UiBehaviorId } from "../../contracts/index.ts";
 import type {
   ApplicationProfileFactId,
@@ -601,6 +603,14 @@ export function retainedDiscoveredIntakeFields(): readonly DiscoveredIntakeField
     constraints: Object.freeze({ ...field.constraints }),
     answer: Object.freeze({ kind: "profile_answer_missing" as const }),
   })));
+}
+
+export function retainedIntakeTextSha256(value: string): string {
+  return createHash("sha256").update(
+    value.normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
+      .replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US"),
+    "utf8",
+  ).digest("hex");
 }
 
 function retained(

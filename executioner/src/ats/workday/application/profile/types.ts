@@ -111,6 +111,17 @@ export interface ProfileControlSnapshot {
   readonly readback: string | null;
 }
 
+export interface ProfileControlObservation {
+  readonly controlId: string;
+  readonly binderStrategy: "catalog_selector_exact" | "opaque_machine_key";
+  readonly sanitizedLabelSha256: string | null;
+  readonly backingState: "set" | "unset";
+  readonly validationState: "clear" | "invalid";
+  readonly optionCatalogState: "not_applicable" | "observed" | "unknown";
+  readonly visibleOptionIds: readonly string[];
+  readonly selectedOptionId: string | null;
+}
+
 export interface ProfileRowSnapshot {
   readonly section: ProfileRepeatableSection;
   readonly rowId: string;

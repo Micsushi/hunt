@@ -12,8 +12,13 @@ import {
   questionFor,
   questionForField,
   retainedIntakeControlGuide,
+  retainedIntakeTextSha256,
   resolveQuestion,
 } from "../../../src/form/questions/catalog.ts";
+import {
+  retainedProfileControlGuide,
+  retainedProfileTextSha256,
+} from "../../../src/ats/workday/application/profile/catalog.ts";
 import {
   optionCatalog,
   resolveOption,
@@ -304,6 +309,27 @@ test("retained run-99 Profile labels and requiredness stay evidence-bound", () =
       { required: true, allowedOptions: ["Yes", "No"] },
     ],
   ]);
+});
+
+test("the runtime Profile guide exactly mirrors the retained intake guide", () => {
+  const retainedProfile = retainedIntakeControlGuide
+    .filter(({ page }) => page === "profile")
+    .map(({ identity, sanitizedLabel, normalizedQuestionType, behavior, answerType,
+      required, uiVariant, allowedOptions }) => ({
+      identity,
+      sanitizedLabel,
+      normalizedQuestionType,
+      behavior,
+      answerType,
+      required,
+      uiVariant,
+      allowedOptions,
+    }));
+  assert.deepEqual(retainedProfileControlGuide, retainedProfile);
+  assert.equal(
+    retainedProfileTextSha256("  Have You\u2019re Applied  "),
+    retainedIntakeTextSha256("  Have You\u2019re Applied  "),
+  );
 });
 
 test("question catalog is exactly the frozen ten-row S1 matrix", () => {

@@ -1,0 +1,63 @@
+<!doctype html>
+<html data-hunt-page-id="page-integer-profile" data-hunt-submit-activated="false">
+  <body data-hunt-application-page="profile" data-hunt-profile-page-type="profile">
+    <main data-automation-id="applyFlowMyInfoPage">
+      <label for="name--legalName--firstName">First Name</label>
+      <input id="name--legalName--firstName" required>
+      <label for="name--legalName--lastName">Last Name</label>
+      <input id="name--legalName--lastName" required>
+      <label for="address--addressLine1">Address Line 1</label>
+      <input id="address--addressLine1">
+      <label for="address--city">City</label>
+      <input id="address--city">
+      <label for="country--country">Country</label>
+      <button id="country--country" role="combobox" aria-required="true" aria-controls="country-options">Select One</button>
+      <div id="country-options" role="listbox" hidden><div role="option">United States</div></div>
+      <label for="address--countryRegion">Province or Territory</label>
+      <button id="address--countryRegion" role="combobox" aria-controls="region-options">Select One</button>
+      <div id="region-options" role="listbox" hidden><div role="option">Colorado</div></div>
+      <label for="address--postalCode">Postal Code</label>
+      <input id="address--postalCode">
+      <label for="emailAddress--emailAddress">Email</label>
+      <input id="emailAddress--emailAddress" required>
+      <label for="phoneNumber--phoneType">Phone Device Type</label>
+      <button id="phoneNumber--phoneType" role="combobox" aria-required="true" aria-controls="phone-type-options">Select One</button>
+      <div id="phone-type-options" role="listbox" hidden><div role="option">Mobile</div><div role="option">Home</div></div>
+      <label for="phoneNumber--countryPhoneCode">Country Phone Code</label>
+      <input id="phoneNumber--countryPhoneCode" role="combobox" aria-required="true" aria-controls="phone-code-options">
+      <div id="phone-code-options" role="listbox" hidden><div role="option">United States (+1)</div></div>
+      <label for="phoneNumber--phoneNumber">Phone Number</label>
+      <input id="phoneNumber--phoneNumber" type="tel" required>
+      <label for="phoneNumber--extension">Phone Extension</label>
+      <input id="phoneNumber--extension">
+      <div data-automation-id="formField-source">
+        <label for="integer-source">How Did You Hear About Us?</label>
+        <button id="integer-source" type="button" role="combobox" data-automation-id="sourcePrompt" aria-required="true" aria-controls="source-options">Select One</button>
+        <div id="source-options" role="listbox" hidden><div role="option">LinkedIn</div><div role="option">Referral</div></div>
+      </div>
+      <div data-automation-id="formField-previousWorker">
+        <fieldset role="radiogroup" aria-required="true">
+          <legend>Have you previously worked for our company (this does not apply to contingent/contract work)?</legend>
+          <input id="previous-yes" type="radio" name="candidateIsPreviousWorker"><label for="previous-yes">Yes</label>
+          <input id="previous-no" type="radio" name="candidateIsPreviousWorker"><label for="previous-no">No</label>
+        </fieldset>
+      </div>
+      <div id="unrelated-options" role="listbox">
+        <div role="option">Crossed Popup Value</div>
+      </div>
+    </main>
+    <script>
+      for (const control of document.querySelectorAll('[aria-controls]')) {
+        const options = document.getElementById(control.getAttribute('aria-controls'));
+        control.addEventListener('click', () => { options.hidden = false; control.setAttribute('aria-expanded', 'true'); });
+      }
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        for (const control of document.querySelectorAll('[aria-controls]')) {
+          document.getElementById(control.getAttribute('aria-controls')).hidden = true;
+          control.setAttribute('aria-expanded', 'false');
+        }
+      });
+    </script>
+  </body>
+</html>

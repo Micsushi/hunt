@@ -271,7 +271,8 @@ function profileLearningDigest(
   );
   if (monitoredStates.length !== profiles.length) denied();
   let latest: string | null = null;
-  const bindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[] = [];
+  const observationBindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["observationBinding"]>[] = [];
+  const mutationBindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[] = [];
   for (const [index, profile] of profiles.entries()) {
     if (profile.checkpoint !== "profile_verified") denied();
     const sha256 = profile.profileFieldLearningSha256;
@@ -280,7 +281,7 @@ function profileLearningDigest(
       continue;
     }
     if (!/^[0-9a-f]{64}$/u.test(sha256)) denied();
-    const learningBytes = readStableFile(paths[index]!, 128 * 1024);
+    const learningBytes = readStableFile(paths[index]!, 256 * 1024);
     const learning = admitProfileFieldLearningEvidence(
       JSON.parse(learningBytes.toString("utf8")),
     );
@@ -310,31 +311,31 @@ function profileLearningDigest(
           field.answerState === "answered" &&
           field.lane === "live_owner_fact" && field.lane === verified.lane
         ).length !== 1
-      ) || learning.fields.some(({ monitorBinding }) => monitorBinding === null)
+      ) || learning.fields.some(({ observationBinding, metadataReconciliation }) =>
+        observationBinding === null || metadataReconciliation !== "matched"
+      )
     ) denied();
-    bindings.push(...learning.fields.flatMap(({ monitorBinding }) =>
+    observationBindings.push(...learning.fields.flatMap(({ observationBinding }) =>
+      observationBinding === null ? [] : [observationBinding]
+    ));
+    mutationBindings.push(...learning.fields.flatMap(({ monitorBinding }) =>
       monitorBinding === null ? [] : [monitorBinding]
     ));
     if (digest(learningBytes) !== sha256) denied();
     latest = sha256;
   }
   if (paths.slice(profiles.length).some(existsSync)) denied();
-  validateProfileMonitorBindings(bindings, monitorOperations);
+  validateProfileMonitorBindings(observationBindings, mutationBindings, monitorOperations);
   return latest;
 }
 
 function validateProfileMonitorBindings(
-  bindings: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[],
+  observations: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["observationBinding"]>[],
+  mutations: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[],
   operations: readonly Stage2MonitorOperationV1[],
 ): void {
-  const mutations = bindings.filter((binding): binding is Extract<typeof binding, {
-    readonly beforeMutationAck: true;
-  }> => "beforeMutationAck" in binding);
   validateControlMonitorBindings(mutations, operations, "profile");
-  const observations = bindings.filter((binding): binding is Extract<typeof binding, {
-    readonly stateObservedAck: true;
-  }> => "stateObservedAck" in binding);
-  if (observations.length === 0) return;
+  if (new Set(observations.map(({ operationId }) => operationId)).size !== observations.length) denied();
   for (const binding of observations) {
     const matches = operations.filter(({ operationId, attempt, page, moment }) =>
       operationId === binding.operationId && attempt === binding.attempt &&
@@ -348,9 +349,10 @@ function validateProfileMonitorBindings(
   const stateOperations = operations.filter(({ page, moment }) =>
     page === "profile" && moment === "state_observed"
   );
-  if (stateOperations.some(({ operationId, attempt }) =>
-    !observedKeys.has(`${operationId}\u0000${attempt}`)
-  )) denied();
+  if (stateOperations.length !== observations.length ||
+      stateOperations.some(({ operationId, attempt }) =>
+        !observedKeys.has(`${operationId}\u0000${attempt}`)
+      )) denied();
 }
 
 function validateControlMonitorBindings(

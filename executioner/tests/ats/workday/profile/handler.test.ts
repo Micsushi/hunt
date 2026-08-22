@@ -136,7 +136,7 @@ test("fills identity, address, phone, dates, and search-selects with independent
   assert.ok(port.inspections >= port.commits.length + 1);
 });
 
-test("stops on a missing required fact before browser inspection or mutation", async () => {
+test("observes the page before a missing required fact stops mutation", async () => {
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
   const result = await completeWorkdayProfilePage({
     mode: "live",
@@ -156,7 +156,7 @@ test("stops on a missing required fact before browser inspection or mutation", a
     code: "profile_answer_missing",
     fieldId: "identity.family_name",
   });
-  assert.equal(port.inspections, 0);
+  assert.equal(port.inspections, 1);
   assert.equal(port.commits.length, 0);
 });
 
@@ -699,7 +699,7 @@ test("keeps classification layers independent and stops on an unreviewed UI vari
   assert.equal(port.commits.length, 0);
 });
 
-test("rejects invented provenance at runtime before inspecting the page", async () => {
+test("rejects invented provenance after one nonmutating page inspection", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [control("identity.given_name", "text")],
@@ -727,7 +727,7 @@ test("rejects invented provenance at runtime before inspecting the page", async 
     await completeWorkdayProfilePage(plan, port, AbortSignal.any([])),
     { kind: "blocked", code: "profile_plan_invalid", fieldId: "identity.given_name" },
   );
-  assert.equal(port.inspections, 0);
+  assert.equal(port.inspections, 1);
 });
 
 test("stops before mutation when an observed required field has no authoritative plan", async () => {
@@ -862,7 +862,7 @@ test("rejects invalid runtime classifications and non-opaque repeatable keys", a
     const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
     assert.equal(result.kind, "blocked");
     if (result.kind === "blocked") assert.equal(result.code, "profile_plan_invalid");
-    assert.equal(port.inspections, 0);
+    assert.equal(port.inspections, 1);
   }
 });
 

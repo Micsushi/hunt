@@ -250,8 +250,9 @@ test("a profile preflight owner-input block remains a deterministic page failure
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"><input required data-automation-id="unreviewedRequiredControl"></main></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName" required><input required data-automation-id="unreviewedRequiredControl"></main></body></html>`);
   const traces: { readonly event: string; readonly details?: object }[] = [];
+  let nextOperation = 0;
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
@@ -272,7 +273,9 @@ fields: [{
       },
     } as never,
     acceptances: { record() {} },
-    nextOperationId: () => generatedOperationId("operation_profile_preflight_01"),
+    nextOperationId: () => generatedOperationId(
+      `operation_profile_preflight_${String(++nextOperation).padStart(8, "0")}`,
+    ),
     timeoutMs: 1_000,
     initialReviewExpected: [],
     externalMonitor: { async auth() {}, async application() {} },
@@ -311,7 +314,7 @@ fields: [{
       },
     });
     assert.equal(
-      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      await page.locator('#name--legalName--firstName').inputValue(),
       "",
     );
     const learning = readFileSync(join(evidenceRoot, "profile-field-learning.json"), "utf8");
@@ -433,20 +436,30 @@ fields: [{
       uiType: "radio_group",
       uiVariant: "workday_previous_worker_radio_v1",
       questionCategory: "prior_employment",
-      answerCategory: "option",
+      answerCategory: "single_select",
       required: true,
       answerState: "unset",
       lane: null,
-      visibleOptionIds: [],
+      binderStrategy: "catalog_selector_exact",
+      sanitizedLabelSha256: "6d98f0476b6f333e02d6e2c85da12ef51b5f32a57eff587fd3be1f424eed7e46",
+      metadataReconciliation: "matched",
+      backingState: "unset",
+      validationState: "clear",
+      optionCatalogState: "observed",
+      observationBinding: {
+        operationId: "operation_prior_employment_01",
+        attempt: 1,
+        stateObservedAck: true,
+      },
+      visibleOptionIds: [
+        "option_sha256_8a798890fe93817163b10b5f7bd2ca4d25d84c52739a645a889c173eee7d9d3d",
+        "option_sha256_9390298f3fb0c5b160498935d79cb139aef28e1c47358b4bbba61862b9c26e59",
+      ],
       selectedOptionId: null,
       optionMapping: "owner_visible_option",
       prefillDisposition: "needs_owner_input",
       driverAttempt: "none",
-        monitorBinding: {
-          operationId: "operation_prior_employment_02",
-          attempt: 1,
-          stateObservedAck: true,
-        },
+      monitorBinding: null,
       terminalDisposition: "required_unset",
       mechanics: {
         popupBound: "not_applicable",
@@ -480,7 +493,8 @@ test("a profile block after a commit remains browser-effect uncertain", async ()
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"><input required data-automation-id="legalNameSection_lastName"><input hidden required data-automation-id="unreviewedConditional"></main><script>document.querySelector('[data-automation-id="legalNameSection_firstName"]').addEventListener('input',()=>document.querySelector('[data-automation-id="unreviewedConditional"]').hidden=false)</script></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName" required><label for="name--legalName--lastName">Last Name</label><input id="name--legalName--lastName" required><input hidden required data-automation-id="unreviewedConditional"></main><script>document.querySelector('#name--legalName--firstName').addEventListener('input',()=>document.querySelector('[data-automation-id="unreviewedConditional"]').hidden=false)</script></body></html>`);
+  let nextOperation = 0;
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       ownerSources: {
@@ -508,7 +522,9 @@ fields: [
       },
     } as never,
     acceptances: { record() {} },
-    nextOperationId: () => generatedOperationId("operation_profile_effect_01"),
+    nextOperationId: () => generatedOperationId(
+      `operation_profile_effect_${String(++nextOperation).padStart(8, "0")}`,
+    ),
     timeoutMs: 1_000,
     initialReviewExpected: [],
     externalMonitor: { async auth() {}, async application() {} },
@@ -536,11 +552,11 @@ fields: [
       input: { attempt: 1, pageId: "page-profile" } as never,
     }, new AbortController().signal), /profile reconciliation denied/u);
     assert.equal(
-      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      await page.locator('#name--legalName--firstName').inputValue(),
       "Ada",
     );
     assert.equal(
-      await page.locator('[data-automation-id="legalNameSection_lastName"]').inputValue(),
+      await page.locator('#name--legalName--lastName').inputValue(),
       "",
     );
   } finally {
@@ -554,7 +570,7 @@ test("each profile field mutation has its own before and readback monitor pair",
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input required data-automation-id="legalNameSection_firstName"></label><label>Middle name<input id="name--legalName--middleName"></label><label>Family name<input required data-automation-id="legalNameSection_lastName"></label><label>Address line 2<input id="address--addressLine2"></label><label>Postal code<input id="address--postalCode"></label><div data-automation-id="formField-source"><button type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>First Name<input required id="name--legalName--firstName"></label><label>Middle Name<input id="name--legalName--middleName"></label><label>Last Name<input required id="name--legalName--lastName"></label><label>Address Line 2<input id="address--addressLine2"></label><label>Postal Code<input id="address--postalCode"></label><div data-automation-id="formField-source"><label for="profile-source">How Did You Hear About Us?</label><button id="profile-source" type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main></body></html>`);
   let nextOperation = 0;
   const monitored: { readonly moment: string; readonly operationId: string }[] = [];
   const runtime = new OwnedWorkdayApplicationRuntime({
@@ -658,16 +674,18 @@ fields: [
     }, new AbortController().signal);
 
     assert.equal((result as { ok: boolean }).ok, true);
-    assert.deepEqual(
-      monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),
-      ["state_observed"],
-    );
-    const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
-    const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
+    assert.deepEqual(monitored.filter(({ operationId }) =>
+      operationId === runOperation
+    ), []);
+    const observationEvents = monitored.filter(({ moment }) => moment === "state_observed");
+    assert.equal(observationEvents.length, 6);
+    assert.equal(new Set(observationEvents.map(({ operationId }) => operationId)).size, 6);
+    const mutationEvents = monitored.filter(({ moment }) => moment !== "state_observed");
+    const operations = [...new Set(mutationEvents.map(({ operationId }) => operationId))];
     assert.equal(operations.length, 6);
     for (const operationId of operations) {
       assert.deepEqual(
-        fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
+        mutationEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
         ["before_mutation", "after_readback"],
       );
     }
@@ -1457,11 +1475,34 @@ test("application authority expiring during ACK permits no reconcile, navigation
       ? '<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button>Submit application</button></main>'
       : pageKind === "questionnaire"
       ? '<main data-automation-id="applyFlowApplicationQuestionsPage"><label>Question<textarea required></textarea></label></main>'
+      : pageKind === "profile"
+      ? '<main data-automation-id="applyFlowMyInfoPage"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName" required></main>'
       : '<main data-automation-id="applyFlowMyInfoPage"><button id="effect">Next</button><input type="file" data-automation-id="file-upload-input-ref"><textarea></textarea></main>';
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-${pageKind}" data-hunt-submit-activated="false"><body data-hunt-application-page="${pageKind}">${review}<script>window.effectCount=0;document.querySelector('#effect')?.addEventListener('click',()=>window.effectCount++);window.addEventListener('beforeunload',()=>window.effectCount++);</script></body></html>`);
     let current = "2026-08-05T12:00:00.000Z";
     const runtime = new OwnedWorkdayApplicationRuntime({
-      request: {} as never,
+      request: pageKind === "profile" ? {
+        ownerSources: {
+          profilePlan: {
+            mode: "live",
+            pageType: "profile",
+            fields: [{
+              fieldId: "identity.given_name",
+              questionType: "identity",
+              answerType: "text",
+              allowedOptions: [],
+              answer: {
+                kind: "answered",
+                value: "Ada",
+                provenance: "owner_provided",
+                lane: "live_owner_fact",
+              },
+            }],
+            repeatables: [],
+          },
+          sensitiveValues: ["Ada"],
+        },
+      } as never : {} as never,
       acceptances: { record() {} },
       nextOperationId: () => generatedOperationId("operation_expiry_next_000001"),
       timeoutMs: 1_000,

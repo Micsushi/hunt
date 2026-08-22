@@ -8,9 +8,11 @@ import {
   type ProfileControlCatalogEntry,
   type ProfileRepeatableCatalogEntry,
 } from "./catalog.ts";
+import { retainedProfileTextSha256 } from "./catalog.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  ProfileControlObservation,
   ProfileInteractionSnapshot,
   ProfilePageSnapshot,
   ProfilePageType,
@@ -23,6 +25,7 @@ interface ResolvedControl {
   readonly locator: Locator;
   readonly uiBehavior: ProfileControlSnapshot["uiBehavior"];
   readonly uiVariant: string;
+  readonly binderStrategy: ProfileControlObservation["binderStrategy"];
 }
 
 interface MutableInteraction {
@@ -102,6 +105,88 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     abort(signal);
     return { pageType: this.#pageType, controls, rows, repeatableSections };
+  }
+
+  async observeControl(
+    controlId: string,
+    signal: AbortSignal,
+  ): Promise<ProfileControlObservation> {
+    abort(signal);
+    const resolved = this.#controls.get(controlId);
+    if (resolved === undefined) throw new TypeError("profile control observation binding unavailable");
+    const controls = await visibleLocators(resolved.locator);
+    if (controls.length === 0) throw new TypeError("profile control observation target unavailable");
+    const before = await resolvedReadback(resolved);
+    const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
+    const label = await observedControlLabel(controls[0]!, resolved.uiBehavior);
+    const optionLabels = await this.#observeOptionLabels(resolved, controls);
+    const after = await resolvedReadback(resolved);
+    const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
+    if (before !== after || validationBefore !== validationAfter) {
+      throw new TypeError("profile control observation changed backing state");
+    }
+    const visibleOptionIds = Object.freeze(optionLabels.map(optionId));
+    const selected = before === null ? null : optionId(before);
+    abort(signal);
+    return Object.freeze({
+      controlId,
+      binderStrategy: resolved.binderStrategy,
+      sanitizedLabelSha256: label === null ? null : retainedProfileTextSha256(label),
+      backingState: before === null ? "unset" : "set",
+      validationState: validationAfter ? "clear" : "invalid",
+      optionCatalogState: isChoice(resolved.uiBehavior)
+        ? visibleOptionIds.length === 0 ? "unknown" : "observed"
+        : "not_applicable",
+      visibleOptionIds,
+      selectedOptionId: selected !== null && visibleOptionIds.includes(selected) ? selected : null,
+    });
+  }
+
+  async #observeOptionLabels(
+    resolved: ResolvedControl,
+    controls: readonly Locator[],
+  ): Promise<string[]> {
+    if (!isChoice(resolved.uiBehavior)) return [];
+    if (resolved.uiBehavior === "radio_group") {
+      return uniqueObservedOptions(await Promise.all(controls.map(radioOptionLabel)));
+    }
+    const control = controls[0]!;
+    if (await control.evaluate((element) => element instanceof HTMLSelectElement)) {
+      return uniqueObservedOptions(await control.evaluate((element) =>
+        element instanceof HTMLSelectElement
+          ? [...element.options].filter((option) => !option.disabled)
+            .map((option) => option.label || option.textContent || "")
+          : []
+      ));
+    }
+    const before = await resolvedReadback(resolved);
+    const validationBefore = await validationCleared(control);
+    await control.focus({ timeout: this.#timeoutMs });
+    await control.click({ timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(25);
+    let labels: string[] = [];
+    try {
+      const owner = await exactObservedOptionOwner(this.#page, control);
+      if (owner !== undefined) {
+        const options = await visibleLocators(owner.locator([
+          '[role="option"]',
+          '[data-automation-id="promptOption"]',
+          '[data-automation-id="promptLeafNode"]',
+        ].join(", ")));
+        labels = uniqueObservedOptions(await Promise.all(options.slice(0, 64).map((option) =>
+          option.innerText()
+        )));
+      }
+    } finally {
+      await this.#page.keyboard.press("Escape");
+      await control.blur({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
+      if (before !== await resolvedReadback(resolved) ||
+          validationBefore !== await validationCleared(control)) {
+        throw new TypeError("profile option observation changed backing state");
+      }
+    }
+    return labels;
   }
 
   async commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void> {
@@ -300,6 +385,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         locator,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
+        binderStrategy: "catalog_selector_exact",
       });
       return [{
         controlId,
@@ -319,6 +405,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         locator: match,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
+        binderStrategy: "catalog_selector_exact",
       });
       snapshots.push({
         controlId,
@@ -539,6 +626,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiBehavior: await unknownUiBehavior(candidate),
         uiVariant: "workday_unknown_required_v1",
         readback: null,
+      });
+      this.#controls.set(`unknown-required:${ordinal}`, {
+        locator: candidate,
+        uiBehavior: unknown[unknown.length - 1]!.uiBehavior,
+        uiVariant: "workday_unknown_required_v1",
+        binderStrategy: "opaque_machine_key",
       });
     }
     return unknown;
@@ -1541,6 +1634,66 @@ async function readback(
     : labels.length === 1 ? labels[0]! : null;
 }
 
+async function resolvedReadback(control: ResolvedControl): Promise<string | null> {
+  if (control.uiBehavior === "radio_group") {
+    return radioReadback(await visibleLocators(control.locator));
+  }
+  return readback(control.locator, control.uiBehavior);
+}
+
+async function observedControlLabel(
+  locator: Locator,
+  behavior: ProfileControlSnapshot["uiBehavior"],
+): Promise<string | null> {
+  const value = await locator.evaluate((element, radioGroup) => {
+    const normalized = (text: string | null | undefined) => (text ?? "")
+      .normalize("NFC").replace(/\s+/gu, " ").trim()
+      .replace(/\s+(?:Required)$/iu, "").replace(/\s*\*\s*$/u, "").trim();
+    if (radioGroup) {
+      const legend = element.closest("fieldset")?.querySelector("legend");
+      return normalized(legend?.textContent);
+    }
+    const labelledBy = element.getAttribute("aria-labelledby");
+    if (labelledBy !== null && labelledBy !== "") {
+      const labels = labelledBy.split(/\s+/u).map((id) => document.getElementById(id)?.textContent ?? "");
+      const label = normalized(labels.join(" "));
+      if (label !== "") return label;
+    }
+    const aria = normalized(element.getAttribute("aria-label"));
+    if (aria !== "") return aria;
+    if (element.id !== "") {
+      const owned = [...document.querySelectorAll("label")].find((label) => label.htmlFor === element.id);
+      const label = normalized(owned?.textContent);
+      if (label !== "") return label;
+    }
+    const parentLabel = normalized(element.closest("label")?.textContent);
+    if (parentLabel !== "") return parentLabel;
+    const field = element.closest(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    return normalized(field?.querySelector("legend, label")?.textContent);
+  }, behavior === "radio_group");
+  return value === "" ? null : value;
+}
+
+function uniqueObservedOptions(values: readonly string[]): string[] {
+  const normalized = values.map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
+    .filter((value) => value !== "");
+  if (normalized.length > 64 || new Set(normalized.map(retainedProfileTextSha256)).size !== normalized.length) {
+    throw new TypeError("profile option observation is ambiguous");
+  }
+  return normalized;
+}
+
+function optionId(value: string): string {
+  return `option_sha256_${retainedProfileTextSha256(value)}`;
+}
+
+function isChoice(behavior: ProfileControlSnapshot["uiBehavior"]): boolean {
+  return behavior === "search_select" || behavior === "select" ||
+    behavior === "multi_select" || behavior === "radio_group";
+}
+
 function scalarReadbackMatches(
   behavior: ProfileControlSnapshot["uiBehavior"],
   actual: string | null,
@@ -1722,6 +1875,38 @@ async function visibleLocators(locator: Locator): Promise<Locator[]> {
     if (await item.isVisible()) matches.push(item);
   }
   return matches;
+}
+
+async function exactObservedOptionOwner(
+  page: Page,
+  control: Locator,
+): Promise<Locator | undefined> {
+  const ids = [await control.getAttribute("aria-controls"), await control.getAttribute("aria-owns")]
+    .flatMap((value) => value?.trim().split(/\s+/u).filter(Boolean) ?? []);
+  if (ids.length > 0) {
+    if (ids.some((id) => !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id))) return undefined;
+    const unique = [...new Set(ids)];
+    if (unique.length !== 1) return undefined;
+    const owner = page.locator(`[id="${unique[0]}"]`);
+    return await owner.count() === 1 && await owner.isVisible() ? owner : undefined;
+  }
+  const field = control.locator(
+    'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
+  );
+  if (await field.count() !== 1) return undefined;
+  const owners = await visibleLocators(field.locator([
+    '[role="listbox"]',
+    '[data-automation-id="responsiveMonikerPrompt"]',
+  ].join(", ")));
+  const optionOwners: Locator[] = [];
+  for (const owner of owners) {
+    if ((await visibleLocators(owner.locator([
+      '[role="option"]',
+      '[data-automation-id="promptOption"]',
+      '[data-automation-id="promptLeafNode"]',
+    ].join(", ")))).length > 0) optionOwners.push(owner);
+  }
+  return optionOwners.length === 1 ? optionOwners[0] : undefined;
 }
 
 async function selectionPopupVisible(

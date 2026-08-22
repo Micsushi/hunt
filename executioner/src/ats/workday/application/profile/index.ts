@@ -12,6 +12,7 @@ export type {
   ProfileCanonicalAnswerType,
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  ProfileControlObservation,
   ProfileFieldAnswer,
   ProfileFieldPlan,
   ProfileInteractionSnapshot,

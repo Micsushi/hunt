@@ -1,6 +1,7 @@
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  ProfileControlObservation,
   ProfileFieldPlan,
   ProfileInteractionSnapshot,
   ProfilePagePlan,
@@ -15,6 +16,10 @@ import {
 import {
   profileRepeatableCatalog,
   profileScalarControlCatalog,
+} from "../../ats/workday/application/profile/catalog.ts";
+import {
+  retainedProfileControlGuide,
+  retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
@@ -46,6 +51,11 @@ const persistentReadbacks = new Set([
   "not_attempted", "pending_rescan", "verified_after_rescan",
   "unverified_after_rescan", "driver_failed",
 ]);
+const binderStrategies = new Set(["catalog_selector_exact", "opaque_machine_key"]);
+const metadataReconciliations = new Set(["pending", "matched", "unresolved", "mismatch"]);
+const backingStates = new Set(["unknown", "set", "unset"]);
+const validationStates = new Set(["unknown", "clear", "invalid"]);
+const optionCatalogStates = new Set(["not_applicable", "observed", "unknown"]);
 const reviewedUiVariants = new Set([
   ...profileScalarControlCatalog.map(({ uiVariant }) => uiVariant),
   ...profileRepeatableCatalog.flatMap(({ fields }) =>
@@ -62,6 +72,8 @@ const repeatableFields = new Map(
     new Set(fields.map(({ fieldId }) => fieldId)),
   ]),
 );
+const retainedProfileGuide = new Map(retainedProfileControlGuide
+  .map((entry) => [entry.identity, entry]));
 const reviewedStructuralStrings = Object.freeze([
   ...uiTypes,
   ...questionCategories,
@@ -71,6 +83,11 @@ const reviewedStructuralStrings = Object.freeze([
   ...driverAttempts,
   ...mechanicStatuses,
   ...persistentReadbacks,
+  ...binderStrategies,
+  ...metadataReconciliations,
+  ...backingStates,
+  ...validationStates,
+  ...optionCatalogStates,
   ...reviewedUiVariants,
   ...scalarIdentities,
   ...profileRepeatableCatalog.flatMap(({ section, fields }) => [
@@ -98,20 +115,27 @@ export interface ProfileFieldLearningRecordV2 {
   readonly required: boolean;
   readonly answerState: "answered" | "unset";
   readonly lane: AnswerProvenanceLane | null;
+  readonly binderStrategy: "catalog_selector_exact" | "opaque_machine_key" | null;
+  readonly sanitizedLabelSha256: string | null;
+  readonly metadataReconciliation: "pending" | "matched" | "unresolved" | "mismatch";
+  readonly backingState: "unknown" | "set" | "unset";
+  readonly validationState: "unknown" | "clear" | "invalid";
+  readonly optionCatalogState: "not_applicable" | "observed" | "unknown";
   readonly visibleOptionIds: readonly string[];
   readonly selectedOptionId: string | null;
   readonly optionMapping: string;
   readonly prefillDisposition: string;
   readonly driverAttempt: string;
+  readonly observationBinding: {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly stateObservedAck: true;
+  } | null;
   readonly monitorBinding: {
     readonly operationId: string;
     readonly attempt: number;
     readonly beforeMutationAck: true;
     readonly afterReadbackAck: true;
-  } | {
-    readonly operationId: string;
-    readonly attempt: number;
-    readonly stateObservedAck: true;
   } | null;
   readonly terminalDisposition:
     | "verified" | "verified_without_mutation" | "optional_unset"
@@ -120,8 +144,8 @@ export interface ProfileFieldLearningRecordV2 {
 }
 
 export interface ProfileFieldLearningEvidenceV2 {
-  readonly schemaVersion: 4;
-  readonly evidenceRevision: "s2-profile-field-learning-v4";
+  readonly schemaVersion: 5;
+  readonly evidenceRevision: "s2-profile-field-learning-v5";
   readonly page: "profile";
   readonly executionMode: "live" | "synthetic_test_non_submittable";
   readonly testOnly: boolean;
@@ -147,11 +171,13 @@ export function createProfileFieldLearningCapture(input: {
   readonly root?: string;
   readonly fileName?: "profile-field-learning.json" | "profile-field-learning-02.json";
   readonly sensitiveValues: readonly string[];
-  readonly observationBinding?: {
-    readonly operationId: string;
-    readonly attempt: number;
-    readonly stateObservedAck: true;
-  };
+  readonly observeControl?: (
+    control: ProfileControlSnapshot,
+    signal: AbortSignal,
+  ) => Promise<{
+    readonly observation: ProfileControlObservation;
+    readonly binding: NonNullable<ProfileFieldLearningRecordV2["observationBinding"]>;
+  }>;
 }): ProfileFieldLearningCapture {
   const records = new Map<string, MutableRecord>();
   const controlBindings = new Map<string, string>();
@@ -175,13 +201,29 @@ export function createProfileFieldLearningCapture(input: {
         nextRowOrdinal,
         visibleIdentities,
       );
-      if (input.observationBinding !== undefined) {
-        for (const record of records.values()) {
-          if (record.driverAttempt === "none" && record.monitorBinding === null) {
-            record.monitorBinding = Object.freeze({ ...input.observationBinding });
+      let observationFailed = false;
+      for (const control of snapshotControls(snapshot)) {
+        const identity = controlBindings.get(control.controlId);
+        const record = identity === undefined ? undefined : records.get(identity);
+        if (record === undefined || record.observationBinding !== null) continue;
+        if (input.observeControl === undefined) {
+          observationFailed ||= input.plan.mode === "live";
+          continue;
+        }
+        try {
+          const observed = await input.observeControl(control, signal);
+          if (operationUsedByAnotherRecord(records, record, observed.binding.operationId)) {
+            throw new TypeError("profile control observation operation crossed");
           }
+          applyControlObservation(record, control, plans.get(control.fieldId), observed);
+          observationFailed ||= record.metadataReconciliation === "mismatch";
+        } catch (error) {
+          record.metadataReconciliation = "mismatch";
+          record.terminalDisposition = "verification_failed";
+          throw error;
         }
       }
+      if (observationFailed) throw new TypeError("profile control observation denied");
       return snapshot;
     },
     async commit(request, signal) {
@@ -197,12 +239,14 @@ export function createProfileFieldLearningCapture(input: {
       try {
         await input.page.commit(request, signal);
         if (identity !== undefined) {
-          applyInteraction(records.get(identity), input.page.interaction?.(request.controlId));
+          applyInteraction(
+            records.get(identity), input.page.interaction?.(request.controlId), request.value,
+          );
         }
       } catch (error) {
         if (identity !== undefined) {
           const record = records.get(identity);
-          applyInteraction(record, input.page.interaction?.(request.controlId));
+          applyInteraction(record, input.page.interaction?.(request.controlId), request.value);
           if (record !== undefined) {
             record.mechanics.persistentReadback = "driver_failed";
             record.terminalDisposition = "driver_failed";
@@ -235,6 +279,10 @@ export function createProfileFieldLearningCapture(input: {
         if (record.pendingMonitor !== null || isMutationBinding(record.monitorBinding)) {
           throw new TypeError("profile monitor binding duplicate");
         }
+        if (operationUsedByAnotherRecord(records, record, binding.operationId) ||
+            record.observationBinding?.operationId === binding.operationId) {
+          throw new TypeError("profile monitor binding crossed");
+        }
         record.monitorBinding = null;
         record.pendingMonitor = {
           operationId: binding.operationId,
@@ -266,8 +314,8 @@ export function createProfileFieldLearningCapture(input: {
         return writeAtomicJsonEvidence({
           root: input.root ?? "",
           value: admitProfileFieldLearningEvidence({
-            schemaVersion: 4,
-            evidenceRevision: "s2-profile-field-learning-v4",
+            schemaVersion: 5,
+            evidenceRevision: "s2-profile-field-learning-v5",
             page: "profile",
             executionMode: input.plan.mode,
             testOnly: input.plan.mode === "synthetic_test_non_submittable",
@@ -295,6 +343,18 @@ export function createProfileFieldLearningCapture(input: {
   });
 }
 
+function operationUsedByAnotherRecord(
+  records: ReadonlyMap<string, MutableRecord>,
+  current: MutableRecord,
+  operationId: string,
+): boolean {
+  return [...records.values()].some((record) => record !== current && (
+    record.observationBinding?.operationId === operationId ||
+    record.monitorBinding?.operationId === operationId ||
+    record.pendingMonitor?.operationId === operationId
+  ));
+}
+
 export function admitProfileFieldLearningEvidence(
   value: ProfileFieldLearningEvidenceV2,
 ): ProfileFieldLearningEvidenceV2 {
@@ -303,8 +363,8 @@ export function admitProfileFieldLearningEvidence(
       "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
       "liveAcceptanceEligible", "visibleControlCount", "fields",
     ]) ||
-    value.schemaVersion !== 4 ||
-    value.evidenceRevision !== "s2-profile-field-learning-v4" ||
+    value.schemaVersion !== 5 ||
+    value.evidenceRevision !== "s2-profile-field-learning-v5" ||
     value.page !== "profile" ||
     !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
     value.fields.length < 1 || value.fields.length > 128 ||
@@ -316,9 +376,14 @@ export function admitProfileFieldLearningEvidence(
     if (!validIdentityBinding(field)) {
       denied(`identity_binding:${field.fieldIdentity}:${field.uiType}:${field.uiVariant}`);
     }
+    if (!validMetadataReconciliation(field)) {
+      denied(`metadata_reconciliation:${field.fieldIdentity}`);
+    }
     if (!exactKeys(field, [
       "fieldIdentity", "uiType", "uiVariant", "questionCategory",
-      "answerCategory", "required", "answerState", "lane",
+      "answerCategory", "required", "answerState", "lane", "binderStrategy",
+      "sanitizedLabelSha256", "metadataReconciliation", "backingState",
+      "validationState", "optionCatalogState", "observationBinding",
       "visibleOptionIds", "selectedOptionId",
       "optionMapping", "prefillDisposition", "driverAttempt", "monitorBinding",
       "terminalDisposition", "mechanics",
@@ -337,17 +402,27 @@ export function admitProfileFieldLearningEvidence(
       (field.lane === "live_owner_fact" && value.executionMode !== "live") ||
       (field.lane === "synthetic_test_default" &&
         value.executionMode !== "synthetic_test_non_submittable") ||
+      (field.binderStrategy !== null && !binderStrategies.has(field.binderStrategy)) ||
+      (field.sanitizedLabelSha256 !== null &&
+        !/^[0-9a-f]{64}$/u.test(field.sanitizedLabelSha256)) ||
+      !metadataReconciliations.has(field.metadataReconciliation) ||
+      !backingStates.has(field.backingState) ||
+      !validationStates.has(field.validationState) ||
+      !optionCatalogStates.has(field.optionCatalogState) ||
+      !(field.observationBinding === null || isObservationBinding(field.observationBinding)) ||
       field.visibleOptionIds.length > 64 ||
       new Set(field.visibleOptionIds).size !== field.visibleOptionIds.length ||
-      field.visibleOptionIds.some((id, index) =>
-        id !== `option_ref_${String(index + 1).padStart(2, "0")}`
-      ) ||
+      field.visibleOptionIds.some((id) => !/^option_sha256_[0-9a-f]{64}$/u.test(id)) ||
+      (field.optionCatalogState === "observed") !== (field.visibleOptionIds.length > 0) ||
+      (field.optionCatalogState === "not_applicable" && isChoiceType(field.uiType)) ||
+      (field.optionCatalogState !== "not_applicable" && !isChoiceType(field.uiType) &&
+        field.metadataReconciliation !== "unresolved") ||
       (field.selectedOptionId !== null &&
         !field.visibleOptionIds.includes(field.selectedOptionId)) ||
       !optionMappings.has(field.optionMapping) ||
       !prefillDispositions.has(field.prefillDisposition) ||
       !driverAttempts.has(field.driverAttempt) ||
-      !validMonitorBinding(field.monitorBinding) ||
+      !(field.monitorBinding === null || isMutationBinding(field.monitorBinding)) ||
       ![
         "verified", "verified_without_mutation", "optional_unset", "required_unset",
         "driver_failed", "verification_failed", "pending",
@@ -357,9 +432,10 @@ export function admitProfileFieldLearningEvidence(
     if (!validMechanicsRelations(field)) denied(`mechanics_relation:${field.fieldIdentity}`);
     identities.add(field.fieldIdentity);
   }
-  const operations = value.fields.flatMap(({ monitorBinding }) =>
-    isMutationBinding(monitorBinding) ? [monitorBinding.operationId] : []
-  );
+  const operations = value.fields.flatMap(({ observationBinding, monitorBinding }) => [
+    ...(observationBinding === null ? [] : [observationBinding.operationId]),
+    ...(monitorBinding === null ? [] : [monitorBinding.operationId]),
+  ]);
   if (new Set(operations).size !== operations.length) denied();
   const eligible = value.executionMode === "live" && value.fields.every(liveEligibleField);
   if (value.liveAcceptanceEligible !== eligible) denied();
@@ -368,6 +444,12 @@ export function admitProfileFieldLearningEvidence(
     fields: Object.freeze(value.fields.map((field) => Object.freeze({
       ...field,
       visibleOptionIds: Object.freeze([...field.visibleOptionIds]),
+      observationBinding: field.observationBinding === null
+        ? null
+        : Object.freeze({ ...field.observationBinding }),
+      monitorBinding: field.monitorBinding === null
+        ? null
+        : Object.freeze({ ...field.monitorBinding }),
       mechanics: Object.freeze({ ...field.mechanics }),
     }))),
   });
@@ -419,6 +501,63 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
   ) === true;
 }
 
+function validMetadataReconciliation(field: ProfileFieldLearningRecordV2): boolean {
+  const identity = field.fieldIdentity.slice("profile.".length);
+  const guide = retainedProfileGuide.get(identity);
+  if (guide !== undefined) {
+    const matches = guideMetadataMatches(field, guide);
+    return field.metadataReconciliation === (matches ? "matched" : "mismatch");
+  }
+  if (identity.startsWith("unknown.")) {
+    return field.metadataReconciliation === "unresolved" &&
+      field.binderStrategy === "opaque_machine_key" &&
+      field.sanitizedLabelSha256 === null && field.questionCategory === "unknown" &&
+      field.answerCategory === "unknown" && field.optionCatalogState === "unknown" &&
+      field.visibleOptionIds.length === 0 && field.selectedOptionId === null;
+  }
+  const repeatable = /^profile\.(experience|education|skills|websites)\.[1-9][0-9]{0,2}\./u
+    .test(field.fieldIdentity);
+  return repeatable && field.metadataReconciliation === "matched" &&
+    field.binderStrategy === "catalog_selector_exact" &&
+    field.sanitizedLabelSha256 === null;
+}
+
+function guideMetadataMatches(
+  field: Pick<ProfileFieldLearningRecordV2,
+    "binderStrategy" | "sanitizedLabelSha256" | "questionCategory" | "answerCategory" |
+    "uiType" | "uiVariant" | "required" | "optionCatalogState" | "visibleOptionIds">,
+  guide: (typeof retainedProfileControlGuide)[number],
+): boolean {
+  const expectedOptions = guide.allowedOptions.map((value) =>
+    `option_sha256_${retainedProfileTextSha256(value)}`
+  );
+  const optionsMatch = expectedOptions.length === 0 || !isChoiceType(field.uiType) || (
+    field.optionCatalogState === "observed" &&
+    JSON.stringify(field.visibleOptionIds) === JSON.stringify(expectedOptions)
+  );
+  return field.binderStrategy === "catalog_selector_exact" &&
+    field.sanitizedLabelSha256 === retainedProfileTextSha256(guide.sanitizedLabel) &&
+    field.questionCategory === guide.normalizedQuestionType &&
+    field.answerCategory === guide.answerType &&
+    guideBehaviorMatches(guide.behavior, field.uiType, field.uiVariant) &&
+    field.uiVariant === guide.uiVariant &&
+    (guide.required === null || field.required === guide.required) && optionsMatch;
+}
+
+function guideBehaviorMatches(
+  expected: (typeof retainedProfileControlGuide)[number]["behavior"],
+  observed: string,
+  variant: string,
+): boolean {
+  return expected === observed || expected === "radio" && observed === "radio_group" ||
+    expected === "text" && observed === "phone" && variant === "workday_phone_v2";
+}
+
+function isChoiceType(value: string): boolean {
+  return value === "search_select" || value === "select" ||
+    value === "multi_select" || value === "radio_group";
+}
+
 function sameMechanics(
   left: ProfileFieldMechanicsV1,
   right: MutableRecord["mechanics"],
@@ -441,11 +580,18 @@ interface MutableRecord {
   required: boolean;
   answerState: "answered" | "unset";
   lane: AnswerProvenanceLane | null;
+  binderStrategy: ProfileFieldLearningRecordV2["binderStrategy"];
+  sanitizedLabelSha256: string | null;
+  metadataReconciliation: ProfileFieldLearningRecordV2["metadataReconciliation"];
+  backingState: ProfileFieldLearningRecordV2["backingState"];
+  validationState: ProfileFieldLearningRecordV2["validationState"];
+  optionCatalogState: ProfileFieldLearningRecordV2["optionCatalogState"];
   visibleOptionIds: readonly string[];
   selectedOptionId: string | null;
   optionMapping: string;
   prefillDisposition: string;
   driverAttempt: string;
+  observationBinding: ProfileFieldLearningRecordV2["observationBinding"];
   monitorBinding: ProfileFieldLearningRecordV2["monitorBinding"];
   pendingMonitor: {
     operationId: string;
@@ -499,6 +645,9 @@ function observe(
   visibleIdentities.clear();
   for (const control of snapshot.controls) {
     const identity = `profile.${control.fieldId}`;
+    if (visibleIdentities.has(identity)) {
+      throw new TypeError("duplicate profile control binding denied");
+    }
     visibleIdentities.add(identity);
     learn(control, identity, plans.get(control.fieldId), records, controlBindings, pending);
   }
@@ -512,7 +661,11 @@ function observe(
     }
     observeRow(row, ordinal, plans, records, controlBindings, pending);
     for (const control of row.controls) {
-      visibleIdentities.add(`profile.${row.section}.${ordinal}.${control.fieldId}`);
+      const identity = `profile.${row.section}.${ordinal}.${control.fieldId}`;
+      if (visibleIdentities.has(identity)) {
+        throw new TypeError("duplicate profile control binding denied");
+      }
+      visibleIdentities.add(identity);
     }
   }
 }
@@ -549,20 +702,28 @@ function learn(
   let record = records.get(identity);
   if (record === undefined) {
     const answerState = plan?.answer.kind === "answered" ? "answered" : "unset";
+    const guide = retainedProfileGuide.get(control.fieldId);
     record = {
       fieldIdentity: identity,
       uiType: control.uiBehavior,
       uiVariant: control.uiVariant,
-      questionCategory: plan?.questionType ?? "unknown",
-      answerCategory: plan?.answerType ?? "unknown",
+      questionCategory: guide?.normalizedQuestionType ?? plan?.questionType ?? "unknown",
+      answerCategory: guide?.answerType ?? plan?.answerType ?? "unknown",
       required: control.required,
       answerState,
       lane: plan?.answer.kind === "answered" ? plan.answer.lane : null,
+      binderStrategy: null,
+      sanitizedLabelSha256: null,
+      metadataReconciliation: "pending",
+      backingState: "unknown",
+      validationState: "unknown",
+      optionCatalogState: isChoiceType(control.uiBehavior) ? "unknown" : "not_applicable",
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: optionMapping(plan),
       prefillDisposition: prefillDisposition(plan, control.readback),
       driverAttempt: "none",
+      observationBinding: null,
       monitorBinding: null,
       pendingMonitor: null,
       terminalDisposition: answerState === "unset"
@@ -589,9 +750,75 @@ function learn(
   }
 }
 
+function snapshotControls(snapshot: ProfilePageSnapshot): readonly ProfileControlSnapshot[] {
+  return [
+    ...snapshot.controls,
+    ...snapshot.rows.flatMap(({ controls }) => controls),
+  ];
+}
+
+function applyControlObservation(
+  record: MutableRecord,
+  control: ProfileControlSnapshot,
+  plan: ProfileFieldPlan | undefined,
+  observed: {
+    readonly observation: ProfileControlObservation;
+    readonly binding: NonNullable<ProfileFieldLearningRecordV2["observationBinding"]>;
+  },
+): void {
+  if (observed.observation.controlId !== control.controlId ||
+      !isObservationBinding(observed.binding)) {
+    throw new TypeError("profile control observation binding mismatch");
+  }
+  record.binderStrategy = observed.observation.binderStrategy;
+  record.backingState = observed.observation.backingState;
+  record.validationState = observed.observation.validationState;
+  record.optionCatalogState = observed.observation.optionCatalogState;
+  record.observationBinding = Object.freeze({ ...observed.binding });
+  const guide = retainedProfileGuide.get(control.fieldId);
+  if (guide === undefined && control.fieldId.startsWith("unknown.")) {
+    record.sanitizedLabelSha256 = null;
+    record.visibleOptionIds = Object.freeze([]);
+    record.selectedOptionId = null;
+    record.optionCatalogState = "unknown";
+    record.metadataReconciliation = "unresolved";
+    return;
+  }
+  if (guide === undefined) {
+    record.sanitizedLabelSha256 = null;
+    record.visibleOptionIds = observed.observation.visibleOptionIds;
+    record.selectedOptionId = observed.observation.selectedOptionId;
+    record.metadataReconciliation = record.binderStrategy === "catalog_selector_exact" &&
+        plan !== undefined && plan.questionType === record.questionCategory &&
+        plan.answerType === record.answerCategory
+      ? "matched"
+      : "mismatch";
+    return;
+  }
+  record.sanitizedLabelSha256 = observed.observation.sanitizedLabelSha256;
+  record.visibleOptionIds = observed.observation.visibleOptionIds;
+  record.selectedOptionId = observed.observation.selectedOptionId;
+  record.metadataReconciliation = guideMetadataMatches(record, guide) &&
+      planMatchesGuide(plan, guide)
+    ? "matched"
+    : "mismatch";
+}
+
+function planMatchesGuide(
+  plan: ProfileFieldPlan | undefined,
+  guide: (typeof retainedProfileControlGuide)[number],
+): boolean {
+  if (plan === undefined) return true;
+  const answerMatches = plan.answerType === guide.answerType ||
+    plan.answerType === "option" && guide.answerType === "single_select" ||
+    plan.answerType === "phone" && guide.answerType === "text";
+  return plan.questionType === guide.normalizedQuestionType && answerMatches;
+}
+
 function applyInteraction(
   record: MutableRecord | undefined,
   interaction: ProfileInteractionSnapshot | undefined,
+  expectedValue: string,
 ): void {
   if (record === undefined || interaction === undefined) return;
   record.mechanics.popupBound = mechanicStatus(interaction.popupBound);
@@ -608,16 +835,12 @@ function applyInteraction(
     interaction.visibleOptionCount >= 0 &&
     interaction.visibleOptionCount <= 64
   ) {
-    record.visibleOptionIds = Object.freeze(Array.from(
-      { length: interaction.visibleOptionCount },
-      (_value, index) => `option_ref_${String(index + 1).padStart(2, "0")}`,
-    ));
-    record.selectedOptionId = interaction.selectedOptionOrdinal !== null &&
-        Number.isInteger(interaction.selectedOptionOrdinal) &&
-        interaction.selectedOptionOrdinal >= 1 &&
-        interaction.selectedOptionOrdinal <= interaction.visibleOptionCount
-      ? `option_ref_${String(interaction.selectedOptionOrdinal).padStart(2, "0")}`
-      : null;
+    if (record.optionCatalogState === "observed" &&
+        interaction.visibleOptionCount !== record.visibleOptionIds.length) {
+      record.metadataReconciliation = "mismatch";
+    }
+    const expectedId = `option_sha256_${retainedProfileTextSha256(expectedValue)}`;
+    record.selectedOptionId = record.visibleOptionIds.includes(expectedId) ? expectedId : null;
   }
 }
 
@@ -737,6 +960,15 @@ function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
     required: value.required,
     answerState: value.answerState,
     lane: value.lane,
+    binderStrategy: value.binderStrategy,
+    sanitizedLabelSha256: value.sanitizedLabelSha256,
+    metadataReconciliation: value.metadataReconciliation,
+    backingState: value.backingState,
+    validationState: value.validationState,
+    optionCatalogState: value.optionCatalogState,
+    observationBinding: value.observationBinding === null
+      ? null
+      : Object.freeze({ ...value.observationBinding }),
     visibleOptionIds: Object.freeze([...value.visibleOptionIds]),
     selectedOptionId: value.selectedOptionId,
     optionMapping: value.optionMapping,
@@ -751,8 +983,14 @@ function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
 }
 
 function liveEligibleField(field: ProfileFieldLearningRecordV2): boolean {
+  if (
+    field.metadataReconciliation !== "matched" ||
+    field.binderStrategy !== "catalog_selector_exact" ||
+    field.backingState === "unknown" || field.validationState !== "clear" ||
+    !isObservationBinding(field.observationBinding)
+  ) return false;
   if (field.answerState === "unset") {
-    return !field.required && field.lane === null && isObservationBinding(field.monitorBinding) &&
+    return !field.required && field.lane === null && field.monitorBinding === null &&
       field.terminalDisposition === "optional_unset";
   }
   return field.lane === "live_owner_fact" &&
@@ -760,11 +998,7 @@ function liveEligibleField(field: ProfileFieldLearningRecordV2): boolean {
       field.terminalDisposition === "verified_without_mutation") &&
     (field.terminalDisposition === "verified"
       ? isMutationBinding(field.monitorBinding)
-      : isObservationBinding(field.monitorBinding));
-}
-
-function validMonitorBinding(value: ProfileFieldLearningRecordV2["monitorBinding"]): boolean {
-  return value === null || isMutationBinding(value) || isObservationBinding(value);
+      : field.monitorBinding === null);
 }
 
 function isMutationBinding(
@@ -780,10 +1014,8 @@ function isMutationBinding(
 }
 
 function isObservationBinding(
-  value: ProfileFieldLearningRecordV2["monitorBinding"],
-): value is Extract<NonNullable<ProfileFieldLearningRecordV2["monitorBinding"]>, {
-  readonly stateObservedAck: true;
-}> {
+  value: ProfileFieldLearningRecordV2["observationBinding"],
+): value is NonNullable<ProfileFieldLearningRecordV2["observationBinding"]> {
   return value !== null && "stateObservedAck" in value && exactKeys(value, [
     "operationId", "attempt", "stateObservedAck",
   ]) && /^operation_[A-Za-z0-9_-]{16,64}$/u.test(value.operationId) &&

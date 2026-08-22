@@ -17,7 +17,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 const MAX_ACCEPTANCE_BYTES = 16 * 1024;
 const MAX_APPLICATION_WALK_ACCEPTANCE_BYTES = 128 * 1024;
 const MAX_DIAGNOSTICS_BYTES = 64 * 1024;
-const MAX_PROFILE_FIELD_LEARNING_BYTES = 128 * 1024;
+const MAX_PROFILE_FIELD_LEARNING_BYTES = 256 * 1024;
 const MAX_STORAGE_MANIFEST_BYTES = 512 * 1024;
 const OPAQUE_ID_PREFIXES = [
   "approval_", "checkpoint_", "event_", "host_", "journey_", "operation_",

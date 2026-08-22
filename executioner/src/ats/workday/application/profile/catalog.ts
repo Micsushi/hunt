@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { ApplicationProfileFactId } from
   "../../../../form/answers/application-types.ts";
 import type {
@@ -20,6 +22,73 @@ export interface ProfileOwnerInputCatalogEntry {
   readonly questionType: ProfileQuestionType;
   readonly answerType: ProfileCanonicalAnswerType;
   readonly allowedOptions: readonly string[];
+}
+
+export interface RetainedProfileControlGuideEntry {
+  readonly identity: string;
+  readonly sanitizedLabel: string;
+  readonly normalizedQuestionType: ProfileQuestionType;
+  readonly behavior: "text" | "checkbox" | "search_select" | "radio";
+  readonly answerType: "text" | "boolean" | "single_select" | "multi_select";
+  readonly required: boolean;
+  readonly uiVariant: string;
+  readonly allowedOptions: readonly string[];
+}
+
+export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEntry[] =
+  Object.freeze([
+    retained("identity.given_name", "First Name", "identity", "text", "text", true, "workday_text_v2"),
+    retained("identity.middle_name", "Middle Name", "identity", "text", "text", false, "workday_text_v2"),
+    retained("identity.family_name", "Last Name", "identity", "text", "text", true, "workday_text_v2"),
+    retained("identity.preferred_name", "Preferred Name", "identity", "text", "text", false, "workday_text_v1"),
+    retained("identity.has_preferred_name", "I have a preferred name", "identity", "checkbox", "boolean", false, "workday_checkbox_v2", ["Yes", "No"]),
+    retained("address.line1", "Address Line 1", "address", "text", "text", false, "workday_text_v2"),
+    retained("address.line2", "Address Line 2", "address", "text", "text", false, "workday_text_v2"),
+    retained("address.city", "City", "address", "text", "text", false, "workday_text_v2"),
+    retained("address.country", "Country", "address", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("address.region", "Province or Territory", "address", "search_select", "single_select", false, "workday_search_select_v2"),
+    retained("address.postal_code", "Postal Code", "address", "text", "text", false, "workday_text_v2"),
+    retained("contact.email", "Email", "identity", "text", "text", true, "workday_text_v2"),
+    retained("phone.device_type", "Phone Device Type", "phone", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("phone.country_code", "Country Phone Code", "phone", "search_select", "single_select", true, "workday_search_select_v2"),
+    retained("phone.number", "Phone Number", "phone", "text", "text", true, "workday_phone_v2"),
+    retained("phone.extension", "Phone Extension", "phone", "text", "text", false, "workday_text_v2"),
+    retained("source.how_did_you_hear", "How Did You Hear About Us?", "application_source", "search_select", "single_select", true, "workday_source_select_v1"),
+    retained("employment.previously_worked_for_organization", "Have you previously worked for our company (this does not apply to contingent/contract work)?", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
+    retained("skills.values", "Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
+    retained("social.linkedin", "LinkedIn", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
+  ]);
+
+export function retainedProfileTextSha256(value: string): string {
+  return createHash("sha256").update(
+    value.normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
+      .replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US"),
+    "utf8",
+  ).digest("hex");
+}
+
+function retained(
+  identity: string,
+  sanitizedLabel: string,
+  normalizedQuestionType: ProfileQuestionType,
+  behavior: RetainedProfileControlGuideEntry["behavior"],
+  answerType: RetainedProfileControlGuideEntry["answerType"],
+  required: boolean,
+  uiVariant: string,
+  allowedOptions: readonly string[] = [],
+): RetainedProfileControlGuideEntry {
+  return Object.freeze({
+    identity,
+    sanitizedLabel,
+    normalizedQuestionType,
+    behavior,
+    answerType,
+    required,
+    uiVariant,
+    allowedOptions: Object.freeze([...allowedOptions]),
+  });
 }
 
 export const profileOwnerInputCatalog: readonly ProfileOwnerInputCatalogEntry[] =

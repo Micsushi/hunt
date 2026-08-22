@@ -92,13 +92,12 @@ export async function completeWorkdayProfilePage(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
 ): Promise<ProfilePageCompletionResult> {
-  const preflight = validatePlan(plan);
-  if (preflight !== undefined) return preflight;
   if (signal.aborted) return blocked("operation_cancelled");
-
-  const initial = await inspectAndPreflight(plan, page, signal);
-  if (initial.kind === "blocked") return initial;
-  let snapshot = initial.snapshot;
+  const observed = await inspect(page, signal);
+  if (observed === undefined) return portFailure(signal);
+  const preflight = validatePlan(plan) ?? preflightSnapshot(plan, observed);
+  if (preflight !== undefined) return preflight;
+  let snapshot = observed;
   const effectivePlan = routeSiteAnswers(plan, snapshot);
   const routedPreflight = validatePlan(effectivePlan) ??
     preflightSnapshot(effectivePlan, snapshot);

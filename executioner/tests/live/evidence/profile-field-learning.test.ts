@@ -7,13 +7,59 @@ import test from "node:test";
 import {
   admitProfileFieldLearningEvidence,
   createProfileFieldLearningCapture,
+  type ProfileFieldLearningEvidenceV2,
+  type ProfileFieldLearningRecordV2,
 } from "../../../src/live/evidence/profile-field-learning.ts";
 import type {
   ProfileCommitRequest,
+  ProfileControlSnapshot,
   ProfilePagePlan,
   ProfilePageSnapshot,
   WorkdayProfilePagePort,
 } from "../../../src/ats/workday/application/profile/index.ts";
+import {
+  retainedIntakeControlGuide,
+  retainedIntakeTextSha256,
+} from "../../../src/form/questions/catalog.ts";
+
+interface MutableObservationBinding {
+  operationId: string;
+  attempt: number;
+  stateObservedAck: boolean;
+}
+
+type MutableLearningRecord = Omit<
+  ProfileFieldLearningRecordV2,
+  "observationBinding" | "visibleOptionIds"
+> & {
+  observationBinding: MutableObservationBinding | null;
+  visibleOptionIds: readonly string[];
+};
+
+type MutableLearningEvidence = Omit<
+  ProfileFieldLearningEvidenceV2,
+  "fields" | "liveAcceptanceEligible"
+> & {
+  liveAcceptanceEligible: boolean;
+  fields: MutableLearningRecord[];
+};
+
+function mutableEvidence(evidence: ProfileFieldLearningEvidenceV2): MutableLearningEvidence {
+  return structuredClone(evidence) as unknown as MutableLearningEvidence;
+}
+
+function admitMutableEvidence(evidence: MutableLearningEvidence): ProfileFieldLearningEvidenceV2 {
+  return admitProfileFieldLearningEvidence(evidence as unknown as ProfileFieldLearningEvidenceV2);
+}
+
+function mutableObservationBinding(
+  evidence: MutableLearningEvidence,
+  index: number,
+): MutableObservationBinding {
+  const binding = evidence.fields[index]?.observationBinding;
+  if (binding === null || binding === undefined) throw new TypeError("missing test observation binding");
+  return binding;
+}
 
 test("retains value-free field learning through prefill, driver, and readback", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-"));
@@ -23,6 +69,7 @@ test("retains value-free field learning through prefill, driver, and readback", 
     plan: profilePlan(),
     root,
     sensitiveValues: ["Ada", "Canada", "United States", "private@example.invalid"],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -43,79 +90,21 @@ test("retains value-free field learning through prefill, driver, and readback", 
       "Ada", "Canada", "United States", "private@example.invalid",
       "Software Engineer", "C:\\private\\resume.pdf",
     ]) assert.equal(text.includes(forbidden), false);
-    assert.deepEqual(JSON.parse(text), {
-      schemaVersion: 4,
-      evidenceRevision: "s2-profile-field-learning-v4",
-      page: "profile",
-      executionMode: "live",
-      testOnly: false,
-      liveAcceptanceEligible: false,
-      visibleControlCount: 3,
-      fields: [
-        {
-          fieldIdentity: "profile.identity.given_name",
-          uiType: "text",
-          uiVariant: "workday_text_v1",
-          questionCategory: "identity",
-          answerCategory: "text",
-          required: true,
-          answerState: "answered",
-          lane: "live_owner_fact",
-          visibleOptionIds: [],
-          selectedOptionId: null,
-          optionMapping: "not_applicable",
-          prefillDisposition: "already_correct",
-          driverAttempt: "none",
-          monitorBinding: null,
-          terminalDisposition: "verified_without_mutation",
-          mechanics: mechanics("text", "not_attempted"),
-        },
-        {
-          fieldIdentity: "profile.address.country",
-          uiType: "search_select",
-          uiVariant: "workday_search_select_v1",
-          questionCategory: "address",
-          answerCategory: "option",
-          required: true,
-          answerState: "answered",
-          lane: "live_owner_fact",
-          visibleOptionIds: ["option_ref_01", "option_ref_02"],
-          selectedOptionId: "option_ref_02",
-          optionMapping: "owner_visible_option",
-          prefillDisposition: "conflict",
-          driverAttempt: "search_select",
-          monitorBinding: binding(1),
-          terminalDisposition: "verified",
-          mechanics: {
-            popupBound: "observed",
-            optionFocused: "observed",
-            optionActivated: "observed",
-            popupClosed: "observed",
-            backingValueCommitted: "observed",
-            validationCleared: "observed",
-            persistentReadback: "verified_after_rescan",
-          },
-        },
-        {
-          fieldIdentity: "profile.unknown.required.1",
-          uiType: "text",
-          uiVariant: "workday_unknown_required_v1",
-          questionCategory: "unknown",
-          answerCategory: "unknown",
-          required: true,
-          answerState: "unset",
-          lane: null,
-          visibleOptionIds: [],
-          selectedOptionId: null,
-          optionMapping: "unresolved",
-          prefillDisposition: "needs_owner_input",
-          driverAttempt: "none",
-          monitorBinding: null,
-          terminalDisposition: "required_unset",
-          mechanics: mechanics("text", "not_attempted"),
-        },
-      ],
-    });
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
+    assert.equal(evidence.schemaVersion, 5);
+    assert.equal(evidence.evidenceRevision, "s2-profile-field-learning-v5");
+    assert.equal(evidence.visibleControlCount, 3);
+    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(new Set(evidence.fields.map(({ observationBinding }) =>
+      observationBinding?.operationId
+    )).size, 3);
+    assert.equal(evidence.fields[0]!.metadataReconciliation, "matched");
+    assert.equal(evidence.fields[1]!.answerCategory, "single_select");
+    assert.equal(evidence.fields[1]!.visibleOptionIds.length, 2);
+    assert.match(evidence.fields[1]!.selectedOptionId ?? "", /^option_sha256_[0-9a-f]{64}$/u);
+    assert.equal(evidence.fields[1]!.monitorBinding?.operationId, operation(1));
+    assert.equal(evidence.fields[2]!.metadataReconciliation, "unresolved");
+    assert.equal(evidence.fields[2]!.terminalDisposition, "required_unset");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -130,6 +119,7 @@ test("records a failed driver without changing the delegated failure", async () 
     plan: profilePlan(),
     root,
     sensitiveValues: [],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -164,6 +154,7 @@ test("repeatable learning identity survives DOM row reordering", async () => {
     plan: profilePlan(),
     root,
     sensitiveValues: ["Changed"],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -207,6 +198,7 @@ test("unavailable evidence storage is passive", async () => {
     page: port,
     plan: profilePlan(),
     sensitiveValues: [],
+    observeControl: observer(),
   });
   assert.equal((await capture.page.inspect(AbortSignal.any([]))).pageType, "profile");
   assert.equal(capture.write(), null);
@@ -220,6 +212,7 @@ test("writes a distinct immutable learning artifact for the second profile state
     root,
     fileName: "profile-field-learning-02.json",
     sensitiveValues: [],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -250,8 +243,8 @@ test("fixed structural vocabulary does not collide with an equal private answer"
       pageType: "profile",
 fields: [{
         fieldId: "social.linkedin",
-        questionType: "social_network",
-        answerType: "url",
+      questionType: "social_network",
+        answerType: "text",
         allowedOptions: [],
         answer: {
           kind: "answered",
@@ -264,6 +257,7 @@ fields: [{
     },
     root,
     sensitiveValues: ["linkedin"],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -283,8 +277,8 @@ fields: [{
 
 test("admits reviewed website repeatable identities", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 4,
-    evidenceRevision: "s2-profile-field-learning-v4",
+    schemaVersion: 5,
+    evidenceRevision: "s2-profile-field-learning-v5",
     page: "profile",
     executionMode: "live",
     testOnly: false,
@@ -299,12 +293,13 @@ test("admits reviewed website repeatable identities", () => {
       required: false,
       answerState: "unset",
       lane: null,
+      ...repeatableObservation(1),
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: "not_applicable",
       prefillDisposition: "blank",
       driverAttempt: "none",
-      monitorBinding: observationBinding(1),
+      monitorBinding: null,
       terminalDisposition: "optional_unset",
       mechanics: mechanics("text", "not_attempted"),
     }],
@@ -331,6 +326,7 @@ test("retains the maximum admitted field inventory", async () => {
     plan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
     root,
     sensitiveValues: [],
+    observeControl: observer(),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -346,8 +342,8 @@ test("retains the maximum admitted field inventory", async () => {
 
 test("admits reviewed owner-input source and prior-employment controls", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 4,
-    evidenceRevision: "s2-profile-field-learning-v4",
+    schemaVersion: 5,
+    evidenceRevision: "s2-profile-field-learning-v5",
     page: "profile",
     executionMode: "live",
     testOnly: false,
@@ -369,12 +365,15 @@ test("admits reviewed owner-input source and prior-employment controls", () => {
     ],
   });
   assert.equal(admitted.fields.length, 2);
+  const mismatchedOptions = mutableEvidence(admitted);
+  mismatchedOptions.fields[1]!.visibleOptionIds = optionIds(["Yes"]);
+  assert.throws(() => admitMutableEvidence(mismatchedOptions));
 });
 
 test("admits a reviewed v2 variant for a duplicated scalar field identity", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 4,
-    evidenceRevision: "s2-profile-field-learning-v4",
+    schemaVersion: 5,
+    evidenceRevision: "s2-profile-field-learning-v5",
     page: "profile",
     executionMode: "live",
     testOnly: false,
@@ -389,6 +388,7 @@ test("admits a reviewed v2 variant for a duplicated scalar field identity", () =
       required: true,
       answerState: "unset",
       lane: null,
+      ...knownObservation("identity.given_name", 1),
       visibleOptionIds: [],
       selectedOptionId: null,
       optionMapping: "not_applicable",
@@ -405,8 +405,8 @@ test("admits a reviewed v2 variant for a duplicated scalar field identity", () =
 
 test("admits privacy-safe optional checkbox and required file inventory", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 4,
-    evidenceRevision: "s2-profile-field-learning-v4",
+    schemaVersion: 5,
+    evidenceRevision: "s2-profile-field-learning-v5",
     page: "profile",
     executionMode: "live",
     testOnly: false,
@@ -422,6 +422,7 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
         required: false,
         answerState: "unset",
         lane: null,
+        ...unknownObservation(1),
         visibleOptionIds: [],
         selectedOptionId: null,
         optionMapping: "unresolved",
@@ -440,6 +441,7 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
         required: true,
         answerState: "unset",
         lane: null,
+        ...unknownObservation(2),
         visibleOptionIds: [],
         selectedOptionId: null,
         optionMapping: "unresolved",
@@ -464,8 +466,8 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
 
 test("denies widened, duplicate, and non-opaque learning records", () => {
   const base = {
-    schemaVersion: 4 as const,
-    evidenceRevision: "s2-profile-field-learning-v4" as const,
+    schemaVersion: 5 as const,
+    evidenceRevision: "s2-profile-field-learning-v5" as const,
     page: "profile" as const,
     executionMode: "live" as const,
     testOnly: false as const,
@@ -474,12 +476,13 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
     fields: [{
       fieldIdentity: "profile.identity.given_name",
       uiType: "text" as const,
-      uiVariant: "workday_text_v1",
+      uiVariant: "workday_text_v2",
       questionCategory: "identity" as const,
       answerCategory: "text" as const,
       required: true,
       answerState: "answered" as const,
       lane: "live_owner_fact" as const,
+      ...knownObservation("identity.given_name", 1),
       visibleOptionIds: [] as const,
       selectedOptionId: null,
       optionMapping: "not_applicable" as const,
@@ -493,6 +496,13 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
   const invalidEvidence = [
     { ...base, rawLabel: "Full legal name" },
     { ...base, fields: [...base.fields, ...base.fields] },
+    { ...base, fields: [{
+      ...base.fields[0],
+      sanitizedLabelSha256: "0".repeat(64),
+    }] },
+    { ...base, fields: [{ ...base.fields[0], questionCategory: "address" }] },
+    { ...base, fields: [{ ...base.fields[0], required: false }] },
+    { ...base, fields: [{ ...base.fields[0], binderStrategy: "opaque_machine_key" }] },
     { ...base, fields: [(() => {
       const { lane: _lane, ...field } = base.fields[0]!;
       return field;
@@ -535,7 +545,7 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
         ...base.fields[0],
         fieldIdentity: "profile.unknown.required.1",
         uiType: "checkbox",
-        uiVariant: "workday_text_v1",
+        uiVariant: "workday_text_v2",
         questionCategory: "unknown",
         answerCategory: "unknown",
         optionMapping: "unresolved",
@@ -573,6 +583,41 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
   });
 });
 
+test("rejects duplicate visible control bindings before mutation", async () => {
+  const port = new FakeProfilePort({
+    pageType: "profile",
+    controls: [
+      {
+        controlId: "given-control-a",
+        fieldId: "identity.given_name",
+        required: true,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v2",
+        readback: null,
+      },
+      {
+        controlId: "given-control-b",
+        fieldId: "identity.given_name",
+        required: true,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v2",
+        readback: null,
+      },
+    ],
+    rows: [],
+  });
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: profilePlan(),
+    sensitiveValues: [],
+    observeControl: observer(),
+  });
+  await assert.rejects(
+    capture.page.inspect(AbortSignal.any([])),
+    /duplicate profile control binding denied/u,
+  );
+});
+
 test("already-correct and optional-unset controls require truthful observation bindings", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-observation-"));
   const port = new FakeProfilePort({
@@ -583,7 +628,7 @@ test("already-correct and optional-unset controls require truthful observation b
         fieldId: "identity.given_name",
         required: true,
         uiBehavior: "text",
-        uiVariant: "workday_text_v1",
+        uiVariant: "workday_text_v2",
         readback: "Ada",
       },
       {
@@ -591,7 +636,7 @@ test("already-correct and optional-unset controls require truthful observation b
         fieldId: "address.line1",
         required: false,
         uiBehavior: "text",
-        uiVariant: "workday_text_v1",
+        uiVariant: "workday_text_v2",
         readback: null,
       },
     ],
@@ -618,7 +663,7 @@ test("already-correct and optional-unset controls require truthful observation b
     },
     root,
     sensitiveValues: ["Ada"],
-    observationBinding: observationBinding(9),
+    observeControl: observer(9),
   });
   try {
     await capture.page.inspect(AbortSignal.any([]));
@@ -630,17 +675,26 @@ test("already-correct and optional-unset controls require truthful observation b
     assert.deepEqual(evidence.fields.map(({ terminalDisposition }) => terminalDisposition), [
       "verified_without_mutation", "optional_unset",
     ]);
-    assert.deepEqual(evidence.fields.map(({ monitorBinding }) => monitorBinding), [
-      observationBinding(9), observationBinding(9),
-    ]);
-    for (const mutate of [
-      (value: any) => { value.fields[0].monitorBinding = null; },
-      (value: any) => { value.fields[0].monitorBinding.operationId = "bad"; },
-      (value: any) => { value.fields[0].monitorBinding.stateObservedAck = false; },
-    ]) {
-      const tampered = structuredClone(evidence) as any;
+    assert.equal(new Set(evidence.fields.map(({ observationBinding }) =>
+      observationBinding?.operationId
+    )).size, 2);
+    assert.deepEqual(evidence.fields.map(({ monitorBinding }) => monitorBinding), [null, null]);
+    const mutations: readonly ((value: MutableLearningEvidence) => void)[] = [
+      (value) => {
+        value.fields[0]!.observationBinding = null;
+        value.liveAcceptanceEligible = true;
+      },
+      (value) => { mutableObservationBinding(value, 0).operationId = "bad"; },
+      (value) => { mutableObservationBinding(value, 0).stateObservedAck = false; },
+      (value) => {
+        mutableObservationBinding(value, 1).operationId =
+          mutableObservationBinding(value, 0).operationId;
+      },
+    ];
+    for (const mutate of mutations) {
+      const tampered = mutableEvidence(evidence);
       mutate(tampered);
-      assert.throws(() => admitProfileFieldLearningEvidence(tampered));
+      assert.throws(() => admitMutableEvidence(tampered));
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -711,19 +765,131 @@ function learningField(input: {
 }) {
   return {
     ...input,
-    answerCategory: "option" as const,
+    answerCategory: "single_select" as const,
     required: true,
     answerState: "answered" as const,
     lane: "live_owner_fact" as const,
-    visibleOptionIds: [] as const,
+    ...knownObservation(input.fieldIdentity.slice("profile.".length),
+      input.questionCategory === "application_source" ? 1 : 2, {
+      backingState: "set",
+    }),
+    visibleOptionIds: input.fieldIdentity ===
+        "profile.employment.previously_worked_for_organization"
+      ? optionIds(["Yes", "No"])
+      : [] as const,
     selectedOptionId: null,
     optionMapping: "owner_visible_option" as const,
     prefillDisposition: "already_correct" as const,
     driverAttempt: "none" as const,
-    monitorBinding: observationBinding(1),
+    monitorBinding: null,
     terminalDisposition: "verified_without_mutation" as const,
     mechanics: mechanics(input.uiType, "not_attempted"),
   };
+}
+
+function observer(start = 100) {
+  let index = start;
+  return async (control: ProfileControlSnapshot) => {
+    index += 1;
+    const guide = retainedIntakeControlGuide.find((entry) =>
+      entry.page === "profile" && entry.identity === control.fieldId
+    );
+    const unknown = control.fieldId.startsWith("unknown.");
+    const options = observedOptions(control.fieldId);
+    const visibleOptionIds = optionIds(options);
+    const selectedOptionId = control.readback === null
+      ? null
+      : visibleOptionIds[options.indexOf(control.readback)] ?? null;
+    return {
+      observation: {
+        controlId: control.controlId,
+        binderStrategy: unknown ? "opaque_machine_key" as const :
+          "catalog_selector_exact" as const,
+        sanitizedLabelSha256: guide?.sanitizedLabel == null
+          ? null
+          : retainedIntakeTextSha256(guide.sanitizedLabel),
+        backingState: control.readback === null ? "unset" as const : "set" as const,
+        validationState: "clear" as const,
+        optionCatalogState: unknown
+          ? "unknown" as const
+          : options.length > 0
+          ? "observed" as const
+          : isChoiceBehavior(control.uiBehavior)
+          ? "unknown" as const
+          : "not_applicable" as const,
+        visibleOptionIds,
+        selectedOptionId,
+      },
+      binding: observationBinding(index),
+    };
+  };
+}
+
+function knownObservation(
+  identity: string,
+  index: number,
+  overrides: { readonly backingState?: "set" | "unset" } = {},
+) {
+  const guide = retainedIntakeControlGuide.find((entry) =>
+    entry.page === "profile" && entry.identity === identity
+  );
+  if (guide === undefined) throw new TypeError(`missing retained guide ${identity}`);
+  return {
+    binderStrategy: "catalog_selector_exact" as const,
+    sanitizedLabelSha256: guide.sanitizedLabel === null
+      ? null
+      : retainedIntakeTextSha256(guide.sanitizedLabel),
+    metadataReconciliation: "matched" as const,
+    backingState: overrides.backingState ?? "unset" as const,
+    validationState: "clear" as const,
+    optionCatalogState: guide.allowedOptions.length > 0
+      ? "observed" as const
+      : isChoiceBehavior(guide.behavior)
+      ? "unknown" as const
+      : "not_applicable" as const,
+    observationBinding: observationBinding(index),
+  };
+}
+
+function repeatableObservation(index: number) {
+  return {
+    binderStrategy: "catalog_selector_exact" as const,
+    sanitizedLabelSha256: null,
+    metadataReconciliation: "matched" as const,
+    backingState: "unset" as const,
+    validationState: "clear" as const,
+    optionCatalogState: "not_applicable" as const,
+    observationBinding: observationBinding(index),
+  };
+}
+
+function unknownObservation(index: number) {
+  return {
+    binderStrategy: "opaque_machine_key" as const,
+    sanitizedLabelSha256: null,
+    metadataReconciliation: "unresolved" as const,
+    backingState: "unset" as const,
+    validationState: "clear" as const,
+    optionCatalogState: "unknown" as const,
+    observationBinding: observationBinding(index),
+  };
+}
+
+function observedOptions(fieldId: string): readonly string[] {
+  switch (fieldId) {
+    case "address.country": return ["Canada", "United States"];
+    case "employment.previously_worked_for_organization": return ["Yes", "No"];
+    default: return [];
+  }
+}
+
+function optionIds(options: readonly string[]): readonly string[] {
+  return options.map((value) => `option_sha256_${retainedIntakeTextSha256(value)}`);
+}
+
+function isChoiceBehavior(behavior: string): boolean {
+  return ["search_select", "select", "multi_select", "radio", "radio_group", "checkbox"]
+    .includes(behavior);
 }
 
 function operation(index: number): string {
@@ -781,7 +947,7 @@ function snapshot(country: string | null): ProfilePageSnapshot {
         fieldId: "identity.given_name",
         required: true,
         uiBehavior: "text",
-        uiVariant: "workday_text_v1",
+        uiVariant: "workday_text_v2",
         readback: "Ada",
       },
       {
@@ -789,7 +955,7 @@ function snapshot(country: string | null): ProfilePageSnapshot {
         fieldId: "address.country",
         required: true,
         uiBehavior: "search_select",
-        uiVariant: "workday_search_select_v1",
+        uiVariant: "workday_search_select_v2",
         readback: country,
       },
       {
