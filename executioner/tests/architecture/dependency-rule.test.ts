@@ -120,6 +120,48 @@ test("production components may not import the contract test kit", () => {
   ]);
 });
 
+test("production, live, and composition owners cannot import synthetic evidence capture", () => {
+  const testOnlyImport = "../testing/evidence/retained-fixture-control-learning.ts";
+  const files: SourceFile[] = [
+    {
+      path: "src/browser/adapter.ts",
+      source: `import { capture } from "${testOnlyImport}";`,
+    },
+    {
+      path: "src/live/runner/application-walk.ts",
+      source: 'import { capture } from "../../testing/evidence/retained-fixture-control-learning.ts";',
+    },
+    {
+      path: "src/composition/runtime.ts",
+      source: `import { capture } from "${testOnlyImport}";`,
+    },
+  ];
+
+  assert.deepEqual(dependencyViolations(files), [
+    "src/browser/adapter.ts imports test-only source src/testing/evidence/retained-fixture-control-learning.ts",
+    "src/live/runner/application-walk.ts imports test-only source src/testing/evidence/retained-fixture-control-learning.ts",
+    "src/composition/runtime.ts imports test-only source src/testing/evidence/retained-fixture-control-learning.ts",
+  ]);
+});
+
+test("synthetic evidence capture has only its exact production validation edges", () => {
+  const capturePath = "src/testing/evidence/retained-fixture-control-learning.ts";
+  assert.deepEqual(dependencyViolations([{
+    path: capturePath,
+    source: [
+      'import { scan } from "../../corpus/audit/privacy.ts";',
+      'import { guide } from "../../form/questions/catalog.ts";',
+      'import { write } from "../../live/evidence/private/atomic-json-evidence.ts";',
+    ].join("\n"),
+  }]), []);
+  assert.deepEqual(dependencyViolations([{
+    path: capturePath,
+    source: 'import { compose } from "../../composition/s2-application-walk-runner.ts";',
+  }]), [
+    `${capturePath} imports peer implementation src/composition/s2-application-walk-runner.ts`,
+  ]);
+});
+
 test("tests may import the contract test kit", () => {
   const files: SourceFile[] = [
     {

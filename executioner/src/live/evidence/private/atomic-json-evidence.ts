@@ -44,7 +44,8 @@ export interface AtomicJsonEvidenceRequest {
     | "disposal-audit.json"
     | "profile-field-learning.json"
     | "profile-field-learning-02.json"
-    | "question-answer-learning.json";
+    | "question-answer-learning.json"
+    | "retained-fixture-control-learning.json";
 }
 
 export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): string {
@@ -70,7 +71,8 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): str
       ? MAX_STORAGE_MANIFEST_BYTES
     : request.fileName === "profile-field-learning.json" ||
       request.fileName === "profile-field-learning-02.json" ||
-      request.fileName === "question-answer-learning.json"
+      request.fileName === "question-answer-learning.json" ||
+      request.fileName === "retained-fixture-control-learning.json"
     ? MAX_PROFILE_FIELD_LEARNING_BYTES
     : request.fileName === "diagnostics.json"
       ? MAX_DIAGNOSTICS_BYTES

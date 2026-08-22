@@ -17,7 +17,7 @@ type ModuleReference =
 const fixedOwners: ReadonlyArray<readonly [RegExp, string]> = [
   [/^src\/contracts(?:\/|$)/, "contracts"],
   [/^src\/form\/answers\/application-types\.ts$/, "application-contracts"],
-  [/^src\/testing\/(?:contracts|live)(?:\/|$)/, "test-kit"],
+  [/^src\/testing\/(?:contracts|evidence|live)(?:\/|$)/, "test-kit"],
   [/^src\/testing\/s2-revision\.ts$/, "test-kit"],
   [
     /^src\/mailbox\/providers\/gmail\/(?:auth-executor|http-client|http-parser)\.ts$/,
@@ -82,6 +82,13 @@ const exactPeerAssemblyImports = new Map<string, ReadonlySet<string>>([[
   new Set([
     "src/ats/workday/application/profile/index.ts",
     "src/ats/workday/application/profile/catalog.ts",
+  ]),
+], [
+  "src/testing/evidence/retained-fixture-control-learning.ts",
+  new Set([
+    "src/corpus/audit/privacy.ts",
+    "src/form/questions/catalog.ts",
+    "src/live/evidence/private/atomic-json-evidence.ts",
   ]),
 ]]);
 
