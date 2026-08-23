@@ -22,6 +22,7 @@ import {
   createStage2RealJourneyProductionBinding,
   type Stage2RealJourneyLiveRuntimeBinding,
 } from "../../src/acceptance/s2-production-binding.ts";
+import { runStage2RealJourney } from "../../src/acceptance/s2-journey.ts";
 import {
   createApplicationLaneAcceptanceCollector,
 } from "../../src/ats/workday/application/lane-composition.ts";
@@ -259,6 +260,164 @@ test("production application graph routes approval expiry through release cleanu
   } finally {
     fixture.cleanup();
   }
+});
+
+test("real journey production graph forwards retention and preserves its causal failure", async () => {
+  const runScenario = async (preserveAccepted: boolean) => {
+    const fixture = liveFixture();
+    const calls: string[] = [];
+    let retainedResume: ResolvedResumeArtifact | undefined;
+    let retained = false;
+    let releaseCalls = 0;
+    let closeCalls = 0;
+    const sourceRevision = "1111111111111111111111111111111111111111";
+    try {
+      const configSha256 = createHash("sha256").update(readFileSync(fixture.configPath)).digest("hex");
+      const owner = fixture.owner as typeof fixture.owner & {
+        approval: { approvalId: string };
+        target: { handleId: string };
+      };
+      const incomplete = {
+        ...truth("profile", "real-journey-profile"),
+        requiredFields: [{
+          fieldId: fieldId("real-journey-required"),
+          verification: "unverified" as const,
+        }],
+      };
+      const runtime: Stage2RealJourneyLiveRuntimeBinding = {
+        async bind(request) {
+          retainedResume = request.ownerSources.resumeIntent.artifact;
+          return {
+            walk: {
+              observer: { async observe() { return { ok: true as const, value: incomplete }; } },
+              handlers: {
+                resume: verifiedHandler("resume", "resume_verified"),
+                profile: verifiedHandler("profile", "profile_verified"),
+                questionnaire: verifiedHandler("questionnaire", "questionnaire_verified"),
+              },
+              navigation: { async next() { return { ok: true as const, value: { advanced: true as const } }; } },
+              progress: { async record() { return { ok: true as const, value: undefined }; } },
+            },
+            laneAcceptances: { snapshot: () => [] },
+            account: {
+              async verify() {
+                return {
+                  ok: true as const,
+                  proof: {
+                    schemaVersion: 1 as const,
+                    proofRevision: "s2-account-session-proof-v1" as const,
+                    status: "unsealed" as const,
+                    sourceRevision: request.sourceRevision,
+                    configSha256: request.configSha256,
+                    revisionId: request.owner.revisionId,
+                    approvalId: request.owner.approval.approvalId,
+                    journeyId: request.owner.journeyId,
+                    targetHandleId: request.owner.target.handleId,
+                    accountState: "application_ready" as const,
+                    independentlyObservedVerifiedState: true as const,
+                    verificationProof: "credential_sign_in" as const,
+                    provider: "workday-auth" as const,
+                    consumedCandidateCount: 0 as const,
+                    messageBodyRetained: false as const,
+                    submitActivated: false as const,
+                  },
+                };
+              },
+            },
+            recovery: { async pending() { return null; } },
+            review: { async capture() { throw new Error("review must not be reached"); } },
+            privacy: { async forbiddenTokens() { return []; } },
+            cleanup: {
+              async preserve() {
+                calls.push("preserve");
+                retained = preserveAccepted;
+                return preserveAccepted;
+              },
+              retentionExpiresAt() {
+                return retained && releaseCalls === 0
+                  ? new Date(Date.now() + 25).toISOString()
+                  : undefined;
+              },
+              async release() {
+                calls.push("release", "monitor.close", "profile.close", "context.close");
+                releaseCalls += 1;
+                retained = false;
+                return true;
+              },
+              async close() {
+                calls.push("close:false");
+                closeCalls += 1;
+                retained = false;
+                return true;
+              },
+            },
+          };
+        },
+      };
+      const binding = createStage2RealJourneyProductionBinding({
+        runtime,
+        inspectSource: () => ({ repositoryRoot: resolve(".."), sourceRevision }),
+        now: () => fixture.now,
+        aclAdmission: { admit: () => ({ ok: true as const }) },
+      });
+      const result = await runStage2RealJourney(
+        {
+          args: { configPath: fixture.configPath, evidenceRoot: fixture.evidenceRoot },
+          source: { repositoryRoot: resolve(".."), sourceRevision },
+          config: {
+            configSha256,
+            contractRevision: "s2-owner-inputs-v1",
+            revisionId: String(owner.revisionId),
+            approvalId: owner.approval.approvalId,
+            journeyId: String(owner.journeyId),
+            targetHandleId: owner.target.handleId,
+          },
+        },
+        binding,
+        { now: () => fixture.now, writeAcceptance: async () => undefined },
+        AbortSignal.any([]),
+      );
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.equal(result.code, "pre_review_failed");
+      assert.equal(result.terminal.status, "failed");
+      if (result.terminal.status !== "failed") return;
+      assert.equal(result.terminal.errorCode, "page_incomplete");
+      assert.equal(result.cleanupErrorCode, undefined);
+      assert.equal(calls.includes("preserve"), true);
+      if (preserveAccepted) {
+        assert.equal(retained, true);
+        assert.equal(closeCalls, 0);
+        for (let attempt = 0; attempt < 50 && releaseCalls === 0; attempt += 1) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+        }
+        assert.equal(releaseCalls, 1);
+        assert.equal(retained, false);
+        assert.equal(closeCalls, 0);
+        assert.deepEqual(calls.slice(-4), ["release", "monitor.close", "profile.close", "context.close"]);
+      } else {
+        assert.equal(releaseCalls, 0);
+        assert.equal(closeCalls, 1);
+        assert.deepEqual(calls, ["preserve", "close:false"]);
+      }
+      assert.equal(retainedResume !== undefined, true);
+      if (retainedResume !== undefined) {
+        assert.deepEqual(await useResumeArtifactUpload(retainedResume, () => ({
+          ok: true as const,
+          value: undefined,
+        })), {
+          ok: false,
+          error: { code: "artifact_already_consumed", retryable: false },
+        });
+      }
+      assert.doesNotMatch(JSON.stringify(result), /submitActivated":true/iu);
+    } finally {
+      fixture.cleanup();
+    }
+  };
+
+  await runScenario(true);
+  await runScenario(false);
 });
 
 test("production binding denies a crossed opaque reference before runtime assembly", async () => {
