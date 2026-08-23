@@ -238,9 +238,11 @@ function questionLearningDigest(
   }
   const bytes = readStableFile(path, 128 * 1024);
   const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
+  const synthetic = expectedAnswers.some(({ lane }) => lane === "synthetic_test_default");
   if (
-    learning.executionMode !== "live" || learning.testOnly ||
-    !learning.liveAcceptanceEligible ||
+    learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
+    learning.testOnly !== synthetic ||
+    learning.liveAcceptanceEligible !== !synthetic ||
     learning.questions.length !== expectedAnswers.length ||
     expectedAnswers.some((answer) => {
       const matches = learning.questions.filter((question) =>
@@ -248,7 +250,7 @@ function questionLearningDigest(
         question.questionId === answer.questionId &&
         question.provenance === answer.provenance &&
         question.answerState === "answered" &&
-        question.lane === "live_owner_fact" &&
+        question.lane === answer.lane &&
         question.lane === answer.lane
       );
       return matches.length !== 1;
@@ -306,14 +308,18 @@ function profileLearningDigest(
     const answeredFields = learning.fields.filter(({ answerState }) =>
       answerState === "answered"
     );
+    const synthetic = profile.verifiedFields.some(({ lane }) =>
+      lane === "synthetic_test_default"
+    );
     const matchesVerified = (field: ProfileFieldLearningEvidenceV2["fields"][number]) =>
       profile.verifiedFields.filter((verified) =>
         field.fieldIdentity === `profile.${verified.fieldId}` &&
         field.lane === verified.lane
       ).length === 1;
     if (
-      learning.executionMode !== "live" || learning.testOnly ||
-      !learning.liveAcceptanceEligible ||
+      learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
+      learning.testOnly !== synthetic ||
+      learning.liveAcceptanceEligible !== !synthetic ||
       pageCheck === undefined || monitoredState === undefined ||
       learning.visibleControlCount !== monitoredState.fieldCount ||
       learning.fields.filter(({ required }) => required).length !== pageCheck.requiredFields ||
@@ -324,7 +330,7 @@ function profileLearningDigest(
         learning.fields.filter((field) =>
           field.fieldIdentity === `profile.${verified.fieldId}` &&
           field.answerState === "answered" &&
-          field.lane === "live_owner_fact" && field.lane === verified.lane
+          field.lane === verified.lane
         ).length !== 1
       ) || learning.fields.some(({ observationBinding, metadataReconciliation }) =>
         observationBinding === null || metadataReconciliation !== "matched"

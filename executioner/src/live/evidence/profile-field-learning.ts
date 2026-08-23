@@ -509,7 +509,6 @@ export function admitProfileFieldLearningEvidence(
       (field.lane !== null && !["live_owner_fact", "synthetic_test_default"].includes(field.lane)) ||
       (field.answerState === "answered" && field.lane === null) ||
       (field.answerState === "unset" && field.lane !== null) ||
-      (field.lane === "live_owner_fact" && value.executionMode !== "live") ||
       (field.lane === "synthetic_test_default" &&
         value.executionMode !== "synthetic_test_non_submittable") ||
       (field.binderStrategy !== null && !binderStrategies.has(field.binderStrategy)) ||

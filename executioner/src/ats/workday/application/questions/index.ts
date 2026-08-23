@@ -87,7 +87,7 @@ export interface VerifiedQuestionnaireAnswer {
   readonly fieldId: FieldId;
   readonly questionId: QuestionId;
   readonly provenance: AnswerProvenance;
-  readonly lane: "live_owner_fact";
+  readonly lane: "live_owner_fact" | "synthetic_test_default";
   readonly protectedCategory: ProtectedQuestionCategory | null;
   readonly templateRevision: string | null;
   readonly verification: "independent";
@@ -432,17 +432,12 @@ export function createQuestionnairePageHandler(
             fieldId: field.fieldId,
             questionId: resolvedQuestionId,
             provenance: answer.value.intent.provenance,
-            lane: "live_owner_fact",
+            lane: answer.value.lane,
             protectedCategory: category,
             templateRevision: narrative?.revision ?? null,
             verification: "independent",
           }));
         }
-      }
-      if (mode === "synthetic_test_non_submittable") {
-        const field = request.page.fields.find(({ state }) => state !== "hidden");
-        if (field === undefined) return candidateInvalid();
-        return blocked("synthetic_test_non_submittable", field.fieldId, null);
       }
       return {
         ok: true,

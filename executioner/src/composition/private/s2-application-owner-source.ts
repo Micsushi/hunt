@@ -307,7 +307,7 @@ function validateProfileAuthority(
   facts: readonly { readonly factId: string; readonly value: unknown; readonly provenance: string }[],
 ): ProfilePagePlan {
   const plan = exact(value, ["mode", "pageType", "fields", "repeatables"]);
-  if (plan.mode !== "live" ||
+  if ((plan.mode !== "live" && plan.mode !== "synthetic_test_non_submittable") ||
       (plan.pageType !== "profile" && plan.pageType !== "contact") ||
       !Array.isArray(plan.fields) || plan.fields.length > 128 ||
       !Array.isArray(plan.repeatables) || plan.repeatables.length > 3) denied();
@@ -379,6 +379,7 @@ function validateProfileAuthority(
       continue;
     }
     const answer = exact(field.answer, ["kind", "value", "provenance", "lane"]);
+    const synthetic = plan.mode === "synthetic_test_non_submittable";
     if (
       !stringMatches(field.fieldId, /^[a-z][a-z0-9_.-]{0,127}$/u) ||
       !new Set([
@@ -393,7 +394,9 @@ function validateProfileAuthority(
       ])
         .has(field.answerType as string) ||
       answer.kind !== "answered" ||
-      answer.lane !== "live_owner_fact" ||
+      !((answer.lane === "live_owner_fact" && !synthetic) ||
+        (synthetic && (answer.lane === "live_owner_fact" ||
+          answer.lane === "synthetic_test_default"))) ||
       typeof answer.value !== "string" ||
       answer.value.trim() === "" ||
       !browserPlainText.test(answer.value)
@@ -410,7 +413,9 @@ function validateProfileAuthority(
         mapping.provenance !== "visible_option"
       ) denied();
     } else if (field.optionMapping !== undefined) denied();
-    if (ownerInput !== undefined) {
+    if (answer.lane === "synthetic_test_default") {
+      if (!synthetic || answer.provenance !== "generated_default") denied();
+    } else if (ownerInput !== undefined) {
       if (
         field.questionType !== ownerInput.questionType ||
         field.answerType !== ownerInput.answerType ||

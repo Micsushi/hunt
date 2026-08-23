@@ -1120,7 +1120,7 @@ export class OwnedWorkdayApplicationRuntime {
         recordFailure: questionLearning?.recordFailure,
       });
       const completed = await questionnaire.complete({
-        mode: "live",
+        mode: request.ownerSources.profilePlan?.mode ?? "live",
         journeyId: session.journeyId,
         sessionId: semanticSessionId,
         pageId: input.pageId,

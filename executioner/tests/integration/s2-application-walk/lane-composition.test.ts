@@ -151,19 +151,19 @@ test("captures profile and questionnaire inputs as immutable source snapshots", 
   assert.equal(request.mode, "live");
 });
 
-test("production lane sources cannot select synthetic non-submittable mode", () => {
+test("lane sources admit explicit non-submittable learning mode", () => {
   const values = laneValues();
-  assert.throws(() => createImmutableApplicationLaneSources({
+  assert.doesNotThrow(() => createImmutableApplicationLaneSources({
     ...values,
     profilePlan: { ...values.profilePlan, mode: "synthetic_test_non_submittable" },
-  }), /require live owner mode/u);
-  assert.throws(() => createImmutableApplicationLaneSources({
+  }));
+  assert.doesNotThrow(() => createImmutableApplicationLaneSources({
     ...values,
     questionnaireRequest: {
       ...values.questionnaireRequest,
       mode: "synthetic_test_non_submittable",
     },
-  }), /require live owner mode/u);
+  }));
 });
 
 test("maps a transient profile page-port outage to the bounded retry policy", async () => {

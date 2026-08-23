@@ -189,9 +189,6 @@ export async function completeWorkdayProfilePage(
   if (ownedDuplicateCount(final.snapshot.rows) !== 0) {
     return blocked("profile_row_unverified");
   }
-  if (plan.mode === "synthetic_test_non_submittable") {
-    return blocked("profile_answer_provenance_denied");
-  }
   return {
     kind: "verified",
     pageType: plan.pageType,
@@ -231,12 +228,14 @@ function preflightRequiredControls(
   }
 
   const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
-  const unsafeProtectedScalar = snapshot.controls.find(({ fieldId }) => {
+  const unsafeProtectedScalar = plan.mode === "live"
+    ? snapshot.controls.find(({ fieldId }) => {
     const field = plannedScalar.get(fieldId);
     return field?.questionType === "prior_employment" &&
       field.answer.kind === "answered" &&
       field.answer.provenance !== "owner_provided";
-  });
+    })
+    : undefined;
   if (unsafeProtectedScalar !== undefined) {
     return blocked("profile_answer_missing", { fieldId: unsafeProtectedScalar.fieldId });
   }

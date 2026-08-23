@@ -299,7 +299,6 @@ export function admitQuestionAnswerLearningEvidence(
       (record.answerState === "unset" &&
         (record.chosenAnswer !== null || record.strategy !== "needs_owner_input")) ||
       (record.lane === "synthetic_test_default" && value.executionMode !== "synthetic_test_non_submittable") ||
-      (record.lane === "live_owner_fact" && value.executionMode !== "live") ||
       (record.lane === "live_owner_fact" &&
         record.provenance !== "owner_provided" &&
         record.provenance !== "resume_verified" &&

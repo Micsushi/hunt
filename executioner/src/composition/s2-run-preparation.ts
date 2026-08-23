@@ -291,7 +291,10 @@ function validateApplicationSource(value: Stage2ApplicationSourceInput): void {
     denied();
   }
   const plan = value.profilePlan as Record<string, unknown>;
-  if (plan.mode !== "live" || !Array.isArray(plan.fields) || !Array.isArray(plan.repeatables)) {
+  if (
+    (plan.mode !== "live" && plan.mode !== "synthetic_test_non_submittable") ||
+    !Array.isArray(plan.fields) || !Array.isArray(plan.repeatables)
+  ) {
     denied();
   }
   const fields = [
@@ -313,8 +316,13 @@ function validateApplicationSource(value: Stage2ApplicationSourceInput): void {
     const answer = (field as { answer?: unknown }).answer;
     if (typeof answer !== "object" || answer === null) return true;
     const candidate = answer as { kind?: unknown; lane?: unknown; provenance?: unknown };
-    return candidate.kind === "answered" &&
-      (candidate.lane !== "live_owner_fact" || candidate.provenance === "generated_default");
+    if (candidate.kind !== "answered") return false;
+    if (plan.mode === "live") {
+      return candidate.lane !== "live_owner_fact" || candidate.provenance === "generated_default";
+    }
+    return candidate.lane === "synthetic_test_default"
+      ? candidate.provenance !== "generated_default"
+      : candidate.lane !== "live_owner_fact" || candidate.provenance === "generated_default";
   })) denied();
 }
 

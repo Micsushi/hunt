@@ -140,7 +140,7 @@ async function loadApplicationSource(
     ) invalid();
     const profile = structuredClone(parseApplicationProfile(value.profile));
     const derivedPlan = withDerivedProfileCountry(profile, value.profilePlan);
-    const profilePlan = structuredClone(derivedPlan);
+    const profilePlan = normalizeLearningPlan(derivedPlan);
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
     const bytes = Buffer.from(resumeBytes);
     return Object.freeze({
@@ -161,6 +161,34 @@ async function loadApplicationSource(
     profileBytes?.fill(0);
     resumeBytes?.fill(0);
   }
+}
+
+function normalizeLearningPlan(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) invalid();
+  const plan = structuredClone(value) as {
+    mode?: string;
+    fields?: Array<{ answer?: { kind?: string; provenance?: string; lane?: string } }>;
+    repeatables?: Array<{ rows?: Array<{ fields?: Array<{ answer?: { kind?: string; provenance?: string; lane?: string } }> }> }>;
+  };
+  const fields = [
+    ...(plan.fields ?? []),
+    ...(plan.repeatables ?? []).flatMap(({ rows = [] }) =>
+      rows.flatMap(({ fields = [] }) => fields)
+    ),
+  ];
+  let synthetic = plan.mode === "synthetic_test_non_submittable";
+  for (const field of fields) {
+    const answer = field.answer;
+    if (answer?.kind !== "answered") continue;
+    if (answer.lane === undefined) {
+      answer.lane = answer.provenance === "generated_default"
+        ? "synthetic_test_default"
+        : "live_owner_fact";
+    }
+    if (answer.lane === "synthetic_test_default") synthetic = true;
+  }
+  if (synthetic) plan.mode = "synthetic_test_non_submittable";
+  return plan;
 }
 
 const LEGACY_RESUME_FACT_IDS = new Set([

@@ -207,9 +207,11 @@ function validProfile(
         ]).has(field.uiVariant) &&
         new Set([
           "owner_provided", "resume_verified", "configured_template", "journey_derived",
+          "generated_default",
         ])
           .has(field.provenance) &&
-        field.lane === "live_owner_fact" &&
+        ((field.lane === "live_owner_fact" && field.provenance !== "generated_default") ||
+          (field.lane === "synthetic_test_default" && field.provenance === "generated_default")) &&
         (field.optionMappingProvenance === undefined ||
           field.optionMappingProvenance === "visible_option") &&
         (field.rowKey === undefined ||
@@ -235,8 +237,12 @@ function validQuestionnaire(
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.questionId) &&
       new Set([
         "owner_provided", "resume_verified", "configured_template",
+        "reviewed_catalog", "visible_option",
       ]).has(answer.provenance) &&
-      answer.lane === "live_owner_fact" &&
+      ((answer.lane === "live_owner_fact" &&
+        answer.provenance !== "reviewed_catalog" && answer.provenance !== "visible_option") ||
+        (answer.lane === "synthetic_test_default" &&
+          (answer.provenance === "reviewed_catalog" || answer.provenance === "visible_option"))) &&
       (answer.protectedCategory === null ||
         new Set(["authorization", "legal", "consent"])
           .has(answer.protectedCategory)) &&

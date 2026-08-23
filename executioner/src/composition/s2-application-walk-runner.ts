@@ -185,7 +185,7 @@ export function createStage2ApplicationWalkProductionBinding(
       try {
         const questionLearning = createQuestionAnswerLearningCapture({
           root: owner.roots.evidence.path,
-          mode: "live",
+          mode: resolvedOwnerSources.profilePlan.mode,
           sensitiveValues: resolvedOwnerSources.sensitiveValues,
         });
         runtime = await dependencies.runtime.bind({

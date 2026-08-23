@@ -37,7 +37,7 @@ export function answerLaneAdmitted(
 ): boolean {
   return mode === "live"
     ? lane === "live_owner_fact"
-    : lane === "synthetic_test_default";
+    : lane === "live_owner_fact" || lane === "synthetic_test_default";
 }
 
 export const applicationTextProfileFactIds = [

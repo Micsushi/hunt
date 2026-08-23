@@ -44,8 +44,8 @@ export function createImmutableApplicationLaneSources(
     throw new TypeError("resume source must contain an admitted immutable intent");
   }
   if (
-    values.profilePlan.mode !== "live" ||
-    values.questionnaireRequest.mode !== "live"
+    !["live", "synthetic_test_non_submittable"].includes(values.profilePlan.mode) ||
+    !["live", "synthetic_test_non_submittable"].includes(values.questionnaireRequest.mode)
   ) {
     throw new TypeError("production application lanes require live owner mode");
   }
@@ -279,12 +279,15 @@ function liveLaneAcceptance(acceptance: ApplicationLaneAcceptance): boolean {
   if (acceptance.checkpoint === "resume_verified") return true;
   if (acceptance.checkpoint === "profile_verified") {
     return acceptance.verifiedFields.every((field) =>
-      field.lane === "live_owner_fact" && field.provenance !== "generated_default"
+      (field.lane === "live_owner_fact" && field.provenance !== "generated_default") ||
+      (field.lane === "synthetic_test_default" && field.provenance === "generated_default")
     );
   }
   return acceptance.answers.every((answer) =>
-    answer.lane === "live_owner_fact" &&
-    answer.provenance !== "reviewed_catalog" && answer.provenance !== "visible_option"
+    (answer.lane === "live_owner_fact" &&
+      answer.provenance !== "reviewed_catalog" && answer.provenance !== "visible_option") ||
+    (answer.lane === "synthetic_test_default" &&
+      (answer.provenance === "reviewed_catalog" || answer.provenance === "visible_option"))
   );
 }
 
