@@ -44,6 +44,35 @@ export interface Stage2ApplicationWalkDependencies {
   readonly evidence: ApplicationWalkAcceptanceWriter;
 }
 
+export function scheduleStage2ApplicationRetentionExpiry(
+  cleanup: Stage2ApplicationWalkDependencies["cleanup"],
+): void {
+  const release = cleanup.release;
+  const expiresAt = cleanup.retentionExpiresAt?.();
+  if (release === undefined || expiresAt === undefined) return;
+  const deadline = Date.parse(expiresAt);
+  if (!Number.isFinite(deadline)) return;
+  const delay = Math.max(0, deadline - Date.now());
+  const timer = setTimeout(() => {
+    if (cleanup.retentionExpiresAt?.() === undefined) return;
+    void (async () => {
+      let released = false;
+      try {
+        released = await release(new AbortController().signal);
+      } catch {
+        released = false;
+      }
+      if (released) return;
+      try {
+        await cleanup.close(new AbortController().signal);
+      } catch {
+        // The original application-walk result remains the causal result.
+      }
+    })();
+  }, Math.min(delay, 2_147_483_647));
+  timer.unref?.();
+}
+
 export type Stage2ApplicationWalkTraceEvent =
   | {
       readonly kind: "application_walk_started";
@@ -155,40 +184,6 @@ export async function runStage2ApplicationWalk(
   dependencies: Stage2ApplicationWalkDependencies,
   signal: AbortSignal,
 ): Promise<Stage2ApplicationWalkResult> {
-  let retentionExpiryTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearRetentionExpiry = (): void => {
-    if (retentionExpiryTimer !== undefined) {
-      clearTimeout(retentionExpiryTimer);
-      retentionExpiryTimer = undefined;
-    }
-  };
-  const scheduleRetentionExpiry = (): void => {
-    const release = dependencies.cleanup.release;
-    const expiresAt = dependencies.cleanup.retentionExpiresAt?.();
-    if (release === undefined || expiresAt === undefined) return;
-    const deadline = Date.parse(expiresAt);
-    if (!Number.isFinite(deadline)) return;
-    const delay = Math.max(0, deadline - Date.now());
-    retentionExpiryTimer = setTimeout(() => {
-      retentionExpiryTimer = undefined;
-      if (dependencies.cleanup.retentionExpiresAt?.() === undefined) return;
-      void (async () => {
-        let released = false;
-        try {
-          released = await release(new AbortController().signal);
-        } catch {
-          released = false;
-        }
-        if (released) return;
-        try {
-          await dependencies.cleanup.close(new AbortController().signal);
-        } catch {
-          // The original application-walk result remains the causal result.
-        }
-      })();
-    }, Math.min(delay, 2_147_483_647));
-    retentionExpiryTimer.unref?.();
-  };
   let walk: Awaited<ReturnType<typeof runApplicationPageWalk>>;
   try {
     walk = await runObservedApplicationPageWalk(
@@ -225,7 +220,6 @@ export async function runStage2ApplicationWalk(
     cleaned = false;
   }
   if (!cleaned) {
-    clearRetentionExpiry();
     try {
       cleaned = await dependencies.cleanup.close(new AbortController().signal);
     } catch {
@@ -243,7 +237,7 @@ export async function runStage2ApplicationWalk(
     }
     return { ok: false, code: "browser_profile_cleanup_failed" };
   }
-  scheduleRetentionExpiry();
+  scheduleStage2ApplicationRetentionExpiry(dependencies.cleanup);
   if (!walk.ok) {
     return {
       ok: false,

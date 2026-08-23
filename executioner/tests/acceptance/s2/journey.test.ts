@@ -351,6 +351,139 @@ test("application failure preserves its exact code and completed-page count", as
   }
 });
 
+test("runStage2RealJourney retains the failed application owner until release expiry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retention-owner-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const calls: string[] = [];
+  const value = runtime(calls, evidenceRoot);
+  value.recovery.pending = async () => null;
+  let retained = false;
+  let releaseCalls = 0;
+  let closeCalls = 0;
+  value.application.run = async () => ({
+    ok: false,
+    error: {
+      checkpoint: "profile",
+      completedPages: 1,
+      failure: {
+        code: "browser_timeout",
+        retryable: false,
+        owner: "profile",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "ui_behavior",
+        page: "profile",
+        attempt: 1,
+      },
+      submitActivated: false,
+      privacyScan: "pass",
+    },
+  });
+  value.cleanup.preserve = async () => {
+    retained = true;
+    return true;
+  };
+  value.cleanup.retentionExpiresAt = () => retained && releaseCalls === 0
+    ? new Date(Date.now() + 25).toISOString()
+    : undefined;
+  value.cleanup.release = async () => {
+    releaseCalls += 1;
+    calls.push("runtime.release", "monitor.close", "profile.close", "context.close");
+    retained = false;
+    return true;
+  };
+  value.cleanup.close = async () => {
+    calls.push("fallback.close");
+    closeCalls += 1;
+    retained = false;
+    return true;
+  };
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "pre_review_failed");
+    assert.equal(result.terminal.status, "failed");
+    if (result.terminal.status !== "failed") return;
+    assert.equal(result.terminal.errorCode, "browser_timeout");
+    assert.equal(retained, true);
+    assert.equal(closeCalls, 0);
+    for (let attempt = 0; attempt < 50 && releaseCalls === 0; attempt += 1) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+    assert.equal(releaseCalls, 1);
+    assert.equal(retained, false);
+    assert.equal(closeCalls, 0);
+    assert.equal(result.terminal.status, "failed");
+    assert.equal(result.terminal.completedPages, 1);
+    assert.deepEqual(calls.slice(-4), [
+      "runtime.release",
+      "monitor.close",
+      "profile.close",
+      "context.close",
+    ]);
+    assert.doesNotMatch(JSON.stringify(result), /submitActivated":true/iu);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runStage2RealJourney falls back once when retention is rejected", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retention-fallback-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const value = runtime([], evidenceRoot);
+  value.recovery.pending = async () => null;
+  let preserveCalls = 0;
+  let closeCalls = 0;
+  value.application.run = async () => ({
+    ok: false,
+    error: {
+      checkpoint: "profile",
+      completedPages: 1,
+      failure: {
+        code: "browser_timeout",
+        retryable: false,
+        owner: "profile",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "ui_behavior",
+        page: "profile",
+        attempt: 1,
+      },
+      submitActivated: false,
+      privacyScan: "pass",
+    },
+  });
+  value.cleanup.preserve = async () => {
+    preserveCalls += 1;
+    return false;
+  };
+  value.cleanup.close = async () => {
+    closeCalls += 1;
+    return true;
+  };
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "pre_review_failed");
+    assert.equal(result.terminal.status, "failed");
+    if (result.terminal.status !== "failed") return;
+    assert.equal(result.terminal.errorCode, "browser_timeout");
+    assert.equal(preserveCalls, 1);
+    assert.equal(closeCalls, 1);
+    assert.equal(result.cleanupErrorCode, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("cleanup failure does not replace the original journey failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-primary-failure-"));
   const evidenceRoot = resolve(root, "evidence");
@@ -600,6 +733,9 @@ function runtime(calls: string[], evidenceRoot: string): Stage2RealJourneyRuntim
       },
     },
     cleanup: {
+      preserve: async () => false,
+      release: async () => false,
+      retentionExpiresAt: () => undefined,
       close: async () => {
         calls.push("cleanup.close");
         return true;

@@ -29,6 +29,9 @@ import type {
   Stage2ReviewAcceptance,
   Stage2SourceCapture,
 } from "./s2-gate.ts";
+import {
+  scheduleStage2ApplicationRetentionExpiry,
+} from "../live/runner/application-walk.ts";
 
 export interface Stage2RealJourneyInvocation {
   readonly args: Stage2RealAcceptanceArgs;
@@ -62,6 +65,9 @@ export interface Stage2RealJourneyRuntime {
     forbiddenTokens(signal: AbortSignal): Promise<readonly string[]>;
   };
   readonly cleanup: {
+    preserve?(signal: AbortSignal): Promise<boolean>;
+    release?(signal: AbortSignal): Promise<boolean>;
+    retentionExpiresAt?(): string | undefined;
     close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
   };
 }
@@ -146,15 +152,28 @@ export async function runStage2RealJourney(
       ? pending
       : errorFailure(invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3);
   }
-  const retained = await closeRuntime(runtime, false);
   if (pending.ok) {
     const outcome = cancelled(invocation.config.journeyId, pending.terminal.completedPages);
-    return retained ? outcome : withCleanupFailure(outcome);
+    const cleaned = await closeRuntime(runtime, false);
+    return cleaned ? outcome : withCleanupFailure(outcome);
   }
   const outcome = signal.aborted
     ? cancelled(invocation.config.journeyId, pending.terminal.completedPages)
     : pending;
-  return retained ? outcome : withCleanupFailure(outcome);
+  if (!outcome.ok && outcome.code === "pre_review_failed") {
+    let retained = false;
+    try {
+      retained = await runtime.cleanup.preserve?.(new AbortController().signal) ?? false;
+    } catch {
+      retained = false;
+    }
+    if (retained) {
+      scheduleStage2ApplicationRetentionExpiry(runtime.cleanup);
+      return outcome;
+    }
+  }
+  const cleaned = await closeRuntime(runtime, false);
+  return cleaned ? outcome : withCleanupFailure(outcome);
 }
 
 function withCleanupFailure(

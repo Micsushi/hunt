@@ -413,6 +413,17 @@ test("outer Review binding resolves owner sources and retains only live browser 
           review: { async capture() { throw new Error("not used by binding test"); } },
           privacy: { async forbiddenTokens() { return ["private-owner-value"]; } },
           cleanup: {
+            async preserve() {
+              calls.push("cleanup.preserve");
+              return false;
+            },
+            async release() {
+              calls.push("cleanup.release");
+              return true;
+            },
+            retentionExpiresAt() {
+              return "2099-08-05T07:00:00.000Z";
+            },
             async close() {
               calls.push("cleanup.close");
               throw new Error("Windows profile remains locked until process exit");
@@ -449,6 +460,8 @@ test("outer Review binding resolves owner sources and retains only live browser 
     const walked = await bound.application.run(AbortSignal.any([]));
     assert.equal(walked.ok, true, JSON.stringify(walked));
     assert.equal(walked.ok && walked.value.checkpoint, "pre_review");
+    assert.equal(typeof bound.cleanup.release, "function");
+    assert.equal(typeof bound.cleanup.retentionExpiresAt, "function");
     assert.deepEqual(await bound.privacy.forbiddenTokens(AbortSignal.any([])), ["private-owner-value"]);
     assert.equal(await bound.cleanup.close(AbortSignal.any([]), true), true);
     assert.equal(existsSync(join(fixture.evidenceRoot, "application-walk-acceptance.json")), true);

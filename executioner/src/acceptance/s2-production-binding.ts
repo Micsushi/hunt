@@ -111,6 +111,10 @@ export function createStage2RealJourneyProductionBinding(
         review: bound.review,
         privacy: bound.privacy,
         cleanup: Object.freeze({
+          ...(resolved.dependencies.cleanup.preserve === undefined ? {} : {
+            preserve: async (cleanupSignal: AbortSignal): Promise<boolean> =>
+              await resolved.dependencies.cleanup.preserve!(cleanupSignal),
+          }),
           ...(resolved.dependencies.cleanup.release === undefined ? {} : {
             release: async (cleanupSignal: AbortSignal): Promise<boolean> =>
               await resolved.dependencies.cleanup.release!(cleanupSignal),
