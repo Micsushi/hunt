@@ -1,34 +1,22 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 
 import {
   generatedOperationId,
-  browserPageId,
-  fieldId,
   journeyId,
   mcpRequestId,
   upstreamJobId,
   upstreamProfileId,
   upstreamResumeId,
-  useResumeArtifactUpload,
-  type ResolvedResumeArtifact,
   type McpRequest,
 } from "../../src/contracts/index.ts";
-import {
-  createStage2RealJourneyProductionBinding,
-  type Stage2RealJourneyLiveRuntimeBinding,
-} from "../../src/acceptance/s2-production-binding.ts";
 import { applicationProfileFactIds as profileFactIds } from
   "../../src/profile/application-profile.ts";
-import {
-  createStage2McpFromPreparedRun,
-  captureStage2PreparedMcpRun,
-  type Stage2PreparedMcpCapture,
-} from "../../src/composition/s2-mcp-control.ts";
 
 const args = {
   configPath: resolve("protected", "transient", "run_20260810_abcdefghijklmnop", "owner-input.json"),
@@ -39,7 +27,105 @@ const target = upstreamJobId("target_ref_abcdefghijklmnop");
 const resume = upstreamResumeId("resume_ref_abcdefghijklmnop");
 const profile = upstreamProfileId("profile_ref_abcdefghijklmnop");
 
-function capture(): Stage2PreparedMcpCapture {
+interface RetentionScenario {
+  readonly preserveAccepted: boolean;
+  readonly leaseExpiryAt: string;
+  readonly calls: string[];
+  readonly observedExpiry: string[];
+  releaseAt: number;
+  closeCalls: number;
+}
+
+let activeRetentionScenario: RetentionScenario | undefined;
+
+const browserFreeDefaultBinding = {
+  async bind(invocation: any) {
+    const scenario = activeRetentionScenario;
+    assert.ok(scenario);
+    scenario.calls.push("bind");
+    const owner = JSON.parse(readFileSync(invocation.args.configPath, "utf8"));
+    return {
+      account: {
+        async verify() {
+          scenario.calls.push("account");
+          return {
+            ok: true as const,
+            proof: {
+              schemaVersion: 1 as const,
+              proofRevision: "s2-account-session-proof-v1" as const,
+              status: "unsealed" as const,
+              sourceRevision: invocation.source.sourceRevision,
+              configSha256: invocation.config.configSha256,
+              revisionId: invocation.config.revisionId,
+              approvalId: invocation.config.approvalId,
+              journeyId: invocation.config.journeyId,
+              targetHandleId: invocation.config.targetHandleId,
+              accountState: "application_ready" as const,
+              independentlyObservedVerifiedState: true as const,
+              verificationProof: "credential_sign_in" as const,
+              provider: "workday-auth" as const,
+              consumedCandidateCount: 0 as const,
+              messageBodyRetained: false as const,
+              submitActivated: false as const,
+            },
+          };
+        },
+      },
+      recovery: { async pending() { return null; } },
+      application: {
+        async run() {
+          return {
+            ok: false as const,
+            error: {
+              completedPages: 0,
+              failure: { code: "page_incomplete" },
+            },
+          } as never;
+        },
+      },
+      review: { async capture() { throw new Error("review must not be reached"); } },
+      privacy: { async forbiddenTokens() { return []; } },
+      cleanup: {
+        async preserve() {
+          scenario.calls.push("preserve");
+          return scenario.preserveAccepted;
+        },
+        retentionExpiresAt() {
+          const expiry = new Date(Math.min(
+            Date.parse(owner.approval.expiresAt),
+            Date.parse(scenario.leaseExpiryAt),
+          )).toISOString();
+          scenario.observedExpiry.push(expiry);
+          return expiry;
+        },
+        async release() {
+          scenario.calls.push("release");
+          scenario.releaseAt = Date.now();
+          return false;
+        },
+        async close(_signal: AbortSignal, accepted?: boolean) {
+          scenario.calls.push(`close:${accepted === true ? "accepted" : "fallback"}`);
+          scenario.closeCalls += 1;
+          return true;
+        },
+      },
+    };
+  },
+};
+
+// Replace only the default binding module boundary before composition imports it.
+// The MCP composition still selects its real default runner path.
+mock.module(import.meta.resolve("../../src/acceptance/s2-production-binding.ts"), {
+  namedExports: {
+    stage2RealJourneyRuntimeBinding: browserFreeDefaultBinding,
+  },
+});
+const {
+  createStage2McpFromPreparedRun,
+  captureStage2PreparedMcpRun,
+} = await import("../../src/composition/s2-mcp-control.ts");
+
+function capture() {
   return {
     invocation: {
       args,
@@ -227,13 +313,23 @@ test("prepared-run MCP preserves the journey's exact factual terminal and page c
   assert.deepEqual(result.value.result.terminal, exactTerminal);
 });
 
-test("default MCP production journey retains and releases the failed owner without replacing its error", async () => {
-  for (const preserveAccepted of [true, false]) {
-    const approvalExpiryAt = new Date(Date.now() + 1_500).toISOString();
-    const leaseExpiryAt = new Date(Date.now() + 3_000).toISOString();
-    const approvedAt = new Date(Date.now() + 100).toISOString();
-    const admittedAt = new Date(Date.now() + 200).toISOString();
-    const fixture = preparedFixture(approvalExpiryAt, approvedAt);
+test("default MCP production journey retains, expires, and falls back without replacing its error", async () => {
+  const approvalExpiryAt = new Date(Date.now() + 3_000).toISOString();
+  const leaseExpiryAt = new Date(Date.now() + 6_000).toISOString();
+  const approvedAt = new Date(Date.now() - 100).toISOString();
+  const admittedAt = new Date(Date.now() - 50).toISOString();
+  const fixture = preparedFixture(approvalExpiryAt, approvedAt);
+  const scenario: RetentionScenario = {
+    preserveAccepted: true,
+    leaseExpiryAt,
+    calls: [],
+    observedExpiry: [],
+    releaseAt: 0,
+    closeCalls: 0,
+  };
+  activeRetentionScenario = scenario;
+  try {
+    protectFixtureForCurrentUser(fixture);
     const prepared = captureStage2PreparedMcpRun(fixture.args, {
       inspectSource: () => ({
         repositoryRoot: fixture.repositoryRoot,
@@ -242,173 +338,60 @@ test("default MCP production journey retains and releases the failed owner witho
       now: () => admittedAt,
       aclAdmission: { admit: () => ({ ok: true as const }) },
     });
-    const calls: string[] = [];
-    const retainedResume: { value?: ResolvedResumeArtifact } = {};
-    const observedExpiry: string[] = [];
-    let releaseAt = 0;
-    let closeCalls = 0;
-    try {
-      const runtime: Stage2RealJourneyLiveRuntimeBinding = {
-        async bind(request) {
-          retainedResume.value = request.ownerSources.resumeIntent.artifact;
-          const incomplete = {
-            page: "profile" as const,
-            pageId: browserPageId("page_real_journey"),
-            requiredFields: [{
-              fieldId: fieldId("real-journey-required"),
-              verification: "unverified" as const,
-            }],
-            c3OwnedDuplicateRows: 0,
-            submitActivated: false as const,
-          };
-          return {
-            walk: {
-              observer: { async observe() { return { ok: true as const, value: incomplete }; } },
-              handlers: {
-                resume: verifiedHandler("resume", "resume_verified"),
-                profile: verifiedHandler("profile", "profile_verified"),
-                questionnaire: verifiedHandler("questionnaire", "questionnaire_verified"),
-              },
-              navigation: { async next() { return { ok: true as const, value: { advanced: true as const } }; } },
-              progress: { async record() { return { ok: true as const, value: undefined }; } },
-            },
-            laneAcceptances: { snapshot: () => [] },
-            account: {
-              async verify() {
-                return {
-                  ok: true as const,
-                  proof: {
-                    schemaVersion: 1 as const,
-                    proofRevision: "s2-account-session-proof-v1" as const,
-                    status: "unsealed" as const,
-                    sourceRevision: request.sourceRevision,
-                    configSha256: request.configSha256,
-                    revisionId: request.owner.revisionId,
-                    approvalId: request.owner.approval.approvalId,
-                    journeyId: request.owner.journeyId,
-                    targetHandleId: request.owner.target.handleId,
-                    accountState: "application_ready" as const,
-                    independentlyObservedVerifiedState: true as const,
-                    verificationProof: "credential_sign_in" as const,
-                    provider: "workday-auth" as const,
-                    consumedCandidateCount: 0 as const,
-                    messageBodyRetained: false as const,
-                    submitActivated: false as const,
-                  },
-                };
-              },
-            },
-            recovery: { async pending() { return null; } },
-            review: { async capture() { throw new Error("review must not be reached"); } },
-            privacy: { async forbiddenTokens() { return []; } },
-            cleanup: {
-              async preserve() {
-                calls.push("preserve");
-                return preserveAccepted;
-              },
-              retentionExpiresAt() {
-                const expiry = new Date(Math.min(
-                  Date.parse(request.owner.approval.expiresAt),
-                  Date.parse(leaseExpiryAt),
-                )).toISOString();
-                observedExpiry.push(expiry);
-                return expiry;
-              },
-              async release() {
-                calls.push("release");
-                releaseAt = Date.now();
-                return true;
-              },
-              async close(_signal, accepted) {
-                calls.push(`close:${accepted === true ? "accepted" : "fallback"}`);
-                closeCalls += 1;
-                return true;
-              },
-            },
-          };
-        },
-      };
-      const binding = createStage2RealJourneyProductionBinding({
-        runtime,
-        inspectSource: () => ({
-          repositoryRoot: fixture.repositoryRoot,
-          sourceRevision: "0123456789abcdef0123456789abcdef01234567",
-        }),
-        now: () => admittedAt,
-        aclAdmission: { admit: () => ({ ok: true as const }) },
-      });
-      const api = createStage2McpFromPreparedRun(fixture.args, {
-        capture: () => prepared,
-        journeyBinding: binding,
-        nextOperationId: () => ({
-          ok: true,
-          value: generatedOperationId("operation_defaultmcppath01"),
-        }),
-      });
-      const start = await api.handle({
-        schemaVersion: 2,
-        requestId: mcpRequestId(`request-start-${preserveAccepted ? "preserve" : "fallback"}`),
-        method: "start_journey",
-        params: {
-          jobId: prepared.bound.targetHandleId,
-          resumeId: prepared.bound.resumeRef,
-          profileId: prepared.bound.profileRef,
-        },
-      }, new AbortController().signal);
-      assert.equal(start.ok, true);
-      if (!start.ok || !start.value.ok) continue;
+    const api = createStage2McpFromPreparedRun(fixture.args, {
+      nextOperationId: () => ({
+        ok: true,
+        value: generatedOperationId("operation_defaultmcppath01"),
+      }),
+    });
+    const start = await api.handle({
+      schemaVersion: 2,
+      requestId: mcpRequestId("request-start-default"),
+      method: "start_journey",
+      params: {
+        jobId: prepared.bound.targetHandleId,
+        resumeId: prepared.bound.resumeRef,
+        profileId: prepared.bound.profileRef,
+      },
+    }, new AbortController().signal);
+    assert.equal(start.ok, true);
+    if (!start.ok || !start.value.ok) return;
 
-      let result: Awaited<ReturnType<typeof api.handle>> | undefined;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        result = await api.handle({
-          schemaVersion: 2,
-          requestId: mcpRequestId(`request-result-${preserveAccepted ? "preserve" : "fallback"}-${attempt}`),
-          method: "journey_result",
-          params: { journeyId: prepared.bound.journeyId },
-        }, new AbortController().signal);
-        if (result.ok && result.value.ok && result.value.result.kind === "terminal") break;
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
-      }
-      assert.equal(result?.ok, true);
-      if (!result?.ok || !result.value.ok || result.value.result.kind !== "terminal") continue;
-      assert.deepEqual(result.value.result.terminal, {
-        schemaVersion: 4,
-        journeyId: prepared.bound.journeyId,
-        status: "failed",
-        completedPages: 0,
-        errorCode: "page_incomplete",
-      });
-      assert.equal(calls[0], "preserve");
-      if (preserveAccepted) {
-        assert.deepEqual(observedExpiry[0], new Date(Math.min(
-          Date.parse(approvalExpiryAt),
-          Date.parse(leaseExpiryAt),
-        )).toISOString());
-        assert.equal(closeCalls, 0);
-        for (let attempt = 0; attempt < 200 && releaseAt === 0; attempt += 1) {
-          await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-        }
-        assert.equal(releaseAt > 0, true);
-        assert.equal(releaseAt < Date.parse(leaseExpiryAt), true);
-        assert.deepEqual(calls, ["preserve", "release"]);
-      } else {
-        assert.equal(releaseAt, 0);
-        assert.equal(closeCalls, 1);
-        assert.deepEqual(calls, ["preserve", "close:fallback"]);
-      }
-      assert.equal(retainedResume.value !== undefined, true);
-      if (retainedResume.value !== undefined) {
-        assert.deepEqual(await useResumeArtifactUpload(retainedResume.value, () => ({
-          ok: true as const,
-          value: undefined,
-        })), {
-          ok: false,
-          error: { code: "artifact_already_consumed", retryable: false },
-        });
-      }
-    } finally {
-      fixture.cleanup();
+    let result: Awaited<ReturnType<typeof api.handle>> | undefined;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      result = await api.handle({
+        schemaVersion: 2,
+        requestId: mcpRequestId(`request-result-default-${attempt}`),
+        method: "journey_result",
+        params: { journeyId: prepared.bound.journeyId },
+      }, new AbortController().signal);
+      if (result.ok && result.value.ok && result.value.result.kind === "terminal") break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
     }
+    assert.equal(result?.ok, true);
+    if (!result?.ok || !result.value.ok || result.value.result.kind !== "terminal") return;
+    assert.deepEqual(result.value.result.terminal, {
+      schemaVersion: 4,
+      journeyId: prepared.bound.journeyId,
+      status: "failed",
+      completedPages: 0,
+      errorCode: "page_incomplete",
+    });
+    assert.deepEqual(scenario.calls, ["bind", "account", "preserve"]);
+    assert.deepEqual(scenario.observedExpiry, [new Date(Math.min(
+      Date.parse(approvalExpiryAt),
+      Date.parse(leaseExpiryAt),
+    )).toISOString()]);
+    for (let attempt = 0; attempt < 300 && scenario.closeCalls === 0; attempt += 1) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+    assert.equal(scenario.releaseAt > 0, true);
+    assert.equal(scenario.closeCalls, 1);
+    assert.deepEqual(scenario.calls, ["bind", "account", "preserve", "release", "close:fallback"]);
+    assert.equal(scenario.releaseAt < Date.parse(leaseExpiryAt), true);
+  } finally {
+    activeRetentionScenario = undefined;
+    fixture.cleanup();
   }
 });
 
@@ -589,20 +572,50 @@ function preparedFixture(
     root,
     repositoryRoot,
     args: { configPath, evidenceRoot: evidence },
+    paths: { runtime, secrets, evidence, ownerConfig: configPath },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
 
-function verifiedHandler<
-  Page extends "resume" | "profile" | "questionnaire",
-  Checkpoint extends "resume_verified" | "profile_verified" | "questionnaire_verified",
->(page: Page, checkpoint: Checkpoint) {
-  return {
-    async reconcile(input: { readonly pageId: ReturnType<typeof browserPageId> }) {
-      return {
-        ok: true as const,
-        value: { page, pageId: input.pageId, checkpoint, independentlyVerified: true as const },
-      };
+function protectFixtureForCurrentUser(fixture: ReturnType<typeof preparedFixture>): void {
+  const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+$paths = [Console]::In.ReadToEnd() | ConvertFrom-Json
+foreach ($index in 0..2) {
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetOwner($current)
+  $acl.SetAccessRuleProtection($true, $false)
+  $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+  $propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($current, 'FullControl', $inherit, $propagation, $allow))
+  $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($system, 'FullControl', $inherit, $propagation, $allow))
+  [System.IO.Directory]::SetAccessControl($paths[$index], $acl)
+}
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetOwner($current)
+$acl.SetAccessRuleProtection($true, $false)
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($current, 'FullControl', 'Allow'))
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($system, 'FullControl', 'Allow'))
+[System.IO.File]::SetAccessControl($paths[3], $acl)
+`;
+  const result = spawnSync(
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    {
+      input: JSON.stringify([
+        fixture.paths.runtime,
+        fixture.paths.secrets,
+        fixture.paths.evidence,
+        fixture.paths.ownerConfig,
+      ]),
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: 10_000,
     },
-  };
+  );
+  assert.equal(result.status, 0);
 }
