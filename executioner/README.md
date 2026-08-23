@@ -69,6 +69,52 @@ existing prohibition on final Submit.
 
 ## Stage 2 real-run preflight
 
+### Mandatory C3 readiness gate
+
+Do not prepare a live run root until the exact owner worktree has issued a
+synthetic readiness certificate:
+
+```text
+npm run readiness:s2
+```
+
+This single command installs or verifies the hash-pinned Node 22.23.2 and npm
+10.9.8 pair in the current user's Hunt runtime cache, runs a locked `npm ci`
+when the worktree or lockfile changed, installs the Chromium revision selected
+by Playwright 1.62.1, verifies Git and Windows PowerShell identities, and records
+physical plus Windows commit headroom. Less than 8 GiB is a diagnostic signal;
+it is not permission to kill unrelated processes or an automatic testing stop.
+
+After setup, the gate performs two consecutive synthetic C3 launches. Each
+launch uses a fresh root and throwaway profile on Hunt's isolated Windows
+desktop, opens only a loopback-served Workday fixture through the production
+persistent-context launcher, proves a disabled final Submit, exercises the
+production monitor/ACK contract, retains typed value-free phase logs, runs the
+watchdog, and proves process, port, profile, and run-root cleanup. The observer
+is ready before either synthetic run root is created. No account, Gmail,
+resume, applicant, official posting, or external Workday resource is used.
+
+The final JSON names the first failing class: `setup`, `child_spawn`,
+`browser_launch`, `page_binding`, `monitor`, `evidence`, or `cleanup`. Generic
+wrappers such as `evidence_unavailable` are not accepted as causes. A successful
+certificate is bound to the clean Git revision, accepted source ancestry,
+rejected-observability denylist, exact Node/npm pair, package lock, and browser
+executable. It is valid for 24 hours while those keys remain unchanged.
+
+`prepare:s2-run`, `live:s2`, `live:s2:slice`, and `mcp:s2` all repeat the cheap
+runtime/browser check and then require the newest valid certificate (or the
+exact path in `HUNT_C3_READINESS_CERTIFICATE`) before their real entrypoint can
+run. Therefore canonical preparation cannot allocate a root after a stale,
+missing, or failed readiness result. To recheck a named certificate directly:
+
+```text
+npm run readiness:s2:verify -- --certificate C:\Users\you\AppData\Local\Hunt\c3-readiness\retained\readiness_ID\readiness-certificate.json
+```
+
+Setup and synthetic failures are readiness failures, not Company attempts. A
+live attempt starts only when the owned production browser begins external
+navigation to the approved official posting. Never activate final Submit.
+
 The owner input file belongs outside the repository and every worktree. Never
 copy the owner input file into the repository. It contains one exact approved
 Workday URL and identity, opaque profile and resume references, scoped secret

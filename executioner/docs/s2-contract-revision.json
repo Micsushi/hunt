@@ -5,11 +5,11 @@
   "s2ContractSource": "b98ebad34b74b3a318edfca4532a954bf07e1051",
   "s2ContractSourceTree": "94521b4c6468f88505c6cb55da608618002e2d61",
   "contractTreeOids": {
-    "executioner/src/contracts": "ad9f5a43e0bbe0e79661784dabf28b15b18e9ad8",
+    "executioner/src/contracts": "9dfa8418e4194a4bca58c31a9d5de8da8394ed4c",
     "executioner/src/contracts/live": "ac3971aae2a1ceb3703b0f8c8f171c884c4059d9",
     "executioner/src/control/orchestrator/live": "6b38b5dee5a63989719045ef0de22df2a3f50590",
     "executioner/src/testing/live": "377d167ace83fa4d95798c221f4f776d86f209ac",
-    "executioner/tests/live/contracts": "8c9d120d6c2c77bb713fbd9d8e916fc099a6be7a",
+    "executioner/tests/live/contracts": "dfcf85877ebeee1f5201256688691aaba565a1b4",
     "executioner/tests/live/walking-skeleton": "745b301fcc177e7feeefc1d65eb521a56a3d2292"
   },
   "serializedVersions": {

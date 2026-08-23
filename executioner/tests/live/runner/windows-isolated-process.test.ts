@@ -211,7 +211,7 @@ test("live:s2 enters through the same-revision gate and its real slice remains i
   const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
     readonly scripts?: Readonly<Record<string, string>>;
   };
-  assert.equal(packageJson.scripts?.["live:s2"], "node scripts/run-s2-acceptance.ts");
+  assert.match(packageJson.scripts?.["live:s2"] ?? "", /run-with-s2-runtime\.ps1 scripts\/run-s2-acceptance\.ts/u);
   const gate = await readFile("scripts/run-s2-acceptance.ts", "utf8");
   assert.match(gate, /executeStage2AcceptanceCli/u);
   assert.match(gate, /createLocalStage2AcceptancePorts/u);

@@ -7,8 +7,8 @@ test("S2 runbook documents the owned runtime, live prerequisites, Review gate, a
     readonly scripts: Readonly<Record<string, string>>;
   };
   const readme = await readFile("README.md", "utf8");
-  assert.equal(packageJson.scripts["live:s2"], "node scripts/run-s2-acceptance.ts");
-  assert.equal(packageJson.scripts["live:s2:slice"], "node scripts/run-s2-isolated.ts");
+  assert.match(packageJson.scripts["live:s2"] ?? "", /run-with-s2-runtime\.ps1 scripts\/run-s2-acceptance\.ts/u);
+  assert.match(packageJson.scripts["live:s2:slice"] ?? "", /run-with-s2-runtime\.ps1 scripts\/run-s2-isolated\.ts/u);
   assert.match(readme, /npm run live:s2 -- --config .* --stop-after review --evidence-root/u);
   assert.match(readme, /npm run live:s2:slice -- --config .* --stop-after account_access/u);
   assert.match(readme, /quality_failed/u);
