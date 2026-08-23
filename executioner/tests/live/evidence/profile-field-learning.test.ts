@@ -9,11 +9,11 @@ import {
   createProfileFieldLearningCapture,
   type ProfileFieldLearningEvidenceV2,
   type ProfileFieldLearningRecordV2,
-  type ProfileLearningConversion,
 } from "../../../src/live/evidence/profile-field-learning.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  ProfileLearningConversion,
   ProfilePagePlan,
   ProfilePageSnapshot,
   WorkdayProfilePagePort,
@@ -31,8 +31,9 @@ interface MutableObservationBinding {
 
 type MutableLearningRecord = Omit<
   ProfileFieldLearningRecordV2,
-  "observationBinding" | "visibleOptionIds"
+  "driverAttempt" | "observationBinding" | "visibleOptionIds"
 > & {
+  driverAttempt: string;
   observationBinding: MutableObservationBinding | null;
   visibleOptionIds: readonly string[];
 };
@@ -43,7 +44,8 @@ type MutableLearningEvidence = Omit<
 > & {
   liveAcceptanceEligible: boolean;
   fields: MutableLearningRecord[];
-  learningConversion?: Omit<ProfileLearningConversion, "fieldIds" | "affected"> & {
+  learningConversion?: Omit<ProfileLearningConversion, "affected" | "defaultsGenerated" | "fieldIds"> & {
+    defaultsGenerated: boolean;
     fieldIds: string[];
     affected: { fieldId: string; reasons: string[] }[];
   };

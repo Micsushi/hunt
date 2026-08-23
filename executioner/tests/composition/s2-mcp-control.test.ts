@@ -482,7 +482,7 @@ test("browser-free production MCP composition bridges mismatch learning, retenti
   const api = createStage2McpFromPreparedRun(
     { configPath: invocation.args.configPath, evidenceRoot },
     {
-      capture: () => ({ invocation, bound: { journeyId, targetHandleId: target, resumeRef: resume, profileRef: profile } }),
+      capture: () => ({ invocation, bound: { journeyId: journey, targetHandleId: target, resumeRef: resume, profileRef: profile } }),
       nextOperationId: () => ({
         ok: true,
         value: generatedOperationId("operation_mismatchcomposition01"),
@@ -577,7 +577,7 @@ test("browser-free production MCP composition bridges mismatch learning, retenti
   let terminalResult: Awaited<ReturnType<typeof api.handle>> | undefined;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     terminalResult = await api.handle(
-      request(`request-mismatch-result-${attempt}`, "journey_result"),
+      request(`request-mismatch-result-${attempt}`, upstreamJobId("journey_result")),
       new AbortController().signal,
     );
     if (terminalResult.ok && terminalResult.value.ok) break;
