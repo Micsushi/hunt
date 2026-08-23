@@ -255,6 +255,10 @@ test("returns all value-free metadata mismatches for learning conversion", async
     const missingPlanBinding = structuredClone(evidence) as MutableLearningEvidence;
     (missingPlanBinding.fields[0] as unknown as { planBinding: null }).planBinding = null;
     assert.throws(() => admitMutableEvidence(missingPlanBinding), TypeError);
+    const planlessOwnerInput = structuredClone(evidence) as MutableLearningEvidence;
+    (planlessOwnerInput.fields[0] as unknown as { planBinding: null }).planBinding = null;
+    planlessOwnerInput.learningConversion!.affected[0]!.reasons = ["label_digest"];
+    assert.equal(admitMutableEvidence(planlessOwnerInput).fields[0]!.planBinding, null);
     const mutation = structuredClone(evidence) as MutableLearningEvidence;
     mutation.fields[0]!.driverAttempt = "search_select";
     assert.throws(() => admitMutableEvidence(mutation), TypeError);

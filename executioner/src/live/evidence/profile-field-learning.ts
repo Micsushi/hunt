@@ -617,7 +617,7 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
 
 function validConvertedField(field: ProfileFieldLearningRecordV2): boolean {
   return isObservationBinding(field.observationBinding) &&
-    validPlanBinding(field.planBinding) &&
+    (field.planBinding === null || validPlanBinding(field.planBinding)) &&
     field.answerState === "unset" &&
     field.lane === null &&
     field.prefillDisposition === "needs_owner_input" &&
