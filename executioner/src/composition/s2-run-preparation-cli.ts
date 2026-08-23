@@ -196,11 +196,20 @@ function normalizeLearningPlan(value: unknown): unknown {
 function normalizeOwnerProfile(value: unknown): unknown {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid();
   const profile = structuredClone(value) as {
-    facts?: Array<{ lane?: string }>;
+    facts?: Array<{ factId?: string; lane?: string }>;
+    unsetFactIds?: string[];
+    discoveredFields?: unknown[];
   };
   for (const fact of profile.facts ?? []) {
     if (fact.lane === undefined) fact.lane = "live_owner_fact";
   }
+  if (profile.unsetFactIds === undefined) {
+    const answered = new Set((profile.facts ?? []).map(({ factId }) => factId));
+    profile.unsetFactIds = applicationProfileFactIds.filter((factId) =>
+      !answered.has(factId)
+    );
+  }
+  if (profile.discoveredFields === undefined) profile.discoveredFields = [];
   return profile;
 }
 
