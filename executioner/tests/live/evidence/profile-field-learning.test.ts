@@ -9,6 +9,7 @@ import {
   createProfileFieldLearningCapture,
   type ProfileFieldLearningEvidenceV2,
   type ProfileFieldLearningRecordV2,
+  type ProfileLearningConversion,
 } from "../../../src/live/evidence/profile-field-learning.ts";
 import type {
   ProfileCommitRequest,
@@ -38,10 +39,14 @@ type MutableLearningRecord = Omit<
 
 type MutableLearningEvidence = Omit<
   ProfileFieldLearningEvidenceV2,
-  "fields" | "liveAcceptanceEligible"
+  "fields" | "liveAcceptanceEligible" | "learningConversion"
 > & {
   liveAcceptanceEligible: boolean;
   fields: MutableLearningRecord[];
+  learningConversion?: Omit<ProfileLearningConversion, "fieldIds" | "affected"> & {
+    fieldIds: string[];
+    affected: { fieldId: string; reasons: string[] }[];
+  };
 };
 
 function mutableEvidence(evidence: ProfileFieldLearningEvidenceV2): MutableLearningEvidence {
@@ -222,6 +227,23 @@ test("returns all value-free metadata mismatches for learning conversion", async
       affected: { reasons: string[] }[];
     }).affected[0]!.reasons = [];
     assert.throws(() => admitMutableEvidence(contradictory), TypeError);
+    const omitted = structuredClone(evidence) as MutableLearningEvidence;
+    omitted.learningConversion!.fieldIds = omitted.learningConversion!.fieldIds.slice(1);
+    omitted.learningConversion!.affected = omitted.learningConversion!.affected.slice(1);
+    assert.throws(() => admitMutableEvidence(omitted), TypeError);
+    const substituted = structuredClone(evidence) as MutableLearningEvidence;
+    substituted.learningConversion!.affected[0]!.fieldId =
+      substituted.learningConversion!.fieldIds[1]!;
+    assert.throws(() => admitMutableEvidence(substituted), TypeError);
+    const tamperedReason = structuredClone(evidence) as MutableLearningEvidence;
+    tamperedReason.learningConversion!.affected[0]!.reasons = ["option_catalog"];
+    assert.throws(() => admitMutableEvidence(tamperedReason), TypeError);
+    const mutation = structuredClone(evidence) as MutableLearningEvidence;
+    mutation.fields[0]!.driverAttempt = "search_select";
+    assert.throws(() => admitMutableEvidence(mutation), TypeError);
+    const defaulted = structuredClone(evidence) as MutableLearningEvidence;
+    defaulted.learningConversion!.defaultsGenerated = true;
+    assert.throws(() => admitMutableEvidence(defaulted), TypeError);
     assert.equal(evidence.fields.every((field: { answerState: string; lane: unknown; driverAttempt: string }) =>
       field.answerState === "unset" && field.lane === null && field.driverAttempt === "none"), true);
     assert.equal(JSON.stringify(evidence).includes("answer-"), false);

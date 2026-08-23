@@ -20,24 +20,10 @@ import {
   type ResumeId,
   type S2CommonPhaseId,
   type S2StableErrorCode,
+  type TerminalArtifactErrorCode,
   type TerminalResultV4,
   type JobId,
 } from "../../contracts/index.ts";
-
-type TerminalArtifactErrorCode = "terminal_artifact_persistence_failed";
-
-type Stage2McpTerminalResponse = {
-  readonly schemaVersion: 4;
-  readonly requestId: McpRequestId;
-  readonly ok: true;
-  readonly result: {
-    readonly kind: "terminal";
-    readonly terminal: TerminalResultV4;
-    readonly terminalArtifactErrorCode?: TerminalArtifactErrorCode;
-  };
-};
-
-type Stage2McpResponse = McpResponseV4 | Stage2McpTerminalResponse;
 
 export interface Stage2McpBoundJourney {
   readonly journeyId: JourneyId;
@@ -63,7 +49,7 @@ export interface Stage2McpRunResult {
 }
 
 type HandleResult = PortResult<
-  Stage2McpResponse,
+  McpResponseV4,
   McpTransportError | PortError<"operation_cancelled">
 >;
 
@@ -85,7 +71,7 @@ export function createStage2McpControl(
     {
       readonly operationId: OperationId;
       readonly request: McpRequest;
-      response: Promise<Stage2McpResponse>;
+      response: Promise<McpResponseV4>;
     }
   >();
   const controller = new AbortController();
@@ -134,7 +120,7 @@ export function createStage2McpControl(
       const record = {
         operationId: allocated.value,
         request,
-        response: Promise.resolve(null as never) as Promise<Stage2McpResponse>,
+        response: Promise.resolve(null as never) as Promise<McpResponseV4>,
       };
       const response = execute(request, allocated.value).catch(() =>
         errorResponse(
@@ -166,7 +152,7 @@ export function createStage2McpControl(
   async function execute(
     request: McpRequest,
     operationId: OperationId,
-  ): Promise<Stage2McpResponse> {
+  ): Promise<McpResponseV4> {
     if (request.method === "start_journey") {
       if (!matchesBinding(request, bound)) {
         return errorResponse(
@@ -370,9 +356,8 @@ function terminalResponse(
   requestId: McpRequestId,
   terminal: TerminalResultV4,
   terminalArtifactErrorCode: TerminalArtifactErrorCode | undefined,
-): Stage2McpTerminalResponse {
-  parseTerminalResultV4(terminal);
-  return {
+): McpResponseV4 {
+  return parseMcpResponseV4({
     schemaVersion: 4,
     requestId,
     ok: true,
@@ -383,7 +368,7 @@ function terminalResponse(
         terminalArtifactErrorCode,
       }),
     },
-  };
+  });
 }
 
 function admitted(value: McpResponseV4): McpResponseV4 {

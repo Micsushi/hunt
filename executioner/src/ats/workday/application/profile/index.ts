@@ -4,6 +4,7 @@ export {
   profileRepeatableCatalog,
   profileScalarControlCatalog,
 } from "./catalog.ts";
+export { profileLearningConversionFromFailure } from "./types.ts";
 export {
   PlaywrightWorkdayProfilePage,
   type PlaywrightWorkdayProfilePageOptions,

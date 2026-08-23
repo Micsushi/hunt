@@ -450,7 +450,7 @@ test("default MCP production result preserves artifact persistence failure besid
   });
 });
 
-test("browser-free production mismatch bridges learning, retention, terminal, and completion storage", async () => {
+test("browser-free production MCP composition bridges mismatch learning, retention, and terminal storage", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-release-readiness-composed-"));
   const evidenceRoot = join(root, "evidence");
   mkdirSync(evidenceRoot);
@@ -464,34 +464,9 @@ test("browser-free production mismatch bridges learning, retention, terminal, an
       reasons: ["option_catalog" as const],
     }],
   };
-  const blocked = await completeWorkdayProfilePage(
-    { mode: "live", pageType: "profile", fields: [], repeatables: [] },
-    {
-      async inspect() { throw new TypeError("profile metadata reconciliation failed"); },
-      metadataReconciliationFailure: () => mismatch,
-      async commit() {},
-      async addOwnedRow() { throw new TypeError("not used"); },
-      async removeOwnedRow() { throw new TypeError("not used"); },
-    },
-    AbortSignal.any([]),
-  );
-  assert.equal(blocked.kind, "blocked");
-  if (blocked.kind !== "blocked" || blocked.learningConversion === undefined) return;
   const trace = createValueFreeRunTrace(evidenceRoot, () => undefined);
-  trace("profile_reconciliation_blocked", {
-    learningConversion: blocked.learningConversion.kind,
-    executionMode: blocked.learningConversion.executionMode,
-    testOnly: blocked.learningConversion.testOnly,
-    mutationAllowed: blocked.learningConversion.mutationAllowed,
-    defaultsGenerated: blocked.learningConversion.defaultsGenerated,
-    learningFieldIds: blocked.learningConversion.fieldIds,
-    learningFieldReasons: blocked.learningConversion.affected.flatMap(({ fieldId, reasons }) =>
-      reasons.map((reason) => `${fieldId}.${reason}`)
-    ),
-  });
 
   const calls: string[] = [];
-  const acceptanceWrites: unknown[] = [];
   const invocation = {
     args: { configPath: join(root, "owner-input.json"), evidenceRoot },
     source: { repositoryRoot: root, sourceRevision },
@@ -504,75 +479,125 @@ test("browser-free production mismatch bridges learning, retention, terminal, an
       targetHandleId: target,
     },
   } as const;
-  const result = await runStage2RealJourney(invocation, {
-    async bind() {
-      return {
-        account: {
-          async verify() {
+  const api = createStage2McpFromPreparedRun(
+    { configPath: invocation.args.configPath, evidenceRoot },
+    {
+      capture: () => ({ invocation, bound: { journeyId, targetHandleId: target, resumeRef: resume, profileRef: profile } }),
+      nextOperationId: () => ({
+        ok: true,
+        value: generatedOperationId("operation_mismatchcomposition01"),
+      }),
+      async run(runInvocation, signal) {
+        calls.push("application:mismatch");
+        return runStage2RealJourney(runInvocation, {
+          async bind() {
             return {
-              ok: true as const,
-              proof: {
-                schemaVersion: 1 as const,
-                proofRevision: "s2-account-session-proof-v1" as const,
-                status: "unsealed" as const,
-                sourceRevision,
-                configSha256: invocation.config.configSha256,
-                revisionId: invocation.config.revisionId,
-                approvalId: invocation.config.approvalId,
-                journeyId: invocation.config.journeyId,
-                targetHandleId: invocation.config.targetHandleId,
-                accountState: "application_ready" as const,
-                independentlyObservedVerifiedState: true as const,
-                verificationProof: "application_state_observed" as const,
-                provider: "workday-state" as const,
-                consumedCandidateCount: 0 as const,
-                messageBodyRetained: false as const,
-                submitActivated: false as const,
+              account: {
+                async verify() {
+                  return {
+                    ok: true as const,
+                    proof: {
+                      schemaVersion: 1 as const,
+                      proofRevision: "s2-account-session-proof-v1" as const,
+                      status: "unsealed" as const,
+                      sourceRevision,
+                      configSha256: invocation.config.configSha256,
+                      revisionId: invocation.config.revisionId,
+                      approvalId: invocation.config.approvalId,
+                      journeyId: invocation.config.journeyId,
+                      targetHandleId: invocation.config.targetHandleId,
+                      accountState: "application_ready" as const,
+                      independentlyObservedVerifiedState: true as const,
+                      verificationProof: "application_state_observed" as const,
+                      provider: "workday-state" as const,
+                      consumedCandidateCount: 0 as const,
+                      messageBodyRetained: false as const,
+                      submitActivated: false as const,
+                    },
+                  };
+                },
+              },
+              recovery: { async pending() { return null; } },
+              application: {
+                async run() {
+                  const blocked = await completeWorkdayProfilePage(
+                    { mode: "live", pageType: "profile", fields: [], repeatables: [] },
+                    {
+                      async inspect() { throw new TypeError("profile metadata reconciliation failed"); },
+                      metadataReconciliationFailure: () => mismatch,
+                      async commit() {},
+                      async addOwnedRow() { throw new TypeError("not used"); },
+                      async removeOwnedRow() { throw new TypeError("not used"); },
+                    },
+                    AbortSignal.any([]),
+                  );
+                  assert.equal(blocked.kind, "blocked");
+                  if (blocked.kind !== "blocked" || blocked.learningConversion === undefined) {
+                    throw new TypeError("mismatch conversion unavailable");
+                  }
+                  trace("profile_reconciliation_blocked", {
+                    learningConversion: blocked.learningConversion.kind,
+                    executionMode: blocked.learningConversion.executionMode,
+                    testOnly: blocked.learningConversion.testOnly,
+                    mutationAllowed: blocked.learningConversion.mutationAllowed,
+                    defaultsGenerated: blocked.learningConversion.defaultsGenerated,
+                    learningFieldIds: blocked.learningConversion.fieldIds,
+                    learningFieldReasons: blocked.learningConversion.affected.flatMap(({ fieldId, reasons }) =>
+                      reasons.map((reason) => `${fieldId}.${reason}`)
+                    ),
+                  });
+                  return {
+                    ok: false as const,
+                    error: { completedPages: 1, failure: { code: "page_incomplete" } },
+                  } as never;
+                },
+              },
+              review: { async capture() { throw new Error("review must not run"); } },
+              privacy: { async forbiddenTokens() { return ["value-free"]; } },
+              cleanup: {
+                async preserve() { calls.push("preserve"); return true; },
+                retentionExpiresAt() { return new Date(Date.now() + 20).toISOString(); },
+                async release() { calls.push("release"); return true; },
+                async close() { calls.push("close"); return true; },
               },
             };
           },
-        },
-        recovery: { async pending() { return null; } },
-        application: {
-          async run() {
-            calls.push("application:mismatch");
-            return {
-              ok: false as const,
-              error: { completedPages: 1, failure: { code: "page_incomplete" } },
-            } as never;
+        }, {
+          now: () => "2026-08-23T15:00:00.000Z",
+          async writeAcceptance() {},
+          async writeTerminalArtifact(rootValue, value) {
+            writeStage2TerminalArtifact(rootValue, value);
           },
-        },
-        review: { async capture() { throw new Error("review must not run"); } },
-        privacy: { async forbiddenTokens() { return ["value-free"]; } },
-        cleanup: {
-          async preserve() { calls.push("preserve"); return true; },
-          retentionExpiresAt() { return new Date(Date.now() + 20).toISOString(); },
-          async release() { calls.push("release"); return true; },
-          async close() { calls.push("close"); return true; },
-        },
-      };
+        }, signal);
+      },
     },
-  }, {
-    now: () => "2026-08-23T15:00:00.000Z",
-    async writeAcceptance(_root, value) { acceptanceWrites.push(value); },
-    async writeTerminalArtifact(rootValue, value) {
-      writeStage2TerminalArtifact(rootValue, value);
-    },
-  }, new AbortController().signal);
-
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.code, "pre_review_failed");
-  assert.equal(result.terminal.status, "failed");
-  if (result.terminal.status !== "failed") return;
-  assert.equal(result.terminal.errorCode, "page_incomplete");
-  assert.deepEqual(acceptanceWrites, []);
+  );
+  const started = await api.handle(request("request-mismatch-composition-start"), new AbortController().signal);
+  assert.equal(started.ok, true);
+  let terminalResult: Awaited<ReturnType<typeof api.handle>> | undefined;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    terminalResult = await api.handle(
+      request(`request-mismatch-result-${attempt}`, "journey_result"),
+      new AbortController().signal,
+    );
+    if (terminalResult.ok && terminalResult.value.ok) break;
+    await new Promise((resolveDelay) => setImmediate(resolveDelay));
+  }
+  if (terminalResult === undefined) return;
+  assert.equal(terminalResult.ok, true);
+  if (!terminalResult.ok || !terminalResult.value.ok || terminalResult.value.result.kind !== "terminal") return;
+  assert.equal(terminalResult.value.result.terminal.status, "failed");
+  if (terminalResult.value.result.terminal.status !== "failed") return;
+  assert.equal(terminalResult.value.result.terminal.errorCode, "page_incomplete");
   assert.deepEqual(calls, ["application:mismatch", "preserve"]);
   for (let attempt = 0; attempt < 40 && !calls.includes("release"); attempt += 1) {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   }
   assert.equal(calls.includes("release"), true);
-  assert.deepEqual(readStage2TerminalArtifact(evidenceRoot).terminal, result.terminal);
+  assert.deepEqual(
+    readStage2TerminalArtifact(evidenceRoot).terminal,
+    terminalResult.value.result.terminal,
+  );
   assert.deepEqual(readValueFreeRunTrace(join(evidenceRoot, "value-free-trace.ndjson"))[0]?.details, {
     learningConversion: "profile_ui_learning",
     executionMode: "synthetic_test_non_submittable",

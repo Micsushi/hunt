@@ -12,6 +12,8 @@ import type {
   ProfileRowSnapshot,
   WorkdayProfilePagePort,
 } from "../../ats/workday/application/profile/index.ts";
+import { profileLearningConversionFromFailure } from
+  "../../ats/workday/application/profile/index.ts";
 import {
   answerLaneAdmitted,
   type AnswerProvenanceLane,
@@ -376,18 +378,7 @@ function operationUsedByAnotherRecord(
 function conversion(
   failure: ProfileMetadataReconciliationFailure,
 ): ProfileLearningConversion {
-  return Object.freeze({
-    kind: "profile_ui_learning" as const,
-    executionMode: "synthetic_test_non_submittable" as const,
-    testOnly: true as const,
-    mutationAllowed: false as const,
-    defaultsGenerated: false as const,
-    liveAcceptanceEligible: false as const,
-    fieldIds: Object.freeze(failure.mismatches.map(({ fieldId }) => fieldId)),
-    affected: Object.freeze(failure.mismatches.map(({ fieldId, reasons }) =>
-      Object.freeze({ fieldId, reasons: Object.freeze([...reasons]) })
-    )),
-  });
+  return profileLearningConversionFromFailure(failure);
 }
 
 function convertedField(
@@ -432,7 +423,7 @@ function createMetadataReconciliationFailure(
 }
 
 function metadataMismatchReasons(
-  record: MutableRecord,
+  record: MetadataRecord,
   plan: ProfileFieldPlan | undefined,
 ): readonly ProfileMetadataMismatchReason[] {
   const fieldId = record.fieldIdentity.slice("profile.".length);
@@ -580,6 +571,10 @@ function validConversion(
   value: ProfileLearningConversion,
   evidence: ProfileFieldLearningEvidenceV2,
 ): boolean {
+  const mismatches = evidence.fields.filter(({ metadataReconciliation }) =>
+    metadataReconciliation === "mismatch"
+  );
+  const mismatchIds = mismatches.map(({ fieldIdentity }) => fieldIdentity);
   return exactKeys(value, [
     "kind", "executionMode", "testOnly", "mutationAllowed", "defaultsGenerated",
     "liveAcceptanceEligible", "fieldIds", "affected",
@@ -587,28 +582,42 @@ function validConversion(
     value.executionMode === "synthetic_test_non_submittable" &&
     value.testOnly === true && value.mutationAllowed === false &&
     value.defaultsGenerated === false && value.liveAcceptanceEligible === false &&
-    value.fieldIds.length > 0 && value.fieldIds.length <= evidence.fields.length &&
+    value.fieldIds.length === mismatchIds.length && value.fieldIds.length > 0 &&
     new Set(value.fieldIds).size === value.fieldIds.length &&
-    value.fieldIds.every((fieldId) =>
-      typeof fieldId === "string" && validFieldIdentity(fieldId) &&
-      evidence.fields.some((field) =>
-        field.fieldIdentity === fieldId && field.metadataReconciliation === "mismatch"
-      )
-    ) && value.affected.length === value.fieldIds.length &&
+    sameList(value.fieldIds, mismatchIds) &&
+    value.affected.length === mismatchIds.length &&
     value.affected.every((affected, index) =>
       exactKeys(affected, ["fieldId", "reasons"]) &&
-      affected.fieldId === value.fieldIds[index] &&
+      affected.fieldId === mismatchIds[index] &&
       validFieldIdentity(affected.fieldId) &&
       affected.reasons.length > 0 &&
       affected.reasons.length <= profileMetadataMismatchReasons.length &&
       new Set(affected.reasons).size === affected.reasons.length &&
       affected.reasons.every((reason) =>
         (profileMetadataMismatchReasons as readonly string[]).includes(reason)
-      ) && evidence.fields.some((field) =>
-        field.fieldIdentity === affected.fieldId && field.metadataReconciliation === "mismatch"
-      )
+      ) && sameList(
+        affected.reasons,
+        metadataMismatchReasons(mismatches[index]!, undefined),
+      ) && validConvertedField(mismatches[index]!)
     ) && evidence.executionMode === "synthetic_test_non_submittable" &&
     evidence.testOnly === true && evidence.liveAcceptanceEligible === false;
+}
+
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function validConvertedField(field: ProfileFieldLearningRecordV2): boolean {
+  return field.answerState === "unset" &&
+    field.lane === null &&
+    field.prefillDisposition === "needs_owner_input" &&
+    field.driverAttempt === "none" &&
+    field.monitorBinding === null &&
+    field.terminalDisposition === (field.required ? "required_unset" : "optional_unset") &&
+    field.mechanics.backingValueCommitted === "not_observed" &&
+    field.mechanics.validationCleared === "not_observed" &&
+    field.mechanics.persistentReadback === "not_attempted" &&
+    (!isChoiceType(field.uiType) || field.optionMapping === "unresolved");
 }
 
 function validFieldIdentity(value: string): boolean {
@@ -765,6 +774,12 @@ interface MutableRecord {
     persistentReadback: string;
   };
 }
+
+type MetadataRecord = Pick<MutableRecord,
+  "fieldIdentity" | "uiType" | "uiVariant" | "questionCategory" |
+  "answerCategory" | "required" | "binderStrategy" |
+  "sanitizedLabelSha256" | "optionCatalogState" | "visibleOptionIds"
+>;
 
 function plannedFields(plan: ProfilePagePlan): ReadonlyMap<string, ProfileFieldPlan> {
   const result = new Map<string, ProfileFieldPlan>();

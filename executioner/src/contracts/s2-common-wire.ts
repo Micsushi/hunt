@@ -233,6 +233,11 @@ export type FactualTerminalOutcomeV4 =
   | FactualTerminalOutcome
   | S2FactualTerminalOutcome;
 
+export const terminalArtifactErrorCodes = [
+  "terminal_artifact_persistence_failed",
+] as const;
+export type TerminalArtifactErrorCode = (typeof terminalArtifactErrorCodes)[number];
+
 export type TerminalResultV4 =
   | {
       readonly schemaVersion: 4;
@@ -262,7 +267,11 @@ export type McpResultV4 =
       readonly journeyId: JourneyId;
     }
   | { readonly kind: "status"; readonly progress: JourneyProgress }
-  | { readonly kind: "terminal"; readonly terminal: TerminalResultV4 };
+  | {
+      readonly kind: "terminal";
+      readonly terminal: TerminalResultV4;
+      readonly terminalArtifactErrorCode?: TerminalArtifactErrorCode;
+    };
 
 export type McpResponseV4 =
   | {

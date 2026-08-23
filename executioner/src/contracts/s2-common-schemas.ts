@@ -175,6 +175,7 @@ const mcpResultV4Schemas = [
   closed(["kind", "terminal"], {
     kind: { const: "terminal" },
     terminal: terminalResultV4Schema,
+    terminalArtifactErrorCode: { const: "terminal_artifact_persistence_failed" },
   }),
 ] as const;
 

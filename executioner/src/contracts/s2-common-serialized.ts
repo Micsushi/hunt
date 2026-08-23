@@ -14,6 +14,7 @@ import {
   s2CommonComponentIds,
   s2CommonPhaseIds,
   s2StableErrorPolicy,
+  terminalArtifactErrorCodes,
   type ErrorEnvelopeV3,
   type EventEnvelopeV3,
   type McpResponseV4,
@@ -347,8 +348,20 @@ export function parseMcpResponseV4(value: unknown): McpResponseV4 {
     const result = record(response.result, "$.result");
     const kind = oneOf(result.kind, ["accepted", "status", "terminal"], "$.result.kind");
     if (kind === "terminal") {
-      const terminal = exact(result, "$.result", ["kind", "terminal"]);
+      const terminal = exact(
+        result,
+        "$.result",
+        ["kind", "terminal"],
+        ["terminalArtifactErrorCode"],
+      );
       parseTerminalResultV4(terminal.terminal);
+      if (Object.hasOwn(terminal, "terminalArtifactErrorCode")) {
+        oneOf(
+          terminal.terminalArtifactErrorCode,
+          terminalArtifactErrorCodes,
+          "$.result.terminalArtifactErrorCode",
+        );
+      }
     } else {
       parseMcpResponse({ ...response, schemaVersion: 3 });
     }

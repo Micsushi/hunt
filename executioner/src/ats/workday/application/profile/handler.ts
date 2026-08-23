@@ -15,6 +15,7 @@ import type {
   VerifiedProfileField,
   WorkdayProfilePagePort,
 } from "./types.ts";
+import { profileLearningConversionFromFailure } from "./types.ts";
 import {
   profileInspectionDiagnostic,
   profileInspectionFailureFromError,
@@ -106,23 +107,9 @@ export async function completeWorkdayProfilePage(
   if (observed.metadataReconciliationFailure !== undefined) {
     return blocked("profile_metadata_reconciliation_failed", {
       metadataReconciliationFailure: observed.metadataReconciliationFailure,
-      learningConversion: Object.freeze({
-        kind: "profile_ui_learning" as const,
-        executionMode: "synthetic_test_non_submittable" as const,
-        testOnly: true as const,
-        mutationAllowed: false as const,
-        defaultsGenerated: false as const,
-        liveAcceptanceEligible: false as const,
-        fieldIds: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
-          ({ fieldId }) => fieldId,
-        )),
-        affected: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
-          ({ fieldId, reasons }) => Object.freeze({
-            fieldId,
-            reasons: Object.freeze([...reasons]),
-          }),
-        )),
-      }),
+      learningConversion: profileLearningConversionFromFailure(
+        observed.metadataReconciliationFailure,
+      ),
     });
   }
   if (observed.snapshot === undefined) {

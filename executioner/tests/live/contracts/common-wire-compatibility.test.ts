@@ -354,6 +354,23 @@ test("MCP v4 nests only terminal v4 or error v3 and request v2 stays closed", ()
     result: { kind: "terminal", terminal },
   } as const;
   assert.deepEqual(parseMcpResponseV4(terminalResponse), terminalResponse);
+  const artifactResponse = {
+    ...terminalResponse,
+    result: {
+      kind: "terminal" as const,
+      terminal,
+      terminalArtifactErrorCode: "terminal_artifact_persistence_failed" as const,
+    },
+  };
+  assert.deepEqual(parseMcpResponseV4(artifactResponse), artifactResponse);
+  expectCode(
+    () => parseMcpResponseV4({
+      ...artifactResponse,
+      result: { ...artifactResponse.result, terminalArtifactErrorCode: "tampered" },
+    }),
+    "invalid_value",
+    "$.result.terminalArtifactErrorCode",
+  );
 
   const error = errorV3("secret_store_unavailable");
   const errorResponse = {
@@ -442,6 +459,11 @@ test("new schemas mirror strict versions, nesting, and closed objects", () => {
     s2CommonWireSchemas.mcpResponse.properties.result.oneOf[2].properties
       .terminal,
     s2CommonWireSchemas.terminalResult,
+  );
+  assert.equal(
+    s2CommonWireSchemas.mcpResponse.properties.result.oneOf[2].properties
+      .terminalArtifactErrorCode.const,
+    "terminal_artifact_persistence_failed",
   );
   assert.equal(
     s2CommonWireSchemas.mcpResponse.properties.error,

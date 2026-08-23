@@ -160,6 +160,23 @@ export interface ProfileLearningConversion {
   }[];
 }
 
+export function profileLearningConversionFromFailure(
+  failure: ProfileMetadataReconciliationFailure,
+): ProfileLearningConversion {
+  return Object.freeze({
+    kind: "profile_ui_learning" as const,
+    executionMode: "synthetic_test_non_submittable" as const,
+    testOnly: true as const,
+    mutationAllowed: false as const,
+    defaultsGenerated: false as const,
+    liveAcceptanceEligible: false as const,
+    fieldIds: Object.freeze(failure.mismatches.map(({ fieldId }) => fieldId)),
+    affected: Object.freeze(failure.mismatches.map(({ fieldId, reasons }) =>
+      Object.freeze({ fieldId, reasons: Object.freeze([...reasons]) })
+    )),
+  });
+}
+
 export interface ProfileRowSnapshot {
   readonly section: ProfileRepeatableSection;
   readonly rowId: string;
