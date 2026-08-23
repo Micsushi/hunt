@@ -164,6 +164,9 @@ function validProfile(
     "submitActivated", "privacyScan",
   ];
   const hasLearningDigest = Object.hasOwn(value, "profileFieldLearningSha256");
+  const hasSyntheticDefault = value.verifiedFields.some((field) =>
+    field.lane === "synthetic_test_default"
+  );
   return (hasLearningDigest
     ? exactKeys(value, learningKeys) &&
       typeof value.profileFieldLearningSha256 === "string" &&
@@ -171,6 +174,7 @@ function validProfile(
     : exactKeys(value, requiredKeys)) &&
     value.schemaVersion === 1 &&
     (value.pageType === "profile" || value.pageType === "contact") &&
+    (!hasSyntheticDefault || hasLearningDigest) &&
     value.verifiedFields.every((field) => {
       const keys = Object.keys(field);
       const required = [

@@ -438,7 +438,7 @@ test("Integer truth-dependent wording families fail closed before mutation", asy
   }
 });
 
-test("non-protected synthetic mechanics stay non-submittable and never verify live", async () => {
+test("non-protected synthetic mechanics stay non-submittable while verifying UI mechanics", async () => {
   const source = field(
     "s2-field-application-source",
     "How Did You Hear About Us?",
@@ -453,10 +453,9 @@ test("non-protected synthetic mechanics stay non-submittable and never verify li
   ), {
     ok: true,
     value: {
-      kind: "blocked",
-      code: "synthetic_test_non_submittable",
-      fieldId: source.fieldId,
-      protectedCategory: null,
+      kind: "verified",
+      answers: [],
+      protectedPlaceholderCount: 0,
     },
   });
   assert.equal(calls.driven, 1);
