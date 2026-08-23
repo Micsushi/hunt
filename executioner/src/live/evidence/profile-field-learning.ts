@@ -4,6 +4,8 @@ import type {
   ProfileControlObservation,
   ProfileFieldPlan,
   ProfileInteractionSnapshot,
+  ProfileMetadataReconciliationFailure,
+  ProfileMetadataMismatchReason,
   ProfilePagePlan,
   ProfilePageSnapshot,
   ProfileRowSnapshot,
@@ -187,6 +189,7 @@ export function createProfileFieldLearningCapture(input: {
   const visibleIdentities = new Set<string>();
   const plans = plannedFields(input.plan);
   let written = false;
+  let metadataFailure: ProfileMetadataReconciliationFailure | undefined;
 
   const page: WorkdayProfilePagePort = {
     async inspect(signal) {
@@ -216,12 +219,15 @@ export function createProfileFieldLearningCapture(input: {
             throw new TypeError("profile control observation operation crossed");
           }
           applyControlObservation(record, control, plans.get(control.fieldId), observed);
-          observationFailed ||= record.metadataReconciliation === "mismatch";
         } catch (error) {
           record.metadataReconciliation = "mismatch";
           record.terminalDisposition = "verification_failed";
           throw error;
         }
+      }
+      metadataFailure = createMetadataReconciliationFailure(records, plans);
+      if (metadataFailure !== undefined) {
+        throw new TypeError("profile metadata reconciliation failed");
       }
       if (observationFailed) throw new TypeError("profile control observation denied");
       return snapshot;
@@ -262,6 +268,7 @@ export function createProfileFieldLearningCapture(input: {
     removeOwnedRow(section, rowId, signal) {
       return input.page.removeOwnedRow(section, rowId, signal);
     },
+    metadataReconciliationFailure: () => metadataFailure,
   };
 
   return Object.freeze({
@@ -353,6 +360,61 @@ function operationUsedByAnotherRecord(
     record.monitorBinding?.operationId === operationId ||
     record.pendingMonitor?.operationId === operationId
   ));
+}
+
+function createMetadataReconciliationFailure(
+  records: ReadonlyMap<string, MutableRecord>,
+  plans: ReadonlyMap<string, ProfileFieldPlan>,
+): ProfileMetadataReconciliationFailure | undefined {
+  const mismatches = [...records.values()]
+    .filter(({ metadataReconciliation }) => metadataReconciliation === "mismatch")
+    .map((record) => Object.freeze({
+      fieldId: record.fieldIdentity,
+      uiBehavior: record.uiType as ProfileControlSnapshot["uiBehavior"],
+      uiVariant: record.uiVariant,
+      reasons: metadataMismatchReasons(record, plans.get(record.fieldIdentity.slice("profile.".length))),
+    }));
+  return mismatches.length === 0
+    ? undefined
+    : Object.freeze({
+        code: "profile_metadata_reconciliation_failed" as const,
+        mismatches: Object.freeze(mismatches),
+      });
+}
+
+function metadataMismatchReasons(
+  record: MutableRecord,
+  plan: ProfileFieldPlan | undefined,
+): readonly ProfileMetadataMismatchReason[] {
+  const fieldId = record.fieldIdentity.slice("profile.".length);
+  const guide = retainedProfileGuide.get(fieldId);
+  if (guide === undefined) return Object.freeze([
+    ...(record.binderStrategy !== "catalog_selector_exact" ? ["binder_strategy" as const] : []),
+    "plan_binding" as const,
+  ]);
+  const reasons: ProfileMetadataMismatchReason[] = [];
+  if (record.binderStrategy !== "catalog_selector_exact") reasons.push("binder_strategy");
+  if (record.sanitizedLabelSha256 !== retainedProfileTextSha256(guide.sanitizedLabel)) {
+    reasons.push("label_digest");
+  }
+  if (record.questionCategory !== guide.normalizedQuestionType) {
+    reasons.push("question_category");
+  }
+  if (record.answerCategory !== guide.answerType) reasons.push("answer_category");
+  if (!guideBehaviorMatches(guide.behavior, record.uiType, record.uiVariant)) {
+    reasons.push("ui_behavior");
+  }
+  if (record.uiVariant !== guide.uiVariant) reasons.push("ui_variant");
+  if (record.required !== guide.required) reasons.push("required_state");
+  const expectedOptions = guide.allowedOptions.map((value) =>
+    `option_sha256_${retainedProfileTextSha256(value)}`
+  );
+  if (expectedOptions.length > 0 && (
+    record.optionCatalogState !== "observed" ||
+    JSON.stringify(record.visibleOptionIds) !== JSON.stringify(expectedOptions)
+  )) reasons.push("option_catalog");
+  if (!planMatchesGuide(plan, guide)) reasons.push("plan_binding");
+  return Object.freeze(reasons.length === 0 ? ["plan_binding"] : reasons);
 }
 
 export function admitProfileFieldLearningEvidence(

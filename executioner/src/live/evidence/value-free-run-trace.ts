@@ -76,7 +76,7 @@ const STRING_KEYS = new Set([
   "profileInspectionClassification", "profileInspectionPhase",
   "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
   "profileInspectionSessionState", "profileInspectionCleanupState",
-  "profileInspectionPreservationReason",
+  "profileInspectionPreservationReason", "learningConversion",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -112,7 +112,7 @@ const NUMBER_KEYS = new Set([
   "reboundDateLabelSvgOwnerCount", "reboundDateDistinctInputCount",
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
   "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
-  "profileInspectionAttemptCount", "profileInspectionFrameCount",
+  "profileInspectionAttemptCount", "profileInspectionFrameCount", "profileMetadataMismatchCount",
   "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
   "profileInspectionDomOwnerCandidateCount", "profileInspectionControlCandidateCount",
 ]);
@@ -128,6 +128,7 @@ const BOOLEAN_KEYS = new Set([
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
+  "profileMetadataMismatchFields", "profileMetadataMismatchReasons",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",

@@ -11,7 +11,7 @@ type Stage2ReviewJourneyResult =
         readonly status: "review_reached" | "failed" | "blocked" | "cancelled";
         readonly errorCode?: string;
       };
-    };
+};
 
 export type Stage2TerminalResult =
   | {

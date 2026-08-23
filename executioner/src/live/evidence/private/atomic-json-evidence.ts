@@ -45,6 +45,7 @@ export interface AtomicJsonEvidenceRequest {
     | "profile-field-learning.json"
     | "profile-field-learning-02.json"
     | "question-answer-learning.json"
+    | "terminal-artifact.json"
     | "retained-fixture-control-learning.json";
 }
 

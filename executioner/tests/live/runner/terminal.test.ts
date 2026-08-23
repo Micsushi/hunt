@@ -1,10 +1,48 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   formatStage2ReviewJourneyTerminal,
   formatStage2TerminalResult,
 } from "../../../src/live/runner/terminal.ts";
+import { writeStage2TerminalArtifact } from "../../../src/acceptance/s2-terminal-artifact.ts";
+
+test("persists a sanitized terminal artifact atomically", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-terminal-artifact-"));
+  try {
+    writeStage2TerminalArtifact(root, {
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "pre_review_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: "journey_1234567890abcdef" as never,
+        status: "failed",
+        completedPages: 2,
+        errorCode: "page_incomplete",
+      },
+    });
+    const text = readFileSync(join(root, "terminal-artifact.json"), "utf8");
+    assert.equal(text.includes("secret"), false);
+    assert.deepEqual(JSON.parse(text), {
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "pre_review_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: "journey_1234567890abcdef",
+        status: "failed",
+        completedPages: 2,
+        errorCode: "page_incomplete",
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("review journey terminal preserves the stable inner error code", () => {
   assert.equal(formatStage2ReviewJourneyTerminal({

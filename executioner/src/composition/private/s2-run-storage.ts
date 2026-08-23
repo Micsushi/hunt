@@ -63,6 +63,7 @@ const REVIEW_RETAINED_FILES = new Set([
   "process-audit.json",
   "review-acceptance.json",
   "s2-acceptance-manifest.json",
+  "terminal-artifact.json",
   "value-free-trace.ndjson",
 ]);
 

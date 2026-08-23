@@ -81,6 +81,8 @@ const blocked = (
     readonly fieldId?: string;
     readonly uiBehavior?: ProfileControlSnapshot["uiBehavior"];
     readonly uiVariant?: string;
+    readonly metadataReconciliationFailure?: BlockedResult["metadataReconciliationFailure"];
+    readonly learningConversion?: BlockedResult["learningConversion"];
   } = {},
 ): BlockedResult => ({ kind: "blocked", code, ...detail });
 
@@ -101,6 +103,20 @@ export async function completeWorkdayProfilePage(
 ): Promise<ProfilePageCompletionResult> {
   if (signal.aborted) return blocked("operation_cancelled");
   const observed = await inspect(page, signal);
+  if (observed.metadataReconciliationFailure !== undefined) {
+    return blocked("profile_metadata_reconciliation_failed", {
+      metadataReconciliationFailure: observed.metadataReconciliationFailure,
+      learningConversion: Object.freeze({
+        kind: "profile_ui_learning" as const,
+        mode: "synthetic_test_non_submittable" as const,
+        mutationAllowed: false as const,
+        defaultsGenerated: false as const,
+        fieldIds: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
+          ({ fieldId }) => fieldId,
+        )),
+      }),
+    });
+  }
   if (observed.snapshot === undefined) {
     return portFailure(signal, {
       profileInspectionDiagnostic: observed.profileInspectionDiagnostic,
@@ -875,6 +891,7 @@ async function inspect(
 ): Promise<{
   readonly snapshot?: ProfilePageSnapshot;
   readonly profileInspectionDiagnostic?: BlockedResult["profileInspectionDiagnostic"];
+  readonly metadataReconciliationFailure?: BlockedResult["metadataReconciliationFailure"];
 }> {
   const started = Date.now();
   const deadline = started + 1_000;
@@ -887,6 +904,10 @@ async function inspect(
     } catch (error) {
       lastError = error;
       retryCount += 1;
+      const metadataReconciliationFailure = page.metadataReconciliationFailure?.();
+      if (metadataReconciliationFailure !== undefined) {
+        return { metadataReconciliationFailure };
+      }
       if (signal.aborted || Date.now() >= deadline) {
         const deadlineOutcome = signal.aborted || Date.now() < deadline
           ? undefined

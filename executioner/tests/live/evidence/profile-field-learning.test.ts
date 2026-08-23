@@ -110,6 +110,101 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("returns all value-free metadata mismatches for learning conversion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-metadata-mismatch-"));
+  const fields = [
+    ["source.how_did_you_hear", "search_select", "workday_source_select_v1", true],
+    ["employment.previously_worked_for_organization", "radio_group", "workday_previous_worker_radio_v1", true],
+    ["address.country", "search_select", "workday_search_select_v2", true],
+    ["address.region", "search_select", "workday_search_select_v1", false],
+    ["phone.device_type", "search_select", "workday_search_select_v2", true],
+  ] as const;
+  const plan: ProfilePagePlan = {
+    mode: "live",
+    pageType: "profile",
+    fields: fields.map(([fieldId], index) => ({
+      fieldId,
+      questionType: fieldId === "source.how_did_you_hear"
+        ? "application_source" as const
+        : fieldId === "employment.previously_worked_for_organization"
+          ? "prior_employment" as const
+          : fieldId.startsWith("phone.") ? "phone" as const : "address" as const,
+      answerType: fieldId.startsWith("phone.") ? "option" as const : "option" as const,
+      allowedOptions: fieldId === "employment.previously_worked_for_organization"
+        ? ["Yes", "No"] : [],
+      answer: {
+        kind: "answered" as const,
+        value: `answer-${index}`,
+        provenance: "owner_provided" as const,
+        lane: "live_owner_fact" as const,
+      },
+      ...(fieldId === "employment.previously_worked_for_organization" ? {
+        optionMapping: { canonicalValue: "No", visibleOption: "No", provenance: "visible_option" as const },
+      } : {}),
+    })),
+    repeatables: [],
+  };
+  const port = new FakeProfilePort({
+    pageType: "profile",
+    controls: fields.map(([fieldId, uiBehavior, uiVariant, required], index) => ({
+      controlId: `metadata-control-${index}`,
+      fieldId,
+      required,
+      uiBehavior,
+      uiVariant,
+      readback: null,
+    })),
+    rows: [],
+  });
+  const baseObserver = observer(40);
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan,
+    root,
+    sensitiveValues: ["answer-0", "answer-1", "answer-2", "answer-3", "answer-4"],
+    observeControl: async (control) => {
+      const observed = await baseObserver(control);
+      if (control.fieldId === "source.how_did_you_hear") {
+        return { ...observed, observation: { ...observed.observation, sanitizedLabelSha256: "0".repeat(64) } };
+      }
+      if (control.fieldId === "employment.previously_worked_for_organization") {
+        return { ...observed, observation: { ...observed.observation, visibleOptionIds: optionIds(["Yes"]) } };
+      }
+      if (control.fieldId === "address.country") {
+        return { ...observed, observation: { ...observed.observation, binderStrategy: "opaque_machine_key" as const } };
+      }
+      if (control.fieldId === "phone.device_type") {
+        return { ...observed, observation: { ...observed.observation, sanitizedLabelSha256: "1".repeat(64) } };
+      }
+      return observed;
+    },
+  });
+  try {
+    await assert.rejects(
+      capture.page.inspect(AbortSignal.any([])),
+      (error: unknown) => error instanceof TypeError &&
+        error.message === "profile metadata reconciliation failed",
+    );
+    const failure = capture.page.metadataReconciliationFailure?.();
+    assert.deepEqual(failure?.mismatches.map(({ fieldId }) => fieldId), fields.map(([fieldId]) =>
+      `profile.${fieldId}`
+    ));
+    assert.deepEqual(failure?.mismatches.map(({ reasons }) => reasons), [
+      ["label_digest"],
+      ["option_catalog"],
+      ["binder_strategy"],
+      ["ui_variant"],
+      ["label_digest"],
+    ]);
+    assert.equal(capture.write() !== null, true);
+    const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(JSON.stringify(evidence).includes("answer-"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("records a failed driver without changing the delegated failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-failure-"));
   const expected = new TypeError("delegated driver failure");

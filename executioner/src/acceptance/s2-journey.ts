@@ -32,6 +32,10 @@ import type {
 import {
   scheduleStage2ApplicationRetentionExpiry,
 } from "../live/runner/application-walk.ts";
+import {
+  writeStage2TerminalArtifact,
+  type Stage2TerminalArtifactV1,
+} from "./s2-terminal-artifact.ts";
 
 export interface Stage2RealJourneyInvocation {
   readonly args: Stage2RealAcceptanceArgs;
@@ -85,6 +89,10 @@ export interface Stage2RealJourneyPorts {
     evidenceRoot: string,
     value: Stage2ReviewAcceptance,
   ): Promise<void>;
+  readonly writeTerminalArtifact?: (
+    evidenceRoot: string,
+    value: Stage2TerminalArtifactV1,
+  ) => Promise<void>;
 }
 
 export type Stage2RealJourneyFailureCode =
@@ -136,6 +144,25 @@ export async function runStage2RealJourney(
   }
 
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
+  try {
+    const cleanupErrorCode = pending.ok ? undefined : pending.cleanupErrorCode;
+    const artifact = Object.freeze({
+      schemaVersion: 1 as const,
+      evidenceRevision: "s2-terminal-artifact-v1" as const,
+      resultCode: pending.ok ? "review_reached" : pending.code,
+      terminal: pending.terminal,
+      ...(cleanupErrorCode === undefined ? {} : {
+        cleanupErrorCode,
+      }),
+    });
+    if (ports.writeTerminalArtifact === undefined) {
+      writeStage2TerminalArtifact(invocation.args.evidenceRoot, artifact);
+    } else {
+      await ports.writeTerminalArtifact(invocation.args.evidenceRoot, artifact);
+    }
+  } catch {
+    // The terminal artifact is diagnostic; preserve the causal journey result.
+  }
   if (pending.ok && !signal.aborted) {
     try {
       await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);

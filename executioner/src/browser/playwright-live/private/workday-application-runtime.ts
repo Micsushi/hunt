@@ -680,12 +680,24 @@ export class OwnedWorkdayApplicationRuntime {
         }
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
           this.#profilePreservationCandidate = result.kind === "blocked" &&
-            result.code === "profile_port_unavailable" && !mutationAttempted;
+            (result.code === "profile_port_unavailable" ||
+              result.code === "profile_metadata_reconciliation_failed") && !mutationAttempted;
           if (result.kind === "blocked") {
             try {
+              const metadata = result.metadataReconciliationFailure;
               this.#trace?.("profile_reconciliation_blocked", {
                 pageId: input.pageId,
                 code: result.code,
+                ...(result.learningConversion === undefined ? {} : {
+                  learningConversion: result.learningConversion.kind,
+                }),
+                ...(metadata === undefined ? {} : {
+                  profileMetadataMismatchCount: metadata.mismatches.length,
+                  profileMetadataMismatchFields: metadata.mismatches.map(({ fieldId }) => fieldId),
+                  profileMetadataMismatchReasons: metadata.mismatches.flatMap(({ fieldId, reasons }) =>
+                    reasons.map((reason) => `${fieldId}.${reason}`)
+                  ),
+                }),
                 ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
                 ...(result.uiBehavior === undefined ? {} : { uiBehavior: result.uiBehavior }),
                 ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),

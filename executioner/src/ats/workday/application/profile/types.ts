@@ -122,6 +122,38 @@ export interface ProfileControlObservation {
   readonly selectedOptionId: string | null;
 }
 
+export const profileMetadataMismatchReasons = [
+  "binder_strategy",
+  "label_digest",
+  "question_category",
+  "answer_category",
+  "ui_behavior",
+  "ui_variant",
+  "required_state",
+  "option_catalog",
+  "plan_binding",
+] as const;
+export type ProfileMetadataMismatchReason =
+  (typeof profileMetadataMismatchReasons)[number];
+
+export interface ProfileMetadataReconciliationFailure {
+  readonly code: "profile_metadata_reconciliation_failed";
+  readonly mismatches: readonly {
+    readonly fieldId: string;
+    readonly uiBehavior: ProfileUiBehavior;
+    readonly uiVariant: string;
+    readonly reasons: readonly ProfileMetadataMismatchReason[];
+  }[];
+}
+
+export interface ProfileLearningConversion {
+  readonly kind: "profile_ui_learning";
+  readonly mode: "synthetic_test_non_submittable";
+  readonly mutationAllowed: false;
+  readonly defaultsGenerated: false;
+  readonly fieldIds: readonly string[];
+}
+
 export interface ProfileRowSnapshot {
   readonly section: ProfileRepeatableSection;
   readonly rowId: string;
@@ -235,6 +267,7 @@ export interface WorkdayProfilePagePort {
   inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
   inspectionFailure?(): ProfileInspectionFailure | undefined;
   inspectionFacts?(): ProfileInspectionFacts | undefined;
+  metadataReconciliationFailure?(): ProfileMetadataReconciliationFailure | undefined;
   commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void>;
   addOwnedRow(
     section: ProfileRepeatableSection,
@@ -279,6 +312,7 @@ export type ProfilePageCompletionResult =
         | "profile_control_missing"
         | "profile_page_mismatch"
         | "profile_plan_invalid"
+        | "profile_metadata_reconciliation_failed"
         | "profile_port_unavailable"
         | "profile_row_unverified"
         | "profile_ui_behavior_mismatch"
@@ -287,4 +321,6 @@ export type ProfilePageCompletionResult =
       readonly uiBehavior?: ProfileUiBehavior;
       readonly uiVariant?: string;
       readonly profileInspectionDiagnostic?: ProfileInspectionDiagnostic;
+      readonly metadataReconciliationFailure?: ProfileMetadataReconciliationFailure;
+      readonly learningConversion?: ProfileLearningConversion;
     };

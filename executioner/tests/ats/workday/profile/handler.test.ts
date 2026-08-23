@@ -142,6 +142,48 @@ test("fills identity, address, phone, dates, and search-selects with independent
   assert.ok(port.inspections >= port.commits.length + 1);
 });
 
+test("converts a typed metadata mismatch into non-submittable UI learning", async () => {
+  let commits = 0;
+  const failure = {
+    code: "profile_metadata_reconciliation_failed" as const,
+    mismatches: [{
+      fieldId: "profile.address.country",
+      uiBehavior: "search_select" as const,
+      uiVariant: "workday_search_select_v2",
+      reasons: ["option_catalog" as const],
+    }],
+  };
+  const page: WorkdayProfilePagePort = {
+    async inspect() {
+      throw new TypeError("profile metadata reconciliation failed");
+    },
+    metadataReconciliationFailure: () => failure,
+    async commit() { commits += 1; },
+    async addOwnedRow() { throw new TypeError("not used"); },
+    async removeOwnedRow() { throw new TypeError("not used"); },
+  };
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("address.country", "address", "option", "CA", "owner_provided", "Canada")],
+    repeatables: [],
+  }, page, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_metadata_reconciliation_failed",
+    metadataReconciliationFailure: failure,
+    learningConversion: {
+      kind: "profile_ui_learning",
+      mode: "synthetic_test_non_submittable",
+      mutationAllowed: false,
+      defaultsGenerated: false,
+      fieldIds: ["profile.address.country"],
+    },
+  });
+  assert.equal(commits, 0);
+});
+
 test("observes the page before a missing required fact stops mutation", async () => {
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
   const result = await completeWorkdayProfilePage({
