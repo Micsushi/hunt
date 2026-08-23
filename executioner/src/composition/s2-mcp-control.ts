@@ -25,6 +25,7 @@ import type { RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   runStage2RealJourney,
   type Stage2RealJourneyInvocation,
+  type Stage2RealJourneyRuntimeBinding,
   type Stage2RealJourneyResult,
 } from "../acceptance/s2-journey.ts";
 import { writeStage2ReviewAcceptance } from "../acceptance/s2-local.ts";
@@ -52,6 +53,7 @@ export interface Stage2PreparedMcpCaptureOptions {
 
 export interface Stage2McpCompositionDependencies {
   readonly capture?: (args: Stage2RealAcceptanceArgs) => Stage2PreparedMcpCapture;
+  readonly journeyBinding?: Stage2RealJourneyRuntimeBinding;
   readonly nextOperationId?: () => PortResult<OperationId, OperationIdentityError>;
   readonly run?: (
     invocation: Stage2RealJourneyInvocation,
@@ -64,7 +66,8 @@ export function createStage2McpFromPreparedRun(
   dependencies: Stage2McpCompositionDependencies = {},
 ): Stage2McpControl {
   const captured = (dependencies.capture ?? captureStage2PreparedMcpRun)(args);
-  const run = dependencies.run ?? runPreparedJourney;
+  const run = dependencies.run ?? ((invocation, signal) =>
+    runPreparedJourney(invocation, signal, dependencies.journeyBinding));
   const ids = createGeneratedIdAllocator({
     next: () => randomBytes(16).toString("hex"),
   });
@@ -142,10 +145,11 @@ export function captureStage2PreparedMcpRun(
 async function runPreparedJourney(
   invocation: Stage2RealJourneyInvocation,
   signal: AbortSignal,
+  binding: Stage2RealJourneyRuntimeBinding = stage2RealJourneyRuntimeBinding,
 ): Promise<Stage2RealJourneyResult> {
   return runStage2RealJourney(
     invocation,
-    stage2RealJourneyRuntimeBinding,
+    binding,
     {
       now: () => new Date().toISOString(),
       writeAcceptance: async (root, value) => {
