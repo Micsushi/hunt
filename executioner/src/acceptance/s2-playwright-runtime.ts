@@ -33,6 +33,7 @@ import type { PlaywrightPersistentBrowserSession } from
   "../browser/playwright-live/session.ts";
 import {
   ownedApplicationPageAccess,
+  retainOwnedApplicationSession,
   suspendOwnedApplicationSession,
   type OwnedApplicationOperation,
   type OwnedApplicationPageCapability,
@@ -435,6 +436,21 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           },
         }),
         cleanup: Object.freeze({
+          async preserve(activeSignal: AbortSignal): Promise<boolean> {
+            const activeRequest = liveRequest;
+            if (!currentOwnerAuthorization(activeRequest?.owner, activeSignal, now)) return false;
+            const retain = browser[retainOwnedApplicationSession];
+            if (retain === undefined) return false;
+            const retained = await retain.call(browser, {
+              schemaVersion: 1,
+              journeyId: session.journeyId,
+              operationId: nextOperationId(),
+              sessionId: session.sessionId,
+              target,
+              now: now(),
+            }, activeSignal);
+            return retained.ok;
+          },
           async close(activeSignal: AbortSignal, accepted?: boolean) {
             const closeRequest = {
               schemaVersion: 1,

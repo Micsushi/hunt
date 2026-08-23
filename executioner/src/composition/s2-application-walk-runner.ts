@@ -216,6 +216,10 @@ export function createStage2ApplicationWalkProductionBinding(
         dependencies: Object.freeze({
           ...walkRuntime,
           cleanup: Object.freeze({
+            ...(runtime.cleanup.preserve === undefined ? {} : {
+              preserve: async (cleanupSignal: AbortSignal): Promise<boolean> =>
+                await runtime.cleanup.preserve!(cleanupSignal),
+            }),
             async close(
               cleanupSignal: AbortSignal,
               accepted?: boolean,

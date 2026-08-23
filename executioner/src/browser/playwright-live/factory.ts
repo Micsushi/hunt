@@ -75,6 +75,7 @@ export function createPlaywrightPersistentBrowserSession(
     }),
     accountNavigationTrace: options.accountTrace,
     valueFreeTrace: options.valueFreeTrace,
+    now: options.applicationRuntime?.now,
     verificationNavigation: new PlaywrightVerificationNavigationAdapter({
       trace: options.accountTrace,
     }),

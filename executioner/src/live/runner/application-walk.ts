@@ -37,6 +37,7 @@ export interface Stage2ApplicationWalkDependencies {
   readonly trace?: (event: Stage2ApplicationWalkTraceEvent) => void;
   readonly cleanup: {
     close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
+    preserve?(signal: AbortSignal): Promise<boolean>;
   };
   readonly evidence: ApplicationWalkAcceptanceWriter;
 }
@@ -182,9 +183,16 @@ export async function runStage2ApplicationWalk(
 
   let cleaned = false;
   try {
-    cleaned = await dependencies.cleanup.close(new AbortController().signal);
+    cleaned = await dependencies.cleanup.preserve?.(new AbortController().signal) ?? false;
   } catch {
     cleaned = false;
+  }
+  if (!cleaned) {
+    try {
+      cleaned = await dependencies.cleanup.close(new AbortController().signal);
+    } catch {
+      cleaned = false;
+    }
   }
   if (!cleaned) return { ok: false, code: "browser_profile_cleanup_failed" };
   if (!walk.ok) {

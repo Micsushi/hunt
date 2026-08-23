@@ -295,6 +295,10 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
           bindingPaths: ["profile.scalar"],
           bindingDigests: [item.digest],
           frameCount: 2,
+          frameIdentityDigests: ["2".repeat(64), "3".repeat(64)],
+          frameDomOwnerCandidateCounts: [1, 2],
+          frameControlCandidateCounts: [2, 2],
+          frameOwnerControlRelationshipDigests: ["4".repeat(64), "5".repeat(64)],
           structuralIdentityDigest: "d".repeat(64),
           profileRootCandidateCount: 2,
           profileRootVisibleCount: 0,
@@ -351,6 +355,10 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       "profileInspectionAttemptCount",
       "profileInspectionDeadlineOutcome",
       "profileInspectionFrameCount",
+      "profileInspectionFrameIdentityDigests",
+      "profileInspectionFrameDomOwnerCandidateCounts",
+      "profileInspectionFrameControlCandidateCounts",
+      "profileInspectionFrameOwnerControlRelationshipDigests",
       "profileInspectionStructuralIdentityDigest",
       "profileInspectionProfileRootCandidateCount",
       "profileInspectionProfileRootVisibleCount",
@@ -386,6 +394,14 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       assert.equal(record.details.profileInspectionPreservationReason, "session_validation_required");
       assert.equal(record.details.profileInspectionContinueAllowed, false);
       assert.equal(record.details.profileInspectionFrameCount, 2);
+      assert.deepEqual(record.details.profileInspectionFrameIdentityDigests, [
+        "2".repeat(64), "3".repeat(64),
+      ]);
+      assert.deepEqual(record.details.profileInspectionFrameDomOwnerCandidateCounts, [1, 2]);
+      assert.deepEqual(record.details.profileInspectionFrameControlCandidateCounts, [2, 2]);
+      assert.deepEqual(record.details.profileInspectionFrameOwnerControlRelationshipDigests, [
+        "4".repeat(64), "5".repeat(64),
+      ]);
       assert.equal(record.details.profileInspectionProfileRootCandidateCount, 2);
       assert.equal(record.details.profileInspectionProfileRootVisibleCount, 0);
       assert.equal(record.details.profileInspectionDomOwnerCandidateCount, 3);
@@ -415,6 +431,39 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       "deadline_exceeded_before_return",
     );
     assert.equal(delayed.deadlineOutcome, "deadline_exceeded_before_return");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persists eligible and rejected profile-session retention without private identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-retention-trace-"));
+  try {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    trace("profile_session_preservation", {
+      profileInspectionSessionState: "bound",
+      profileInspectionCleanupState: "not_started",
+      profileInspectionPreservationEligible: true,
+      profileInspectionPreservationReason: "eligible",
+      profileInspectionContinueAllowed: false,
+      frameIdentity: "frame-url-title-label-value-sentinel",
+      rawError: "private-error-sentinel",
+    });
+    trace("profile_session_preservation", {
+      profileInspectionSessionState: "invalid",
+      profileInspectionCleanupState: "started",
+      profileInspectionPreservationEligible: false,
+      profileInspectionPreservationReason: "lease_invalid",
+      profileInspectionContinueAllowed: false,
+    });
+    const path = join(root, "value-free-trace.ndjson");
+    const records = readValueFreeRunTrace(path);
+    assert.deepEqual(records.map(({ details }) => [
+      details.profileInspectionPreservationEligible,
+      details.profileInspectionPreservationReason,
+      details.profileInspectionContinueAllowed,
+    ]), [[true, "eligible", false], [false, "lease_invalid", false]]);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /frame-url-title-label-value-sentinel|private-error-sentinel|submit/iu);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

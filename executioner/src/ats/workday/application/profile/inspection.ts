@@ -72,6 +72,11 @@ export function profileInspectionTraceDetails(
     profileInspectionAttemptCount: diagnostic.attemptCount,
     profileInspectionDeadlineOutcome: diagnostic.deadlineOutcome,
     profileInspectionFrameCount: diagnostic.frameCount,
+    profileInspectionFrameIdentityDigests: diagnostic.frameIdentityDigests,
+    profileInspectionFrameDomOwnerCandidateCounts: diagnostic.frameDomOwnerCandidateCounts,
+    profileInspectionFrameControlCandidateCounts: diagnostic.frameControlCandidateCounts,
+    profileInspectionFrameOwnerControlRelationshipDigests:
+      diagnostic.frameOwnerControlRelationshipDigests,
     profileInspectionStructuralIdentityDigest: diagnostic.structuralIdentityDigest,
     profileInspectionProfileRootCandidateCount: diagnostic.profileRootCandidateCount,
     profileInspectionProfileRootVisibleCount: diagnostic.profileRootVisibleCount,

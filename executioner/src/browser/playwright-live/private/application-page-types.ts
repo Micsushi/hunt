@@ -6,6 +6,16 @@ import type {
 } from "../../../contracts/live/index.ts";
 export const ownedApplicationPageAccess = Symbol("ownedApplicationPageAccess");
 export const suspendOwnedApplicationSession = Symbol("suspendOwnedApplicationSession");
+export const retainOwnedApplicationSession = Symbol("retainOwnedApplicationSession");
+
+export interface ProfileSessionRetentionRequest {
+  readonly schemaVersion: 1;
+  readonly journeyId: import("../../../contracts/index.ts").JourneyId;
+  readonly operationId: import("../../../contracts/index.ts").OperationId;
+  readonly sessionId: import("../../../contracts/live/index.ts").LiveSessionId;
+  readonly target: import("../../../contracts/live/index.ts").TargetIdentityV1;
+  readonly now: string;
+}
 
 export interface OwnedApplicationPageRequest {
   readonly schemaVersion: 1;
@@ -39,6 +49,13 @@ export interface OwnedApplicationPageCapability {
   >>;
   [suspendOwnedApplicationSession](
     request: import("../../../contracts/live/index.ts").PersistentBrowserCloseRequest,
+    signal: AbortSignal,
+  ): Promise<import("../../../contracts/live/index.ts").LivePortResult<
+    void,
+    PersistentBrowserErrorCode
+  >>;
+  [retainOwnedApplicationSession]?(
+    request: ProfileSessionRetentionRequest,
     signal: AbortSignal,
   ): Promise<import("../../../contracts/live/index.ts").LivePortResult<
     void,

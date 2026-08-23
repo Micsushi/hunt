@@ -113,6 +113,83 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
   assert.equal(terminal.submitActivated, false);
 });
 
+test("retains an eligible profile session and skips ordinary cleanup", async () => {
+  const calls: string[] = [];
+  const result = await runStage2ApplicationWalk(input(), {
+    walk: dependenciesFor([truth("profile"), {
+      ...truth("profile"),
+      requiredFields: [{ ...truth("profile").requiredFields[0]!, verification: "unverified" }],
+    }], calls),
+    laneAcceptances: { snapshot: () => [] },
+    cleanup: {
+      async preserve() {
+        calls.push("preserve");
+        return true;
+      },
+      async close() {
+        calls.push("close");
+        throw new Error("ordinary cleanup must be skipped");
+      },
+    },
+    evidence: { async write() { calls.push("write"); } },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls.slice(-1), ["preserve"]);
+  assert.doesNotMatch(JSON.stringify(result), /submit|url|title|label|value|selector|error/iu);
+});
+
+test("rejects stale profile-session retention and falls back to cleanup", async () => {
+  const calls: string[] = [];
+  const result = await runStage2ApplicationWalk(input(), {
+    walk: dependenciesFor([truth("profile"), {
+      ...truth("profile"),
+      requiredFields: [{ ...truth("profile").requiredFields[0]!, verification: "unverified" }],
+    }], calls),
+    laneAcceptances: { snapshot: () => [] },
+    cleanup: {
+      async preserve() {
+        calls.push("preserve_rejected_stale_authority");
+        return false;
+      },
+      async close() {
+        calls.push("close");
+        return true;
+      },
+    },
+    evidence: { async write() { calls.push("write"); } },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls.slice(-2), ["preserve_rejected_stale_authority", "close"]);
+  assert.doesNotMatch(JSON.stringify(result), /submit|url|title|label|value|selector|error/iu);
+});
+
+test("preservation diagnostics cannot suppress ordinary cleanup", async () => {
+  const calls: string[] = [];
+  const result = await runStage2ApplicationWalk(input(), {
+    walk: dependenciesFor([truth("profile"), {
+      ...truth("profile"),
+      requiredFields: [{ ...truth("profile").requiredFields[0]!, verification: "unverified" }],
+    }], calls),
+    laneAcceptances: { snapshot: () => [] },
+    cleanup: {
+      async preserve() {
+        calls.push("preserve_failed");
+        throw new Error("stale authority");
+      },
+      async close() {
+        calls.push("close");
+        return true;
+      },
+    },
+    evidence: { async write() { calls.push("write"); } },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls.slice(-2), ["preserve_failed", "close"]);
+});
+
 test("traces value-free page progress with question, answer, UI, and provenance summaries", async () => {
   const trace: Stage2ApplicationWalkTraceEvent[] = [];
   const calls: string[] = [];

@@ -274,6 +274,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #mutationMonitorAttempts = new Map<string, number>();
   #profileMutationAttempted = false;
   #profileCleanupState: ProfileCleanupState = "not_started";
+  #profilePreservationCandidate = false;
 
   constructor(options: OwnedWorkdayApplicationRuntimeOptions) {
     this.#request = options.request;
@@ -302,6 +303,7 @@ export class OwnedWorkdayApplicationRuntime {
 
   dispose(): void {
     this.#profileCleanupState = "started";
+    this.#profilePreservationCandidate = false;
     this.#request = undefined;
     this.#session = undefined;
     this.#reviewExpected.clear();
@@ -310,10 +312,12 @@ export class OwnedWorkdayApplicationRuntime {
   profilePreservationSnapshot(): {
     readonly mutationAttempted: boolean;
     readonly cleanupState: ProfileCleanupState;
+    readonly candidate: boolean;
   } {
     return Object.freeze({
       mutationAttempted: this.#profileMutationAttempted,
       cleanupState: this.#profileCleanupState,
+      candidate: this.#profilePreservationCandidate,
     });
   }
 
@@ -535,6 +539,7 @@ export class OwnedWorkdayApplicationRuntime {
         let mutationAttempted = false;
         this.#profileMutationAttempted = false;
         this.#profileCleanupState = "not_started";
+        this.#profilePreservationCandidate = false;
         let observationMonitorFailure: unknown;
         let learning: ReturnType<typeof createProfileFieldLearningCapture> | undefined;
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
@@ -674,6 +679,8 @@ export class OwnedWorkdayApplicationRuntime {
           learningSha256 = learning.write();
         }
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
+          this.#profilePreservationCandidate = result.kind === "blocked" &&
+            result.code === "profile_port_unavailable" && !mutationAttempted;
           if (result.kind === "blocked") {
             try {
               this.#trace?.("profile_reconciliation_blocked", {

@@ -19,7 +19,7 @@ export interface ValueFreeRunTraceRecordV1 {
   readonly traceRevision: "c3-value-free-run-trace-v1";
   readonly sequence: number;
   readonly event: string;
-  readonly details: Readonly<Record<string, boolean | number | string | readonly string[]>>;
+  readonly details: Readonly<Record<string, boolean | number | string | readonly string[] | readonly number[]>>;
 }
 
 export function createValueFreeRunTrace(
@@ -132,6 +132,10 @@ const ARRAY_KEYS = new Set([
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",
   "profileInspectionControlIdDigests", "profileInspectionSemanticIdDigests",
+  "profileInspectionFrameIdentityDigests", "profileInspectionFrameOwnerControlRelationshipDigests",
+]);
+const PROFILE_INSPECTION_NUMBER_ARRAY_KEYS = new Set([
+  "profileInspectionFrameDomOwnerCandidateCounts", "profileInspectionFrameControlCandidateCounts",
 ]);
 const PROFILE_INSPECTION_DIGEST_KEYS = new Set([
   "profileInspectionStructuralIdentityDigest", "profileInspectionBindingDigest",
@@ -143,9 +147,9 @@ const PROFILE_INSPECTION_STRING_KEYS = new Set([
   "profileInspectionPreservationReason",
 ]);
 
-function sanitize(value: object | undefined): Readonly<Record<string, boolean | number | string | readonly string[]>> {
+function sanitize(value: object | undefined): Readonly<Record<string, boolean | number | string | readonly string[] | readonly number[]>> {
   if (value === undefined || value === null || Array.isArray(value)) return Object.freeze({});
-  const output: Record<string, boolean | number | string | readonly string[]> = {};
+  const output: Record<string, boolean | number | string | readonly string[] | readonly number[]> = {};
   for (const [key, candidate] of Object.entries(value)) {
     if (PROFILE_INSPECTION_DIGEST_KEYS.has(key) && typeof candidate === "string" &&
         /^[0-9a-f]{64}$/u.test(candidate)) {
@@ -165,6 +169,11 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
           typeof item === "string" && profileInspectionIdentifier(key, item)
         )) {
       output[key] = Object.freeze([...candidate]);
+    } else if (PROFILE_INSPECTION_NUMBER_ARRAY_KEYS.has(key) && Array.isArray(candidate) &&
+        candidate.length <= 32 && candidate.every((item) =>
+          Number.isSafeInteger(item) && item >= 0 && item <= 1_000_000
+        )) {
+      output[key] = Object.freeze([...candidate]);
     } else if (ARRAY_KEYS.has(key) && Array.isArray(candidate) && candidate.length <= 64 &&
         candidate.every((item) => typeof item === "string" && structural(item))) {
       output[key] = Object.freeze([...candidate]);
@@ -176,7 +185,11 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
 function profileInspectionIdentifier(key: string, value: string): boolean {
   if (key === "profileInspectionBindingDigests" ||
       key === "profileInspectionControlIdDigests" ||
-      key === "profileInspectionSemanticIdDigests") return /^[0-9a-f]{64}$/u.test(value);
+      key === "profileInspectionSemanticIdDigests" ||
+      key === "profileInspectionFrameIdentityDigests" ||
+      key === "profileInspectionFrameOwnerControlRelationshipDigests") {
+    return /^[0-9a-f]{64}$/u.test(value);
+  }
   return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);
 }
 

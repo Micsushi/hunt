@@ -179,6 +179,10 @@ export type ProfilePreservationReason =
 
 export interface ProfileInspectionFacts {
   readonly frameCount: number;
+  readonly frameIdentityDigests: readonly string[];
+  readonly frameDomOwnerCandidateCounts: readonly number[];
+  readonly frameControlCandidateCounts: readonly number[];
+  readonly frameOwnerControlRelationshipDigests: readonly string[];
   readonly structuralIdentityDigest: string;
   readonly profileRootCandidateCount: number;
   readonly profileRootVisibleCount: number;
@@ -197,6 +201,10 @@ export interface ProfileInspectionFailure {
   readonly bindingPaths: readonly string[];
   readonly bindingDigests: readonly string[];
   readonly frameCount?: number;
+  readonly frameIdentityDigests?: readonly string[];
+  readonly frameDomOwnerCandidateCounts?: readonly number[];
+  readonly frameControlCandidateCounts?: readonly number[];
+  readonly frameOwnerControlRelationshipDigests?: readonly string[];
   readonly structuralIdentityDigest?: string;
   readonly profileRootCandidateCount?: number;
   readonly profileRootVisibleCount?: number;

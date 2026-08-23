@@ -178,28 +178,79 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       '[data-automation-id="applyFlowMyExperiencePage"]',
       '[data-automation-id="applyFlowMyExpPage"]',
     ].join(", ");
+    const ownerSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
+    const controlSelector = [
+      profileInteractiveControlSelector,
+      profileRequiredControlSelector,
+    ].join(", ");
     const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
     try {
-      const roots = this.#page.locator(rootSelector);
-      const rootCandidateCount = await roots.count();
-      const rootVisibleCount = (await visibleLocators(roots)).length;
-      const frameCount = this.#page.frames().length;
-      const domOwnerCandidateCount = await this.#page.locator(
-        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
-      ).count();
-      const controls = this.#page.locator([
-        profileInteractiveControlSelector,
-        profileRequiredControlSelector,
-      ].join(", "));
-      const controlCandidateCount = await controls.count();
-      const identities = await controls.evaluateAll((elements) => elements.slice(0, 128).map((element) => ({
-        control: element.id || element.getAttribute("name") || "missing",
-        semantic: element.getAttribute("data-automation-id") || element.getAttribute("role") || "missing",
-      })));
+      const frames = this.#page.frames();
+      const frameFacts: {
+        readonly identityDigest: string;
+        readonly domOwnerCandidateCount: number;
+        readonly controlCandidateCount: number;
+        readonly ownerControlRelationshipDigest: string;
+        readonly identities: readonly { readonly control: string; readonly semantic: string }[];
+        readonly rootCandidateCount: number;
+        readonly rootVisibleCount: number;
+      }[] = [];
+      for (const [frameIndex, frame] of frames.slice(0, 32).entries()) {
+        const roots = frame.locator(rootSelector);
+        const rootCandidateCount = await roots.count();
+        const rootVisibleCount = (await visibleLocators(roots)).length;
+        const domOwners = frame.locator(ownerSelector);
+        const controls = frame.locator(controlSelector);
+        const domOwnerCandidateCount = await domOwners.count();
+        const controlCandidateCount = await controls.count();
+        const ownerControlCount = await domOwners.evaluateAll(
+          (elements, selector) => elements.reduce(
+            (count, element) => count + element.querySelectorAll(selector).length,
+            0,
+          ),
+          controlSelector,
+        );
+        const identities = await controls.evaluateAll((elements) => elements.slice(0, 128).map((element) => ({
+          control: element.id || element.getAttribute("name") || "missing",
+          semantic: element.getAttribute("data-automation-id") || element.getAttribute("role") || "missing",
+        })));
+        const relationship = { domOwnerCandidateCount, controlCandidateCount, ownerControlCount };
+        frameFacts.push({
+          identityDigest: digest(JSON.stringify({ frameIndex, rootCandidateCount, rootVisibleCount, ...relationship })),
+          domOwnerCandidateCount,
+          controlCandidateCount,
+          ownerControlRelationshipDigest: digest(JSON.stringify(relationship)),
+          identities,
+          rootCandidateCount,
+          rootVisibleCount,
+        });
+      }
+      const frameCount = frames.length;
+      const rootCandidateCount = frameFacts.reduce((count, facts) => count + facts.rootCandidateCount, 0);
+      const rootVisibleCount = frameFacts.reduce((count, facts) => count + facts.rootVisibleCount, 0);
+      const domOwnerCandidateCount = frameFacts.reduce(
+        (count, facts) => count + facts.domOwnerCandidateCount,
+        0,
+      );
+      const controlCandidateCount = frameFacts.reduce(
+        (count, facts) => count + facts.controlCandidateCount,
+        0,
+      );
+      const identities = frameFacts.flatMap(({ identities: frameIdentities }) => frameIdentities);
       const controlIdDigests = identities.map(({ control }) => digest(control));
       const semanticIdDigests = identities.map(({ semantic }) => digest(semantic));
+      const frameIdentityDigests = frameFacts.map(({ identityDigest }) => identityDigest);
+      const frameDomOwnerCandidateCounts = frameFacts.map(({ domOwnerCandidateCount: count }) => count);
+      const frameControlCandidateCounts = frameFacts.map(({ controlCandidateCount: count }) => count);
+      const frameOwnerControlRelationshipDigests = frameFacts.map(
+        ({ ownerControlRelationshipDigest }) => ownerControlRelationshipDigest,
+      );
       const structure = JSON.stringify({
         frameCount,
+        frameIdentityDigests,
+        frameDomOwnerCandidateCounts,
+        frameControlCandidateCounts,
+        frameOwnerControlRelationshipDigests,
         rootCandidateCount,
         rootVisibleCount,
         domOwnerCandidateCount,
@@ -210,6 +261,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const structuralIdentityDigest = digest(structure);
       return Object.freeze({
         frameCount,
+        frameIdentityDigests: Object.freeze(frameIdentityDigests),
+        frameDomOwnerCandidateCounts: Object.freeze(frameDomOwnerCandidateCounts),
+        frameControlCandidateCounts: Object.freeze(frameControlCandidateCounts),
+        frameOwnerControlRelationshipDigests: Object.freeze(frameOwnerControlRelationshipDigests),
         structuralIdentityDigest,
         profileRootCandidateCount: rootCandidateCount,
         profileRootVisibleCount: rootVisibleCount,
@@ -224,6 +279,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const structuralIdentityDigest = digest("profile-inspection-facts-unavailable");
       return Object.freeze({
         frameCount: 0,
+        frameIdentityDigests: Object.freeze([]),
+        frameDomOwnerCandidateCounts: Object.freeze([]),
+        frameControlCandidateCounts: Object.freeze([]),
+        frameOwnerControlRelationshipDigests: Object.freeze([]),
         structuralIdentityDigest,
         profileRootCandidateCount: 0,
         profileRootVisibleCount: 0,
