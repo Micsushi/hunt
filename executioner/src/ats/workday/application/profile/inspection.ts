@@ -11,6 +11,7 @@ import type {
 
 const livenessFailure = /(?:browser|context|page|target).*(?:closed|destroyed)|execution context was destroyed/iu;
 const bindingFailure = /(?:binding|control|element|locator|owner|profile|repeatable|row|selector).*(?:ambiguous|missing|stale|unavailable|visible|invalid|denied)|(?:ambiguous|missing|stale|unavailable).*(?:binding|control|element|locator|owner|profile|repeatable|row|selector)/iu;
+const safeIdentityDenial = "Workday unknown required control identity denied";
 
 export function classifyProfileInspectionFailure(
   error: unknown,
@@ -38,7 +39,11 @@ export function createProfileInspectionFailure(
     bindingDigests: Object.freeze(digestInputs.map(digest)),
     ...(facts ?? {}),
   });
-  const wrapped = new TypeError("profile inspection failed");
+  const wrapped = new TypeError(
+    error instanceof Error && error.message === safeIdentityDenial
+      ? safeIdentityDenial
+      : "profile inspection failed",
+  );
   Object.defineProperty(wrapped, "profileInspectionFailure", {
     configurable: false,
     enumerable: false,

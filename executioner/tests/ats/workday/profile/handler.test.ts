@@ -12,6 +12,10 @@ import {
   type ProfileRepeatableSection,
   type WorkdayProfilePagePort,
 } from "../../../../src/ats/workday/application/profile/index.ts";
+import {
+  createProfileInspectionFailure,
+  profileInspectionFailureFromError,
+} from "../../../../src/ats/workday/application/profile/inspection.ts";
 
 const answered = (
   value: string,
@@ -243,6 +247,22 @@ test("retains value-free typed diagnostics for liveness, binding, and unknown in
     });
     assert.doesNotMatch(JSON.stringify(diagnostic), /opaque|closed|missing|secret|Ada/u);
   }
+});
+
+test("preserves the sanitized unknown-control denial through inspection wrapping", () => {
+  const wrap = (message: string) => createProfileInspectionFailure(
+    new TypeError(message),
+    "unknown_controls",
+    ["unknown_controls"],
+    ["profile.unknown_controls"],
+    ["profile.interactive"],
+    (value) => value,
+  );
+
+  const identityDenied = wrap("Workday unknown required control identity denied");
+  assert.equal(identityDenied.message, "Workday unknown required control identity denied");
+  assert.equal(profileInspectionFailureFromError(identityDenied)?.phase, "unknown_controls");
+  assert.equal(wrap("opaque profile inspection backend fault").message, "profile inspection failed");
 });
 
 for (const missing of [
