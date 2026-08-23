@@ -10,6 +10,7 @@ import {
   completeWorkdayProfilePage,
   PlaywrightWorkdayProfilePage,
   profileInspectionTraceDetails,
+  type ProfileCleanupState,
   type ProfilePageSnapshot,
   type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
@@ -271,6 +272,8 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #observationMonitorAttempts = new Map<string, number>();
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
+  #profileMutationAttempted = false;
+  #profileCleanupState: ProfileCleanupState = "not_started";
 
   constructor(options: OwnedWorkdayApplicationRuntimeOptions) {
     this.#request = options.request;
@@ -298,9 +301,20 @@ export class OwnedWorkdayApplicationRuntime {
   }
 
   dispose(): void {
+    this.#profileCleanupState = "started";
     this.#request = undefined;
     this.#session = undefined;
     this.#reviewExpected.clear();
+  }
+
+  profilePreservationSnapshot(): {
+    readonly mutationAttempted: boolean;
+    readonly cleanupState: ProfileCleanupState;
+  } {
+    return Object.freeze({
+      mutationAttempted: this.#profileMutationAttempted,
+      cleanupState: this.#profileCleanupState,
+    });
   }
 
   async run(
@@ -519,6 +533,8 @@ export class OwnedWorkdayApplicationRuntime {
         const monitorPageName = await this.#monitorPageForLane(page, "profile");
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
+        this.#profileMutationAttempted = false;
+        this.#profileCleanupState = "not_started";
         let observationMonitorFailure: unknown;
         let learning: ReturnType<typeof createProfileFieldLearningCapture> | undefined;
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
@@ -528,8 +544,10 @@ export class OwnedWorkdayApplicationRuntime {
         const profilePage: WorkdayProfilePagePort = {
           inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),
           inspectionFailure: () => playwrightProfilePage.inspectionFailure(),
+          inspectionFacts: () => playwrightProfilePage.inspectionFacts(),
           commit: async (commit, innerSignal) => {
             mutationAttempted = true;
+            this.#profileMutationAttempted = true;
             const operationId = this.#nextOperationId();
             const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
             await this.#monitor(
@@ -559,6 +577,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           addOwnedRow: async (section, innerSignal) => {
             mutationAttempted = true;
+            this.#profileMutationAttempted = true;
             const operationId = this.#nextOperationId();
             const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
             await this.#monitor(
@@ -574,6 +593,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           removeOwnedRow: async (section, rowId, innerSignal) => {
             mutationAttempted = true;
+            this.#profileMutationAttempted = true;
             const operationId = this.#nextOperationId();
             const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
             await this.#monitor(
@@ -664,7 +684,15 @@ export class OwnedWorkdayApplicationRuntime {
                 ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),
                 ...(result.profileInspectionDiagnostic === undefined
                   ? {}
-                  : profileInspectionTraceDetails(result.profileInspectionDiagnostic)),
+                  : profileInspectionTraceDetails(result.profileInspectionDiagnostic, {
+                    sessionState: this.#session === undefined ? "unknown" : "bound",
+                    cleanupState: this.#profileCleanupState,
+                    preservationEligible: false,
+                    preservationReason: mutationAttempted
+                      ? "mutation_attempted"
+                      : "session_validation_required",
+                    continueAllowed: false,
+                  })),
                 mutationAttempted,
                 retryable: false,
               });

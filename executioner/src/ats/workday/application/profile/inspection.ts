@@ -3,6 +3,10 @@ import type {
   ProfileInspectionDiagnostic,
   ProfileInspectionFailure,
   ProfileInspectionPhase,
+  ProfileInspectionFacts,
+  ProfileCleanupState,
+  ProfilePreservationReason,
+  ProfileSessionState,
 } from "./types.ts";
 
 const livenessFailure = /(?:browser|context|page|target).*(?:closed|destroyed)|execution context was destroyed/iu;
@@ -24,6 +28,7 @@ export function createProfileInspectionFailure(
   bindingPaths: readonly string[],
   digestInputs: readonly string[],
   digest: (value: string) => string,
+  facts?: ProfileInspectionFacts,
 ): Error {
   const failure: ProfileInspectionFailure = Object.freeze({
     classification: classifyProfileInspectionFailure(error),
@@ -31,6 +36,7 @@ export function createProfileInspectionFailure(
     bindingIds: Object.freeze([...bindingIds]),
     bindingPaths: Object.freeze([...bindingPaths]),
     bindingDigests: Object.freeze(digestInputs.map(digest)),
+    ...(facts ?? {}),
   });
   const wrapped = new TypeError("profile inspection failed");
   Object.defineProperty(wrapped, "profileInspectionFailure", {
@@ -44,8 +50,15 @@ export function createProfileInspectionFailure(
 
 export function profileInspectionTraceDetails(
   diagnostic: ProfileInspectionDiagnostic,
+  context?: {
+    readonly sessionState?: ProfileSessionState;
+    readonly cleanupState?: ProfileCleanupState;
+    readonly preservationEligible?: boolean;
+    readonly preservationReason?: ProfilePreservationReason;
+    readonly continueAllowed?: false;
+  },
 ): Readonly<Record<string, unknown>> {
-  return Object.freeze({
+  const details: Record<string, unknown> = {
     profileInspectionClassification: diagnostic.classification,
     profileInspectionPhase: diagnostic.phase,
     profileInspectionRetryCount: diagnostic.retryCount,
@@ -54,7 +67,32 @@ export function profileInspectionTraceDetails(
     profileInspectionBindingIds: diagnostic.bindingIds,
     profileInspectionBindingPaths: diagnostic.bindingPaths,
     profileInspectionBindingDigests: diagnostic.bindingDigests,
-  });
+  };
+  const optional = {
+    profileInspectionAttemptCount: diagnostic.attemptCount,
+    profileInspectionDeadlineOutcome: diagnostic.deadlineOutcome,
+    profileInspectionFrameCount: diagnostic.frameCount,
+    profileInspectionStructuralIdentityDigest: diagnostic.structuralIdentityDigest,
+    profileInspectionProfileRootCandidateCount: diagnostic.profileRootCandidateCount,
+    profileInspectionProfileRootVisibleCount: diagnostic.profileRootVisibleCount,
+    profileInspectionDomOwnerCandidateCount: diagnostic.domOwnerCandidateCount,
+    profileInspectionControlCandidateCount: diagnostic.controlCandidateCount,
+    profileInspectionControlIdDigests: diagnostic.controlIdDigests,
+    profileInspectionSemanticIdDigests: diagnostic.semanticIdDigests,
+    profileInspectionBindingDigest: diagnostic.bindingDigest,
+    profileInspectionProfilePortState: diagnostic.profilePortState,
+    profileInspectionSessionState: context?.sessionState ?? diagnostic.sessionState,
+    profileInspectionCleanupState: context?.cleanupState ?? diagnostic.cleanupState,
+    profileInspectionPreservationEligible:
+      context?.preservationEligible ?? diagnostic.preservationEligible,
+    profileInspectionPreservationReason:
+      context?.preservationReason ?? diagnostic.preservationReason,
+    profileInspectionContinueAllowed: context?.continueAllowed ?? diagnostic.continueAllowed,
+  } as const;
+  for (const [key, value] of Object.entries(optional)) {
+    if (value !== undefined) details[key] = value;
+  }
+  return Object.freeze(details);
 }
 
 export function profileInspectionDiagnostic(
@@ -63,6 +101,10 @@ export function profileInspectionDiagnostic(
   retryCount: number,
   deadlineMs: number,
   elapsedMs: number,
+  deadlineOutcome?: "deadline_exceeded_before_return",
+  facts?: ProfileInspectionFacts,
+  preservation?: Pick<ProfileInspectionDiagnostic, "sessionState" | "cleanupState" |
+    "preservationEligible" | "preservationReason" | "continueAllowed">,
 ): ProfileInspectionDiagnostic {
   const retained = failure ?? {
     classification: classifyProfileInspectionFailure(error),
@@ -76,6 +118,12 @@ export function profileInspectionDiagnostic(
     retryCount,
     deadlineMs,
     elapsedMs: Math.max(0, Math.round(elapsedMs)),
+    ...(facts ?? {}),
+    ...(deadlineOutcome === undefined ? {} : {
+      attemptCount: retryCount,
+      deadlineOutcome,
+    }),
+    ...(preservation ?? {}),
   });
 }
 

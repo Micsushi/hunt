@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   completeWorkdayProfilePage,
+  profileInspectionDiagnostic,
   profileInspectionTraceDetails,
   type ProfileInspectionFailure,
   type ProfilePagePlan,
@@ -293,6 +294,16 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
           bindingIds: [item.bindingId],
           bindingPaths: ["profile.scalar"],
           bindingDigests: [item.digest],
+          frameCount: 2,
+          structuralIdentityDigest: "d".repeat(64),
+          profileRootCandidateCount: 2,
+          profileRootVisibleCount: 0,
+          domOwnerCandidateCount: 3,
+          controlCandidateCount: 4,
+          controlIdDigests: ["e".repeat(64)],
+          semanticIdDigests: ["f".repeat(64)],
+          bindingDigest: "1".repeat(64),
+          profilePortState: "inspecting",
         }),
         AbortSignal.any([]),
       );
@@ -302,11 +313,21 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       assert.equal(result.profileInspectionDiagnostic?.classification, item.classification);
       assert.ok((result.profileInspectionDiagnostic?.retryCount ?? 0) > 0);
       assert.equal(result.profileInspectionDiagnostic?.deadlineMs, 1_000);
+      assert.equal(
+        result.profileInspectionDiagnostic?.deadlineOutcome,
+        "deadline_exceeded_before_return",
+      );
 
       trace("profile_reconciliation_blocked", {
         code: result.code,
         mutationAttempted: false,
-        ...profileInspectionTraceDetails(result.profileInspectionDiagnostic!),
+        ...profileInspectionTraceDetails(result.profileInspectionDiagnostic!, {
+          sessionState: "bound",
+          cleanupState: "not_started",
+          preservationEligible: false,
+          preservationReason: "session_validation_required",
+          continueAllowed: false,
+        }),
         profileInspectionDiagnostic: result.profileInspectionDiagnostic,
         rawError: item.error,
         selector: '[data-automation-id="private-secret"]',
@@ -327,6 +348,23 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       "profileInspectionRetryCount",
       "profileInspectionDeadlineMs",
       "profileInspectionElapsedMs",
+      "profileInspectionAttemptCount",
+      "profileInspectionDeadlineOutcome",
+      "profileInspectionFrameCount",
+      "profileInspectionStructuralIdentityDigest",
+      "profileInspectionProfileRootCandidateCount",
+      "profileInspectionProfileRootVisibleCount",
+      "profileInspectionDomOwnerCandidateCount",
+      "profileInspectionControlCandidateCount",
+      "profileInspectionControlIdDigests",
+      "profileInspectionSemanticIdDigests",
+      "profileInspectionBindingDigest",
+      "profileInspectionProfilePortState",
+      "profileInspectionSessionState",
+      "profileInspectionCleanupState",
+      "profileInspectionPreservationEligible",
+      "profileInspectionPreservationReason",
+      "profileInspectionContinueAllowed",
       "profileInspectionBindingIds",
       "profileInspectionBindingPaths",
       "profileInspectionBindingDigests",
@@ -339,6 +377,23 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
     ]);
     for (const [index, record] of records.entries()) {
       assert.equal(record.details.mutationAttempted, false);
+      assert.equal(record.details.profileInspectionAttemptCount, record.details.profileInspectionRetryCount);
+      assert.equal(record.details.profileInspectionDeadlineOutcome, "deadline_exceeded_before_return");
+      assert.equal(record.details.profileInspectionProfilePortState, "deadline_exceeded_before_return");
+      assert.equal(record.details.profileInspectionSessionState, "bound");
+      assert.equal(record.details.profileInspectionCleanupState, "not_started");
+      assert.equal(record.details.profileInspectionPreservationEligible, false);
+      assert.equal(record.details.profileInspectionPreservationReason, "session_validation_required");
+      assert.equal(record.details.profileInspectionContinueAllowed, false);
+      assert.equal(record.details.profileInspectionFrameCount, 2);
+      assert.equal(record.details.profileInspectionProfileRootCandidateCount, 2);
+      assert.equal(record.details.profileInspectionProfileRootVisibleCount, 0);
+      assert.equal(record.details.profileInspectionDomOwnerCandidateCount, 3);
+      assert.equal(record.details.profileInspectionControlCandidateCount, 4);
+      assert.match(record.details.profileInspectionStructuralIdentityDigest as string, /^[0-9a-f]{64}$/u);
+      assert.match(record.details.profileInspectionBindingDigest as string, /^[0-9a-f]{64}$/u);
+      assert.match((record.details.profileInspectionControlIdDigests as readonly string[])[0]!, /^[0-9a-f]{64}$/u);
+      assert.match((record.details.profileInspectionSemanticIdDigests as readonly string[])[0]!, /^[0-9a-f]{64}$/u);
       assert.deepEqual(record.details.profileInspectionBindingPaths, ["profile.scalar"]);
       assert.match(
         (record.details.profileInspectionBindingDigests as readonly string[])[0]!,
@@ -351,6 +406,15 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       persisted,
       /raw-error-sentinel|selector-sentinel|profile-value-sentinel|credential-sentinel|mailbox_sentinel|private-secret|profileInspectionDiagnostic|submit/iu,
     );
+    const delayed = profileInspectionDiagnostic(
+      new Error("deadline-only sentinel"),
+      undefined,
+      162,
+      1_000,
+      162_000,
+      "deadline_exceeded_before_return",
+    );
+    assert.equal(delayed.deadlineOutcome, "deadline_exceeded_before_return");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -888,14 +888,25 @@ async function inspect(
       lastError = error;
       retryCount += 1;
       if (signal.aborted || Date.now() >= deadline) {
+        const deadlineOutcome = signal.aborted || Date.now() < deadline
+          ? undefined
+          : "deadline_exceeded_before_return" as const;
+        const diagnostic = profileInspectionDiagnostic(
+          lastError,
+          page.inspectionFailure?.() ?? profileInspectionFailureFromError(lastError),
+          retryCount,
+          1_000,
+          Date.now() - started,
+          deadlineOutcome,
+          page.inspectionFacts?.(),
+        );
         return {
-          profileInspectionDiagnostic: profileInspectionDiagnostic(
-            lastError,
-            page.inspectionFailure?.() ?? profileInspectionFailureFromError(lastError),
-            retryCount,
-            1_000,
-            Date.now() - started,
-          ),
+          profileInspectionDiagnostic: Object.freeze({
+            ...diagnostic,
+            profilePortState: deadlineOutcome === undefined
+              ? "unavailable" as const
+              : "deadline_exceeded_before_return" as const,
+          }),
         };
       }
       await new Promise((resolve) => setTimeout(resolve, 50));

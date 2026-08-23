@@ -115,6 +115,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly accountNavigationTrace?: (
     event: import("./account-navigation-types.ts").PostingNavigationSessionTraceEvent,
   ) => void;
+  readonly valueFreeTrace?: (event: string, details?: object) => void;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
   readonly sessionControl?: SemanticSessionControlAdapter;
   readonly browserMode?: "persistent" | "private_test";

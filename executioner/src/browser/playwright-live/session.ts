@@ -90,6 +90,7 @@ export class PlaywrightPersistentBrowserSession
   #cleanupFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
   #inspectionFailedSessionId: LiveBrowserSessionV1["sessionId"] | undefined;
   #inspectionFailedJourneyId: LiveBrowserSessionV1["journeyId"] | undefined;
+  #cleanupStarted = false;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
   readonly #applicationRuntime: RevocableWorkdayApplicationRuntime;
@@ -639,11 +640,39 @@ export class PlaywrightPersistentBrowserSession
           )
         : failure("browser_session_invalidated");
       if (!after.ok || after.value.target.kind !== "matched") {
+        if (operation.kind === "reconcile_profile" && isProfileBlockedResult(result.value)) {
+          const preservation = profilePreservationOutcome({
+            mutationAttempted: applicationRuntime.profilePreservationSnapshot().mutationAttempted,
+            pageLive: false,
+            exactBinding: current,
+            leaseValid: this.#session !== undefined &&
+              now < Date.parse(this.#session.leaseExpiresAt),
+            cleanupStarted: this.#cleanupStarted,
+          });
+          await this.#invalidateAccountSession();
+          this.#emitProfilePreservation(preservation, "started");
+        }
         if (effect === "mutation") {
           await this.#invalidateAccountSession();
           return failure("browser_effect_uncertain");
         }
         return failure("browser_session_invalidated");
+      }
+      if (operation.kind === "reconcile_profile" && isProfileBlockedResult(result.value)) {
+        const preservation = profilePreservationOutcome({
+          mutationAttempted: applicationRuntime.profilePreservationSnapshot().mutationAttempted,
+          pageLive: !page.isClosed() && this.#context !== undefined,
+          exactBinding: current && after.value.target.kind === "matched",
+          leaseValid: this.#session !== undefined &&
+            now < Date.parse(this.#session.leaseExpiresAt),
+          cleanupStarted: this.#cleanupStarted,
+        });
+        if (!preservation.eligible) {
+          await this.#invalidateAccountSession();
+          this.#emitProfilePreservation(preservation, "started");
+          return failure("browser_session_invalidated");
+        }
+        this.#emitProfilePreservation(preservation, "not_started");
       }
       return { ok: true, value: result.value };
     } catch {
@@ -676,6 +705,7 @@ export class PlaywrightPersistentBrowserSession
         this.#marker === undefined || this.#profilePath === undefined ||
         request.journeyId !== this.#session.journeyId ||
         request.sessionId !== this.#session.sessionId) return failure("browser_session_missing");
+    this.#cleanupStarted = true;
     const context = this.#context;
     const inspectionPassed = await this.#holdBeforeCleanup(context);
     const closed = await this.#boundedCleanup(() => context.close());
@@ -1057,6 +1087,19 @@ export class PlaywrightPersistentBrowserSession
     await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
   }
 
+  #emitProfilePreservation(
+    preservation: ProfilePreservationOutcome,
+    cleanupState: "not_started" | "started",
+  ): void {
+    this.#options.valueFreeTrace?.("profile_session_preservation", {
+      profileInspectionSessionState: preservation.sessionState,
+      profileInspectionCleanupState: cleanupState,
+      profileInspectionPreservationEligible: preservation.eligible,
+      profileInspectionPreservationReason: preservation.reason,
+      profileInspectionContinueAllowed: false,
+    });
+  }
+
   async #closeOnce(
     request: PersistentBrowserCloseRequest,
     signal: AbortSignal,
@@ -1090,6 +1133,7 @@ export class PlaywrightPersistentBrowserSession
     ) {
       return failure("browser_session_missing");
     }
+    this.#cleanupStarted = true;
     const context = this.#context;
     const profilePath = this.#profilePath;
     const marker = this.#marker;
@@ -1148,6 +1192,7 @@ export class PlaywrightPersistentBrowserSession
     profilePath: string,
     marker?: ProfileMarkerV1,
   ): Promise<FailedOpenCleanupResult> {
+    this.#cleanupStarted = true;
     const context = this.#context;
     const failedSession = this.#session;
     const inspectionPassed = await this.#holdBeforeCleanup(context);
@@ -1181,6 +1226,7 @@ export class PlaywrightPersistentBrowserSession
   }
 
   #resetTerminalCleanup(): void {
+    this.#cleanupStarted = false;
     this.#closedSessionId = undefined;
     this.#closedJourneyId = undefined;
     this.#cleanupFailedSessionId = undefined;
@@ -1243,6 +1289,52 @@ class RevocableWorkdayApplicationRuntime {
     this.#runtime = undefined;
     runtime?.dispose();
   }
+}
+
+interface ProfilePreservationOutcome {
+  readonly eligible: boolean;
+  readonly reason:
+    | "eligible"
+    | "mutation_attempted"
+    | "page_or_context_not_live"
+    | "owner_session_target_binding_mismatch"
+    | "lease_invalid"
+    | "cleanup_started";
+  readonly sessionState: "bound" | "invalid";
+}
+
+function profilePreservationOutcome(input: {
+  readonly mutationAttempted: boolean;
+  readonly pageLive: boolean;
+  readonly exactBinding: boolean;
+  readonly leaseValid: boolean;
+  readonly cleanupStarted: boolean;
+}): ProfilePreservationOutcome {
+  if (input.mutationAttempted) {
+    return { eligible: false, reason: "mutation_attempted", sessionState: "invalid" };
+  }
+  if (!input.pageLive) {
+    return { eligible: false, reason: "page_or_context_not_live", sessionState: "invalid" };
+  }
+  if (!input.exactBinding) {
+    return {
+      eligible: false,
+      reason: "owner_session_target_binding_mismatch",
+      sessionState: "invalid",
+    };
+  }
+  if (!input.leaseValid) {
+    return { eligible: false, reason: "lease_invalid", sessionState: "invalid" };
+  }
+  if (input.cleanupStarted) {
+    return { eligible: false, reason: "cleanup_started", sessionState: "invalid" };
+  }
+  return { eligible: true, reason: "eligible", sessionState: "bound" };
+}
+
+function isProfileBlockedResult(value: unknown): boolean {
+  return typeof value === "object" && value !== null &&
+    (value as { readonly ok?: unknown }).ok === false;
 }
 
 type OpenPortResult = LivePortResult<

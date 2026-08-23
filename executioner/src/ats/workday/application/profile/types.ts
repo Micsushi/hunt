@@ -164,23 +164,67 @@ export type ProfileInspectionPhase =
   | "unknown_controls"
   | "unknown";
 
+export type ProfileInspectionDeadlineOutcome = "deadline_exceeded_before_return";
+export type ProfilePortState = "unknown" | "inspecting" | "unavailable" | "deadline_exceeded_before_return";
+export type ProfileSessionState = "unknown" | "bound" | "invalid";
+export type ProfileCleanupState = "not_started" | "started" | "completed" | "failed";
+export type ProfilePreservationReason =
+  | "session_validation_required"
+  | "mutation_attempted"
+  | "page_or_context_not_live"
+  | "owner_session_target_binding_mismatch"
+  | "lease_invalid"
+  | "cleanup_started"
+  | "eligible";
+
+export interface ProfileInspectionFacts {
+  readonly frameCount: number;
+  readonly structuralIdentityDigest: string;
+  readonly profileRootCandidateCount: number;
+  readonly profileRootVisibleCount: number;
+  readonly domOwnerCandidateCount: number;
+  readonly controlCandidateCount: number;
+  readonly controlIdDigests: readonly string[];
+  readonly semanticIdDigests: readonly string[];
+  readonly bindingDigest: string;
+  readonly profilePortState: ProfilePortState;
+}
+
 export interface ProfileInspectionFailure {
   readonly classification: ProfileInspectionClassification;
   readonly phase: ProfileInspectionPhase;
   readonly bindingIds: readonly string[];
   readonly bindingPaths: readonly string[];
   readonly bindingDigests: readonly string[];
+  readonly frameCount?: number;
+  readonly structuralIdentityDigest?: string;
+  readonly profileRootCandidateCount?: number;
+  readonly profileRootVisibleCount?: number;
+  readonly domOwnerCandidateCount?: number;
+  readonly controlCandidateCount?: number;
+  readonly controlIdDigests?: readonly string[];
+  readonly semanticIdDigests?: readonly string[];
+  readonly bindingDigest?: string;
+  readonly profilePortState?: ProfilePortState;
 }
 
 export interface ProfileInspectionDiagnostic extends ProfileInspectionFailure {
   readonly retryCount: number;
   readonly deadlineMs: number;
   readonly elapsedMs: number;
+  readonly attemptCount?: number;
+  readonly deadlineOutcome?: ProfileInspectionDeadlineOutcome;
+  readonly sessionState?: ProfileSessionState;
+  readonly cleanupState?: ProfileCleanupState;
+  readonly preservationEligible?: boolean;
+  readonly preservationReason?: ProfilePreservationReason;
+  readonly continueAllowed?: false;
 }
 
 export interface WorkdayProfilePagePort {
   inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
   inspectionFailure?(): ProfileInspectionFailure | undefined;
+  inspectionFacts?(): ProfileInspectionFacts | undefined;
   commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void>;
   addOwnedRow(
     section: ProfileRepeatableSection,

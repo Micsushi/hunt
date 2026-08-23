@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Locator, Page } from "playwright";
 
 import {
@@ -16,6 +17,7 @@ import type {
   ProfileInteractionSnapshot,
   ProfilePageSnapshot,
   ProfilePageType,
+  ProfileInspectionFacts,
   ProfileRepeatableSection,
   ProfileRowSnapshot,
   WorkdayProfilePagePort,
@@ -59,6 +61,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #unknownControlOrdinals = new Map<string, number>();
   readonly #ownedIndexedRows = new Set<string>();
   #inspectionFailure: ProfileInspectionFailure | undefined;
+  #inspectionFacts: ProfileInspectionFacts | undefined;
   #nextUnknownControlOrdinal = 1;
 
   constructor(page: Page, options: PlaywrightWorkdayProfilePageOptions) {
@@ -70,7 +73,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
     abort(signal);
     this.#inspectionFailure = undefined;
-    const profile = await this.#assertPageType();
+    this.#inspectionFacts = await this.#captureInspectionFacts();
+    let profile: Locator;
+    try {
+      profile = await this.#assertPageType();
+    } catch (error) {
+      throw this.#recordInspectionFailure(
+        "unknown",
+        ["profile_root"],
+        ["profile.root"],
+        [],
+        error,
+      );
+    }
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
     for (const entry of profileScalarControlCatalog) {
@@ -133,8 +148,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     return this.#inspectionFailure;
   }
 
+  inspectionFacts(): ProfileInspectionFacts | undefined {
+    return this.#inspectionFacts;
+  }
+
   #recordInspectionFailure(
-    phase: "scalar" | "repeatable" | "unknown_controls",
+    phase: "scalar" | "repeatable" | "unknown_controls" | "unknown",
     bindingIds: readonly string[],
     bindingPaths: readonly string[],
     digestInputs: readonly string[],
@@ -147,9 +166,75 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       bindingPaths,
       digestInputs,
       retainedProfileTextSha256,
+      this.#inspectionFacts,
     );
     this.#inspectionFailure = profileInspectionFailureFromError(wrapped);
     return wrapped;
+  }
+
+  async #captureInspectionFacts(): Promise<ProfileInspectionFacts> {
+    const rootSelector = [
+      '[data-automation-id="applyFlowMyInfoPage"]',
+      '[data-automation-id="applyFlowMyExperiencePage"]',
+      '[data-automation-id="applyFlowMyExpPage"]',
+    ].join(", ");
+    const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+    try {
+      const roots = this.#page.locator(rootSelector);
+      const rootCandidateCount = await roots.count();
+      const rootVisibleCount = (await visibleLocators(roots)).length;
+      const frameCount = this.#page.frames().length;
+      const domOwnerCandidateCount = await this.#page.locator(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      ).count();
+      const controls = this.#page.locator([
+        profileInteractiveControlSelector,
+        profileRequiredControlSelector,
+      ].join(", "));
+      const controlCandidateCount = await controls.count();
+      const identities = await controls.evaluateAll((elements) => elements.slice(0, 128).map((element) => ({
+        control: element.id || element.getAttribute("name") || "missing",
+        semantic: element.getAttribute("data-automation-id") || element.getAttribute("role") || "missing",
+      })));
+      const controlIdDigests = identities.map(({ control }) => digest(control));
+      const semanticIdDigests = identities.map(({ semantic }) => digest(semantic));
+      const structure = JSON.stringify({
+        frameCount,
+        rootCandidateCount,
+        rootVisibleCount,
+        domOwnerCandidateCount,
+        controlCandidateCount,
+        controlIdDigests,
+        semanticIdDigests,
+      });
+      const structuralIdentityDigest = digest(structure);
+      return Object.freeze({
+        frameCount,
+        structuralIdentityDigest,
+        profileRootCandidateCount: rootCandidateCount,
+        profileRootVisibleCount: rootVisibleCount,
+        domOwnerCandidateCount,
+        controlCandidateCount,
+        controlIdDigests: Object.freeze(controlIdDigests),
+        semanticIdDigests: Object.freeze(semanticIdDigests),
+        bindingDigest: digest(JSON.stringify({ structuralIdentityDigest, controlIdDigests, semanticIdDigests })),
+        profilePortState: "inspecting" as const,
+      });
+    } catch {
+      const structuralIdentityDigest = digest("profile-inspection-facts-unavailable");
+      return Object.freeze({
+        frameCount: 0,
+        structuralIdentityDigest,
+        profileRootCandidateCount: 0,
+        profileRootVisibleCount: 0,
+        domOwnerCandidateCount: 0,
+        controlCandidateCount: 0,
+        controlIdDigests: Object.freeze([]),
+        semanticIdDigests: Object.freeze([]),
+        bindingDigest: digest(structuralIdentityDigest),
+        profilePortState: "unknown" as const,
+      });
+    }
   }
 
   async observeControl(

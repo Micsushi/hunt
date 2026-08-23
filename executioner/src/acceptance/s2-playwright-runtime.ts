@@ -222,6 +222,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             applicationRuntime,
             externalMonitor: accountExternalMonitor,
             accountTrace: valueFreeTrace,
+            valueFreeTrace,
             inspectionHold,
           }));
         opened = await browser.open({

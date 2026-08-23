@@ -74,6 +74,9 @@ const STRING_KEYS = new Set([
   "code", "fieldId", "uiBehavior", "uiVariant", "kind", "journeyId", "stopAfter",
   "checkpoint", "browserPage", "status", "classifier", "primitive", "unknownLayer",
   "profileInspectionClassification", "profileInspectionPhase",
+  "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
+  "profileInspectionSessionState", "profileInspectionCleanupState",
+  "profileInspectionPreservationReason",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -109,6 +112,9 @@ const NUMBER_KEYS = new Set([
   "reboundDateLabelSvgOwnerCount", "reboundDateDistinctInputCount",
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
   "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
+  "profileInspectionAttemptCount", "profileInspectionFrameCount",
+  "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
+  "profileInspectionDomOwnerCandidateCount", "profileInspectionControlCandidateCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
@@ -118,19 +124,36 @@ const BOOLEAN_KEYS = new Set([
   "rightHitInput", "rightHitWithinField", "rightHitButtonAncestor",
   "rightHitRoleButtonAncestor", "rightHitSvgAncestor", "rightHitAutomationAncestor",
   "boundRightHitInput", "boundRightHitWithinSvgOwner", "boundRightHitSvgAncestor",
+  "profileInspectionPreservationEligible", "profileInspectionContinueAllowed",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",
+  "profileInspectionControlIdDigests", "profileInspectionSemanticIdDigests",
+]);
+const PROFILE_INSPECTION_DIGEST_KEYS = new Set([
+  "profileInspectionStructuralIdentityDigest", "profileInspectionBindingDigest",
+]);
+const PROFILE_INSPECTION_STRING_KEYS = new Set([
+  "profileInspectionClassification", "profileInspectionPhase",
+  "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
+  "profileInspectionSessionState", "profileInspectionCleanupState",
+  "profileInspectionPreservationReason",
 ]);
 
 function sanitize(value: object | undefined): Readonly<Record<string, boolean | number | string | readonly string[]>> {
   if (value === undefined || value === null || Array.isArray(value)) return Object.freeze({});
   const output: Record<string, boolean | number | string | readonly string[]> = {};
   for (const [key, candidate] of Object.entries(value)) {
-    if (STRING_KEYS.has(key) && typeof candidate === "string" && structural(candidate)) {
+    if (PROFILE_INSPECTION_DIGEST_KEYS.has(key) && typeof candidate === "string" &&
+        /^[0-9a-f]{64}$/u.test(candidate)) {
+      output[key] = candidate;
+    } else if (STRING_KEYS.has(key) && typeof candidate === "string" &&
+        (PROFILE_INSPECTION_STRING_KEYS.has(key)
+          ? profileInspectionString(key, candidate)
+          : structural(candidate))) {
       output[key] = candidate;
     } else if (NUMBER_KEYS.has(key) && Number.isSafeInteger(candidate) &&
         typeof candidate === "number" && candidate >= 0 && candidate <= 1_000_000) {
@@ -151,8 +174,28 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
 }
 
 function profileInspectionIdentifier(key: string, value: string): boolean {
-  if (key === "profileInspectionBindingDigests") return /^[0-9a-f]{64}$/u.test(value);
+  if (key === "profileInspectionBindingDigests" ||
+      key === "profileInspectionControlIdDigests" ||
+      key === "profileInspectionSemanticIdDigests") return /^[0-9a-f]{64}$/u.test(value);
   return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);
+}
+
+function profileInspectionString(key: string, value: string): boolean {
+  const allowed: Record<string, ReadonlySet<string>> = {
+    profileInspectionClassification: new Set(["liveness", "dom_owner_binding", "unknown"]),
+    profileInspectionPhase: new Set(["scalar", "repeatable", "unknown_controls", "unknown"]),
+    profileInspectionDeadlineOutcome: new Set(["deadline_exceeded_before_return"]),
+    profileInspectionProfilePortState: new Set([
+      "unknown", "inspecting", "unavailable", "deadline_exceeded_before_return",
+    ]),
+    profileInspectionSessionState: new Set(["unknown", "bound", "invalid"]),
+    profileInspectionCleanupState: new Set(["not_started", "started", "completed", "failed"]),
+    profileInspectionPreservationReason: new Set([
+      "session_validation_required", "mutation_attempted", "page_or_context_not_live",
+      "owner_session_target_binding_mismatch", "lease_invalid", "cleanup_started", "eligible",
+    ]),
+  };
+  return allowed[key]?.has(value) ?? false;
 }
 
 function admitRecord(value: unknown, sequence: number): ValueFreeRunTraceRecordV1 {
