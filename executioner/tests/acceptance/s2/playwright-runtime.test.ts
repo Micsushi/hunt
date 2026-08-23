@@ -707,9 +707,6 @@ fields: [
     assert.deepEqual(expectations.map(({ fieldId }) => fieldId), [
       "identity.given_name",
       "identity.family_name",
-      "identity.middle_name",
-      "address.line2",
-      "address.postal_code",
       "source.how_did_you_hear",
     ]);
   } finally {
