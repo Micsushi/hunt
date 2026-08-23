@@ -96,7 +96,6 @@ export class PlaywrightPersistentBrowserSession
   #cleanupStarted = false;
   #profileSessionRetained = false;
   #profileSessionRetentionRequest: ProfileSessionRetentionRequest | undefined;
-  #profileRetentionExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
   readonly #applicationRuntime: RevocableWorkdayApplicationRuntime;
@@ -729,20 +728,46 @@ export class PlaywrightPersistentBrowserSession
       signal,
       this.#options.timeoutMs,
     );
-    if (!pinned.ok || pinned.value.target.kind !== "matched") {
-      const outcome = this.#profileRetentionDecision(request, signal, Date.parse(request.now), false);
+    const authority = this.#options.retentionAuthority === undefined
+      ? request.now === undefined ? undefined : {
+          now: request.now,
+          ownerApprovalExpiresAt: request.ownerApprovalExpiresAt,
+        }
+      : this.#options.retentionAuthority(signal);
+    if (authority === undefined) {
+      return failure("browser_session_invalidated");
+    }
+    const effectiveRequest = Object.freeze({
+      ...request,
+      now: authority.now,
+      ...(authority.ownerApprovalExpiresAt === undefined
+        ? {}
+        : { ownerApprovalExpiresAt: authority.ownerApprovalExpiresAt }),
+    });
+    const pinnedTargetMatched = pinned.ok && pinned.value.target.kind === "matched";
+    if (!pinnedTargetMatched) {
+      const outcome = this.#profileRetentionDecision(
+        effectiveRequest,
+        signal,
+        Date.parse(authority.now),
+        false,
+      );
       this.#emitProfilePreservation(outcome, "started");
       return failure("browser_session_invalidated");
     }
-    const outcome = this.#profileRetentionDecision(request, signal, Date.parse(request.now), true);
+    const outcome = this.#profileRetentionDecision(
+      effectiveRequest,
+      signal,
+      Date.parse(authority.now),
+      true,
+    );
     if (!outcome.eligible) {
       this.#profileSessionRetained = false;
       this.#emitProfilePreservation(outcome, "started");
       return failure("browser_session_invalidated");
     }
     this.#profileSessionRetained = true;
-    this.#profileSessionRetentionRequest = Object.freeze({ ...request });
-    this.#scheduleProfileRetentionExpiry(this.#session.leaseExpiresAt);
+    this.#profileSessionRetentionRequest = effectiveRequest;
     this.#emitProfilePreservation(outcome, "not_started");
     return { ok: true, value: undefined };
   }
@@ -761,7 +786,6 @@ export class PlaywrightPersistentBrowserSession
     ) return failure("browser_session_invalidated");
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
-    this.#clearProfileRetentionExpiry();
     if (this.#profilePath === undefined) return failure("browser_session_missing");
     if (
       this.#context === undefined || this.#session === undefined || this.#marker === undefined ||
@@ -1197,11 +1221,11 @@ export class PlaywrightPersistentBrowserSession
       sameTarget(request.target, session.target) &&
       sameTarget(request.target, marker.target) &&
       sameTarget(request.target, this.#approvedTarget.identity);
-    const requestNow = Date.parse(request.now);
+    const requestNow = request.now === undefined ? undefined : Date.parse(request.now);
     const approvalExpiresAt = request.ownerApprovalExpiresAt === undefined
       ? undefined
       : Date.parse(request.ownerApprovalExpiresAt);
-    const exactIso = Number.isFinite(requestNow) &&
+    const exactIso = requestNow !== undefined && Number.isFinite(requestNow) &&
       new Date(requestNow).toISOString() === request.now;
     const approvalValid = approvalExpiresAt !== undefined &&
       Number.isFinite(approvalExpiresAt) &&
@@ -1211,7 +1235,7 @@ export class PlaywrightPersistentBrowserSession
       marker !== undefined &&
       freshNow >= Date.parse(marker.admittedAt) &&
       freshNow < Date.parse(session.leaseExpiresAt) &&
-      requestNow >= Date.parse(marker.admittedAt) &&
+      requestNow !== undefined && requestNow >= Date.parse(marker.admittedAt) &&
       requestNow < Date.parse(session.leaseExpiresAt) &&
       requestNow <= freshNow && exactIso && approvalValid;
     return profilePreservationOutcome({
@@ -1221,40 +1245,6 @@ export class PlaywrightPersistentBrowserSession
       leaseValid,
       cleanupStarted: this.#cleanupStarted || snapshot?.cleanupState !== "not_started",
     });
-  }
-
-  #freshNowString(): string {
-    try { return this.#options.now?.() ?? new Date().toISOString(); } catch { return ""; }
-  }
-
-  #scheduleProfileRetentionExpiry(leaseExpiresAt: string): void {
-    this.#clearProfileRetentionExpiry();
-    const expiresAt = Date.parse(leaseExpiresAt);
-    if (!Number.isFinite(expiresAt)) return;
-    const delay = Math.max(0, expiresAt - Date.now());
-    const timer = setTimeout(() => {
-      this.#profileRetentionExpiryTimer = undefined;
-      const retained = this.#profileSessionRetentionRequest;
-      if (retained === undefined || !this.#profileSessionRetained) return;
-      const remaining = Date.parse(leaseExpiresAt) - Date.now();
-      if (remaining > 0) {
-        this.#scheduleProfileRetentionExpiry(leaseExpiresAt);
-        return;
-      }
-      void this[releaseOwnedApplicationSession]({
-        ...retained,
-        now: this.#freshNowString(),
-      }, new AbortController().signal).catch(() => undefined);
-    }, Math.min(delay, 2_147_483_647));
-    timer.unref?.();
-    this.#profileRetentionExpiryTimer = timer;
-  }
-
-  #clearProfileRetentionExpiry(): void {
-    if (this.#profileRetentionExpiryTimer !== undefined) {
-      clearTimeout(this.#profileRetentionExpiryTimer);
-      this.#profileRetentionExpiryTimer = undefined;
-    }
   }
 
   #emitProfilePreservation(
@@ -1373,7 +1363,6 @@ export class PlaywrightPersistentBrowserSession
     this.#cleanupStarted = true;
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
-    this.#clearProfileRetentionExpiry();
     const context = this.#context;
     const failedSession = this.#session;
     const inspectionPassed = await this.#holdBeforeCleanup(context);
@@ -1416,7 +1405,6 @@ export class PlaywrightPersistentBrowserSession
     this.#inspectionFailedJourneyId = undefined;
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
-    this.#clearProfileRetentionExpiry();
   }
 
   async #cleanupDetachedContext(

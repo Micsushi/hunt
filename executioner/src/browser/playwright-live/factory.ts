@@ -40,6 +40,13 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
       PlaywrightSessionControlTraceEvent,
   ) => void;
   readonly valueFreeTrace?: (event: string, details?: object) => void;
+  readonly now?: () => string;
+  readonly retentionAuthority?: (
+    signal: AbortSignal,
+  ) => {
+    readonly now: string;
+    readonly ownerApprovalExpiresAt?: string;
+  } | undefined;
   readonly applicationRuntime?: OwnedWorkdayApplicationRuntimeOptions;
   readonly externalMonitor?: ExternalMonitorPort;
   readonly browserMode?: "persistent" | "private_test";
@@ -75,7 +82,8 @@ export function createPlaywrightPersistentBrowserSession(
     }),
     accountNavigationTrace: options.accountTrace,
     valueFreeTrace: options.valueFreeTrace,
-    now: options.applicationRuntime?.now,
+    now: options.now ?? options.applicationRuntime?.now,
+    retentionAuthority: options.retentionAuthority,
     verificationNavigation: new PlaywrightVerificationNavigationAdapter({
       trace: options.accountTrace,
     }),

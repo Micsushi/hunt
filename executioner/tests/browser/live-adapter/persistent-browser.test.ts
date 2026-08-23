@@ -521,7 +521,70 @@ test("retention rejects a pinned-target drift and leaves fallback cleanup as own
   assert.equal(profiles.cleanupCount, 1);
 });
 
-test("retained session expiry timer releases context and profile", async () => {
+test("retention rejects a pinned probe that crosses current approval", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const base = Date.now();
+  let current = new Date(base).toISOString();
+  const approvalExpiresAt = new Date(base + 50).toISOString();
+  const leaseExpiresAt = new Date(base + 10_000).toISOString();
+  let delayProbe = false;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(new Date(base - 60_000).toISOString(), leaseExpiresAt),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() {
+      if (delayProbe) {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        current = new Date(base + 100).toISOString();
+      }
+      return ownedMatched();
+    } },
+    profiles,
+    applicationRuntime: candidateApplicationRuntime(leaseExpiresAt),
+    now: () => current,
+    retentionAuthority: () => current < approvalExpiresAt
+      ? { now: current, ownerApprovalExpiresAt: approvalExpiresAt }
+      : undefined,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 1_500,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const unavailable = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_delayed_probe_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: current,
+  }, { kind: "reconcile_profile", input: { pageId: "page-profile" } }, new AbortController().signal);
+  assert.equal(unavailable.ok, true);
+  delayProbe = true;
+  const rejected = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_delayed_probe_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    ownerApprovalExpiresAt: approvalExpiresAt,
+  }, new AbortController().signal);
+  assert.deepEqual(rejected, {
+    ok: false,
+    error: { code: "browser_session_invalidated", retryable: false },
+  });
+  assert.equal(context.closeCount, 0);
+  assert.deepEqual(await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_delayed_probe_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal), { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("explicit retained-session release closes context and profile", async () => {
   const now = Date.now();
   const context = new FakeContext([]);
   const profiles = new MemoryProfiles();
@@ -573,6 +636,15 @@ test("retained session expiry timer releases context and profile", async () => {
     ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
   }, new AbortController().signal);
   assert.deepEqual(retained, { ok: true, value: undefined });
+  const released = await provider[releaseOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_release_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+  }, new AbortController().signal);
+  assert.deepEqual(released, { ok: true, value: undefined });
   await waitFor(() => context.closeCount === 1 && profiles.cleanupCount === 1, 3_000);
   assert.equal(context.closed, true);
   assert.equal(profiles.marker, undefined);

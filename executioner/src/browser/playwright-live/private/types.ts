@@ -117,6 +117,10 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   ) => void;
   readonly valueFreeTrace?: (event: string, details?: object) => void;
   readonly now?: () => string;
+  readonly retentionAuthority?: (signal: AbortSignal) => {
+    readonly now: string;
+    readonly ownerApprovalExpiresAt?: string;
+  } | undefined;
   readonly verificationNavigation?: SemanticVerificationNavigationAdapter;
   readonly sessionControl?: SemanticSessionControlAdapter;
   readonly browserMode?: "persistent" | "private_test";

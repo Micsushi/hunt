@@ -15,7 +15,7 @@ export interface ProfileSessionRetentionRequest {
   readonly operationId: import("../../../contracts/index.ts").OperationId;
   readonly sessionId: import("../../../contracts/live/index.ts").LiveSessionId;
   readonly target: import("../../../contracts/live/index.ts").TargetIdentityV1;
-  readonly now: string;
+  readonly now?: string;
   readonly ownerApprovalExpiresAt?: string;
 }
 

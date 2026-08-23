@@ -226,6 +226,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             accountTrace: valueFreeTrace,
             valueFreeTrace,
             inspectionHold,
+            now,
+            retentionAuthority: (activeSignal) =>
+              retentionDecision(liveRequest, activeSignal, now),
           }));
         opened = await browser.open({
           schemaVersion: 1,
@@ -438,20 +441,33 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         }),
         cleanup: Object.freeze({
           async preserve(activeSignal: AbortSignal): Promise<boolean> {
-            const decision = retentionDecision(liveRequest, activeSignal, now);
-            if (decision === undefined) return false;
+            if (activeSignal.aborted || liveRequest === undefined) return false;
             const retain = browser[retainOwnedApplicationSession];
             if (retain === undefined) return false;
+            const decision = productionBrowser === undefined
+              ? retentionDecision(liveRequest, activeSignal, now)
+              : undefined;
+            if (productionBrowser === undefined && decision === undefined) return false;
             const retained = await retain.call(browser, {
               schemaVersion: 1,
               journeyId: session.journeyId,
               operationId: nextOperationId(),
               sessionId: session.sessionId,
               target,
-              now: decision.now,
-              ownerApprovalExpiresAt: decision.ownerApprovalExpiresAt,
+              ...(decision === undefined ? {} : {
+                now: decision.now,
+                ownerApprovalExpiresAt: decision.ownerApprovalExpiresAt,
+              }),
             }, activeSignal);
             return retained.ok;
+          },
+          retentionExpiresAt(): string | undefined {
+            const activeRequest = liveRequest;
+            if (activeRequest === undefined) return undefined;
+            return minimumExpiry(
+              activeRequest.owner.approval.expiresAt,
+              session.leaseExpiresAt,
+            );
           },
           async release(activeSignal: AbortSignal): Promise<boolean> {
             const activeRequest = liveRequest;
@@ -718,6 +734,16 @@ function retentionDecision(
   return currentOwnerAuthorization(request.owner, signal, () => current)
     ? Object.freeze({ now: current, ownerApprovalExpiresAt: request.owner.approval.expiresAt })
     : undefined;
+}
+
+function minimumExpiry(left: string, right: string): string | undefined {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (!Number.isFinite(leftMs) || !Number.isFinite(rightMs)) return undefined;
+  if (new Date(leftMs).toISOString() !== left || new Date(rightMs).toISOString() !== right) {
+    return undefined;
+  }
+  return leftMs <= rightMs ? left : right;
 }
 
 async function sealAccountEvidence(

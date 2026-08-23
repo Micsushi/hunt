@@ -2691,6 +2691,10 @@ test("production retention captures one fresh authority decision and releases it
     },
   };
   try {
+    const approvedOwner = authorizedOwner(root) as {
+      approval: { expiresAt: string };
+    };
+    approvedOwner.approval.expiresAt = "2026-08-06T11:00:00.000Z";
     const runtime = await createStage2PlaywrightLiveRuntimeBinding({
       browser: () => browser,
       now: () => {
@@ -2699,7 +2703,7 @@ test("production retention captures one fresh authority decision and releases it
       },
       nextOperationId: operationIds(950),
     }).bind({
-      owner: authorizedOwner(root),
+      owner: approvedOwner as never,
       ownerBinding: {} as never,
       ownerSources: { sensitiveValues: [] } as never,
       sourceRevision: "0123456789abcdef0123456789abcdef01234567",
@@ -2708,6 +2712,10 @@ test("production retention captures one fresh authority decision and releases it
     assert.equal(await runtime.cleanup.preserve!(new AbortController().signal), true);
     assert.equal(nowCalls, 1);
     assert.equal(retained, true);
+    assert.equal(
+      runtime.cleanup.retentionExpiresAt?.(),
+      "2026-08-06T11:00:00.000Z",
+    );
     assert.equal(await runtime.cleanup.release!(new AbortController().signal), true);
     assert.equal(releaseCalls, 1);
     assert.equal(retained, false);

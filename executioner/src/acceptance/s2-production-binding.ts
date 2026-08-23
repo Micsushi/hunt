@@ -111,6 +111,13 @@ export function createStage2RealJourneyProductionBinding(
         review: bound.review,
         privacy: bound.privacy,
         cleanup: Object.freeze({
+          ...(resolved.dependencies.cleanup.release === undefined ? {} : {
+            release: async (cleanupSignal: AbortSignal): Promise<boolean> =>
+              await resolved.dependencies.cleanup.release!(cleanupSignal),
+          }),
+          ...(resolved.dependencies.cleanup.retentionExpiresAt === undefined ? {} : {
+            retentionExpiresAt: resolved.dependencies.cleanup.retentionExpiresAt,
+          }),
           async close(cleanupSignal: AbortSignal, accepted?: boolean) {
             let cleaned = false;
             try {

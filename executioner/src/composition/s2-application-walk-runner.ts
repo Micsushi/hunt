@@ -235,6 +235,9 @@ export function createStage2ApplicationWalkProductionBinding(
                 }
               },
             }),
+            ...(runtime.cleanup.retentionExpiresAt === undefined ? {} : {
+              retentionExpiresAt: runtime.cleanup.retentionExpiresAt,
+            }),
             async close(
               cleanupSignal: AbortSignal,
               accepted?: boolean,

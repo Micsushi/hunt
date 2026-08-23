@@ -157,6 +157,110 @@ test("production binding resolves opaque owner sources without value leakage", a
   }
 });
 
+test("production application graph routes approval expiry through release cleanup", async () => {
+  const fixture = liveFixture();
+  const calls: string[] = [];
+  let retainedResume: ResolvedResumeArtifact | undefined;
+  let released = false;
+  let releaseAt = 0;
+  const approvalExpiryAt = Date.now() + 40;
+  const leaseExpiryAt = Date.now() + 500;
+  try {
+    const collector = createApplicationLaneAcceptanceCollector();
+    collector.record({
+      schemaVersion: 1,
+      checkpoint: "profile_verified",
+      pageType: "profile",
+      verifiedFields: [],
+      ownedDuplicateRows: 0,
+      independentlyVerified: true,
+      submitActivated: false,
+      privacyScan: "pass",
+    });
+    const runtime: Stage2ApplicationWalkRuntimeBinding = {
+      async bind(request) {
+        retainedResume = request.ownerSources.resumeIntent.artifact;
+        return {
+          walk: {
+            observer: {
+              async observe() {
+                return { ok: true as const, value: truth("profile", "expiry-profile") };
+              },
+            },
+            handlers: {
+              resume: verifiedHandler("resume", "resume_verified"),
+              profile: verifiedHandler("profile", "profile_verified"),
+              questionnaire: neverHandler("questionnaire", "questionnaire_verified"),
+            },
+            navigation: { async next() { return { ok: true as const, value: { advanced: true as const } }; } },
+            progress: { async record() { return { ok: true as const, value: undefined }; } },
+          },
+          laneAcceptances: collector,
+          cleanup: {
+            async preserve() {
+              calls.push("preserve");
+              return true;
+            },
+            retentionExpiresAt() {
+              return new Date(Math.min(approvalExpiryAt, leaseExpiryAt)).toISOString();
+            },
+            async release() {
+              calls.push("release");
+              calls.push("monitor.close", "profile.close", "context.close");
+              releaseAt = Date.now();
+              released = true;
+              return true;
+            },
+            async close() {
+              calls.push("ordinary.close");
+              return true;
+            },
+          },
+        };
+      },
+    };
+    const binding = createStage2ApplicationWalkProductionBinding({
+      runtime,
+      inspectSource: () => ({
+        repositoryRoot: resolve(".."),
+        sourceRevision: "1111111111111111111111111111111111111111",
+      }),
+      now: () => fixture.now,
+      aclAdmission: { admit: () => ({ ok: true as const }) },
+    });
+    const result = await runStage2ApplicationWalkFromOwnerConfig({
+      configPath: fixture.configPath,
+      evidenceRoot: fixture.evidenceRoot,
+      checkpoint: "profile_verified",
+    }, AbortSignal.any([]), binding);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    for (let attempt = 0; attempt < 50 && !released; attempt += 1) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+    assert.equal(released, true);
+    assert.equal(releaseAt < leaseExpiryAt, true);
+    assert.deepEqual(calls, [
+      "preserve",
+      "release",
+      "monitor.close",
+      "profile.close",
+      "context.close",
+    ]);
+    assert.equal(retainedResume !== undefined, true);
+    if (retainedResume !== undefined) {
+      assert.deepEqual(await useResumeArtifactUpload(retainedResume, () => ({
+        ok: true as const,
+        value: undefined,
+      })), {
+        ok: false,
+        error: { code: "artifact_already_consumed", retryable: false },
+      });
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("production binding denies a crossed opaque reference before runtime assembly", async () => {
   const fixture = liveFixture();
   let runtimeCalls = 0;
