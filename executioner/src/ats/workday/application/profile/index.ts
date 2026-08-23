@@ -16,6 +16,10 @@ export type {
   ProfileFieldAnswer,
   ProfileFieldPlan,
   ProfileInteractionSnapshot,
+  ProfileInspectionClassification,
+  ProfileInspectionDiagnostic,
+  ProfileInspectionFailure,
+  ProfileInspectionPhase,
   ProfileOptionMapping,
   ProfilePageCompletionResult,
   ProfilePagePlan,
@@ -30,3 +34,8 @@ export type {
   VerifiedProfileField,
   WorkdayProfilePagePort,
 } from "./types.ts";
+export {
+  classifyProfileInspectionFailure,
+  profileInspectionDiagnostic,
+  profileInspectionTraceDetails,
+} from "./inspection.ts";

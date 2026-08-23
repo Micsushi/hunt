@@ -73,6 +73,7 @@ const STRING_KEYS = new Set([
   "chain", "page", "moment", "operationId", "failureStage", "validationState",
   "code", "fieldId", "uiBehavior", "uiVariant", "kind", "journeyId", "stopAfter",
   "checkpoint", "browserPage", "status", "classifier", "primitive", "unknownLayer",
+  "profileInspectionClassification", "profileInspectionPhase",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -107,6 +108,7 @@ const NUMBER_KEYS = new Set([
   "reboundDateExactLabelCount", "reboundDateLabelInputOwnerCount",
   "reboundDateLabelSvgOwnerCount", "reboundDateDistinctInputCount",
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
+  "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
@@ -120,6 +122,9 @@ const BOOLEAN_KEYS = new Set([
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
 ]);
+const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
+  "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",
+]);
 
 function sanitize(value: object | undefined): Readonly<Record<string, boolean | number | string | readonly string[]>> {
   if (value === undefined || value === null || Array.isArray(value)) return Object.freeze({});
@@ -132,12 +137,22 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
       output[key] = candidate;
     } else if (BOOLEAN_KEYS.has(key) && typeof candidate === "boolean") {
       output[key] = candidate;
+    } else if (PROFILE_INSPECTION_ARRAY_KEYS.has(key) && Array.isArray(candidate) &&
+        candidate.length <= 64 && candidate.every((item) =>
+          typeof item === "string" && profileInspectionIdentifier(key, item)
+        )) {
+      output[key] = Object.freeze([...candidate]);
     } else if (ARRAY_KEYS.has(key) && Array.isArray(candidate) && candidate.length <= 64 &&
         candidate.every((item) => typeof item === "string" && structural(item))) {
       output[key] = Object.freeze([...candidate]);
     }
   }
   return Object.freeze(output);
+}
+
+function profileInspectionIdentifier(key: string, value: string): boolean {
+  if (key === "profileInspectionBindingDigests") return /^[0-9a-f]{64}$/u.test(value);
+  return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);
 }
 
 function admitRecord(value: unknown, sequence: number): ValueFreeRunTraceRecordV1 {

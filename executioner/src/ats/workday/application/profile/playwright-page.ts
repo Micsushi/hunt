@@ -20,6 +20,11 @@ import type {
   ProfileRowSnapshot,
   WorkdayProfilePagePort,
 } from "./types.ts";
+import {
+  createProfileInspectionFailure,
+  profileInspectionFailureFromError,
+} from "./inspection.ts";
+import type { ProfileInspectionFailure } from "./types.ts";
 
 interface ResolvedControl {
   readonly locator: Locator;
@@ -53,6 +58,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   #selectionDiagnosticOrdinal = 0;
   readonly #unknownControlOrdinals = new Map<string, number>();
   readonly #ownedIndexedRows = new Set<string>();
+  #inspectionFailure: ProfileInspectionFailure | undefined;
   #nextUnknownControlOrdinal = 1;
 
   constructor(page: Page, options: PlaywrightWorkdayProfilePageOptions) {
@@ -63,6 +69,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
 
   async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
     abort(signal);
+    this.#inspectionFailure = undefined;
     const profile = await this.#assertPageType();
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
@@ -70,8 +77,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       try {
         controls.push(...await this.#inspectControls(entry, profile.locator(entry.selector)));
       } catch (error) {
-        profileInspectionFailure(`scalar.${entry.fieldId}`, error);
-        throw error;
+        throw this.#recordInspectionFailure(
+          "scalar",
+          [entry.fieldId],
+          ["profile.scalar"],
+          [entry.selector],
+          error,
+        );
       }
     }
     const rows: ProfileRowSnapshot[] = [];
@@ -93,18 +105,51 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
         for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
       } catch (error) {
-        profileInspectionFailure(`repeatable.${entry.section}`, error);
-        throw error;
+        throw this.#recordInspectionFailure(
+          "repeatable",
+          [entry.section],
+          [`profile.repeatable.${entry.section}`],
+          [entry.sectionSelector, entry.rowSelector],
+          error,
+        );
       }
     }
     try {
       controls.push(...await this.#inspectUnknownControls(profile));
     } catch (error) {
-      profileInspectionFailure("unknown_controls", error);
-      throw error;
+      throw this.#recordInspectionFailure(
+        "unknown_controls",
+        ["unknown_controls"],
+        ["profile.unknown_controls"],
+        [profileInteractiveControlSelector],
+        error,
+      );
     }
     abort(signal);
     return { pageType: this.#pageType, controls, rows, repeatableSections };
+  }
+
+  inspectionFailure(): ProfileInspectionFailure | undefined {
+    return this.#inspectionFailure;
+  }
+
+  #recordInspectionFailure(
+    phase: "scalar" | "repeatable" | "unknown_controls",
+    bindingIds: readonly string[],
+    bindingPaths: readonly string[],
+    digestInputs: readonly string[],
+    error: unknown,
+  ): Error {
+    const wrapped = createProfileInspectionFailure(
+      error,
+      phase,
+      bindingIds,
+      bindingPaths,
+      digestInputs,
+      retainedProfileTextSha256,
+    );
+    this.#inspectionFailure = profileInspectionFailureFromError(wrapped);
+    return wrapped;
   }
 
   async observeControl(
@@ -1444,15 +1489,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (matches.length !== 1) throw new TypeError("Workday row binding is stale or ambiguous");
     return matches[0]!;
   }
-}
-
-function profileInspectionFailure(stage: string, error: unknown): void {
-  process.stderr.write(`${JSON.stringify({
-    applicationProfileInspectionFailed: {
-      stage,
-      error: error instanceof Error ? error.message : "unknown",
-    },
-  })}\n`);
 }
 
 async function expandableCategory(

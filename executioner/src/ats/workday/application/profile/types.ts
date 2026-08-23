@@ -153,8 +153,34 @@ export interface ProfileInteractionSnapshot {
   readonly selectedOptionOrdinal: number | null;
 }
 
+export type ProfileInspectionClassification =
+  | "liveness"
+  | "dom_owner_binding"
+  | "unknown";
+
+export type ProfileInspectionPhase =
+  | "scalar"
+  | "repeatable"
+  | "unknown_controls"
+  | "unknown";
+
+export interface ProfileInspectionFailure {
+  readonly classification: ProfileInspectionClassification;
+  readonly phase: ProfileInspectionPhase;
+  readonly bindingIds: readonly string[];
+  readonly bindingPaths: readonly string[];
+  readonly bindingDigests: readonly string[];
+}
+
+export interface ProfileInspectionDiagnostic extends ProfileInspectionFailure {
+  readonly retryCount: number;
+  readonly deadlineMs: number;
+  readonly elapsedMs: number;
+}
+
 export interface WorkdayProfilePagePort {
   inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
+  inspectionFailure?(): ProfileInspectionFailure | undefined;
   commit(request: ProfileCommitRequest, signal: AbortSignal): Promise<void>;
   addOwnedRow(
     section: ProfileRepeatableSection,
@@ -206,4 +232,5 @@ export type ProfilePageCompletionResult =
       readonly fieldId?: string;
       readonly uiBehavior?: ProfileUiBehavior;
       readonly uiVariant?: string;
+      readonly profileInspectionDiagnostic?: ProfileInspectionDiagnostic;
     };

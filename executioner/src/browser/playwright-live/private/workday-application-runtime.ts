@@ -9,6 +9,7 @@ import { PlaywrightWorkdayApplicationPage } from
 import {
   completeWorkdayProfilePage,
   PlaywrightWorkdayProfilePage,
+  profileInspectionTraceDetails,
   type ProfilePageSnapshot,
   type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
@@ -526,6 +527,7 @@ export class OwnedWorkdayApplicationRuntime {
         });
         const profilePage: WorkdayProfilePagePort = {
           inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),
+          inspectionFailure: () => playwrightProfilePage.inspectionFailure(),
           commit: async (commit, innerSignal) => {
             mutationAttempted = true;
             const operationId = this.#nextOperationId();
@@ -660,6 +662,9 @@ export class OwnedWorkdayApplicationRuntime {
                 ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
                 ...(result.uiBehavior === undefined ? {} : { uiBehavior: result.uiBehavior }),
                 ...(result.uiVariant === undefined ? {} : { uiVariant: result.uiVariant }),
+                ...(result.profileInspectionDiagnostic === undefined
+                  ? {}
+                  : profileInspectionTraceDetails(result.profileInspectionDiagnostic)),
                 mutationAttempted,
                 retryable: false,
               });

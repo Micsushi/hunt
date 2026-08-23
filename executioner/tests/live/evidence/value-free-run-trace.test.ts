@@ -5,9 +5,50 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  completeWorkdayProfilePage,
+  profileInspectionTraceDetails,
+  type ProfileInspectionFailure,
+  type ProfilePagePlan,
+  type ProfilePageSnapshot,
+  type WorkdayProfilePagePort,
+} from "../../../src/ats/workday/application/profile/index.ts";
+import {
   createValueFreeRunTrace,
   readValueFreeRunTrace,
 } from "../../../src/live/evidence/value-free-run-trace.ts";
+
+class ExhaustedInspectionPage implements WorkdayProfilePagePort {
+  private readonly error: Error;
+  private readonly failure: ProfileInspectionFailure;
+
+  constructor(
+    error: Error,
+    failure: ProfileInspectionFailure,
+  ) {
+    this.error = error;
+    this.failure = failure;
+  }
+
+  async inspect(): Promise<ProfilePageSnapshot> {
+    throw this.error;
+  }
+
+  inspectionFailure(): ProfileInspectionFailure {
+    return this.failure;
+  }
+
+  async commit(): Promise<void> {
+    throw new Error("mutation not admitted");
+  }
+
+  async addOwnedRow(): Promise<string> {
+    throw new Error("mutation not admitted");
+  }
+
+  async removeOwnedRow(): Promise<void> {
+    throw new Error("mutation not admitted");
+  }
+}
 
 test("durable run trace retains ordered structural state and drops applicant values", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-value-free-trace-"));
@@ -206,6 +247,109 @@ test("trace observer and invalid details never alter runtime behavior", () => {
     assert.throws(
       () => readValueFreeRunTrace(join(root, "malformed.ndjson")),
       /value-free run trace denied/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("profile inspection retry exhaustion survives runtime flattening and value-free persistence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-inspection-trace-"));
+  const plan: ProfilePagePlan = {
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [],
+  };
+  const cases = [
+    {
+      classification: "liveness" as const,
+      error: "Target page, context or browser has been closed raw-error-sentinel",
+      bindingId: "profile.page",
+      digest: "a".repeat(64),
+    },
+    {
+      classification: "dom_owner_binding" as const,
+      error: "Workday profile control binding is missing selector-sentinel",
+      bindingId: "identity.given_name",
+      digest: "b".repeat(64),
+    },
+    {
+      classification: "unknown" as const,
+      error: "opaque backend fault profile-value-sentinel",
+      bindingId: "profile.unknown",
+      digest: "c".repeat(64),
+    },
+  ];
+
+  try {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    for (const item of cases) {
+      const result = await completeWorkdayProfilePage(
+        plan,
+        new ExhaustedInspectionPage(new Error(item.error), {
+          classification: item.classification,
+          phase: "scalar",
+          bindingIds: [item.bindingId],
+          bindingPaths: ["profile.scalar"],
+          bindingDigests: [item.digest],
+        }),
+        AbortSignal.any([]),
+      );
+      assert.equal(result.kind, "blocked");
+      if (result.kind !== "blocked") continue;
+      assert.equal(result.code, "profile_port_unavailable");
+      assert.equal(result.profileInspectionDiagnostic?.classification, item.classification);
+      assert.ok((result.profileInspectionDiagnostic?.retryCount ?? 0) > 0);
+      assert.equal(result.profileInspectionDiagnostic?.deadlineMs, 1_000);
+
+      trace("profile_reconciliation_blocked", {
+        code: result.code,
+        mutationAttempted: false,
+        ...profileInspectionTraceDetails(result.profileInspectionDiagnostic!),
+        profileInspectionDiagnostic: result.profileInspectionDiagnostic,
+        rawError: item.error,
+        selector: '[data-automation-id="private-secret"]',
+        profileValue: "profile-value-sentinel",
+        credential: "credential-sentinel",
+        mailbox: "mailbox_sentinel",
+      });
+    }
+
+    const path = join(root, "value-free-trace.ndjson");
+    const records = readValueFreeRunTrace(path);
+    assert.equal(records.length, 3);
+    const expectedKeys = [
+      "code",
+      "mutationAttempted",
+      "profileInspectionClassification",
+      "profileInspectionPhase",
+      "profileInspectionRetryCount",
+      "profileInspectionDeadlineMs",
+      "profileInspectionElapsedMs",
+      "profileInspectionBindingIds",
+      "profileInspectionBindingPaths",
+      "profileInspectionBindingDigests",
+    ].sort();
+    assert.deepEqual(Object.keys(records[0]!.details).sort(), expectedKeys);
+    assert.deepEqual(records.map(({ details }) => details.profileInspectionClassification), [
+      "liveness",
+      "dom_owner_binding",
+      "unknown",
+    ]);
+    for (const [index, record] of records.entries()) {
+      assert.equal(record.details.mutationAttempted, false);
+      assert.deepEqual(record.details.profileInspectionBindingPaths, ["profile.scalar"]);
+      assert.match(
+        (record.details.profileInspectionBindingDigests as readonly string[])[0]!,
+        /^[0-9a-f]{64}$/u,
+      );
+      assert.equal((record.details.profileInspectionBindingIds as readonly string[])[0], cases[index]!.bindingId);
+    }
+    const persisted = readFileSync(path, "utf8");
+    assert.doesNotMatch(
+      persisted,
+      /raw-error-sentinel|selector-sentinel|profile-value-sentinel|credential-sentinel|mailbox_sentinel|private-secret|profileInspectionDiagnostic|submit/iu,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

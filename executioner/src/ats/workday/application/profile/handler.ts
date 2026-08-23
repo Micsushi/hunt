@@ -15,6 +15,10 @@ import type {
   VerifiedProfileField,
   WorkdayProfilePagePort,
 } from "./types.ts";
+import {
+  profileInspectionDiagnostic,
+  profileInspectionFailureFromError,
+} from "./inspection.ts";
 import { answerLaneAdmitted } from "../../../../form/answers/application-types.ts";
 
 const reviewedVariants = new Set([
@@ -82,7 +86,10 @@ const blocked = (
 
 const portFailure = (
   signal: AbortSignal,
-  detail: { readonly fieldId?: string } = {},
+  detail: {
+    readonly fieldId?: string;
+    readonly profileInspectionDiagnostic?: BlockedResult["profileInspectionDiagnostic"];
+  } = {},
 ): BlockedResult => signal.aborted
   ? blocked("operation_cancelled")
   : blocked("profile_port_unavailable", detail);
@@ -94,10 +101,14 @@ export async function completeWorkdayProfilePage(
 ): Promise<ProfilePageCompletionResult> {
   if (signal.aborted) return blocked("operation_cancelled");
   const observed = await inspect(page, signal);
-  if (observed === undefined) return portFailure(signal);
-  const preflight = validatePlan(plan) ?? preflightSnapshot(plan, observed);
+  if (observed.snapshot === undefined) {
+    return portFailure(signal, {
+      profileInspectionDiagnostic: observed.profileInspectionDiagnostic,
+    });
+  }
+  const preflight = validatePlan(plan) ?? preflightSnapshot(plan, observed.snapshot);
   if (preflight !== undefined) return preflight;
-  let snapshot = observed;
+  let snapshot = observed.snapshot;
   const effectivePlan = routeSiteAnswers(plan, snapshot);
   const routedPreflight = validatePlan(effectivePlan) ??
     preflightSnapshot(effectivePlan, snapshot);
@@ -292,9 +303,13 @@ async function inspectAndPreflight(
   | BlockedResult
 > {
   const snapshot = await inspect(page, signal);
-  if (snapshot === undefined) return portFailure(signal);
-  const preflight = preflightSnapshot(plan, snapshot);
-  return preflight ?? { kind: "inspected", snapshot };
+  if (snapshot.snapshot === undefined) {
+    return portFailure(signal, {
+      profileInspectionDiagnostic: snapshot.profileInspectionDiagnostic,
+    });
+  }
+  const preflight = preflightSnapshot(plan, snapshot.snapshot);
+  return preflight ?? { kind: "inspected", snapshot: snapshot.snapshot };
 }
 
 function validatePlan(plan: ProfilePagePlan): ProfilePageCompletionResult | undefined {
@@ -857,14 +872,32 @@ function ownedDuplicateCount(rows: readonly ProfileRowSnapshot[]): number {
 async function inspect(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
-): Promise<ProfilePageSnapshot | undefined> {
-  const deadline = Date.now() + 1_000;
+): Promise<{
+  readonly snapshot?: ProfilePageSnapshot;
+  readonly profileInspectionDiagnostic?: BlockedResult["profileInspectionDiagnostic"];
+}> {
+  const started = Date.now();
+  const deadline = started + 1_000;
+  let retryCount = 0;
+  let lastError: unknown;
   while (true) {
     try {
-      if (signal.aborted) return undefined;
-      return await page.inspect(signal);
-    } catch {
-      if (signal.aborted || Date.now() >= deadline) return undefined;
+      if (signal.aborted) return {};
+      return { snapshot: await page.inspect(signal) };
+    } catch (error) {
+      lastError = error;
+      retryCount += 1;
+      if (signal.aborted || Date.now() >= deadline) {
+        return {
+          profileInspectionDiagnostic: profileInspectionDiagnostic(
+            lastError,
+            page.inspectionFailure?.() ?? profileInspectionFailureFromError(lastError),
+            retryCount,
+            1_000,
+            Date.now() - started,
+          ),
+        };
+      }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  classifyProfileInspectionFailure,
   completeWorkdayProfilePage,
+  profileInspectionDiagnostic,
   type ProfileControlSnapshot,
   type ProfileFieldPlan,
   type ProfilePagePlan,
@@ -201,6 +203,46 @@ test("retries a transient read-only inspection after a committed field", async (
   assert.equal(result.kind, "verified", JSON.stringify(result));
   assert.equal(port.commits.length, 1);
   assert.ok(port.inspections >= 4);
+});
+
+test("retains value-free typed diagnostics for liveness, binding, and unknown inspection failures", () => {
+  const cases = [
+    {
+      error: new Error("Target page, context or browser has been closed"),
+      classification: "liveness" as const,
+    },
+    {
+      error: new TypeError("Workday profile control binding is missing"),
+      classification: "dom_owner_binding" as const,
+    },
+    {
+      error: new Error("opaque profile inspection backend fault"),
+      classification: "unknown" as const,
+    },
+  ];
+
+  for (const { error, classification } of cases) {
+    assert.equal(classifyProfileInspectionFailure(error), classification);
+    const diagnostic = profileInspectionDiagnostic(error, {
+      classification,
+      phase: "scalar",
+      bindingIds: ["identity.given_name"],
+      bindingPaths: ["profile.scalar"],
+      bindingDigests: ["a".repeat(64)],
+    }, 4, 1_000, 1_002);
+
+    assert.deepEqual(diagnostic, {
+      classification,
+      phase: "scalar",
+      bindingIds: ["identity.given_name"],
+      bindingPaths: ["profile.scalar"],
+      bindingDigests: ["a".repeat(64)],
+      retryCount: 4,
+      deadlineMs: 1_000,
+      elapsedMs: 1_002,
+    });
+    assert.doesNotMatch(JSON.stringify(diagnostic), /opaque|closed|missing|secret|Ada/u);
+  }
 });
 
 for (const missing of [
