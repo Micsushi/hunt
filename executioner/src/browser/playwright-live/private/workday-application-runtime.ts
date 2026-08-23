@@ -690,6 +690,11 @@ export class OwnedWorkdayApplicationRuntime {
                 code: result.code,
                 ...(result.learningConversion === undefined ? {} : {
                   learningConversion: result.learningConversion.kind,
+                  executionMode: result.learningConversion.executionMode,
+                  testOnly: result.learningConversion.testOnly,
+                  mutationAllowed: result.learningConversion.mutationAllowed,
+                  defaultsGenerated: result.learningConversion.defaultsGenerated,
+                  learningFieldIds: result.learningConversion.fieldIds,
                 }),
                 ...(metadata === undefined ? {} : {
                   profileMetadataMismatchCount: metadata.mismatches.length,

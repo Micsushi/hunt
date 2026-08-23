@@ -198,7 +198,20 @@ test("returns all value-free metadata mismatches for learning conversion", async
     ]);
     assert.equal(capture.write() !== null, true);
     const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
+    assert.equal(evidence.testOnly, true);
     assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.deepEqual(evidence.learningConversion, {
+      kind: "profile_ui_learning",
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
+      mutationAllowed: false,
+      defaultsGenerated: false,
+      liveAcceptanceEligible: false,
+      fieldIds: fields.map(([fieldId]) => `profile.${fieldId}`),
+    });
+    assert.equal(evidence.fields.every((field: { answerState: string; lane: unknown; driverAttempt: string }) =>
+      field.answerState === "unset" && field.lane === null && field.driverAttempt === "none"), true);
     assert.equal(JSON.stringify(evidence).includes("answer-"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

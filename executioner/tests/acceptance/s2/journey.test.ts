@@ -25,6 +25,7 @@ import {
   type Stage2RealJourneyRuntime,
   type Stage2RealJourneyRuntimeBinding,
 } from "../../../src/acceptance/s2-journey.ts";
+import { writeStage2TerminalArtifact } from "../../../src/acceptance/s2-terminal-artifact.ts";
 import { reviewPageFixture } from "../../interaction/review/fixtures.ts";
 
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
@@ -38,13 +39,48 @@ const config = Object.freeze({
 });
 
 test("the unavailable opaque runtime binding fails before any journey effect", async () => {
-  const result = await runStage2RealJourney(
-    invocation(resolve("evidence")),
-    undefined,
-    ports(),
-    new AbortController().signal,
-  );
-  assertFailureCode(result, "runtime_binding_failed");
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-unbound-terminal-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot),
+      undefined,
+      ports(),
+      new AbortController().signal,
+    );
+    assertFailureCode(result, "runtime_binding_failed");
+    assert.deepEqual(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")), {
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "runtime_binding_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: config.journeyId,
+        status: "failed",
+        completedPages: 0,
+        errorCode: "owner_config_invalid",
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pre-aborted journeys persist a cancelled terminal without binding", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-pre-aborted-terminal-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const controller = new AbortController();
+  controller.abort();
+  try {
+    const result = await runStage2RealJourney(invocation(evidenceRoot), undefined, ports(), controller.signal);
+    assertFailureCode(result, "operation_cancelled");
+    assert.equal(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).terminal.status,
+      "cancelled");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("one bound runtime recovers, proves pre-Review and Review, seals evidence, then cleans", async () => {
@@ -62,6 +98,10 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
         writeAcceptance: async (_root, value) => {
           calls.push("acceptance.write");
           accepted = value;
+        },
+        writeTerminalArtifact: async (root, value) => {
+          calls.push("terminal-artifact.write");
+          writeStage2TerminalArtifact(root, value);
         },
       },
       new AbortController().signal,
@@ -81,7 +121,19 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
       "privacy.forbiddenTokens",
       "acceptance.write",
       "cleanup.close",
+      "terminal-artifact.write",
     ]);
+    assert.deepEqual(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")), {
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "review_reached",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: config.journeyId,
+        status: "review_reached",
+        completedPages: 3,
+      },
+    });
     assert.deepEqual(accepted, {
       schemaVersion: 1,
       evidenceRevision: "s2-review-acceptance-v1",
@@ -143,7 +195,7 @@ test("a tenant-skipped Resume is recorded as missing rather than falsely verifie
   }
 });
 
-test("acceptance write failure retains recovery and exact evidence is retryable", async () => {
+test("acceptance write failure retains recovery and stale terminal evidence blocks retry", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retry-"));
   const evidenceRoot = resolve(root, "evidence");
   mkdirSync(evidenceRoot);
@@ -163,6 +215,8 @@ test("acceptance write failure retains recovery and exact evidence is retryable"
     ), "evidence_failed");
     assert.equal(existsSync(join(evidenceRoot, "real-evidence", "manifest.json")), true);
     assert.deepEqual(cleanupModes, [false]);
+    assert.equal(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).resultCode,
+      "evidence_failed");
 
     const second = runtime([], evidenceRoot);
     second.recovery.pending = async () => null;
@@ -170,12 +224,14 @@ test("acceptance write failure retains recovery and exact evidence is retryable"
       cleanupModes.push(accepted);
       return true;
     };
-    assert.equal((await runStage2RealJourney(
+    const retry = await runStage2RealJourney(
       invocation(evidenceRoot), binding(second), {
         now: () => "2026-08-06T12:00:00.000Z",
         writeAcceptance: async () => undefined,
       }, new AbortController().signal,
-    )).ok, true);
+    );
+    assert.equal(retry.ok, false);
+    if (!retry.ok) assert.equal(retry.terminalArtifactErrorCode, "terminal_artifact_persistence_failed");
     assert.deepEqual(cleanupModes, [false, true]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -503,6 +559,31 @@ test("cleanup failure does not replace the original journey failure", async () =
       assert.equal(result.terminal.errorCode, "browser_effect_uncertain");
     }
     assert.equal(result.cleanupErrorCode, "browser_profile_cleanup_failed");
+    const artifact = JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8"));
+    assert.equal(artifact.resultCode, "account_verification_failed");
+    assert.equal(artifact.terminal.errorCode, "browser_effect_uncertain");
+    assert.equal(artifact.cleanupErrorCode, "browser_profile_cleanup_failed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a stale terminal artifact fails closed without being overwritten", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-stale-terminal-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  try {
+    const first = await runStage2RealJourney(
+      invocation(evidenceRoot), undefined, ports(), new AbortController().signal,
+    );
+    assertFailureCode(first, "runtime_binding_failed");
+    const before = readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8");
+    const second = await runStage2RealJourney(
+      invocation(evidenceRoot), undefined, ports(), new AbortController().signal,
+    );
+    assert.equal(second.ok, false);
+    if (!second.ok) assert.equal(second.terminalArtifactErrorCode, "terminal_artifact_persistence_failed");
+    assert.equal(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8"), before);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

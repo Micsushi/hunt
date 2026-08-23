@@ -108,9 +108,11 @@ export async function completeWorkdayProfilePage(
       metadataReconciliationFailure: observed.metadataReconciliationFailure,
       learningConversion: Object.freeze({
         kind: "profile_ui_learning" as const,
-        mode: "synthetic_test_non_submittable" as const,
+        executionMode: "synthetic_test_non_submittable" as const,
+        testOnly: true as const,
         mutationAllowed: false as const,
         defaultsGenerated: false as const,
+        liveAcceptanceEligible: false as const,
         fieldIds: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
           ({ fieldId }) => fieldId,
         )),

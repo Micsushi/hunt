@@ -14,6 +14,7 @@ import {
   readStage2AcceptanceManifest,
   readStage2ReviewAcceptance,
 } from "../../acceptance/s2-local.ts";
+import { admitStage2TerminalArtifact } from "../../acceptance/s2-terminal-artifact.ts";
 import type { Stage2ConfigCapture } from "../../acceptance/s2-gate.ts";
 import {
   readAccountVerifiedEvidence,
@@ -60,6 +61,7 @@ export interface Stage2ReviewCompletionAuditV1 {
   readonly accountVerification: "present";
   readonly processBinding: "production_bound";
   readonly processAuditSha256: string;
+  readonly terminalArtifactSha256: string;
   readonly profileFieldLearningSha256: string | null;
   readonly questionAnswerLearningSha256: string | null;
   readonly authMonitor: "external_chain_acknowledged";
@@ -109,6 +111,13 @@ export function inspectStage2ReviewCompletion(
     if (!existsSync(tracePath)) denied();
     validateValueFreeTrace(tracePath, application);
     const packet = readRealEvidence(root);
+    const terminalArtifactBytes = readStableFile(
+      join(root, "terminal-artifact.json"),
+      16 * 1024,
+    );
+    const terminalArtifact = admitStage2TerminalArtifact(
+      JSON.parse(terminalArtifactBytes.toString("utf8")),
+    );
     const processAudit = readWindowsProcessAudit(root);
     const processBytes = readStableFile(join(root, "process-audit.json"), 16 * 1024);
     const runKey = basename(dirname(root));
@@ -171,7 +180,12 @@ export function inspectStage2ReviewCompletion(
       packet.requiredFieldCount !== application.pageChecks.reduce(
         (total, item) => total + item.verifiedFields,
         0,
-      )
+      ) ||
+      terminalArtifact.resultCode !== "review_reached" ||
+      terminalArtifact.terminal.journeyId !== config.journeyId ||
+      terminalArtifact.terminal.status !== "review_reached" ||
+      terminalArtifact.terminal.completedPages !== application.completedPages ||
+      terminalArtifact.cleanupErrorCode !== undefined
     ) denied();
     const audit: Stage2ReviewCompletionAuditV1 = Object.freeze({
       schemaVersion: 1,
@@ -187,6 +201,7 @@ export function inspectStage2ReviewCompletion(
       accountVerification: "present",
       processBinding: "production_bound",
       processAuditSha256: digest(processBytes),
+      terminalArtifactSha256: digest(terminalArtifactBytes),
       profileFieldLearningSha256,
       questionAnswerLearningSha256,
       authMonitor: "external_chain_acknowledged",

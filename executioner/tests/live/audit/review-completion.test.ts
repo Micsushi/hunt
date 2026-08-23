@@ -15,6 +15,7 @@ import test from "node:test";
 import { deflateSync } from "node:zlib";
 
 import { writeStage2AcceptanceManifest, writeStage2ReviewAcceptance } from "../../../src/acceptance/s2-local.ts";
+import { writeStage2TerminalArtifact } from "../../../src/acceptance/s2-terminal-artifact.ts";
 import { auditStage2Completion } from "../../../src/composition/private/s2-any-completion-audit.ts";
 import {
   finalizeStage2RunStorage,
@@ -62,6 +63,9 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
       accountVerification: "present",
       processBinding: "production_bound",
       processAuditSha256: digest(readFileSync(join(layout.evidenceRoot, "process-audit.json"))),
+      terminalArtifactSha256: digest(readFileSync(
+        join(layout.evidenceRoot, "terminal-artifact.json"),
+      )),
       profileFieldLearningSha256: digest(readFileSync(
         join(layout.evidenceRoot, "profile-field-learning.json"),
       )),
@@ -181,6 +185,30 @@ test("Review completion requires the value-free trace", async () => {
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     rmSync(join(layout.evidenceRoot, "value-free-trace.ndjson"));
     await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion and storage reject a missing terminal artifact", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-terminal-required-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_terminalrequired",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    rmSync(join(layout.evidenceRoot, "terminal-artifact.json"));
+    await assert.rejects(
+      auditStage2Completion(layout.evidenceRoot),
+      /completion audit denied/u,
+    );
+    await assert.rejects(() => finalizeStage2RunStorage({
+      storageRoot,
+      ownerConfigPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    }), /storage finalization denied/u);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
@@ -1123,6 +1151,17 @@ async function writeReviewEvidence(
     repeatedQuestionnaire,
   );
   writeProcessAudit(root, "2026-08-10T12:01:00.000Z", configSha256);
+  writeStage2TerminalArtifact(root, {
+    schemaVersion: 1,
+    evidenceRevision: "s2-terminal-artifact-v1",
+    resultCode: "review_reached",
+    terminal: {
+      schemaVersion: 4,
+      journeyId: journeyId as never,
+      status: "review_reached",
+      completedPages: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+    },
+  });
   if (writeTrace) {
     const trace = createValueFreeRunTrace(root, () => undefined);
     trace("application_walk_started", {

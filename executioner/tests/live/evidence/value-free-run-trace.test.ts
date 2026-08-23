@@ -473,3 +473,32 @@ test("persists eligible and rejected profile-session retention without private i
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("retains non-submittable learning conversion semantics without values", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-learning-conversion-trace-"));
+  try {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    trace("profile_reconciliation_blocked", {
+      learningConversion: "profile_ui_learning",
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
+      mutationAllowed: false,
+      defaultsGenerated: false,
+      learningFieldIds: ["profile.address.country"],
+      rawValue: "private-profile-value",
+    });
+    const records = readValueFreeRunTrace(join(root, "value-free-trace.ndjson"));
+    assert.deepEqual(records[0]?.details, {
+      learningConversion: "profile_ui_learning",
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
+      mutationAllowed: false,
+      defaultsGenerated: false,
+      learningFieldIds: ["profile.address.country"],
+    });
+    assert.doesNotMatch(readFileSync(join(root, "value-free-trace.ndjson"), "utf8"),
+      /private-profile-value/iu);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

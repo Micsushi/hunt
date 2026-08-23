@@ -175,9 +175,11 @@ test("converts a typed metadata mismatch into non-submittable UI learning", asyn
     metadataReconciliationFailure: failure,
     learningConversion: {
       kind: "profile_ui_learning",
-      mode: "synthetic_test_non_submittable",
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
       mutationAllowed: false,
       defaultsGenerated: false,
+      liveAcceptanceEligible: false,
       fieldIds: ["profile.address.country"],
     },
   });

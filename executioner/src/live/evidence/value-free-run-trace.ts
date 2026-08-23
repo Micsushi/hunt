@@ -76,7 +76,7 @@ const STRING_KEYS = new Set([
   "profileInspectionClassification", "profileInspectionPhase",
   "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
   "profileInspectionSessionState", "profileInspectionCleanupState",
-  "profileInspectionPreservationReason", "learningConversion",
+  "profileInspectionPreservationReason", "learningConversion", "executionMode",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -125,10 +125,11 @@ const BOOLEAN_KEYS = new Set([
   "rightHitRoleButtonAncestor", "rightHitSvgAncestor", "rightHitAutomationAncestor",
   "boundRightHitInput", "boundRightHitWithinSvgOwner", "boundRightHitSvgAncestor",
   "profileInspectionPreservationEligible", "profileInspectionContinueAllowed",
+  "testOnly", "mutationAllowed", "defaultsGenerated",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
-  "profileMetadataMismatchFields", "profileMetadataMismatchReasons",
+  "profileMetadataMismatchFields", "profileMetadataMismatchReasons", "learningFieldIds",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",

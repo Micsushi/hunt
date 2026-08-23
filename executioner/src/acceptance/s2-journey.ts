@@ -119,6 +119,7 @@ export type Stage2RealJourneyResult =
       readonly code: Stage2RealJourneyFailureCode;
       readonly terminal: TerminalResultV4;
       readonly cleanupErrorCode?: "browser_profile_cleanup_failed";
+      readonly terminalArtifactErrorCode?: "terminal_artifact_persistence_failed";
     };
 
 type PendingJourneyResult = Stage2RealJourneyResult;
@@ -129,30 +130,95 @@ export async function runStage2RealJourney(
   ports: Stage2RealJourneyPorts,
   signal: AbortSignal,
 ): Promise<Stage2RealJourneyResult> {
-  if (signal.aborted) return cancelled(invocation.config.journeyId, 0);
+  if (signal.aborted) {
+    return persistTerminalArtifact(
+      invocation,
+      ports,
+      cancelled(invocation.config.journeyId, 0),
+    );
+  }
   if (binding === undefined) {
-    return errorFailure(invocation.config.journeyId, "runtime_binding_failed", "owner_config_invalid", 0);
+    return persistTerminalArtifact(
+      invocation,
+      ports,
+      errorFailure(invocation.config.journeyId, "runtime_binding_failed", "owner_config_invalid", 0),
+    );
   }
 
   let runtime: Stage2RealJourneyRuntime;
   try {
     runtime = await binding.bind(invocation, signal);
   } catch {
-    return signal.aborted
+    return persistTerminalArtifact(invocation, ports, signal.aborted
       ? cancelled(invocation.config.journeyId, 0)
-      : errorFailure(invocation.config.journeyId, "runtime_binding_failed", "mcp_internal_error", 0);
+      : errorFailure(invocation.config.journeyId, "runtime_binding_failed", "mcp_internal_error", 0));
   }
 
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
+  let result: Stage2RealJourneyResult | undefined;
+  if (pending.ok && !signal.aborted) {
+    try {
+      await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);
+    } catch {
+      const retained = await closeRuntime(runtime, false);
+      result = retained
+        ? errorFailure(invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3)
+        : withCleanupFailure(errorFailure(
+          invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3,
+        ));
+    }
+    if (result === undefined) {
+      const finalized = await closeRuntime(runtime, true);
+      result = finalized
+        ? pending
+        : withCleanupFailure(errorFailure(
+          invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3,
+        ));
+    }
+  } else if (pending.ok) {
+    const outcome = cancelled(invocation.config.journeyId, pending.terminal.completedPages);
+    const cleaned = await closeRuntime(runtime, false);
+    result = cleaned ? outcome : withCleanupFailure(outcome);
+  } else {
+    const outcome = signal.aborted
+      ? cancelled(invocation.config.journeyId, pending.terminal.completedPages)
+      : pending;
+    if (!outcome.ok && outcome.code === "pre_review_failed") {
+      let retained = false;
+      try {
+        retained = await runtime.cleanup.preserve?.(new AbortController().signal) ?? false;
+      } catch {
+        retained = false;
+      }
+      if (retained) {
+        scheduleStage2ApplicationRetentionExpiry(runtime.cleanup);
+        result = outcome;
+      } else {
+        const cleaned = await closeRuntime(runtime, false);
+        result = cleaned ? outcome : withCleanupFailure(outcome);
+      }
+    } else {
+      const cleaned = await closeRuntime(runtime, false);
+      result = cleaned ? outcome : withCleanupFailure(outcome);
+    }
+  }
+  if (result === undefined) throw new Error("journey terminal result unavailable");
+  return persistTerminalArtifact(invocation, ports, result);
+}
+
+async function persistTerminalArtifact(
+  invocation: Stage2RealJourneyInvocation,
+  ports: Stage2RealJourneyPorts,
+  result: Stage2RealJourneyResult,
+): Promise<Stage2RealJourneyResult> {
   try {
-    const cleanupErrorCode = pending.ok ? undefined : pending.cleanupErrorCode;
     const artifact = Object.freeze({
       schemaVersion: 1 as const,
       evidenceRevision: "s2-terminal-artifact-v1" as const,
-      resultCode: pending.ok ? "review_reached" : pending.code,
-      terminal: pending.terminal,
-      ...(cleanupErrorCode === undefined ? {} : {
-        cleanupErrorCode,
+      resultCode: result.ok ? "review_reached" : result.code,
+      terminal: result.terminal,
+      ...(result.ok || result.cleanupErrorCode === undefined ? {} : {
+        cleanupErrorCode: result.cleanupErrorCode,
       }),
     });
     if (ports.writeTerminalArtifact === undefined) {
@@ -160,53 +226,33 @@ export async function runStage2RealJourney(
     } else {
       await ports.writeTerminalArtifact(invocation.args.evidenceRoot, artifact);
     }
+    return result;
   } catch {
-    // The terminal artifact is diagnostic; preserve the causal journey result.
-  }
-  if (pending.ok && !signal.aborted) {
-    try {
-      await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);
-    } catch {
-      const retained = await closeRuntime(runtime, false);
-      return retained
-        ? errorFailure(invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3)
-        : withCleanupFailure(errorFailure(
-          invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3,
-        ));
+    if (result.ok) {
+      return Object.freeze({
+        ...errorFailure(
+          invocation.config.journeyId,
+          "evidence_failed",
+          "mcp_internal_error",
+          result.terminal.completedPages,
+        ),
+        terminalArtifactErrorCode: "terminal_artifact_persistence_failed" as const,
+      });
     }
-    const finalized = await closeRuntime(runtime, true);
-    return finalized
-      ? pending
-      : errorFailure(invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3);
+    return Object.freeze({
+      ...result,
+      terminalArtifactErrorCode: "terminal_artifact_persistence_failed" as const,
+    });
   }
-  if (pending.ok) {
-    const outcome = cancelled(invocation.config.journeyId, pending.terminal.completedPages);
-    const cleaned = await closeRuntime(runtime, false);
-    return cleaned ? outcome : withCleanupFailure(outcome);
-  }
-  const outcome = signal.aborted
-    ? cancelled(invocation.config.journeyId, pending.terminal.completedPages)
-    : pending;
-  if (!outcome.ok && outcome.code === "pre_review_failed") {
-    let retained = false;
-    try {
-      retained = await runtime.cleanup.preserve?.(new AbortController().signal) ?? false;
-    } catch {
-      retained = false;
-    }
-    if (retained) {
-      scheduleStage2ApplicationRetentionExpiry(runtime.cleanup);
-      return outcome;
-    }
-  }
-  const cleaned = await closeRuntime(runtime, false);
-  return cleaned ? outcome : withCleanupFailure(outcome);
 }
 
 function withCleanupFailure(
   result: Extract<Stage2RealJourneyResult, { readonly ok: false }>,
 ): Extract<Stage2RealJourneyResult, { readonly ok: false }> {
-  return Object.freeze({ ...result, cleanupErrorCode: "browser_profile_cleanup_failed" });
+  return Object.freeze({
+    ...result,
+    cleanupErrorCode: "browser_profile_cleanup_failed" as const,
+  });
 }
 
 async function closeRuntime(

@@ -8,6 +8,7 @@ import type {
   ProfileMetadataMismatchReason,
   ProfilePagePlan,
   ProfilePageSnapshot,
+  ProfileLearningConversion,
   ProfileRowSnapshot,
   WorkdayProfilePagePort,
 } from "../../ats/workday/application/profile/index.ts";
@@ -152,6 +153,7 @@ export interface ProfileFieldLearningEvidenceV2 {
   readonly executionMode: "live" | "synthetic_test_non_submittable";
   readonly testOnly: boolean;
   readonly liveAcceptanceEligible: boolean;
+  readonly learningConversion?: ProfileLearningConversion;
   readonly visibleControlCount: number;
   readonly fields: readonly ProfileFieldLearningRecordV2[];
 }
@@ -324,11 +326,19 @@ export function createProfileFieldLearningCapture(input: {
             schemaVersion: 5,
             evidenceRevision: "s2-profile-field-learning-v5",
             page: "profile",
-            executionMode: input.plan.mode,
-            testOnly: input.plan.mode === "synthetic_test_non_submittable",
-            liveAcceptanceEligible,
+            executionMode: metadataFailure === undefined
+              ? input.plan.mode
+              : "synthetic_test_non_submittable",
+            testOnly: metadataFailure !== undefined ||
+              input.plan.mode === "synthetic_test_non_submittable",
+            liveAcceptanceEligible: metadataFailure === undefined && liveAcceptanceEligible,
+            ...(metadataFailure === undefined ? {} : {
+              learningConversion: conversion(metadataFailure),
+            }),
             visibleControlCount: fields.length,
-            fields,
+            fields: metadataFailure === undefined
+              ? fields
+              : fields.map((field) => convertedField(field)),
           }),
           sensitiveValues: input.sensitiveValues.filter((value) =>
             value.length < 3 || !reviewedStructuralStrings.some((structural) =>
@@ -360,6 +370,41 @@ function operationUsedByAnotherRecord(
     record.monitorBinding?.operationId === operationId ||
     record.pendingMonitor?.operationId === operationId
   ));
+}
+
+function conversion(
+  failure: ProfileMetadataReconciliationFailure,
+): ProfileLearningConversion {
+  return Object.freeze({
+    kind: "profile_ui_learning" as const,
+    executionMode: "synthetic_test_non_submittable" as const,
+    testOnly: true as const,
+    mutationAllowed: false as const,
+    defaultsGenerated: false as const,
+    liveAcceptanceEligible: false as const,
+    fieldIds: Object.freeze(failure.mismatches.map(({ fieldId }) => fieldId)),
+  });
+}
+
+function convertedField(
+  field: ProfileFieldLearningRecordV2,
+): ProfileFieldLearningRecordV2 {
+  return Object.freeze({
+    ...field,
+    answerState: "unset" as const,
+    lane: null,
+    optionMapping: isChoiceType(field.uiType) ? "unresolved" : field.optionMapping,
+    prefillDisposition: "needs_owner_input",
+    driverAttempt: "none",
+    monitorBinding: null,
+    terminalDisposition: field.required ? "required_unset" as const : "optional_unset" as const,
+    mechanics: Object.freeze({
+      ...field.mechanics,
+      backingValueCommitted: "not_observed",
+      validationCleared: "not_observed",
+      persistentReadback: "not_attempted",
+    }),
+  });
 }
 
 function createMetadataReconciliationFailure(
@@ -423,7 +468,9 @@ export function admitProfileFieldLearningEvidence(
   if (
     !exactKeys(value, [
       "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
-      "liveAcceptanceEligible", "visibleControlCount", "fields",
+      "liveAcceptanceEligible",
+      ...(value.learningConversion === undefined ? [] : ["learningConversion"]),
+      "visibleControlCount", "fields",
     ]) ||
     value.schemaVersion !== 5 ||
     value.evidenceRevision !== "s2-profile-field-learning-v5" ||
@@ -432,6 +479,9 @@ export function admitProfileFieldLearningEvidence(
     value.fields.length < 1 || value.fields.length > 128 ||
     value.visibleControlCount !== value.fields.length
   ) denied();
+  if (value.learningConversion !== undefined && !validConversion(value.learningConversion, value)) {
+    denied("learning_conversion");
+  }
   const identities = new Set<string>();
   for (const field of value.fields) {
     if (!validFieldIdentity(field.fieldIdentity)) denied("field_identity");
@@ -515,6 +565,28 @@ export function admitProfileFieldLearningEvidence(
       mechanics: Object.freeze({ ...field.mechanics }),
     }))),
   });
+}
+
+function validConversion(
+  value: ProfileLearningConversion,
+  evidence: ProfileFieldLearningEvidenceV2,
+): boolean {
+  return exactKeys(value, [
+    "kind", "executionMode", "testOnly", "mutationAllowed", "defaultsGenerated",
+    "liveAcceptanceEligible", "fieldIds",
+  ]) && value.kind === "profile_ui_learning" &&
+    value.executionMode === "synthetic_test_non_submittable" &&
+    value.testOnly === true && value.mutationAllowed === false &&
+    value.defaultsGenerated === false && value.liveAcceptanceEligible === false &&
+    value.fieldIds.length > 0 && value.fieldIds.length <= evidence.fields.length &&
+    new Set(value.fieldIds).size === value.fieldIds.length &&
+    value.fieldIds.every((fieldId) =>
+      typeof fieldId === "string" && validFieldIdentity(fieldId) &&
+      evidence.fields.some((field) =>
+        field.fieldIdentity === fieldId && field.metadataReconciliation === "mismatch"
+      )
+    ) && evidence.executionMode === "synthetic_test_non_submittable" &&
+    evidence.testOnly === true && evidence.liveAcceptanceEligible === false;
 }
 
 function validFieldIdentity(value: string): boolean {

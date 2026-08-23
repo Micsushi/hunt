@@ -148,9 +148,11 @@ export interface ProfileMetadataReconciliationFailure {
 
 export interface ProfileLearningConversion {
   readonly kind: "profile_ui_learning";
-  readonly mode: "synthetic_test_non_submittable";
+  readonly executionMode: "synthetic_test_non_submittable";
+  readonly testOnly: true;
   readonly mutationAllowed: false;
   readonly defaultsGenerated: false;
+  readonly liveAcceptanceEligible: false;
   readonly fieldIds: readonly string[];
 }
 

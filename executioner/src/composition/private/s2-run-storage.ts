@@ -26,6 +26,7 @@ import {
 } from "node:path";
 
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
+import { readStage2TerminalArtifact } from "../../acceptance/s2-terminal-artifact.ts";
 import { admitProfileFieldLearningEvidence } from
   "../../live/evidence/profile-field-learning.ts";
 import { admitQuestionAnswerLearningEvidence } from
@@ -751,6 +752,7 @@ function readCompletionAudit(root: string): {
   readonly monitorClassification: string;
   readonly allowedRootFiles: ReadonlySet<string>;
   readonly nestedEvidenceFiles: readonly string[];
+  readonly terminalArtifactSha256: string | null;
 } {
   const value = readBoundedJson(join(root, "completion-audit.json"), 16 * 1024) as Record<string, unknown>;
   const common =
@@ -783,6 +785,7 @@ function readCompletionAudit(root: string): {
     ? ACCOUNT_ACCESS_RETAINED_FILES
     : ACCOUNT_VERIFIED_RETAINED_FILES;
   let nestedEvidenceFiles: readonly string[] = Object.freeze([]);
+  let terminalArtifactSha256: string | null = null;
   let review = false;
   if (value.evidenceRevision === "s2-review-completion-v1") {
     const inspection = inspectStage2ReviewCompletion(root);
@@ -792,8 +795,17 @@ function readCompletionAudit(root: string): {
       ...inspection.realEvidenceFiles,
       ...inspection.monitorFiles,
     ].sort());
+    terminalArtifactSha256 = typeof value.terminalArtifactSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.terminalArtifactSha256)
+      ? value.terminalArtifactSha256
+      : null;
   }
-  if (!common || (!accountAccess && !accountVerified && !review)) {
+  if (
+    !common ||
+    review && (typeof value.terminalArtifactSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(value.terminalArtifactSha256)) ||
+    (!accountAccess && !accountVerified && !review)
+  ) {
     denied("storage finalization denied");
   }
   return Object.freeze({
@@ -802,6 +814,7 @@ function readCompletionAudit(root: string): {
     monitorClassification: value.monitorClassification as string,
     allowedRootFiles,
     nestedEvidenceFiles,
+    terminalArtifactSha256,
   });
 }
 
@@ -826,7 +839,9 @@ function retainedFileDigests(
     names.some((name) => !completion.allowedRootFiles.has(name) && !nestedDirectories.has(name)) ||
     [...nestedDirectories].some((name) => !names.includes(name)) ||
     !names.includes("completion-audit.json") ||
-    !names.includes("process-audit.json")
+    !names.includes("process-audit.json") ||
+    completion.terminalArtifactSha256 !== null &&
+      !names.includes("terminal-artifact.json")
   ) denied("storage finalization denied");
   for (const directoryName of nestedDirectories) {
     const expectedNames = completion.nestedEvidenceFiles
@@ -843,6 +858,14 @@ function retainedFileDigests(
     ...names.filter((name) => !nestedDirectories.has(name)),
     ...completion.nestedEvidenceFiles,
   ].sort();
+  if (completion.terminalArtifactSha256 !== null) {
+    const terminalPath = join(root, "terminal-artifact.json");
+    readStage2TerminalArtifact(root);
+    if (createHash("sha256").update(readFileSync(terminalPath)).digest("hex") !==
+        completion.terminalArtifactSha256) {
+      denied("storage finalization denied");
+    }
+  }
   return Object.freeze(files.map((file) => {
     const path = admittedFile(join(root, file), 12 * 1024 * 1024);
     const bytes = readFileSync(path);
