@@ -112,12 +112,15 @@ export interface ProfileFieldMechanicsV1 {
   readonly persistentReadback: string;
 }
 
+type ObservedPlanBinding = Pick<ProfileFieldPlan, "questionType" | "answerType">;
+
 export interface ProfileFieldLearningRecordV2 {
   readonly fieldIdentity: string;
   readonly uiType: string;
   readonly uiVariant: string;
   readonly questionCategory: string;
   readonly answerCategory: string;
+  readonly planBinding?: ObservedPlanBinding | null;
   readonly required: boolean;
   readonly answerState: "answered" | "unset";
   readonly lane: AnswerProvenanceLane | null;
@@ -424,7 +427,7 @@ function createMetadataReconciliationFailure(
 
 function metadataMismatchReasons(
   record: MetadataRecord,
-  plan: ProfileFieldPlan | undefined,
+  plan: ProfileFieldPlan | ObservedPlanBinding | null | undefined,
 ): readonly ProfileMetadataMismatchReason[] {
   const fieldId = record.fieldIdentity.slice("profile.".length);
   const guide = retainedProfileGuide.get(fieldId);
@@ -453,7 +456,7 @@ function metadataMismatchReasons(
     record.optionCatalogState !== "observed" ||
     JSON.stringify(record.visibleOptionIds) !== JSON.stringify(expectedOptions)
   )) reasons.push("option_catalog");
-  if (!planMatchesGuide(plan, guide)) reasons.push("plan_binding");
+  if (!planBindingMatchesGuide(plan, guide)) reasons.push("plan_binding");
   return Object.freeze(reasons.length === 0 ? ["plan_binding"] : reasons);
 }
 
@@ -483,15 +486,18 @@ export function admitProfileFieldLearningEvidence(
     if (!validMetadataReconciliation(field)) {
       denied(`metadata_reconciliation:${field.fieldIdentity}`);
     }
-    if (!exactKeys(field, [
+    const expectedFieldKeys = [
       "fieldIdentity", "uiType", "uiVariant", "questionCategory",
-      "answerCategory", "required", "answerState", "lane", "binderStrategy",
+      "answerCategory",
+      ...(Object.hasOwn(field, "planBinding") ? ["planBinding"] : []),
+      "required", "answerState", "lane", "binderStrategy",
       "sanitizedLabelSha256", "metadataReconciliation", "backingState",
       "validationState", "optionCatalogState", "observationBinding",
       "visibleOptionIds", "selectedOptionId",
       "optionMapping", "prefillDisposition", "driverAttempt", "monitorBinding",
       "terminalDisposition", "mechanics",
-    ])) denied("field_shape");
+    ];
+    if (!exactKeys(field, expectedFieldKeys)) denied("field_shape");
     if (
       identities.has(field.fieldIdentity) ||
       !uiTypes.has(field.uiType) ||
@@ -507,6 +513,8 @@ export function admitProfileFieldLearningEvidence(
       (field.lane === "synthetic_test_default" &&
         value.executionMode !== "synthetic_test_non_submittable") ||
       (field.binderStrategy !== null && !binderStrategies.has(field.binderStrategy)) ||
+      (field.planBinding !== undefined && field.planBinding !== null &&
+        !validPlanBinding(field.planBinding)) ||
       (field.sanitizedLabelSha256 !== null &&
         !/^[0-9a-f]{64}$/u.test(field.sanitizedLabelSha256)) ||
       !metadataReconciliations.has(field.metadataReconciliation) ||
@@ -597,7 +605,7 @@ function validConversion(
         (profileMetadataMismatchReasons as readonly string[]).includes(reason)
       ) && sameList(
         affected.reasons,
-        metadataMismatchReasons(mismatches[index]!, undefined),
+        metadataMismatchReasons(mismatches[index]!, mismatches[index]!.planBinding),
       ) && validConvertedField(mismatches[index]!)
     ) && evidence.executionMode === "synthetic_test_non_submittable" &&
     evidence.testOnly === true && evidence.liveAcceptanceEligible === false;
@@ -608,7 +616,9 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
 }
 
 function validConvertedField(field: ProfileFieldLearningRecordV2): boolean {
-  return field.answerState === "unset" &&
+  return isObservationBinding(field.observationBinding) &&
+    validPlanBinding(field.planBinding) &&
+    field.answerState === "unset" &&
     field.lane === null &&
     field.prefillDisposition === "needs_owner_input" &&
     field.driverAttempt === "none" &&
@@ -631,6 +641,16 @@ function validFieldIdentity(value: string): boolean {
   if (match === null) return false;
   const section = match[1] as "experience" | "education" | "skills" | "websites";
   return repeatableFields.get(section)?.has(match[3]!) === true;
+}
+
+function validPlanBinding(value: unknown): value is ObservedPlanBinding {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return exactKeys(candidate, ["questionType", "answerType"]) &&
+    typeof candidate.questionType === "string" &&
+    typeof candidate.answerType === "string" &&
+    questionCategories.has(candidate.questionType) &&
+    answerCategories.has(candidate.answerType);
 }
 
 function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
@@ -742,6 +762,7 @@ interface MutableRecord {
   uiVariant: string;
   questionCategory: string;
   answerCategory: string;
+  planBinding: ObservedPlanBinding | null;
   required: boolean;
   answerState: "answered" | "unset";
   lane: AnswerProvenanceLane | null;
@@ -880,6 +901,7 @@ function learn(
       uiVariant: control.uiVariant,
       questionCategory: guide?.normalizedQuestionType ?? plan?.questionType ?? "unknown",
       answerCategory: guide?.answerType ?? plan?.answerType ?? "unknown",
+      planBinding: plan === undefined ? null : planBindingFromPlan(plan),
       required: control.required,
       answerState,
       lane: plan?.answer.kind === "answered" ? plan.answer.lane : null,
@@ -979,11 +1001,25 @@ function planMatchesGuide(
   plan: ProfileFieldPlan | undefined,
   guide: (typeof retainedProfileControlGuide)[number],
 ): boolean {
-  if (plan === undefined) return true;
+  return planBindingMatchesGuide(plan, guide);
+}
+
+function planBindingMatchesGuide(
+  plan: ProfileFieldPlan | ObservedPlanBinding | null | undefined,
+  guide: (typeof retainedProfileControlGuide)[number],
+): boolean {
+  if (plan === undefined || plan === null) return true;
   const answerMatches = plan.answerType === guide.answerType ||
     plan.answerType === "option" && guide.answerType === "single_select" ||
     plan.answerType === "phone" && guide.answerType === "text";
   return plan.questionType === guide.normalizedQuestionType && answerMatches;
+}
+
+function planBindingFromPlan(plan: ProfileFieldPlan): ObservedPlanBinding {
+  return Object.freeze({
+    questionType: plan.questionType,
+    answerType: plan.answerType,
+  });
 }
 
 function applyInteraction(
@@ -1122,12 +1158,18 @@ function prefillDisposition(
 
 function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
   if (value.pendingMonitor !== null) value.terminalDisposition = "verification_failed";
+  const planBinding = value.metadataReconciliation === "mismatch"
+    ? value.planBinding
+    : undefined;
   return Object.freeze({
     fieldIdentity: value.fieldIdentity,
     uiType: value.uiType,
     uiVariant: value.uiVariant,
     questionCategory: value.questionCategory,
     answerCategory: value.answerCategory,
+    ...(planBinding === undefined || planBinding === null ? (planBinding === null ? { planBinding: null } : {}) : {
+      planBinding: Object.freeze({ ...planBinding }),
+    }),
     required: value.required,
     answerState: value.answerState,
     lane: value.lane,

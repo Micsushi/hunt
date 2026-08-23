@@ -130,7 +130,7 @@ test("returns all value-free metadata mismatches for learning conversion", async
     fields: fields.map(([fieldId], index) => ({
       fieldId,
       questionType: fieldId === "source.how_did_you_hear"
-        ? "application_source" as const
+        ? "address" as const
         : fieldId === "employment.previously_worked_for_organization"
           ? "prior_employment" as const
           : fieldId.startsWith("phone.") ? "phone" as const : "address" as const,
@@ -195,7 +195,7 @@ test("returns all value-free metadata mismatches for learning conversion", async
       `profile.${fieldId}`
     ));
     assert.deepEqual(failure?.mismatches.map(({ reasons }) => reasons), [
-      ["label_digest"],
+      ["label_digest", "plan_binding"],
       ["option_catalog"],
       ["binder_strategy"],
       ["ui_variant"],
@@ -216,8 +216,12 @@ test("returns all value-free metadata mismatches for learning conversion", async
       fieldIds: fields.map(([fieldId]) => `profile.${fieldId}`),
       affected: fields.map(([fieldId], index) => ({
         fieldId: `profile.${fieldId}`,
-        reasons: [["label_digest"], ["option_catalog"], ["binder_strategy"], ["ui_variant"], ["label_digest"]][index]!,
+        reasons: [["label_digest", "plan_binding"], ["option_catalog"], ["binder_strategy"], ["ui_variant"], ["label_digest"]][index]!,
       })),
+    });
+    assert.deepEqual(evidence.fields[0]!.planBinding, {
+      questionType: "address",
+      answerType: "option",
     });
     const stripped = structuredClone(evidence) as MutableLearningEvidence;
     delete (stripped.learningConversion as unknown as Record<string, unknown>).affected;
@@ -238,6 +242,17 @@ test("returns all value-free metadata mismatches for learning conversion", async
     const tamperedReason = structuredClone(evidence) as MutableLearningEvidence;
     tamperedReason.learningConversion!.affected[0]!.reasons = ["option_catalog"];
     assert.throws(() => admitMutableEvidence(tamperedReason), TypeError);
+    const tamperedPlanBinding = structuredClone(evidence) as MutableLearningEvidence;
+    (tamperedPlanBinding.fields[0] as unknown as {
+      planBinding: { questionType: string; answerType: string };
+    }).planBinding = { questionType: "application_source", answerType: "option" };
+    assert.throws(() => admitMutableEvidence(tamperedPlanBinding), TypeError);
+    const missingObservedBinding = structuredClone(evidence) as MutableLearningEvidence;
+    missingObservedBinding.fields[0]!.observationBinding = null;
+    assert.throws(() => admitMutableEvidence(missingObservedBinding), TypeError);
+    const missingPlanBinding = structuredClone(evidence) as MutableLearningEvidence;
+    (missingPlanBinding.fields[0] as unknown as { planBinding: null }).planBinding = null;
+    assert.throws(() => admitMutableEvidence(missingPlanBinding), TypeError);
     const mutation = structuredClone(evidence) as MutableLearningEvidence;
     mutation.fields[0]!.driverAttempt = "search_select";
     assert.throws(() => admitMutableEvidence(mutation), TypeError);
