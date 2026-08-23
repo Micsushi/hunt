@@ -695,6 +695,9 @@ export class OwnedWorkdayApplicationRuntime {
                   mutationAllowed: result.learningConversion.mutationAllowed,
                   defaultsGenerated: result.learningConversion.defaultsGenerated,
                   learningFieldIds: result.learningConversion.fieldIds,
+                  learningFieldReasons: result.learningConversion.affected.flatMap(({ fieldId, reasons }) =>
+                    reasons.map((reason) => `${fieldId}.${reason}`)
+                  ),
                 }),
                 ...(metadata === undefined ? {} : {
                   profileMetadataMismatchCount: metadata.mismatches.length,

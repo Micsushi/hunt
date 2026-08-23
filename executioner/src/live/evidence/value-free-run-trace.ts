@@ -130,6 +130,7 @@ const BOOLEAN_KEYS = new Set([
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
   "profileMetadataMismatchFields", "profileMetadataMismatchReasons", "learningFieldIds",
+  "learningFieldReasons",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",

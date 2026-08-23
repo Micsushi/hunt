@@ -41,6 +41,7 @@ export type {
   VerifiedProfileField,
   WorkdayProfilePagePort,
 } from "./types.ts";
+export { profileMetadataMismatchReasons } from "./types.ts";
 export {
   classifyProfileInspectionFailure,
   profileInspectionDiagnostic,

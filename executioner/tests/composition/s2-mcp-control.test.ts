@@ -15,6 +15,13 @@ import {
   upstreamResumeId,
   type McpRequest,
 } from "../../src/contracts/index.ts";
+import { runStage2RealJourney } from "../../src/acceptance/s2-journey.ts";
+import { readStage2TerminalArtifact, writeStage2TerminalArtifact } from
+  "../../src/acceptance/s2-terminal-artifact.ts";
+import { completeWorkdayProfilePage } from
+  "../../src/ats/workday/application/profile/index.ts";
+import { createValueFreeRunTrace, readValueFreeRunTrace } from
+  "../../src/live/evidence/value-free-run-trace.ts";
 import { applicationProfileFactIds as profileFactIds } from
   "../../src/profile/application-profile.ts";
 
@@ -393,6 +400,189 @@ test("default MCP production journey retains, expires, and falls back without re
     activeRetentionScenario = undefined;
     fixture.cleanup();
   }
+});
+
+test("default MCP production result preserves artifact persistence failure beside its primary terminal", async () => {
+  const primaryTerminal = {
+    schemaVersion: 4 as const,
+    journeyId: journey,
+    status: "failed" as const,
+    completedPages: 0,
+    errorCode: "owner_config_invalid" as const,
+  };
+  const api = createStage2McpFromPreparedRun(args, {
+    capture: () => capture(),
+    nextOperationId: () => ({
+      ok: true,
+      value: generatedOperationId("operation_defaultmcpaux0001"),
+    }),
+    async run(invocation, signal) {
+      return runStage2RealJourney(invocation, undefined, {
+        now: () => "2026-08-23T15:00:00.000Z",
+        async writeAcceptance() {},
+        async writeTerminalArtifact() {
+          throw new Error("injected terminal artifact persistence failure");
+        },
+      }, signal);
+    },
+  });
+  const start = await api.handle(request("request-aux-start"), new AbortController().signal);
+  assert.equal(start.ok, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const result = await api.handle({
+    schemaVersion: 2,
+    requestId: mcpRequestId("request-aux-result"),
+    method: "journey_result",
+    params: { journeyId: journey },
+  }, new AbortController().signal);
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      schemaVersion: 4,
+      requestId: "request-aux-result",
+      ok: true,
+      result: {
+        kind: "terminal",
+        terminal: primaryTerminal,
+        terminalArtifactErrorCode: "terminal_artifact_persistence_failed",
+      },
+    },
+  });
+});
+
+test("browser-free production mismatch bridges learning, retention, terminal, and completion storage", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-release-readiness-composed-"));
+  const evidenceRoot = join(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
+  const mismatch = {
+    code: "profile_metadata_reconciliation_failed" as const,
+    mismatches: [{
+      fieldId: "profile.address.country",
+      uiBehavior: "search_select" as const,
+      uiVariant: "workday_search_select_v2",
+      reasons: ["option_catalog" as const],
+    }],
+  };
+  const blocked = await completeWorkdayProfilePage(
+    { mode: "live", pageType: "profile", fields: [], repeatables: [] },
+    {
+      async inspect() { throw new TypeError("profile metadata reconciliation failed"); },
+      metadataReconciliationFailure: () => mismatch,
+      async commit() {},
+      async addOwnedRow() { throw new TypeError("not used"); },
+      async removeOwnedRow() { throw new TypeError("not used"); },
+    },
+    AbortSignal.any([]),
+  );
+  assert.equal(blocked.kind, "blocked");
+  if (blocked.kind !== "blocked" || blocked.learningConversion === undefined) return;
+  const trace = createValueFreeRunTrace(evidenceRoot, () => undefined);
+  trace("profile_reconciliation_blocked", {
+    learningConversion: blocked.learningConversion.kind,
+    executionMode: blocked.learningConversion.executionMode,
+    testOnly: blocked.learningConversion.testOnly,
+    mutationAllowed: blocked.learningConversion.mutationAllowed,
+    defaultsGenerated: blocked.learningConversion.defaultsGenerated,
+    learningFieldIds: blocked.learningConversion.fieldIds,
+    learningFieldReasons: blocked.learningConversion.affected.flatMap(({ fieldId, reasons }) =>
+      reasons.map((reason) => `${fieldId}.${reason}`)
+    ),
+  });
+
+  const calls: string[] = [];
+  const acceptanceWrites: unknown[] = [];
+  const invocation = {
+    args: { configPath: join(root, "owner-input.json"), evidenceRoot },
+    source: { repositoryRoot: root, sourceRevision },
+    config: {
+      configSha256: "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+      contractRevision: "s2-owner-inputs-v1",
+      revisionId: "revision_abcdefghijklmnop",
+      approvalId: "approval_abcdefghijklmnop",
+      journeyId: journey,
+      targetHandleId: target,
+    },
+  } as const;
+  const result = await runStage2RealJourney(invocation, {
+    async bind() {
+      return {
+        account: {
+          async verify() {
+            return {
+              ok: true as const,
+              proof: {
+                schemaVersion: 1 as const,
+                proofRevision: "s2-account-session-proof-v1" as const,
+                status: "unsealed" as const,
+                sourceRevision,
+                configSha256: invocation.config.configSha256,
+                revisionId: invocation.config.revisionId,
+                approvalId: invocation.config.approvalId,
+                journeyId: invocation.config.journeyId,
+                targetHandleId: invocation.config.targetHandleId,
+                accountState: "application_ready" as const,
+                independentlyObservedVerifiedState: true as const,
+                verificationProof: "application_state_observed" as const,
+                provider: "workday-state" as const,
+                consumedCandidateCount: 0 as const,
+                messageBodyRetained: false as const,
+                submitActivated: false as const,
+              },
+            };
+          },
+        },
+        recovery: { async pending() { return null; } },
+        application: {
+          async run() {
+            calls.push("application:mismatch");
+            return {
+              ok: false as const,
+              error: { completedPages: 1, failure: { code: "page_incomplete" } },
+            } as never;
+          },
+        },
+        review: { async capture() { throw new Error("review must not run"); } },
+        privacy: { async forbiddenTokens() { return ["value-free"]; } },
+        cleanup: {
+          async preserve() { calls.push("preserve"); return true; },
+          retentionExpiresAt() { return new Date(Date.now() + 20).toISOString(); },
+          async release() { calls.push("release"); return true; },
+          async close() { calls.push("close"); return true; },
+        },
+      };
+    },
+  }, {
+    now: () => "2026-08-23T15:00:00.000Z",
+    async writeAcceptance(_root, value) { acceptanceWrites.push(value); },
+    async writeTerminalArtifact(rootValue, value) {
+      writeStage2TerminalArtifact(rootValue, value);
+    },
+  }, new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "pre_review_failed");
+  assert.equal(result.terminal.status, "failed");
+  if (result.terminal.status !== "failed") return;
+  assert.equal(result.terminal.errorCode, "page_incomplete");
+  assert.deepEqual(acceptanceWrites, []);
+  assert.deepEqual(calls, ["application:mismatch", "preserve"]);
+  for (let attempt = 0; attempt < 40 && !calls.includes("release"); attempt += 1) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+  assert.equal(calls.includes("release"), true);
+  assert.deepEqual(readStage2TerminalArtifact(evidenceRoot).terminal, result.terminal);
+  assert.deepEqual(readValueFreeRunTrace(join(evidenceRoot, "value-free-trace.ndjson"))[0]?.details, {
+    learningConversion: "profile_ui_learning",
+    executionMode: "synthetic_test_non_submittable",
+    testOnly: true,
+    mutationAllowed: false,
+    defaultsGenerated: false,
+    learningFieldIds: ["profile.address.country"],
+    learningFieldReasons: ["profile.address.country.option_catalog"],
+  });
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("prepared-run capture admits one exact owner config and evidence binding", () => {

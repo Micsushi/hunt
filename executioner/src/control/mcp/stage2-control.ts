@@ -24,6 +24,21 @@ import {
   type JobId,
 } from "../../contracts/index.ts";
 
+type TerminalArtifactErrorCode = "terminal_artifact_persistence_failed";
+
+type Stage2McpTerminalResponse = {
+  readonly schemaVersion: 4;
+  readonly requestId: McpRequestId;
+  readonly ok: true;
+  readonly result: {
+    readonly kind: "terminal";
+    readonly terminal: TerminalResultV4;
+    readonly terminalArtifactErrorCode?: TerminalArtifactErrorCode;
+  };
+};
+
+type Stage2McpResponse = McpResponseV4 | Stage2McpTerminalResponse;
+
 export interface Stage2McpBoundJourney {
   readonly journeyId: JourneyId;
   readonly targetHandleId: JobId;
@@ -37,11 +52,18 @@ export interface Stage2McpControlOptions {
     OperationId,
     OperationIdentityError
   >;
-  readonly run: (signal: AbortSignal) => Promise<TerminalResultV4>;
+  readonly run: (
+    signal: AbortSignal,
+  ) => Promise<TerminalResultV4 | Stage2McpRunResult>;
+}
+
+export interface Stage2McpRunResult {
+  readonly terminal: TerminalResultV4;
+  readonly terminalArtifactErrorCode?: TerminalArtifactErrorCode;
 }
 
 type HandleResult = PortResult<
-  McpResponseV4,
+  Stage2McpResponse,
   McpTransportError | PortError<"operation_cancelled">
 >;
 
@@ -63,14 +85,14 @@ export function createStage2McpControl(
     {
       readonly operationId: OperationId;
       readonly request: McpRequest;
-      response: Promise<McpResponseV4>;
+      response: Promise<Stage2McpResponse>;
     }
   >();
   const controller = new AbortController();
   const reservedRecords = new Set<ReservedRecord>();
   let state: "idle" | "running" | "terminal" = "idle";
-  let task: Promise<TerminalResultV4> | undefined;
-  let terminal: TerminalResultV4 | undefined;
+  let task: Promise<Stage2McpRunResult> | undefined;
+  let terminal: Stage2McpRunResult | undefined;
 
   return Object.freeze({
     async handle(input: unknown, signal: AbortSignal): Promise<HandleResult> {
@@ -112,7 +134,7 @@ export function createStage2McpControl(
       const record = {
         operationId: allocated.value,
         request,
-        response: Promise.resolve(null as never) as Promise<McpResponseV4>,
+        response: Promise.resolve(null as never) as Promise<Stage2McpResponse>,
       };
       const response = execute(request, allocated.value).catch(() =>
         errorResponse(
@@ -136,7 +158,7 @@ export function createStage2McpControl(
         state = "terminal";
         return;
       }
-      terminal = cancelledTerminal(0);
+      terminal = { terminal: cancelledTerminal(0) };
       state = "terminal";
     },
   });
@@ -144,7 +166,7 @@ export function createStage2McpControl(
   async function execute(
     request: McpRequest,
     operationId: OperationId,
-  ): Promise<McpResponseV4> {
+  ): Promise<Stage2McpResponse> {
     if (request.method === "start_journey") {
       if (!matchesBinding(request, bound)) {
         return errorResponse(
@@ -167,7 +189,7 @@ export function createStage2McpControl(
       state = "running";
       task = Promise.resolve()
         .then(() => options.run(controller.signal))
-        .then(validTerminal, () => failedTerminal("mcp_internal_error"))
+        .then(validRunResult, () => failedRunResult("mcp_internal_error"))
         .then((value) => {
           terminal = value;
           state = "terminal";
@@ -222,8 +244,8 @@ export function createStage2McpControl(
           kind: "status",
           progress: {
             journeyId: bound.journeyId,
-            status: terminal?.status ?? "running",
-            completedSteps: terminal?.completedPages ?? 0,
+            status: terminal?.terminal.status ?? "running",
+            completedSteps: terminal?.terminal.completedPages ?? 0,
           },
         },
       });
@@ -237,12 +259,11 @@ export function createStage2McpControl(
           "orchestration",
           "readback",
         )
-      : admitted({
-          schemaVersion: 4,
-          requestId: request.requestId,
-          ok: true,
-          result: { kind: "terminal", terminal },
-        });
+      : terminalResponse(
+          request.requestId,
+          terminal.terminal,
+          terminal.terminalArtifactErrorCode,
+        );
   }
 
   function recordReservation(request: McpRequest): "ordinary" | ReservedRecord | null {
@@ -261,29 +282,41 @@ export function createStage2McpControl(
   }
 
   function reconcileCancellation(): void {
-    if (terminal?.status === "failed") return;
-    terminal = cancelledTerminal(terminal?.completedPages ?? 0);
+    if (terminal?.terminal.status === "failed") return;
+    terminal = { terminal: cancelledTerminal(terminal?.terminal.completedPages ?? 0) };
   }
 
-  function validTerminal(value: TerminalResultV4): TerminalResultV4 {
+  function validRunResult(
+    value: TerminalResultV4 | Stage2McpRunResult,
+  ): Stage2McpRunResult {
     try {
-      const parsed = parseTerminalResultV4(value);
+      const candidate = "terminal" in value ? value : { terminal: value };
+      if (
+        candidate.terminalArtifactErrorCode !== undefined &&
+        candidate.terminalArtifactErrorCode !== "terminal_artifact_persistence_failed"
+      ) throw new TypeError("invalid terminal artifact error code");
+      const parsed = parseTerminalResultV4(candidate.terminal);
       return parsed.journeyId === bound.journeyId
-        ? parsed
-        : failedTerminal("mcp_internal_error");
+        ? Object.freeze({
+            terminal: parsed,
+            ...(candidate.terminalArtifactErrorCode === undefined ? {} : {
+              terminalArtifactErrorCode: candidate.terminalArtifactErrorCode,
+            }),
+          })
+        : failedRunResult("mcp_internal_error");
     } catch {
-      return failedTerminal("mcp_internal_error");
+      return failedRunResult("mcp_internal_error");
     }
   }
 
-  function failedTerminal(errorCode: S2StableErrorCode): TerminalResultV4 {
-    return {
-      schemaVersion: 4,
-      journeyId: bound.journeyId,
-      status: "failed",
-      completedPages: 0,
-      errorCode,
-    };
+  function failedRunResult(errorCode: S2StableErrorCode): Stage2McpRunResult {
+    return { terminal: {
+        schemaVersion: 4,
+        journeyId: bound.journeyId,
+        status: "failed",
+        completedPages: 0,
+        errorCode,
+      } };
   }
 
   function cancelledTerminal(completedPages: number): TerminalResultV4 {
@@ -331,6 +364,26 @@ function errorResponse(
       source: { kind: "operation", id: operationId },
     } as ErrorEnvelopeV3,
   });
+}
+
+function terminalResponse(
+  requestId: McpRequestId,
+  terminal: TerminalResultV4,
+  terminalArtifactErrorCode: TerminalArtifactErrorCode | undefined,
+): Stage2McpTerminalResponse {
+  parseTerminalResultV4(terminal);
+  return {
+    schemaVersion: 4,
+    requestId,
+    ok: true,
+    result: {
+      kind: "terminal",
+      terminal,
+      ...(terminalArtifactErrorCode === undefined ? {} : {
+        terminalArtifactErrorCode,
+      }),
+    },
+  };
 }
 
 function admitted(value: McpResponseV4): McpResponseV4 {

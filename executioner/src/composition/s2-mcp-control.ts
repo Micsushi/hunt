@@ -16,6 +16,7 @@ import {
   createStage2McpControl,
   type Stage2McpBoundJourney,
   type Stage2McpControl,
+  type Stage2McpRunResult,
 } from "../control/mcp/stage2-control.ts";
 import {
   createPrivateRealRunAdmission,
@@ -71,7 +72,15 @@ export function createStage2McpFromPreparedRun(
   return createStage2McpControl({
     bound: captured.bound,
     nextOperationId: dependencies.nextOperationId ?? ids.operationId,
-    run: async (signal) => (await run(captured.invocation, signal)).terminal,
+    run: async (signal): Promise<Stage2McpRunResult> => {
+      const result = await run(captured.invocation, signal);
+      return {
+        terminal: result.terminal,
+        ...(result.ok || result.terminalArtifactErrorCode === undefined ? {} : {
+          terminalArtifactErrorCode: result.terminalArtifactErrorCode,
+        }),
+      };
+    },
   });
 }
 

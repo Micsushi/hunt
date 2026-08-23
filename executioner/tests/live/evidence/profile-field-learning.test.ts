@@ -209,7 +209,19 @@ test("returns all value-free metadata mismatches for learning conversion", async
       defaultsGenerated: false,
       liveAcceptanceEligible: false,
       fieldIds: fields.map(([fieldId]) => `profile.${fieldId}`),
+      affected: fields.map(([fieldId], index) => ({
+        fieldId: `profile.${fieldId}`,
+        reasons: [["label_digest"], ["option_catalog"], ["binder_strategy"], ["ui_variant"], ["label_digest"]][index]!,
+      })),
     });
+    const stripped = structuredClone(evidence) as MutableLearningEvidence;
+    delete (stripped.learningConversion as unknown as Record<string, unknown>).affected;
+    assert.throws(() => admitMutableEvidence(stripped), TypeError);
+    const contradictory = structuredClone(evidence) as MutableLearningEvidence;
+    (contradictory.learningConversion as unknown as {
+      affected: { reasons: string[] }[];
+    }).affected[0]!.reasons = [];
+    assert.throws(() => admitMutableEvidence(contradictory), TypeError);
     assert.equal(evidence.fields.every((field: { answerState: string; lane: unknown; driverAttempt: string }) =>
       field.answerState === "unset" && field.lane === null && field.driverAttempt === "none"), true);
     assert.equal(JSON.stringify(evidence).includes("answer-"), false);

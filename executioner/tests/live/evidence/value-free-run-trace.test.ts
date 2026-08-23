@@ -485,6 +485,7 @@ test("retains non-submittable learning conversion semantics without values", () 
       mutationAllowed: false,
       defaultsGenerated: false,
       learningFieldIds: ["profile.address.country"],
+      learningFieldReasons: ["profile.address.country.option_catalog"],
       rawValue: "private-profile-value",
     });
     const records = readValueFreeRunTrace(join(root, "value-free-trace.ndjson"));
@@ -495,6 +496,7 @@ test("retains non-submittable learning conversion semantics without values", () 
       mutationAllowed: false,
       defaultsGenerated: false,
       learningFieldIds: ["profile.address.country"],
+      learningFieldReasons: ["profile.address.country.option_catalog"],
     });
     assert.doesNotMatch(readFileSync(join(root, "value-free-trace.ndjson"), "utf8"),
       /private-profile-value/iu);

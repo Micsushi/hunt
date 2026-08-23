@@ -18,8 +18,9 @@ import {
 } from "../../form/answers/application-types.ts";
 import {
   profileRepeatableCatalog,
+  profileMetadataMismatchReasons,
   profileScalarControlCatalog,
-} from "../../ats/workday/application/profile/catalog.ts";
+} from "../../ats/workday/application/profile/index.ts";
 import {
   retainedProfileControlGuide,
   retainedProfileTextSha256,
@@ -383,6 +384,9 @@ function conversion(
     defaultsGenerated: false as const,
     liveAcceptanceEligible: false as const,
     fieldIds: Object.freeze(failure.mismatches.map(({ fieldId }) => fieldId)),
+    affected: Object.freeze(failure.mismatches.map(({ fieldId, reasons }) =>
+      Object.freeze({ fieldId, reasons: Object.freeze([...reasons]) })
+    )),
   });
 }
 
@@ -479,9 +483,6 @@ export function admitProfileFieldLearningEvidence(
     value.fields.length < 1 || value.fields.length > 128 ||
     value.visibleControlCount !== value.fields.length
   ) denied();
-  if (value.learningConversion !== undefined && !validConversion(value.learningConversion, value)) {
-    denied("learning_conversion");
-  }
   const identities = new Set<string>();
   for (const field of value.fields) {
     if (!validFieldIdentity(field.fieldIdentity)) denied("field_identity");
@@ -544,6 +545,14 @@ export function admitProfileFieldLearningEvidence(
     if (!validMechanicsRelations(field)) denied(`mechanics_relation:${field.fieldIdentity}`);
     identities.add(field.fieldIdentity);
   }
+  const mismatchIds = value.fields
+    .filter(({ metadataReconciliation }) => metadataReconciliation === "mismatch")
+    .map(({ fieldIdentity }) => fieldIdentity);
+  if ((mismatchIds.length > 0) !== (value.learningConversion !== undefined) ||
+      value.learningConversion !== undefined &&
+        !validConversion(value.learningConversion, value)) {
+    denied("learning_conversion");
+  }
   const operations = value.fields.flatMap(({ observationBinding, monitorBinding }) => [
     ...(observationBinding === null ? [] : [observationBinding.operationId]),
     ...(monitorBinding === null ? [] : [monitorBinding.operationId]),
@@ -573,7 +582,7 @@ function validConversion(
 ): boolean {
   return exactKeys(value, [
     "kind", "executionMode", "testOnly", "mutationAllowed", "defaultsGenerated",
-    "liveAcceptanceEligible", "fieldIds",
+    "liveAcceptanceEligible", "fieldIds", "affected",
   ]) && value.kind === "profile_ui_learning" &&
     value.executionMode === "synthetic_test_non_submittable" &&
     value.testOnly === true && value.mutationAllowed === false &&
@@ -584,6 +593,19 @@ function validConversion(
       typeof fieldId === "string" && validFieldIdentity(fieldId) &&
       evidence.fields.some((field) =>
         field.fieldIdentity === fieldId && field.metadataReconciliation === "mismatch"
+      )
+    ) && value.affected.length === value.fieldIds.length &&
+    value.affected.every((affected, index) =>
+      exactKeys(affected, ["fieldId", "reasons"]) &&
+      affected.fieldId === value.fieldIds[index] &&
+      validFieldIdentity(affected.fieldId) &&
+      affected.reasons.length > 0 &&
+      affected.reasons.length <= profileMetadataMismatchReasons.length &&
+      new Set(affected.reasons).size === affected.reasons.length &&
+      affected.reasons.every((reason) =>
+        (profileMetadataMismatchReasons as readonly string[]).includes(reason)
+      ) && evidence.fields.some((field) =>
+        field.fieldIdentity === affected.fieldId && field.metadataReconciliation === "mismatch"
       )
     ) && evidence.executionMode === "synthetic_test_non_submittable" &&
     evidence.testOnly === true && evidence.liveAcceptanceEligible === false;

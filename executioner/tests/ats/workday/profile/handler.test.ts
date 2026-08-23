@@ -181,6 +181,10 @@ test("converts a typed metadata mismatch into non-submittable UI learning", asyn
       defaultsGenerated: false,
       liveAcceptanceEligible: false,
       fieldIds: ["profile.address.country"],
+      affected: [{
+        fieldId: "profile.address.country",
+        reasons: ["option_catalog"],
+      }],
     },
   });
   assert.equal(commits, 0);

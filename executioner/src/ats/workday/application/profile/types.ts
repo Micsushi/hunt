@@ -154,6 +154,10 @@ export interface ProfileLearningConversion {
   readonly defaultsGenerated: false;
   readonly liveAcceptanceEligible: false;
   readonly fieldIds: readonly string[];
+  readonly affected: readonly {
+    readonly fieldId: string;
+    readonly reasons: readonly ProfileMetadataMismatchReason[];
+  }[];
 }
 
 export interface ProfileRowSnapshot {

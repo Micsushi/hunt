@@ -116,6 +116,12 @@ export async function completeWorkdayProfilePage(
         fieldIds: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
           ({ fieldId }) => fieldId,
         )),
+        affected: Object.freeze(observed.metadataReconciliationFailure.mismatches.map(
+          ({ fieldId, reasons }) => Object.freeze({
+            fieldId,
+            reasons: Object.freeze([...reasons]),
+          }),
+        )),
       }),
     });
   }
