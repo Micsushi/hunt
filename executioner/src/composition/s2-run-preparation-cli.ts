@@ -138,7 +138,9 @@ async function loadApplicationSource(
       value.sourceRevision !== "s2-application-owner-profile-input-v1" ||
       typeof value.resumeId !== "string"
     ) invalid();
-    const profile = structuredClone(parseApplicationProfile(value.profile));
+    const profile = structuredClone(parseApplicationProfile(
+      normalizeOwnerProfile(value.profile),
+    ));
     const derivedPlan = withDerivedProfileCountry(profile, value.profilePlan);
     const profilePlan = normalizeLearningPlan(derivedPlan);
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
@@ -189,6 +191,17 @@ function normalizeLearningPlan(value: unknown): unknown {
   }
   if (synthetic) plan.mode = "synthetic_test_non_submittable";
   return plan;
+}
+
+function normalizeOwnerProfile(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) invalid();
+  const profile = structuredClone(value) as {
+    facts?: Array<{ lane?: string }>;
+  };
+  for (const fact of profile.facts ?? []) {
+    if (fact.lane === undefined) fact.lane = "live_owner_fact";
+  }
+  return profile;
 }
 
 const LEGACY_RESUME_FACT_IDS = new Set([
