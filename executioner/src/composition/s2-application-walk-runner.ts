@@ -220,6 +220,21 @@ export function createStage2ApplicationWalkProductionBinding(
               preserve: async (cleanupSignal: AbortSignal): Promise<boolean> =>
                 await runtime.cleanup.preserve!(cleanupSignal),
             }),
+            ...(runtime.cleanup.release === undefined ? {} : {
+              release: async (cleanupSignal: AbortSignal): Promise<boolean> => {
+                let released = false;
+                try {
+                  released = await runtime.cleanup.release!(cleanupSignal);
+                  return released;
+                } finally {
+                  if (released && ownerSources !== undefined) {
+                    disposeOwnerResume(ownerSources);
+                    ownerSources = undefined;
+                    sensitiveValues = undefined;
+                  }
+                }
+              },
+            }),
             async close(
               cleanupSignal: AbortSignal,
               accepted?: boolean,

@@ -77,6 +77,8 @@ export function profileInspectionTraceDetails(
     profileInspectionFrameControlCandidateCounts: diagnostic.frameControlCandidateCounts,
     profileInspectionFrameOwnerControlRelationshipDigests:
       diagnostic.frameOwnerControlRelationshipDigests,
+    profileInspectionFrameOwnerControlTupleDigests:
+      diagnostic.frameOwnerControlTupleDigests,
     profileInspectionStructuralIdentityDigest: diagnostic.structuralIdentityDigest,
     profileInspectionProfileRootCandidateCount: diagnostic.profileRootCandidateCount,
     profileInspectionProfileRootVisibleCount: diagnostic.profileRootVisibleCount,

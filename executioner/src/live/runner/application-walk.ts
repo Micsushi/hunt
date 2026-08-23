@@ -38,6 +38,7 @@ export interface Stage2ApplicationWalkDependencies {
   readonly cleanup: {
     close(signal: AbortSignal, accepted?: boolean): Promise<boolean>;
     preserve?(signal: AbortSignal): Promise<boolean>;
+    release?(signal: AbortSignal): Promise<boolean>;
   };
   readonly evidence: ApplicationWalkAcceptanceWriter;
 }

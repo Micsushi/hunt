@@ -2554,6 +2554,113 @@ test("a failed optional Workday multi-select search leaves no blocking draft tex
   }
 });
 
+test("captures distinct per-frame owner-control relationships as digests", async () => {
+  const frameOne = new StructuralFrame([
+    new StructuralElement("formField", "owner-one", [
+      new StructuralElement("button", "control-one", []),
+      new StructuralElement("input", "control-two", []),
+    ]),
+  ]);
+  const frameTwo = new StructuralFrame([
+    new StructuralElement("formField", "owner-two", [
+      new StructuralElement("button", "control-three", []),
+    ]),
+  ]);
+  const adapter = new PlaywrightWorkdayProfilePage(new StructuralPage([frameOne, frameTwo]) as never, {
+    pageType: "profile",
+  });
+
+  await assert.rejects(() => adapter.inspect(new AbortController().signal));
+
+  const facts = adapter.inspectionFacts();
+  assert.equal(facts?.frameCount, 2);
+  assert.deepEqual(facts?.frameDomOwnerCandidateCounts, [1, 1]);
+  assert.deepEqual(facts?.frameControlCandidateCounts, [2, 1]);
+  assert.equal(facts?.frameOwnerControlTupleDigests.length, 3);
+  assert.equal(new Set(facts?.frameOwnerControlTupleDigests).size, 3);
+  assert.equal(facts?.frameOwnerControlRelationshipDigests.length, 2);
+  assert.notEqual(
+    facts?.frameOwnerControlRelationshipDigests[0],
+    facts?.frameOwnerControlRelationshipDigests[1],
+  );
+  for (const digest of facts?.frameOwnerControlTupleDigests ?? []) {
+    assert.match(digest, /^[0-9a-f]{64}$/u);
+  }
+  assert.doesNotMatch(JSON.stringify(facts), /owner-one|control-one|control-two|control-three/iu);
+});
+
+class StructuralElement {
+  readonly tagName: string;
+  readonly id: string;
+  private readonly controls: readonly StructuralElement[];
+
+  constructor(
+    tagName: string,
+    id: string,
+    controls: readonly StructuralElement[],
+  ) {
+    this.tagName = tagName;
+    this.id = id;
+    this.controls = controls;
+  }
+
+  getAttribute(name: string): string | null {
+    return name === "data-automation-id" ? this.id : name === "role" ? "button" : null;
+  }
+
+  querySelectorAll(): readonly StructuralElement[] {
+    return this.controls;
+  }
+}
+
+class StructuralLocator {
+  private readonly elements: readonly StructuralElement[];
+  private readonly visible: boolean;
+
+  constructor(elements: readonly StructuralElement[], visible = true) {
+    this.elements = elements;
+    this.visible = visible;
+  }
+
+  async count(): Promise<number> { return this.elements.length; }
+  nth(index: number): StructuralLocator { return new StructuralLocator([this.elements[index]!], this.visible); }
+  async isVisible(): Promise<boolean> { return this.visible && this.elements.length === 1; }
+  async getAttribute(name: string): Promise<string | null> {
+    return this.elements[0]?.getAttribute(name) ?? "wrong";
+  }
+  async evaluateAll<T>(callback: (elements: readonly StructuralElement[], arg: string) => T, arg: string): Promise<T> {
+    return callback(this.elements, arg);
+  }
+}
+
+class StructuralFrame {
+  private readonly owners: readonly StructuralElement[];
+
+  constructor(owners: readonly StructuralElement[]) {
+    this.owners = owners;
+  }
+
+  locator(selector: string): StructuralLocator {
+    if (selector.includes("applyFlow")) return new StructuralLocator([new StructuralElement("main", "root", [])]);
+    if (selector.includes("formField")) return new StructuralLocator(this.owners);
+    return new StructuralLocator(this.owners.flatMap((owner) => owner.querySelectorAll()));
+  }
+}
+
+class StructuralPage {
+  private readonly pageFrames: readonly StructuralFrame[];
+
+  constructor(pageFrames: readonly StructuralFrame[]) {
+    this.pageFrames = pageFrames;
+  }
+
+  frames(): readonly StructuralFrame[] { return this.pageFrames; }
+  locator(selector: string): StructuralLocator {
+    if (selector === "body") return new StructuralLocator([]);
+    return this.pageFrames[0]!.locator(selector);
+  }
+}
+
 function traced(
   port: WorkdayProfilePagePort,
   errors: string[],

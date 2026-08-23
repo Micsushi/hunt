@@ -191,6 +191,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         readonly domOwnerCandidateCount: number;
         readonly controlCandidateCount: number;
         readonly ownerControlRelationshipDigest: string;
+        readonly ownerControlTupleDigests: readonly string[];
         readonly identities: readonly { readonly control: string; readonly semantic: string }[];
         readonly rootCandidateCount: number;
         readonly rootVisibleCount: number;
@@ -203,23 +204,44 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const controls = frame.locator(controlSelector);
         const domOwnerCandidateCount = await domOwners.count();
         const controlCandidateCount = await controls.count();
-        const ownerControlCount = await domOwners.evaluateAll(
-          (elements, selector) => elements.reduce(
-            (count, element) => count + element.querySelectorAll(selector).length,
-            0,
-          ),
-          controlSelector,
-        );
         const identities = await controls.evaluateAll((elements) => elements.slice(0, 128).map((element) => ({
           control: element.id || element.getAttribute("name") || "missing",
           semantic: element.getAttribute("data-automation-id") || element.getAttribute("role") || "missing",
         })));
-        const relationship = { domOwnerCandidateCount, controlCandidateCount, ownerControlCount };
+        const ownerControlTuples = await domOwners.evaluateAll((elements, selector) => {
+          const identity = (element: Element, semantic: boolean): string => [
+            element.tagName.toLowerCase(),
+            element.id,
+            element.getAttribute("name") ?? "",
+            element.getAttribute("data-automation-id") ?? "",
+            element.getAttribute("role") ?? "",
+            semantic ? element.getAttribute("aria-haspopup") ?? "" : "",
+          ].join("\u0000");
+          return elements.slice(0, 64).flatMap((owner, ownerOrdinal) =>
+            [...owner.querySelectorAll(selector)].slice(0, 64).map((control, controlOrdinal) => ({
+              ownerOrdinal,
+              controlOrdinal,
+              ownerIdentity: identity(owner, false),
+              controlIdentity: identity(control, false),
+              semanticIdentity: identity(control, true),
+            }))
+          );
+        }, controlSelector);
+        const ownerControlTupleDigests = ownerControlTuples.map((tuple) => digest(JSON.stringify({
+          frameIndex,
+          ownerOrdinal: tuple.ownerOrdinal,
+          controlOrdinal: tuple.controlOrdinal,
+          ownerIdentityDigest: digest(tuple.ownerIdentity),
+          controlIdentityDigest: digest(tuple.controlIdentity),
+          semanticIdentityDigest: digest(tuple.semanticIdentity),
+        })));
+        const relationship = { frameIndex, ownerControlTupleDigests };
         frameFacts.push({
-          identityDigest: digest(JSON.stringify({ frameIndex, rootCandidateCount, rootVisibleCount, ...relationship })),
+          identityDigest: digest(JSON.stringify({ rootCandidateCount, rootVisibleCount, ...relationship })),
           domOwnerCandidateCount,
           controlCandidateCount,
           ownerControlRelationshipDigest: digest(JSON.stringify(relationship)),
+          ownerControlTupleDigests,
           identities,
           rootCandidateCount,
           rootVisibleCount,
@@ -245,12 +267,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const frameOwnerControlRelationshipDigests = frameFacts.map(
         ({ ownerControlRelationshipDigest }) => ownerControlRelationshipDigest,
       );
+      const frameOwnerControlTupleDigests = frameFacts.flatMap(
+        ({ ownerControlTupleDigests: digests }) => digests,
+      ).slice(0, 64);
       const structure = JSON.stringify({
         frameCount,
         frameIdentityDigests,
         frameDomOwnerCandidateCounts,
         frameControlCandidateCounts,
         frameOwnerControlRelationshipDigests,
+        frameOwnerControlTupleDigests,
         rootCandidateCount,
         rootVisibleCount,
         domOwnerCandidateCount,
@@ -265,6 +291,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         frameDomOwnerCandidateCounts: Object.freeze(frameDomOwnerCandidateCounts),
         frameControlCandidateCounts: Object.freeze(frameControlCandidateCounts),
         frameOwnerControlRelationshipDigests: Object.freeze(frameOwnerControlRelationshipDigests),
+        frameOwnerControlTupleDigests: Object.freeze(frameOwnerControlTupleDigests),
         structuralIdentityDigest,
         profileRootCandidateCount: rootCandidateCount,
         profileRootVisibleCount: rootVisibleCount,
@@ -283,6 +310,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         frameDomOwnerCandidateCounts: Object.freeze([]),
         frameControlCandidateCounts: Object.freeze([]),
         frameOwnerControlRelationshipDigests: Object.freeze([]),
+        frameOwnerControlTupleDigests: Object.freeze([]),
         structuralIdentityDigest,
         profileRootCandidateCount: 0,
         profileRootVisibleCount: 0,

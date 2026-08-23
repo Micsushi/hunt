@@ -12,6 +12,8 @@ import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwri
 import type { OwnedTargetObservation } from "../../../src/browser/playwright-live/private/types.ts";
 import {
   ownedApplicationPageAccess,
+  releaseOwnedApplicationSession,
+  retainOwnedApplicationSession,
   suspendOwnedApplicationSession,
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 
@@ -333,6 +335,94 @@ test("application mutation is unavailable without the fixed owned runtime", asyn
     ok: false,
     error: { code: "browser_session_missing", retryable: false },
   });
+});
+
+test("rejected retention leaves one fallback cleanup owner and exposes explicit release", async () => {
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles,
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const retention = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_reject_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+    ownerApprovalExpiresAt: liveFixtures.expiresAt,
+  }, new AbortController().signal);
+  assert.deepEqual(retention, {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
+  const released = await provider[releaseOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_release_without_retention_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: liveFixtures.issuedAt,
+  }, new AbortController().signal);
+  assert.deepEqual(released, {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_fallback_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+  assert.deepEqual(closed, { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("expired and closed retained-state requests fail closed without teardown masking", async () => {
+  const context = new FakeContext([]);
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(liveFixtures.issuedAt, "2026-08-05T12:00:01.000Z"),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { return ownedMatched(); } },
+    profiles: new MemoryProfiles(),
+    ids: () => liveFixtures.session.sessionId,
+    now: () => "2026-08-05T12:00:02.000Z",
+    timeoutMs: 100,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  context.ownedPages[0]!.closed = true;
+  const rejected = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_expired_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: "2026-08-05T12:00:02.000Z",
+    ownerApprovalExpiresAt: "2026-08-05T12:00:03.000Z",
+  }, new AbortController().signal);
+  assert.deepEqual(rejected, {
+    ok: false,
+    error: { code: "browser_session_missing", retryable: false },
+  });
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_expired_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+  assert.deepEqual(closed, { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
 });
 
 test("application owner sources are deterministically revoked after close", async () => {

@@ -33,6 +33,7 @@ import type { PlaywrightPersistentBrowserSession } from
   "../browser/playwright-live/session.ts";
 import {
   ownedApplicationPageAccess,
+  releaseOwnedApplicationSession,
   retainOwnedApplicationSession,
   suspendOwnedApplicationSession,
   type OwnedApplicationOperation,
@@ -438,7 +439,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         cleanup: Object.freeze({
           async preserve(activeSignal: AbortSignal): Promise<boolean> {
             const activeRequest = liveRequest;
-            if (!currentOwnerAuthorization(activeRequest?.owner, activeSignal, now)) return false;
+            const retentionNow = now();
+            if (!currentOwnerAuthorization(activeRequest?.owner, activeSignal, () => retentionNow)) return false;
             const retain = browser[retainOwnedApplicationSession];
             if (retain === undefined) return false;
             const retained = await retain.call(browser, {
@@ -447,9 +449,30 @@ export function createStage2PlaywrightLiveRuntimeBinding(
               operationId: nextOperationId(),
               sessionId: session.sessionId,
               target,
-              now: now(),
+              now: retentionNow,
+              ownerApprovalExpiresAt: activeRequest?.owner.approval.expiresAt,
             }, activeSignal);
             return retained.ok;
+          },
+          async release(activeSignal: AbortSignal): Promise<boolean> {
+            const activeRequest = liveRequest;
+            const release = browser[releaseOwnedApplicationSession];
+            if (activeRequest === undefined || release === undefined) return false;
+            const released = await release.call(browser, {
+              schemaVersion: 1,
+              journeyId: session.journeyId,
+              operationId: nextOperationId(),
+              sessionId: session.sessionId,
+              target,
+              now: now(),
+            }, activeSignal);
+            if (released.ok) {
+              externalMonitor?.close();
+              accountProof = undefined;
+              accountSensitiveValues = undefined;
+              liveRequest = undefined;
+            }
+            return released.ok;
           },
           async close(activeSignal: AbortSignal, accepted?: boolean) {
             const closeRequest = {

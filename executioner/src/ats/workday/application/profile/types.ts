@@ -183,6 +183,7 @@ export interface ProfileInspectionFacts {
   readonly frameDomOwnerCandidateCounts: readonly number[];
   readonly frameControlCandidateCounts: readonly number[];
   readonly frameOwnerControlRelationshipDigests: readonly string[];
+  readonly frameOwnerControlTupleDigests: readonly string[];
   readonly structuralIdentityDigest: string;
   readonly profileRootCandidateCount: number;
   readonly profileRootVisibleCount: number;
@@ -205,6 +206,7 @@ export interface ProfileInspectionFailure {
   readonly frameDomOwnerCandidateCounts?: readonly number[];
   readonly frameControlCandidateCounts?: readonly number[];
   readonly frameOwnerControlRelationshipDigests?: readonly string[];
+  readonly frameOwnerControlTupleDigests?: readonly string[];
   readonly structuralIdentityDigest?: string;
   readonly profileRootCandidateCount?: number;
   readonly profileRootVisibleCount?: number;

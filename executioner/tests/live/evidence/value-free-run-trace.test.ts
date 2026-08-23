@@ -299,6 +299,7 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
           frameDomOwnerCandidateCounts: [1, 2],
           frameControlCandidateCounts: [2, 2],
           frameOwnerControlRelationshipDigests: ["4".repeat(64), "5".repeat(64)],
+          frameOwnerControlTupleDigests: ["6".repeat(64), "7".repeat(64)],
           structuralIdentityDigest: "d".repeat(64),
           profileRootCandidateCount: 2,
           profileRootVisibleCount: 0,
@@ -359,6 +360,7 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       "profileInspectionFrameDomOwnerCandidateCounts",
       "profileInspectionFrameControlCandidateCounts",
       "profileInspectionFrameOwnerControlRelationshipDigests",
+      "profileInspectionFrameOwnerControlTupleDigests",
       "profileInspectionStructuralIdentityDigest",
       "profileInspectionProfileRootCandidateCount",
       "profileInspectionProfileRootVisibleCount",
@@ -401,6 +403,9 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       assert.deepEqual(record.details.profileInspectionFrameControlCandidateCounts, [2, 2]);
       assert.deepEqual(record.details.profileInspectionFrameOwnerControlRelationshipDigests, [
         "4".repeat(64), "5".repeat(64),
+      ]);
+      assert.deepEqual(record.details.profileInspectionFrameOwnerControlTupleDigests, [
+        "6".repeat(64), "7".repeat(64),
       ]);
       assert.equal(record.details.profileInspectionProfileRootCandidateCount, 2);
       assert.equal(record.details.profileInspectionProfileRootVisibleCount, 0);

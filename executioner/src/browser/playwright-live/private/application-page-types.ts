@@ -7,6 +7,7 @@ import type {
 export const ownedApplicationPageAccess = Symbol("ownedApplicationPageAccess");
 export const suspendOwnedApplicationSession = Symbol("suspendOwnedApplicationSession");
 export const retainOwnedApplicationSession = Symbol("retainOwnedApplicationSession");
+export const releaseOwnedApplicationSession = Symbol("releaseOwnedApplicationSession");
 
 export interface ProfileSessionRetentionRequest {
   readonly schemaVersion: 1;
@@ -15,6 +16,7 @@ export interface ProfileSessionRetentionRequest {
   readonly sessionId: import("../../../contracts/live/index.ts").LiveSessionId;
   readonly target: import("../../../contracts/live/index.ts").TargetIdentityV1;
   readonly now: string;
+  readonly ownerApprovalExpiresAt?: string;
 }
 
 export interface OwnedApplicationPageRequest {
@@ -55,6 +57,13 @@ export interface OwnedApplicationPageCapability {
     PersistentBrowserErrorCode
   >>;
   [retainOwnedApplicationSession]?(
+    request: ProfileSessionRetentionRequest,
+    signal: AbortSignal,
+  ): Promise<import("../../../contracts/live/index.ts").LivePortResult<
+    void,
+    PersistentBrowserErrorCode
+  >>;
+  [releaseOwnedApplicationSession]?(
     request: ProfileSessionRetentionRequest,
     signal: AbortSignal,
   ): Promise<import("../../../contracts/live/index.ts").LivePortResult<

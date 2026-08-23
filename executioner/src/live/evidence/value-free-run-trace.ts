@@ -133,6 +133,7 @@ const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",
   "profileInspectionControlIdDigests", "profileInspectionSemanticIdDigests",
   "profileInspectionFrameIdentityDigests", "profileInspectionFrameOwnerControlRelationshipDigests",
+  "profileInspectionFrameOwnerControlTupleDigests",
 ]);
 const PROFILE_INSPECTION_NUMBER_ARRAY_KEYS = new Set([
   "profileInspectionFrameDomOwnerCandidateCounts", "profileInspectionFrameControlCandidateCounts",
@@ -187,7 +188,8 @@ function profileInspectionIdentifier(key: string, value: string): boolean {
       key === "profileInspectionControlIdDigests" ||
       key === "profileInspectionSemanticIdDigests" ||
       key === "profileInspectionFrameIdentityDigests" ||
-      key === "profileInspectionFrameOwnerControlRelationshipDigests") {
+      key === "profileInspectionFrameOwnerControlRelationshipDigests" ||
+      key === "profileInspectionFrameOwnerControlTupleDigests") {
     return /^[0-9a-f]{64}$/u.test(value);
   }
   return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);

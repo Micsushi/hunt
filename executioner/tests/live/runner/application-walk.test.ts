@@ -162,6 +162,7 @@ test("rejects stale profile-session retention and falls back to cleanup", async 
 
   assert.equal(result.ok, false);
   assert.deepEqual(calls.slice(-2), ["preserve_rejected_stale_authority", "close"]);
+  assert.equal(calls.filter((call) => call === "close").length, 1);
   assert.doesNotMatch(JSON.stringify(result), /submit|url|title|label|value|selector|error/iu);
 });
 
