@@ -191,6 +191,50 @@ test("preservation diagnostics cannot suppress ordinary cleanup", async () => {
   assert.deepEqual(calls.slice(-2), ["preserve_failed", "close"]);
 });
 
+test("cleanup failure is attached separately while profile failure stays primary", async () => {
+  const calls: string[] = [];
+  const result = await runStage2ApplicationWalk(input(), {
+    walk: dependenciesFor([truth("profile")], calls, () => ({
+      ok: false,
+      error: {
+        code: "page_incomplete",
+        classifier: "profile_page",
+        primitive: "profile_control",
+        unknownLayer: "ui_behavior",
+      },
+    })),
+    laneAcceptances: { snapshot: () => [] },
+    cleanup: {
+      async preserve() {
+        calls.push("preserve_rejected");
+        return false;
+      },
+      async close() {
+        calls.push("close_failed");
+        return false;
+      },
+    },
+    evidence: { async write() { calls.push("write"); } },
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: false,
+    code: "page_incomplete",
+    failure: {
+      attempt: 1,
+      classifier: "profile_page",
+      code: "page_incomplete",
+      owner: "profile",
+      page: "profile",
+      primitive: "profile_control",
+      retryable: false,
+      unknownLayer: "ui_behavior",
+    },
+    cleanupErrorCode: "browser_profile_cleanup_failed",
+  });
+  assert.deepEqual(calls.slice(-2), ["preserve_rejected", "close_failed"]);
+});
+
 test("traces value-free page progress with question, answer, UI, and provenance summaries", async () => {
   const trace: Stage2ApplicationWalkTraceEvent[] = [];
   const calls: string[] = [];

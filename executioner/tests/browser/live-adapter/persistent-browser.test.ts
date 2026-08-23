@@ -9,6 +9,7 @@ import type {
 import { liveFixtures } from "../../../src/testing/live/index.ts";
 import { findLivePrivacyViolations } from "../../../src/testing/live/privacy.ts";
 import { PlaywrightPersistentBrowserSession } from "../../../src/browser/playwright-live/index.ts";
+import { OwnedWorkdayApplicationRuntime } from "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 import type { OwnedTargetObservation } from "../../../src/browser/playwright-live/private/types.ts";
 import {
   ownedApplicationPageAccess,
@@ -385,6 +386,196 @@ test("rejected retention leaves one fallback cleanup owner and exposes explicit 
   assert.deepEqual(closed, { ok: true, value: undefined });
   assert.equal(context.closeCount, 1);
   assert.equal(profiles.cleanupCount, 1);
+});
+
+test("successful retention releases the live session exactly once", async () => {
+  const now = Date.now();
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  let probeCalls = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 60_000).toISOString()),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { probeCalls += 1; return { ownership: "owned", target: { kind: "matched" }, snapshot: structuralSnapshot }; } },
+    profiles,
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    now: () => new Date().toISOString(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 1_500,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const direct = new OwnedWorkdayApplicationRuntime(candidateApplicationRuntime(new Date(now + 30_000).toISOString()));
+  direct.bindSession(opened.value.session);
+  await assert.doesNotReject(() => direct.run(context.ownedPages[0]! as never, {
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_direct_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "observe" }, new AbortController().signal));
+  const observed = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_observe_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "observe" }, new AbortController().signal);
+  assert.ok(observed.ok, `${JSON.stringify(observed)} probes=${probeCalls}`);
+  const unavailable = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_access_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "reconcile_profile", input: { pageId: "page-profile" } }, new AbortController().signal);
+  assert.deepEqual(unavailable, {
+    ok: true,
+    value: {
+      ok: false,
+      error: { code: "page_incomplete", classifier: "profile_page", primitive: "profile_control", unknownLayer: "ui_behavior" },
+    },
+  });
+  const retained = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_release_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+  }, new AbortController().signal);
+  assert.deepEqual(retained, { ok: true, value: undefined });
+  const closed = await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_release_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal);
+  assert.deepEqual(closed, { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("retention rejects a pinned-target drift and leaves fallback cleanup as owner", async () => {
+  const now = Date.now();
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  let targetMatched = true;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 60_000).toISOString()),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() {
+      return targetMatched
+        ? ownedMatched()
+        : {
+          ownership: "owned" as const,
+          target: { kind: "target_mismatch" as const, dimension: "posting" as const },
+          snapshot: structuralSnapshot,
+        };
+    } },
+    profiles,
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    now: () => new Date().toISOString(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 1_500,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const unavailable = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_drift_access_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "reconcile_profile", input: { pageId: "page-profile" } }, new AbortController().signal);
+  assert.equal(unavailable.ok, true);
+  targetMatched = false;
+  const rejected = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_drift_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+  }, new AbortController().signal);
+  assert.deepEqual(rejected, {
+    ok: false,
+    error: { code: "browser_session_invalidated", retryable: false },
+  });
+  assert.equal(context.closeCount, 0);
+  assert.deepEqual(await provider.close({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_drift_close_01"),
+    sessionId: opened.value.session.sessionId,
+  }, new AbortController().signal), { ok: true, value: undefined });
+  assert.equal(context.closeCount, 1);
+  assert.equal(profiles.cleanupCount, 1);
+});
+
+test("retained session expiry timer releases context and profile", async () => {
+  const now = Date.now();
+  const context = new FakeContext([]);
+  const profiles = new MemoryProfiles();
+  let probeCalls = 0;
+  const provider = new PlaywrightPersistentBrowserSession({
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 1_250).toISOString()),
+    launcher: { async launchPersistentContext() { return context; } },
+    probe: { async inspect() { probeCalls += 1; return { ownership: "owned", target: { kind: "matched" }, snapshot: structuralSnapshot }; } },
+    profiles,
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    now: () => new Date().toISOString(),
+    ids: () => liveFixtures.session.sessionId,
+    timeoutMs: 1_500,
+  });
+  const opened = await provider.open(openRequest(), new AbortController().signal);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const observed = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_expiry_observe_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "observe" }, new AbortController().signal);
+  assert.ok(observed.ok, `${JSON.stringify(observed)} probes=${probeCalls}`);
+  const unavailable = await provider[ownedApplicationPageAccess]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_profile_candidate_expiry_access_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+  }, { kind: "reconcile_profile", input: { pageId: "page-profile" } }, new AbortController().signal);
+  assert.deepEqual(unavailable, {
+    ok: true,
+    value: {
+      ok: false,
+      error: { code: "page_incomplete", classifier: "profile_page", primitive: "profile_control", unknownLayer: "ui_behavior" },
+    },
+  });
+  const retained = await provider[retainOwnedApplicationSession]({
+    schemaVersion: 1,
+    journeyId: liveFixtures.journeyId,
+    operationId: generatedOperationId("operation_retention_expiry_01"),
+    sessionId: opened.value.session.sessionId,
+    target: liveFixtures.target,
+    now: new Date().toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+  }, new AbortController().signal);
+  assert.deepEqual(retained, { ok: true, value: undefined });
+  await waitFor(() => context.closeCount === 1 && profiles.cleanupCount === 1, 3_000);
+  assert.equal(context.closed, true);
+  assert.equal(profiles.marker, undefined);
 });
 
 test("expired and closed retained-state requests fail closed without teardown masking", async () => {
@@ -1419,6 +1610,37 @@ async function invalidateWithOneFill(
   });
 }
 
+function candidateApplicationRuntime(authorizationExpiresAt: string) {
+  return {
+    request: {
+      owner: { roots: { evidence: { path: "C:\\outside\\evidence" } } },
+      ownerSources: {
+        profilePlan: {
+          mode: "synthetic_test_non_submittable",
+          pageType: "profile",
+          fields: [],
+          repeatables: [],
+        },
+        sensitiveValues: [],
+      },
+    } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_profile_candidate_01"),
+    timeoutMs: 100,
+    initialReviewExpected: [],
+    authorizationExpiresAt,
+    now: () => new Date().toISOString(),
+  };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(predicate(), true, "condition did not become true");
+}
+
 function openRequest(): PersistentBrowserOpenRequest {
   return {
     schemaVersion: 1,
@@ -1458,6 +1680,47 @@ class FakePage {
   async close(): Promise<void> {
     this.closed = true;
   }
+
+  frames(): FakePage[] {
+    return [this];
+  }
+
+  locator(): FakeLocator {
+    return new FakeLocator();
+  }
+
+  getByRole(): FakeLocator {
+    return new FakeLocator();
+  }
+
+  async evaluate(): Promise<unknown> {
+    return {
+      page: "profile",
+      lanes: ["profile"],
+      rootSelector: '[data-automation-id="applyFlowMyInfoPage"]',
+      pageId: "page-profile",
+      requiredFields: [],
+      c3OwnedDuplicateRows: 0,
+      submitActivated: false,
+      signature: "profile-fixture",
+      transitionKey: "profile-fixture",
+      validationKeys: [],
+      validationOwners: [],
+    };
+  }
+
+  async waitForTimeout(): Promise<void> {}
+
+  async reload(): Promise<void> {}
+}
+
+class FakeLocator {
+  async count(): Promise<number> { return 0; }
+  nth(): FakeLocator { return this; }
+  async isVisible(): Promise<boolean> { return false; }
+  async getAttribute(): Promise<string | null> { return null; }
+  locator(): FakeLocator { return this; }
+  async evaluateAll(): Promise<never[]> { return []; }
 }
 
 class FakeContext {

@@ -146,6 +146,7 @@ export type Stage2ApplicationWalkResult =
       readonly ok: false;
       readonly code: S2StableErrorCode;
       readonly failure?: ApplicationWalkFailurePacket;
+      readonly cleanupErrorCode?: "browser_profile_cleanup_failed";
     };
 
 export async function runStage2ApplicationWalk(
@@ -195,7 +196,17 @@ export async function runStage2ApplicationWalk(
       cleaned = false;
     }
   }
-  if (!cleaned) return { ok: false, code: "browser_profile_cleanup_failed" };
+  if (!cleaned) {
+    if (!walk.ok) {
+      return {
+        ok: false,
+        code: walk.error.failure.code,
+        failure: Object.freeze({ ...walk.error.failure }),
+        cleanupErrorCode: "browser_profile_cleanup_failed",
+      };
+    }
+    return { ok: false, code: "browser_profile_cleanup_failed" };
+  }
   if (!walk.ok) {
     return {
       ok: false,

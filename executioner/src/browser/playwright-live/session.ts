@@ -96,6 +96,7 @@ export class PlaywrightPersistentBrowserSession
   #cleanupStarted = false;
   #profileSessionRetained = false;
   #profileSessionRetentionRequest: ProfileSessionRetentionRequest | undefined;
+  #profileRetentionExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   readonly #accountAccess: OwnedAccountPageCoordinator;
   readonly #verificationNavigation: OwnedVerificationNavigationCoordinator;
   readonly #applicationRuntime: RevocableWorkdayApplicationRuntime;
@@ -729,11 +730,11 @@ export class PlaywrightPersistentBrowserSession
       this.#options.timeoutMs,
     );
     if (!pinned.ok || pinned.value.target.kind !== "matched") {
-      const outcome = this.#profileRetentionOutcome(request, signal);
+      const outcome = this.#profileRetentionDecision(request, signal, Date.parse(request.now), false);
       this.#emitProfilePreservation(outcome, "started");
       return failure("browser_session_invalidated");
     }
-    const outcome = this.#profileRetentionOutcome(request, signal);
+    const outcome = this.#profileRetentionDecision(request, signal, Date.parse(request.now), true);
     if (!outcome.eligible) {
       this.#profileSessionRetained = false;
       this.#emitProfilePreservation(outcome, "started");
@@ -741,6 +742,7 @@ export class PlaywrightPersistentBrowserSession
     }
     this.#profileSessionRetained = true;
     this.#profileSessionRetentionRequest = Object.freeze({ ...request });
+    this.#scheduleProfileRetentionExpiry(this.#session.leaseExpiresAt);
     this.#emitProfilePreservation(outcome, "not_started");
     return { ok: true, value: undefined };
   }
@@ -759,6 +761,7 @@ export class PlaywrightPersistentBrowserSession
     ) return failure("browser_session_invalidated");
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
+    this.#clearProfileRetentionExpiry();
     if (this.#profilePath === undefined) return failure("browser_session_missing");
     if (
       this.#context === undefined || this.#session === undefined || this.#marker === undefined ||
@@ -786,7 +789,12 @@ export class PlaywrightPersistentBrowserSession
         request.journeyId !== this.#session.journeyId ||
         request.sessionId !== this.#session.sessionId) return failure("browser_session_missing");
     if (this.#profileSessionRetained) {
-      return failure("browser_session_invalidated");
+      const retained = this.#profileSessionRetentionRequest;
+      if (retained === undefined) return failure("browser_session_missing");
+      return this[releaseOwnedApplicationSession]({
+        ...retained,
+        operationId: request.operationId,
+      }, signal);
     }
     this.#cleanupStarted = true;
     const context = this.#context;
@@ -1170,18 +1178,19 @@ export class PlaywrightPersistentBrowserSession
     await this.#cleanupFailedOpen(this.#profilePath, this.#marker);
   }
 
-  #profileRetentionOutcome(
+  #profileRetentionDecision(
     request: ProfileSessionRetentionRequest,
     signal: AbortSignal,
+    freshNow: number | undefined,
+    pinnedTargetMatched: boolean,
   ): ProfilePreservationOutcome {
     const session = this.#session;
     const marker = this.#marker;
     const runtime = this.#applicationRuntime.current();
     const snapshot = runtime?.profilePreservationSnapshot();
-    const freshNow = this.#freshNow();
     const pageLive = !this.#applicationPageActive && this.#context !== undefined &&
       this.#page !== undefined && !this.#page.isClosed();
-    const exactBinding = request.schemaVersion === 1 && !signal.aborted &&
+    const exactBinding = pinnedTargetMatched && request.schemaVersion === 1 && !signal.aborted &&
       session !== undefined && marker !== undefined && this.#approvedTarget !== undefined &&
       request.journeyId === session.journeyId && request.sessionId === session.sessionId &&
       session.profileLeaseId === marker.profileLeaseId &&
@@ -1214,17 +1223,38 @@ export class PlaywrightPersistentBrowserSession
     });
   }
 
-  #freshNow(): number | undefined {
-    try {
-      const value = Date.parse(this.#options.now?.() ?? new Date().toISOString());
-      return Number.isFinite(value) ? value : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   #freshNowString(): string {
     try { return this.#options.now?.() ?? new Date().toISOString(); } catch { return ""; }
+  }
+
+  #scheduleProfileRetentionExpiry(leaseExpiresAt: string): void {
+    this.#clearProfileRetentionExpiry();
+    const expiresAt = Date.parse(leaseExpiresAt);
+    if (!Number.isFinite(expiresAt)) return;
+    const delay = Math.max(0, expiresAt - Date.now());
+    const timer = setTimeout(() => {
+      this.#profileRetentionExpiryTimer = undefined;
+      const retained = this.#profileSessionRetentionRequest;
+      if (retained === undefined || !this.#profileSessionRetained) return;
+      const remaining = Date.parse(leaseExpiresAt) - Date.now();
+      if (remaining > 0) {
+        this.#scheduleProfileRetentionExpiry(leaseExpiresAt);
+        return;
+      }
+      void this[releaseOwnedApplicationSession]({
+        ...retained,
+        now: this.#freshNowString(),
+      }, new AbortController().signal).catch(() => undefined);
+    }, Math.min(delay, 2_147_483_647));
+    timer.unref?.();
+    this.#profileRetentionExpiryTimer = timer;
+  }
+
+  #clearProfileRetentionExpiry(): void {
+    if (this.#profileRetentionExpiryTimer !== undefined) {
+      clearTimeout(this.#profileRetentionExpiryTimer);
+      this.#profileRetentionExpiryTimer = undefined;
+    }
   }
 
   #emitProfilePreservation(
@@ -1273,7 +1303,14 @@ export class PlaywrightPersistentBrowserSession
     ) {
       return failure("browser_session_missing");
     }
-    if (this.#profileSessionRetained) return failure("browser_session_invalidated");
+    if (this.#profileSessionRetained) {
+      const retained = this.#profileSessionRetentionRequest;
+      if (retained === undefined) return failure("browser_session_missing");
+      return this[releaseOwnedApplicationSession]({
+        ...retained,
+        operationId: request.operationId,
+      }, signal);
+    }
     this.#cleanupStarted = true;
     const context = this.#context;
     const profilePath = this.#profilePath;
@@ -1336,6 +1373,7 @@ export class PlaywrightPersistentBrowserSession
     this.#cleanupStarted = true;
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
+    this.#clearProfileRetentionExpiry();
     const context = this.#context;
     const failedSession = this.#session;
     const inspectionPassed = await this.#holdBeforeCleanup(context);
@@ -1378,6 +1416,7 @@ export class PlaywrightPersistentBrowserSession
     this.#inspectionFailedJourneyId = undefined;
     this.#profileSessionRetained = false;
     this.#profileSessionRetentionRequest = undefined;
+    this.#clearProfileRetentionExpiry();
   }
 
   async #cleanupDetachedContext(

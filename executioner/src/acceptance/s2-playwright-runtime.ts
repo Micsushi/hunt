@@ -438,9 +438,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         }),
         cleanup: Object.freeze({
           async preserve(activeSignal: AbortSignal): Promise<boolean> {
-            const activeRequest = liveRequest;
-            const retentionNow = now();
-            if (!currentOwnerAuthorization(activeRequest?.owner, activeSignal, () => retentionNow)) return false;
+            const decision = retentionDecision(liveRequest, activeSignal, now);
+            if (decision === undefined) return false;
             const retain = browser[retainOwnedApplicationSession];
             if (retain === undefined) return false;
             const retained = await retain.call(browser, {
@@ -449,8 +448,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
               operationId: nextOperationId(),
               sessionId: session.sessionId,
               target,
-              now: retentionNow,
-              ownerApprovalExpiresAt: activeRequest?.owner.approval.expiresAt,
+              now: decision.now,
+              ownerApprovalExpiresAt: decision.ownerApprovalExpiresAt,
             }, activeSignal);
             return retained.ok;
           },
@@ -702,6 +701,23 @@ function currentOwnerAuthorization(
   } catch {
     return false;
   }
+}
+
+function retentionDecision(
+  request: Stage2ApplicationWalkRuntimeBindingRequest | undefined,
+  signal: AbortSignal,
+  clock: () => string,
+): { readonly now: string; readonly ownerApprovalExpiresAt: string } | undefined {
+  if (signal.aborted || request === undefined) return undefined;
+  let current: string;
+  try {
+    current = clock();
+  } catch {
+    return undefined;
+  }
+  return currentOwnerAuthorization(request.owner, signal, () => current)
+    ? Object.freeze({ now: current, ownerApprovalExpiresAt: request.owner.approval.expiresAt })
+    : undefined;
 }
 
 async function sealAccountEvidence(

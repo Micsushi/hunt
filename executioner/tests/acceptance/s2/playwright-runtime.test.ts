@@ -25,6 +25,8 @@ import type {
 } from "../../../src/browser/playwright-live/private/types.ts";
 import {
   ownedApplicationPageAccess,
+  releaseOwnedApplicationSession,
+  retainOwnedApplicationSession,
   suspendOwnedApplicationSession,
   type OwnedApplicationOperation,
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
@@ -2669,6 +2671,80 @@ for (const scenario of [
     }
   });
 }
+
+test("production retention captures one fresh authority decision and releases its owner", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-retention-authority-"));
+  let nowCalls = 0;
+  let retained = false;
+  let releaseCalls = 0;
+  const base = closedRecoveryBrowser("profile");
+  const browser = {
+    ...base,
+    async [retainOwnedApplicationSession]() {
+      retained = true;
+      return { ok: true as const, value: undefined };
+    },
+    async [releaseOwnedApplicationSession]() {
+      releaseCalls += 1;
+      retained = false;
+      return { ok: true as const, value: undefined };
+    },
+  };
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => browser,
+      now: () => {
+        nowCalls += 1;
+        return "2026-08-05T12:00:00.000Z";
+      },
+      nextOperationId: operationIds(950),
+    }).bind({
+      owner: authorizedOwner(root),
+      ownerBinding: {} as never,
+      ownerSources: { sensitiveValues: [] } as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+    assert.equal(await runtime.cleanup.preserve!(new AbortController().signal), true);
+    assert.equal(nowCalls, 1);
+    assert.equal(retained, true);
+    assert.equal(await runtime.cleanup.release!(new AbortController().signal), true);
+    assert.equal(releaseCalls, 1);
+    assert.equal(retained, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production retention rejects expired authority before the retain owner", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-retention-expiry-"));
+  let retainCalls = 0;
+  const base = closedRecoveryBrowser("profile");
+  const browser = {
+    ...base,
+    async [retainOwnedApplicationSession]() {
+      retainCalls += 1;
+      return { ok: true as const, value: undefined };
+    },
+  };
+  try {
+    const runtime = await createStage2PlaywrightLiveRuntimeBinding({
+      browser: () => browser,
+      now: () => "2026-08-06T12:00:01.000Z",
+      nextOperationId: operationIds(960),
+    }).bind({
+      owner: authorizedOwner(root),
+      ownerBinding: {} as never,
+      ownerSources: { sensitiveValues: [] } as never,
+      sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      configSha256: "a".repeat(64),
+    }, new AbortController().signal);
+    assert.equal(await runtime.cleanup.preserve!(new AbortController().signal), false);
+    assert.equal(retainCalls, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 class FixtureProfiles {
   marker: unknown;
