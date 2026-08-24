@@ -124,6 +124,7 @@ const OBSERVER_FAILURE_CODES = [
   "browser_process_binding",
   "browser_window_missing",
   "browser_window_ambiguous",
+  "browser_process_ambiguous",
   "process_inventory",
   "accessibility_tree",
   "browser_observation_command",
@@ -201,7 +202,7 @@ try { $browsers = @($all | Where-Object {
   [pscustomobject]@{ Pid = [int]$_.ProcessId }
 }) } catch { exit 45 }
 if ($browsers.Count -eq 0) { exit 47 }
-if ($browsers.Count -ne 1) { exit 48 }
+if ($browsers.Count -ne 1) { exit 49 }
 try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes
@@ -275,6 +276,7 @@ try {
       : undefined;
     if (status === 47) observerFailure("browser_window_missing");
     if (status === 48) observerFailure("browser_window_ambiguous");
+    if (status === 49) observerFailure("browser_process_ambiguous");
     if (status === 40) observerFailure("process_inventory");
     if (status === 42 || status === 43 || status === 44) observerFailure("accessibility_tree");
     if (status === 45) observerFailure("browser_process_binding");
