@@ -1541,6 +1541,9 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
 });
 
 test("authenticated Workday Chrome title normalization preserves the identity title", () => {
+  const observerSource = readFileSync("src/live/evidence/external-monitor-observer.ts", "utf8");
+  assert.match(observerSource, /\$visible = -not \$element\.Current\.IsOffscreen/u);
+  assert.match(observerSource, /if \(\$visible -and \$allow -contains \$name\)/u);
   assert.equal(
     normalizeObservedChromeTitle("  Business   Manager - Google Chrome for Testing"),
     "Business Manager",

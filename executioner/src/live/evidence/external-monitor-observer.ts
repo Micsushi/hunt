@@ -94,7 +94,7 @@ function acknowledge(
     stableFile(screenshotPath, 12 * 1024 * 1024));
   const visual = observerStage("owned_browser_observation", () =>
     ownedBrowserObservation(runtimeRoot, binding));
-  if (!compatibleObservedPage(request.page, visual.page)) denied();
+  if (!compatibleObservedPage(request.page, visual.page)) observerFailure("structure_classification");
   reconcileObservedMonitorSurface(request, visual);
   observerStage("acknowledgement_admission", () =>
     writeStage2ExternalMonitorAcknowledgement({
@@ -264,8 +264,9 @@ $address = $null
 foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
-    if ($allow -contains $name) { [void]$seen.Add($name) }
-    if ($address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and
+    $visible = -not $element.Current.IsOffscreen
+    if ($visible -and $allow -contains $name) { [void]$seen.Add($name) }
+    if ($visible -and $address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and
         ([string]$element.Current.AutomationId -eq 'view_1021' -or $name -eq 'Address and search bar')) {
       $pattern = $null
       if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
