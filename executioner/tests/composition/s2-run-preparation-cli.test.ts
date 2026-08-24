@@ -66,7 +66,7 @@ test("trusted legacy preparation preserves only owner-bound resume facts and mak
       lane: "live_owner_fact",
     })));
   assert.equal(current.profile.unsetFactIds.length, profileFactIds.length - 5);
-  assert.equal(current.profile.discoveredFields.length, 44);
+  assert.equal(current.profile.discoveredFields.length, 46);
   assert.equal(current.profile.discoveredFields.every(({ answer }) =>
     answer.kind === "profile_answer_missing"
   ), true);
