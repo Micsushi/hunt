@@ -134,9 +134,11 @@ try {
             body: document.body.innerHTML,
           }));
           await page.evaluate(() => {
-            document.title = "My Information";
             document.body.innerHTML = "<main><h1>My Information</h1><button type=\"button\">Next</button></main>";
           });
+          await page.getByRole("button", { name: "Next", exact: true }).waitFor({ state: "visible" });
+          await page.waitForTimeout(250);
+          await page.evaluate(() => { document.title = "My Information"; });
           await productionMonitor.auth(page, "application_ready", "after_readback", {
             fieldCount: 0,
             requiredFieldCount: 0,
@@ -148,9 +150,11 @@ try {
             submitActivated: false,
           }, { operationId: "operation_readiness_auth_monitor_01", attempt: 1 }, new AbortController().signal);
           await page.evaluate((surface) => {
-            document.title = surface.title;
             document.body.innerHTML = surface.body;
           }, reviewSurface);
+          await submit.waitFor({ state: "visible" });
+          await page.waitForTimeout(250);
+          await page.evaluate((title) => { document.title = title; }, reviewSurface.title);
           await productionMonitor.application(page, "review", "review_readback", {
             fieldCount: 0,
             requiredFieldCount: 0,
