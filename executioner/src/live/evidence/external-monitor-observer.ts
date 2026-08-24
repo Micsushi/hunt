@@ -238,7 +238,6 @@ $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgno
 $address = $null
 foreach ($element in $elements) {
   try {
-    if ($element.Current.IsOffscreen) { continue }
     $name = [string]$element.Current.Name
     if ($allow -contains $name) { [void]$seen.Add($name) }
     if ($address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and

@@ -99,6 +99,7 @@ function visiblePersistentLaunchOptions(
     timeout: timeoutMs,
     viewport: null,
     args: [
+      "--force-renderer-accessibility",
       "--start-minimized",
       `--window-position=${window.x},${window.y}`,
       `--window-size=${window.width},${window.height}`,
