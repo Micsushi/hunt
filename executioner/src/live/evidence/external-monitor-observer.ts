@@ -334,7 +334,7 @@ foreach ($element in $elements) {
       $selection = $null
       if ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection) -and
           ([Windows.Automation.SelectionItemPattern]$selection).Current.IsSelected) {
-        $selectedTabTitles.Add($name)
+        [void]$selectedTabTitles.Add($name)
       }
     }
     if ($visible -and $address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and

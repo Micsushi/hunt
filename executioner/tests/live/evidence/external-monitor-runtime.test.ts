@@ -1547,6 +1547,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   const observerSource = readFileSync("src/live/evidence/external-monitor-observer.ts", "utf8");
   assert.match(observerSource, /\$visible = -not \$element\.Current\.IsOffscreen/u);
   assert.match(observerSource, /if \(\$visible -and \$allow -contains \$name\)/u);
+  assert.match(observerSource, /\[void\]\$selectedTabTitles\.Add\(\$name\)/u);
   assert.equal(
     normalizeObservedChromeTitle("  Business   Manager - Google Chrome for Testing"),
     "Business Manager",
