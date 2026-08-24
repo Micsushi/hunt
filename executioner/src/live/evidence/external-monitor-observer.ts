@@ -194,23 +194,34 @@ function Test-OwnedAncestor([int]$pid, [int]$ownerPid) {
 }
 $escaped = [regex]::Escape($profile)
 $profileArgument = '(?i)(?:^|\s)--user-data-dir=(?:"' + $escaped + '"|' + $escaped + ')(?=\s|$)'
-try { $windows = @($all | Where-Object {
+try { $browsers = @($all | Where-Object {
   $_.Name -eq 'chrome.exe' -and $_.CommandLine -match $profileArgument -and
   (Test-OwnedAncestor ([int]$_.ProcessId) ([int]$owner.processOwnerPid))
 } | ForEach-Object {
-  $process = Get-Process -Id $_.ProcessId -ErrorAction Stop
-  if ($process.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($process.MainWindowTitle)) {
-    [pscustomobject]@{ Pid = [int]$_.ProcessId; Handle = $process.MainWindowHandle; Title = [string]$process.MainWindowTitle }
-  }
+  [pscustomobject]@{ Pid = [int]$_.ProcessId }
 }) } catch { exit 45 }
-if ($windows.Count -eq 0) { exit 47 }
-if ($windows.Count -ne 1) { exit 48 }
+if ($browsers.Count -eq 0) { exit 47 }
+if ($browsers.Count -ne 1) { exit 48 }
 try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes
 } catch { exit 44 }
-$window = [Windows.Automation.AutomationElement]::FromHandle($windows[0].Handle)
-if ($null -eq $window) { exit 42 }
+try {
+  $processCondition = [Windows.Automation.PropertyCondition]::new(
+    [Windows.Automation.AutomationElement]::ProcessIdProperty,
+    $browsers[0].Pid
+  )
+  $ownedWindows = [Windows.Automation.AutomationElement]::RootElement.FindAll(
+    [Windows.Automation.TreeScope]::Children,
+    $processCondition
+  )
+  $windows = @($ownedWindows | Where-Object {
+    -not $_.Current.IsOffscreen -and -not [string]::IsNullOrWhiteSpace([string]$_.Current.Name)
+  })
+} catch { exit 42 }
+if ($windows.Count -eq 0) { exit 47 }
+if ($windows.Count -ne 1) { exit 48 }
+$window = $windows[0]
 try {
   $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
 } catch { exit 43 }
@@ -238,8 +249,8 @@ foreach ($element in $elements) {
   } catch {}
 }
 $payload = [ordered]@{
-  pid = $windows[0].Pid
-  title = $windows[0].Title
+  pid = $browsers[0].Pid
+  title = [string]$window.Current.Name
   address = $address
   flags = @($seen | Sort-Object)
 }
