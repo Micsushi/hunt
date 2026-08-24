@@ -169,8 +169,14 @@ function normalizeLearningPlan(value: unknown): unknown {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid();
   const plan = structuredClone(value) as {
     mode?: string;
-    fields?: Array<{ answer?: { kind?: string; provenance?: string; lane?: string } }>;
-    repeatables?: Array<{ rows?: Array<{ fields?: Array<{ answer?: { kind?: string; provenance?: string; lane?: string } }> }> }>;
+    fields?: Array<{
+      allowedOptions?: unknown[];
+      answer?: { kind?: string; provenance?: string; lane?: string };
+    }>;
+    repeatables?: Array<{ rows?: Array<{ fields?: Array<{
+      allowedOptions?: unknown[];
+      answer?: { kind?: string; provenance?: string; lane?: string };
+    }> }> }>;
   };
   const fields = [
     ...(plan.fields ?? []),
@@ -180,6 +186,7 @@ function normalizeLearningPlan(value: unknown): unknown {
   ];
   let synthetic = plan.mode === "synthetic_test_non_submittable";
   for (const field of fields) {
+    field.allowedOptions ??= [];
     const answer = field.answer;
     if (answer?.kind !== "answered") continue;
     if (answer.lane === undefined) {

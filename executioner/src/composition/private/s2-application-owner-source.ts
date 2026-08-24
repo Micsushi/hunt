@@ -26,6 +26,8 @@ import {
 } from "../../profile/application-profile.ts";
 import {
   profileOwnerInputCatalog,
+  profileRepeatableCatalog,
+  profileScalarControlCatalog,
   type ProfileFieldPlan,
   type ProfilePagePlan,
 } from "../../ats/workday/application/profile/index.ts";
@@ -50,6 +52,15 @@ const MAX_RESUME_BYTES = 5 * 1024 * 1024;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const browserPlainText = /^[^\\{}\p{Cc}]+$/u;
 const emailAddress = /^[A-Za-z0-9!#$%&'*+/=?^_`~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/u;
+const scalarProfileFieldIds = new Set(
+  profileScalarControlCatalog.map(({ fieldId }) => fieldId),
+);
+const repeatableProfileFieldIds: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  profileRepeatableCatalog.map(({ section, fields }) => [
+    section,
+    new Set(fields.map(({ fieldId }) => fieldId)),
+  ]),
+);
 
 export interface Stage2ApplicationOwnerSourceRequest {
   readonly runtimeRoot: string;
@@ -330,7 +341,8 @@ function validateProfileAuthority(
     field.fieldId,
     field,
   ]));
-  const fields: unknown[] = [...plan.fields];
+  const fields: Array<{ readonly value: unknown; readonly section?: string }> =
+    plan.fields.map((field) => ({ value: field }));
   const sections = new Set<string>();
   for (const value of plan.repeatables) {
     const repeatable = exact(value, ["section", "rows"]);
@@ -354,11 +366,15 @@ function validateProfileAuthority(
         row.fields.length > 32
       ) denied();
       rowKeys.add(row.rowKey);
-      fields.push(...row.fields);
+      fields.push(...row.fields.map((field) => ({
+        value: field,
+        section: repeatable.section as string,
+      })));
     }
   }
   if (fields.length > 512) denied();
-  for (const value of fields) {
+  for (const entry of fields) {
+    const { value } = entry;
     const field = exact(value, [
       "fieldId", "questionType", "answerType", "allowedOptions", "answer", "optionMapping",
     ], true);
@@ -435,9 +451,18 @@ function validateProfileAuthority(
         answer.value !== country.canonicalValue ||
         mapping.visibleOption !== country.visibleOption
       ) denied();
+    } else if (answer.provenance === "resume_verified") {
+      const factId = factByField[field.fieldId];
+      const fact = factId === undefined ? undefined : factsById.get(factId);
+      if (entry.section === undefined) {
+        if (fact === undefined
+          ? !scalarProfileFieldIds.has(field.fieldId as string)
+          : fact.value !== answer.value || fact.provenance !== answer.provenance) denied();
+      } else if (!repeatableProfileFieldIds.get(entry.section)?.has(field.fieldId as string)) {
+        denied();
+      }
     } else if (answer.provenance === "owner_provided" ||
-      answer.provenance === "configured_template" ||
-      answer.provenance === "resume_verified") {
+      answer.provenance === "configured_template") {
       const factId = factByField[field.fieldId];
       const fact = factId === undefined ? undefined : factsById.get(factId);
       if (fact === undefined || fact.value !== answer.value || fact.provenance !== answer.provenance) {

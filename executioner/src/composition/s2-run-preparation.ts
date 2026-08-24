@@ -9,9 +9,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { parseApplicationProfile } from "../profile/application-profile.ts";
+import { disposeResumeArtifact } from "../contracts/index.ts";
 import type { RealRunAccountMode, RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   protectStage2StoragePaths,
@@ -19,6 +21,8 @@ import {
   type Stage2RunStorageLayout,
   type Stage2StorageProtector,
 } from "./private/s2-run-storage.ts";
+import { FileBackedStage2ApplicationOwnerSourceResolver } from
+  "./private/s2-application-owner-source.ts";
 
 export interface PrepareStage2LiveRunRequest {
   readonly storageRoot: string;
@@ -162,6 +166,28 @@ export async function prepareStage2LiveRun(
   } finally {
     payload.fill(0);
   }
+    if (applicationSource !== undefined) {
+      try {
+        const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+        const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
+          forbiddenRoots: [executionerRoot],
+        }).resolve({
+          runtimeRoot: layout.runtimeRoot,
+          revisionId,
+          approvalId: sourceBinding.approvalId,
+          journeyId,
+          targetHandleId,
+          profileRef: sourceBinding.profileRef,
+          resumeRef: sourceBinding.resumeRef,
+          approvedAt,
+        }, new AbortController().signal);
+        disposeResumeArtifact(resolved.resumeIntent.artifact);
+      } catch {
+        rmSync(layout.transientRoot, { recursive: true, force: true });
+        rmSync(layout.retainedRunRoot, { recursive: true, force: true });
+        return denied();
+      }
+    }
     return layout;
   } finally {
     applicationSource?.resume.bytes.fill(0);

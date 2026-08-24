@@ -148,10 +148,15 @@ export async function runStage2RealJourney(
   let runtime: Stage2RealJourneyRuntime;
   try {
     runtime = await binding.bind(invocation, signal);
-  } catch {
+  } catch (error) {
     return persistTerminalArtifact(invocation, ports, signal.aborted
       ? cancelled(invocation.config.journeyId, 0)
-      : errorFailure(invocation.config.journeyId, "runtime_binding_failed", "mcp_internal_error", 0));
+      : errorFailure(
+          invocation.config.journeyId,
+          "runtime_binding_failed",
+          runtimeBindingErrorCode(error),
+          0,
+        ));
   }
 
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
@@ -204,6 +209,12 @@ export async function runStage2RealJourney(
   }
   if (result === undefined) throw new Error("journey terminal result unavailable");
   return persistTerminalArtifact(invocation, ports, result);
+}
+
+function runtimeBindingErrorCode(error: unknown): S2StableErrorCode {
+  return error instanceof TypeError && error.message === "application owner source denied"
+    ? "owner_config_invalid"
+    : "mcp_internal_error";
 }
 
 async function persistTerminalArtifact(

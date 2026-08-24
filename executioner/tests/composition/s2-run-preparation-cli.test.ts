@@ -128,7 +128,6 @@ fields: [{
           fieldId: "identity.given_name",
           questionType: "identity",
           answerType: "text",
-          allowedOptions: [],
           answer: { kind: "answered", value: "Synthetic", provenance: "owner_provided", lane: "live_owner_fact" },
         }],
         repeatables: [],
@@ -150,6 +149,7 @@ fields: [{
       join(prepared.runtimeRoot, "application-profile.json"),
       "utf8",
     ));
+    assert.deepEqual(captured.profilePlan.fields[0].allowedOptions, []);
     assert.deepEqual(captured.profilePlan.fields[1], {
       fieldId: "address.country",
       questionType: "address",

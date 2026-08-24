@@ -28,12 +28,15 @@ import {
 } from "../../src/ats/workday/application/lane-composition.ts";
 import {
   browserPageId,
+  disposeResumeArtifact,
   fieldId,
   journeyId,
   upstreamResumeId,
   useResumeArtifactUpload,
   type ResolvedResumeArtifact,
 } from "../../src/contracts/index.ts";
+import { FileBackedStage2ApplicationOwnerSourceResolver } from
+  "../../src/composition/private/s2-application-owner-source.ts";
 import { applicationProfileFactIds as profileFactIds } from
   "../../src/profile/application-profile.ts";
 
@@ -153,6 +156,89 @@ test("production binding resolves opaque owner sources without value leakage", a
     assert.doesNotMatch(written, /Ada|dependable systems|application-profile|application-resume|sha256|[a-f0-9]{64}/u);
     const ownerConfig = readFileSync(fixture.configPath, "utf8");
     assert.doesNotMatch(ownerConfig, /Ada|dependable systems|application-profile|application-resume|\.pdf|[a-f0-9]{64}/u);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("production owner source admits catalog-bound resume fields outside flat profile facts", async () => {
+  const fixture = liveFixture();
+  try {
+    const manifestPath = join(dirname(fixture.configPath), "runtime", "application-profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      profilePlan: Record<string, unknown>;
+    };
+    manifest.profilePlan = {
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [{
+        fieldId: "skills.values",
+        questionType: "skill",
+        answerType: "multi_select",
+        allowedOptions: ["TypeScript"],
+        answer: {
+          kind: "answered",
+          value: "TypeScript",
+          provenance: "resume_verified",
+          lane: "live_owner_fact",
+        },
+        optionMapping: {
+          canonicalValue: "TypeScript",
+          visibleOption: "TypeScript",
+          provenance: "visible_option",
+        },
+      }],
+      repeatables: [{
+        section: "experience",
+        rows: [{
+          rowKey: "experience_fixture_row_01",
+          fields: [{
+            fieldId: "experience.company",
+            questionType: "employment",
+            answerType: "text",
+            allowedOptions: [],
+            answer: {
+              kind: "answered",
+              value: "Example Company",
+              provenance: "resume_verified",
+              lane: "live_owner_fact",
+            },
+          }, {
+            fieldId: "experience.location",
+            questionType: "employment",
+            answerType: "text",
+            allowedOptions: [],
+            answer: {
+              kind: "answered",
+              value: "Example City",
+              provenance: "resume_verified",
+              lane: "live_owner_fact",
+            },
+          }],
+        }],
+      }],
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const owner = fixture.owner;
+    const sources = await new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    }).resolve({
+      runtimeRoot: owner.roots.runtime.path,
+      revisionId: owner.revisionId,
+      approvalId: owner.approval.approvalId,
+      journeyId: owner.journeyId,
+      targetHandleId: owner.target.handleId,
+      profileRef: owner.profileRef,
+      resumeRef: owner.resumeRef,
+      approvedAt: owner.approval.approvedAt,
+    }, AbortSignal.any([]));
+    try {
+      assert.equal(sources.profilePlan.fields[0]?.fieldId, "skills.values");
+      assert.equal(sources.profilePlan.repeatables[0]?.rows[0]?.fields.length, 2);
+    } finally {
+      disposeResumeArtifact(sources.resumeIntent.artifact);
+    }
   } finally {
     fixture.cleanup();
   }

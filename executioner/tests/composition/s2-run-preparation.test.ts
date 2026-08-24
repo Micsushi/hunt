@@ -203,6 +203,61 @@ fields: [{
   }
 });
 
+test("preparation rejects source bytes that the production resolver cannot reopen", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-source-proof-"));
+  const resumeBytes = Buffer.from("%PDF-1.7\nsource proof\n");
+  try {
+    await assert.rejects(prepareStage2LiveRun({
+      storageRoot,
+      targetUrl: "https://blackrock.wd1.myworkdayjobs.com/en-US/Careers/job/Test_R265422",
+      accountMode: "sign_in",
+      applicationSource: {
+        resume: {
+          resumeId: "resume-owner-approved",
+          sha256: createHash("sha256").update(resumeBytes).digest("hex"),
+          sizeBytes: resumeBytes.byteLength,
+          fileType: "pdf",
+          bytes: resumeBytes,
+        },
+        profile: {
+          profileId: "profile-owner-approved",
+          revision: 1,
+          facts: [{
+            factId: "given_name",
+            value: "Synthetic",
+            provenance: "owner_provided",
+            lane: "live_owner_fact",
+          }],
+          unsetFactIds: profileFactIds.filter((factId) => factId !== "given_name"),
+          discoveredFields: [],
+        },
+        profilePlan: {
+          mode: "live",
+          pageType: "profile",
+          fields: [{
+            fieldId: "identity.given_name",
+            questionType: "identity",
+            answerType: "text",
+            answer: {
+              kind: "answered",
+              value: "Synthetic",
+              provenance: "owner_provided",
+              lane: "live_owner_fact",
+            },
+          }],
+          repeatables: [],
+        },
+        narrative: { revision: "narrative-owner-approved" },
+      },
+    }, noProtection), { name: "Error", message: "run preparation denied" });
+    assert.deepEqual(readdirSync(join(storageRoot, "transient")), []);
+    assert.deepEqual(readdirSync(join(storageRoot, "retained")), []);
+  } finally {
+    resumeBytes.fill(0);
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("post-write source protection failure leaves no admitted run", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
   const resumeBytes = Buffer.from("%PDF-1.7\nowner-approved resume\n");

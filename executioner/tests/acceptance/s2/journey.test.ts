@@ -67,6 +67,27 @@ test("the unavailable opaque runtime binding fails before any journey effect", a
   }
 });
 
+test("owner-source binding denial keeps its safe causal terminal code", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-owner-source-terminal-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot),
+      { bind: async () => { throw new TypeError("application owner source denied"); } },
+      ports(),
+      new AbortController().signal,
+    );
+    assertFailureCode(result, "runtime_binding_failed");
+    assert.equal(result.terminal.status, "failed");
+    if (result.terminal.status === "failed") {
+      assert.equal(result.terminal.errorCode, "owner_config_invalid");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("pre-aborted journeys persist a cancelled terminal without binding", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-pre-aborted-terminal-"));
   const evidenceRoot = resolve(root, "evidence");
