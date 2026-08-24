@@ -559,7 +559,7 @@ export const retainedIntakeControlGuide: readonly RetainedIntakeControlGuideEntr
     retained("profile", "phone.extension", "Phone Extension", "phone", "text", "text", false, "workday_text_v2"),
     retained("profile", "source.how_did_you_hear", "How Did You Hear About Us?", "application_source", "search_select", "single_select", true, "workday_source_select_v1"),
     retained("profile", "employment.previously_worked_for_organization", "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
-    retained("profile", "skills.values", "Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
+    retained("profile", "skills.values", "Type to Add Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
     retained("profile", "social.linkedin", "LinkedIn", "social_network", "text", "text", false, "workday_text_v2"),
     retained("profile", "social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
     retained("profile", "website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),

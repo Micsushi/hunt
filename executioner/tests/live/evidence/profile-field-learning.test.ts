@@ -75,7 +75,10 @@ test("retains value-free field learning through prefill, driver, and readback", 
     page: port,
     plan: profilePlan(),
     root,
-    sensitiveValues: ["Ada", "Canada", "United States", "private@example.invalid"],
+    sensitiveValues: [
+      "Ada", "Canada", "United States", "private@example.invalid",
+      retainedIntakeTextSha256("Canada").slice(8, 20),
+    ],
     observeControl: observer(),
   });
   try {
@@ -484,7 +487,7 @@ test("fixed structural vocabulary does not collide with an equal private answer"
 fields: [{
         fieldId: "social.linkedin",
       questionType: "social_network",
-        answerType: "text",
+        answerType: "url",
         allowedOptions: [],
         answer: {
           kind: "answered",
@@ -538,7 +541,7 @@ test("generated operation ids do not collide with private answer fragments", asy
       fields: [{
         fieldId: "social.linkedin",
         questionType: "social_network",
-        answerType: "text",
+        answerType: "url",
         allowedOptions: [],
         answer: {
           kind: "answered",
@@ -571,6 +574,45 @@ test("generated operation ids do not collide with private answer fragments", asy
       admitProfileFieldLearningEvidence(JSON.parse(text)).fields[0]?.observationBinding?.operationId,
       "operation_profile_learning_0001",
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reconciles the retained My Experience skills control", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-skills-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({
+      pageType: "profile",
+      controls: [{
+        controlId: "skills-control",
+        fieldId: "skills.values",
+        required: false,
+        uiBehavior: "multi_select",
+        uiVariant: "workday_multi_select_v1",
+        readback: null,
+      }],
+      rows: [],
+    }),
+    plan: {
+      mode: "live",
+      pageType: "profile",
+      fields: [],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: [],
+    observeControl: observer(),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
+      join(root, "profile-field-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.fields[0]?.fieldIdentity, "profile.skills.values");
+    assert.equal(evidence.fields[0]?.uiType, "multi_select");
+    assert.equal(evidence.fields[0]?.metadataReconciliation, "matched");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

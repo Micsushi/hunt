@@ -326,29 +326,34 @@ export function createProfileFieldLearningCapture(input: {
           .map(([, record]) => freezeRecord(record));
         const liveAcceptanceEligible = input.plan.mode === "live" &&
           fields.every(liveEligibleField);
+        const value = admitProfileFieldLearningEvidence({
+          schemaVersion: 5,
+          evidenceRevision: "s2-profile-field-learning-v5",
+          page: "profile",
+          executionMode: metadataFailure === undefined
+            ? input.plan.mode
+            : "synthetic_test_non_submittable",
+          testOnly: metadataFailure !== undefined ||
+            input.plan.mode === "synthetic_test_non_submittable",
+          liveAcceptanceEligible: metadataFailure === undefined && liveAcceptanceEligible,
+          ...(metadataFailure === undefined ? {} : {
+            learningConversion: conversion(metadataFailure),
+          }),
+          visibleControlCount: fields.length,
+          fields: metadataFailure === undefined
+            ? fields
+            : fields.map((field) => convertedField(field)),
+        });
         return writeAtomicJsonEvidence({
           root: input.root ?? "",
-          value: admitProfileFieldLearningEvidence({
-            schemaVersion: 5,
-            evidenceRevision: "s2-profile-field-learning-v5",
-            page: "profile",
-            executionMode: metadataFailure === undefined
-              ? input.plan.mode
-              : "synthetic_test_non_submittable",
-            testOnly: metadataFailure !== undefined ||
-              input.plan.mode === "synthetic_test_non_submittable",
-            liveAcceptanceEligible: metadataFailure === undefined && liveAcceptanceEligible,
-            ...(metadataFailure === undefined ? {} : {
-              learningConversion: conversion(metadataFailure),
-            }),
-            visibleControlCount: fields.length,
-            fields: metadataFailure === undefined
-              ? fields
-              : fields.map((field) => convertedField(field)),
-          }),
+          value,
           sensitiveValues: input.sensitiveValues.filter((value) =>
             value.length < 3 || !reviewedStructuralCollision(value)
           ),
+          reviewedStructuralValues: value.fields.flatMap((field) => [
+            ...field.visibleOptionIds,
+            ...(field.selectedOptionId === null ? [] : [field.selectedOptionId]),
+          ]),
           reviewedOpaqueIdKeys: ["operationId"],
           label: "profile-field-learning",
           fileName: input.fileName ?? "profile-field-learning.json",

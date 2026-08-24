@@ -28,8 +28,8 @@ export interface RetainedProfileControlGuideEntry {
   readonly identity: string;
   readonly sanitizedLabel: string;
   readonly normalizedQuestionType: ProfileQuestionType;
-  readonly behavior: "text" | "checkbox" | "search_select" | "radio";
-  readonly answerType: "text" | "boolean" | "single_select" | "multi_select";
+  readonly behavior: "text" | "checkbox" | "search_select" | "multi_select" | "radio";
+  readonly answerType: "text" | "url" | "boolean" | "single_select" | "multi_select";
   readonly required: boolean;
   readonly uiVariant: string;
   readonly allowedOptions: readonly string[];
@@ -55,8 +55,8 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
     retained("phone.extension", "Phone Extension", "phone", "text", "text", false, "workday_text_v2"),
     retained("source.how_did_you_hear", "How Did You Hear About Us?", "application_source", "search_select", "single_select", true, "workday_source_select_v1"),
     retained("employment.previously_worked_for_organization", "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
-    retained("skills.values", "Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
-    retained("social.linkedin", "LinkedIn", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("skills.values", "Type to Add Skills", "skill", "multi_select", "multi_select", false, "workday_multi_select_v1"),
+    retained("social.linkedin", "LinkedIn", "social_network", "text", "url", false, "workday_text_v2"),
     retained("social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
     retained("website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
   ]);

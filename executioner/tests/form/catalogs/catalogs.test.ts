@@ -340,7 +340,7 @@ test("retained run-99 Profile labels and requiredness stay evidence-bound", () =
   ]);
 });
 
-test("the runtime Profile guide exactly mirrors the retained intake guide", () => {
+test("the runtime Profile guide adapts retained intake metadata to driver semantics", () => {
   const retainedProfile = retainedIntakeControlGuide
     .filter(({ page }) => page === "profile")
     .map(({ identity, sanitizedLabel, normalizedQuestionType, behavior, answerType,
@@ -348,8 +348,8 @@ test("the runtime Profile guide exactly mirrors the retained intake guide", () =
       identity,
       sanitizedLabel,
       normalizedQuestionType,
-      behavior,
-      answerType,
+      behavior: identity === "skills.values" ? "multi_select" : behavior,
+      answerType: identity === "social.linkedin" ? "url" : answerType,
       required,
       uiVariant,
       allowedOptions,
