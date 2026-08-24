@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
@@ -65,9 +66,31 @@ export async function runStage2ExternalMonitorObserver(
       }
       await delay(50);
     }
+  } catch (error) {
+    retainObserverFailure(evidenceRoot, error);
+    throw error;
   } finally {
     authority.close();
     rmSync(stopPath, { force: true });
+  }
+}
+
+function retainObserverFailure(evidenceRoot: string, error: unknown): void {
+  const failureCode = externalMonitorObserverFailureCode(error);
+  if (failureCode === undefined) return;
+  const diagnostic = externalMonitorObserverFailureDiagnostic(error);
+  try {
+    writeFileSync(join(evidenceRoot, "external-monitor-observer-failure.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        evidenceRevision: "s2-external-monitor-observer-failure-v1",
+        status: "failed",
+        failureCode,
+        ...(diagnostic ?? {}),
+        submitActivated: false,
+      })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch {
+    // Diagnostic retention must never replace the causal observer failure.
   }
 }
 
