@@ -4,6 +4,7 @@ import type {
   ProfileControlObservation,
   ProfileFieldPlan,
   ProfileInteractionSnapshot,
+  ProfileInspectionFailure,
   ProfileMetadataReconciliationFailure,
   ProfileMetadataMismatchReason,
   ProfilePagePlan,
@@ -12,6 +13,10 @@ import type {
   ProfileRowSnapshot,
   WorkdayProfilePagePort,
 } from "../../ats/workday/application/profile/index.ts";
+import {
+  createProfileInspectionFailure,
+  profileInspectionFailureFromError,
+} from "../../ats/workday/application/profile/inspection.ts";
 import { profileLearningConversionFromFailure } from
   "../../ats/workday/application/profile/index.ts";
 import {
@@ -198,20 +203,34 @@ export function createProfileFieldLearningCapture(input: {
   const plans = plannedFields(input.plan);
   let written = false;
   let metadataFailure: ProfileMetadataReconciliationFailure | undefined;
+  let inspectionFailure: ProfileInspectionFailure | undefined;
 
   const page: WorkdayProfilePagePort = {
     async inspect(signal) {
-      const snapshot = await input.page.inspect(signal);
-      observe(
-        snapshot,
-        plans,
-        records,
-        controlBindings,
-        pending,
-        rowOrdinals,
-        nextRowOrdinal,
-        visibleIdentities,
-      );
+      inspectionFailure = undefined;
+      let snapshot: ProfilePageSnapshot;
+      try {
+        snapshot = await input.page.inspect(signal);
+      } catch (error) {
+        inspectionFailure = input.page.inspectionFailure?.() ??
+          profileInspectionFailureFromError(error);
+        throw error;
+      }
+      try {
+        observe(
+          snapshot,
+          plans,
+          records,
+          controlBindings,
+          pending,
+          rowOrdinals,
+          nextRowOrdinal,
+          visibleIdentities,
+        );
+      } catch (error) {
+        inspectionFailure = profileInspectionFailureFromError(error);
+        throw error;
+      }
       let observationFailed = false;
       for (const control of snapshotControls(snapshot)) {
         const identity = controlBindings.get(control.controlId);
@@ -276,6 +295,8 @@ export function createProfileFieldLearningCapture(input: {
     removeOwnedRow(section, rowId, signal) {
       return input.page.removeOwnedRow(section, rowId, signal);
     },
+    inspectionFailure: () => inspectionFailure ?? input.page.inspectionFailure?.(),
+    inspectionFacts: () => input.page.inspectionFacts?.(),
     metadataReconciliationFailure: () => metadataFailure,
   };
 
@@ -848,7 +869,7 @@ function observe(
   for (const control of snapshot.controls) {
     const identity = `profile.${control.fieldId}`;
     if (visibleIdentities.has(identity)) {
-      throw new TypeError("duplicate profile control binding denied");
+      duplicateLearningBinding(identity);
     }
     visibleIdentities.add(identity);
     learn(control, identity, plans.get(control.fieldId), records, controlBindings, pending);
@@ -865,11 +886,22 @@ function observe(
     for (const control of row.controls) {
       const identity = `profile.${row.section}.${ordinal}.${control.fieldId}`;
       if (visibleIdentities.has(identity)) {
-        throw new TypeError("duplicate profile control binding denied");
+        duplicateLearningBinding(identity);
       }
       visibleIdentities.add(identity);
     }
   }
+}
+
+function duplicateLearningBinding(identity: string): never {
+  throw createProfileInspectionFailure(
+    new TypeError("duplicate profile control binding denied"),
+    "unknown_controls",
+    [identity],
+    ["profile.learning.binding"],
+    [identity],
+    retainedProfileTextSha256,
+  );
 }
 
 function observeRow(

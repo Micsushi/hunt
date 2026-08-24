@@ -18,6 +18,8 @@ import type {
   ProfilePageSnapshot,
   WorkdayProfilePagePort,
 } from "../../../src/ats/workday/application/profile/index.ts";
+import { retainedProfileTextSha256 } from
+  "../../../src/ats/workday/application/profile/catalog.ts";
 import {
   retainedIntakeControlGuide,
   retainedIntakeTextSha256,
@@ -1025,8 +1027,15 @@ test("rejects duplicate visible control bindings before mutation", async () => {
   });
   await assert.rejects(
     capture.page.inspect(AbortSignal.any([])),
-    /duplicate profile control binding denied/u,
+    /profile inspection failed/u,
   );
+  assert.deepEqual(capture.page.inspectionFailure?.(), {
+    classification: "dom_owner_binding",
+    phase: "unknown_controls",
+    bindingIds: ["profile.identity.given_name"],
+    bindingPaths: ["profile.learning.binding"],
+    bindingDigests: [retainedProfileTextSha256("profile.identity.given_name")],
+  });
 });
 
 test("already-correct and optional-unset controls require truthful observation bindings", async () => {

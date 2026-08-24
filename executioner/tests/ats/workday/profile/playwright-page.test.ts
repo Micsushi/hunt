@@ -287,6 +287,24 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
   }
 });
 
+test("reports the exact catalog identity for ambiguous visible scalar controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <input id="skills--skills"><input id="skills--skills">
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    await assert.rejects(() => adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    assert.deepEqual(adapter.inspectionFailure()?.bindingIds, ["skills.values"]);
+    assert.equal(adapter.inspectionFailure()?.phase, "scalar");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("associated Workday labels override aria labels containing selected values", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

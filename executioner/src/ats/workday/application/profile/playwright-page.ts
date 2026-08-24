@@ -626,6 +626,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         readback: await radioReadback(matches),
       }];
     }
+    if (matches.length > 1) {
+      throw new TypeError("ambiguous Workday profile control binding");
+    }
     const snapshots: ProfileControlSnapshot[] = [];
     for (const [index, match] of matches.entries()) {
       const controlId = [rowIdValue ?? "scalar", entry.fieldId, index].join(":");
