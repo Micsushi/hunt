@@ -87,7 +87,7 @@ test("the synthetic launcher binds an observer before creating a run root and ca
   assert.match(child, /readStage2ExternalMonitorObserverBinding/u);
   assert.match(child, /observer:/u);
   assert.match(child, /productionMonitor\.application\(page, "review", "review_readback"/u);
-  assert.match(child, /productionMonitor\.auth\(page, "application_ready", "after_readback"/u);
+  assert.match(child, /productionMonitor\.auth\(page, "application_ready", "state_observed"/u);
   assert.match(source, /"--config", configPath/u);
   assert.doesNotMatch(child, /writeStage2ExternalMonitorAcknowledgement/u);
   assert.doesNotMatch(child, /waitForAcknowledgement/u);

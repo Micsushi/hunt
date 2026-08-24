@@ -139,7 +139,7 @@ try {
           await page.getByRole("button", { name: "Next", exact: true }).waitFor({ state: "visible" });
           await page.waitForTimeout(250);
           await page.evaluate(() => { document.title = "My Information"; });
-          await productionMonitor.auth(page, "application_ready", "after_readback", {
+          await productionMonitor.auth(page, "application_ready", "state_observed", {
             fieldCount: 0,
             requiredFieldCount: 0,
             controlTypes: [],
