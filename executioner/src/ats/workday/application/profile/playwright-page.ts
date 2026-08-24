@@ -349,7 +349,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         controls,
         // Workday derives this prefilled value from Country; opening its input is
         // not a read-only observation and can wait forever on a non-editable field.
-        inspectInteractiveOptions && resolved.fieldId !== "phone.country_code",
+        inspectInteractiveOptions &&
+          resolved.fieldId !== "phone.country_code" &&
+          // An empty Workday skills prompt has no stable option catalog until
+          // the applicant enters a query. Opening it is not read-only.
+          resolved.fieldId !== "skills.values",
       );
       const after = await resolvedReadback(resolved);
       const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);

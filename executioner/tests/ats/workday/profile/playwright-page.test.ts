@@ -332,6 +332,32 @@ test("reports the exact catalog identity when control observation loses its targ
   }
 });
 
+test("observes an empty Workday skills prompt without opening it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <label>Type to Add Skills
+          <input id="skills--skills"
+            onfocus="this.setAttribute('aria-invalid', 'true')">
+        </label>
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const skills = snapshot.controls.find(({ fieldId }) => fieldId === "skills.values")!;
+
+    const observed = await adapter.observeControl(skills.controlId, AbortSignal.any([]));
+
+    assert.equal(observed.optionCatalogState, "unknown");
+    assert.deepEqual(observed.visibleOptionIds, []);
+    assert.equal(await page.locator('[id="skills--skills"]').getAttribute("aria-invalid"), null);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("associated Workday labels override aria labels containing selected values", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
