@@ -139,9 +139,10 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
   const storageRoot = await mkdtemp(join(tmpdir(), "hunt-c3-process-bound-"));
   const runKey = "run_20260810_processbindingxx";
   const configPath = join(storageRoot, "transient", runKey, "owner-input.json");
+  const runtimeRoot = join(storageRoot, "transient", runKey, "runtime");
   const evidenceRoot = join(storageRoot, "retained", runKey, "evidence");
   try {
-    await mkdir(resolve(configPath, ".."), { recursive: true });
+    await mkdir(runtimeRoot, { recursive: true });
     await mkdir(evidenceRoot, { recursive: true });
     await writeFile(configPath, JSON.stringify({
       journeyId: "journey_abcdefghijklmnop",
@@ -151,6 +152,7 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
         tenant: "tenant",
         posting: "R-12345",
       },
+      roots: { runtime: { path: runtimeRoot } },
     }));
     const argvOutput = join(storageRoot, "argv.json");
     assert.equal(await runWindowsIsolatedStage2Acceptance([
@@ -175,7 +177,80 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
       "isolated-desktop.json",
       "external-monitor-observer-live.json",
       "external-monitor-observer-stop",
-    ]) await assert.rejects(() => readFile(join(resolve(configPath, ".."), name)), /ENOENT/u);
+    ]) await assert.rejects(() => readFile(join(runtimeRoot, name)), /ENOENT/u);
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Windows Review runner constructs the production monitor from the declared nested runtime root", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "hunt-c3-monitor-boundary-"));
+  const runKey = "run_20260824_monitorboundaryx";
+  const runRoot = join(storageRoot, "transient", runKey);
+  const runtimeRoot = join(runRoot, "runtime");
+  const configPath = join(runRoot, "owner-input.json");
+  const evidenceRoot = join(storageRoot, "retained", runKey, "evidence");
+  const output = join(storageRoot, "monitor-binding.json");
+  try {
+    await mkdir(runtimeRoot, { recursive: true });
+    await mkdir(evidenceRoot, { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      journeyId: "journey_abcdefghijklmnop",
+      target: {
+        handleId: "target_ref_abcdefghijklmnop",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R-12345",
+      },
+      roots: { runtime: { path: runtimeRoot } },
+    }));
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "monitor-binding", output,
+      "--evidence-root", evidenceRoot,
+      "--config", configPath,
+    ], { runnerPath: fixture }), 0);
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), {
+      constructed: true,
+      profileNestedUnderRuntime: true,
+    });
+    const audit = JSON.parse(await readFile(join(evidenceRoot, "process-audit.json"), "utf8"));
+    assert.equal(audit.status, "pass");
+    assert.equal(audit.membersAliveAfterClose, 0);
+    for (const name of [
+      "isolated-desktop.json",
+      "external-monitor-observer-live.json",
+      "external-monitor-observer-stop",
+      "external-monitor-live.json",
+    ]) await assert.rejects(() => readFile(join(runtimeRoot, name)), /ENOENT/u);
+
+    const mismatchRunKey = "run_20260824_monitorboundaryy";
+    const mismatchRunRoot = join(storageRoot, "transient", mismatchRunKey);
+    const mismatchRuntimeRoot = join(mismatchRunRoot, "runtime");
+    const mismatchDeclaredRoot = join(mismatchRunRoot, "wrong-runtime");
+    const mismatchConfigPath = join(mismatchRunRoot, "owner-input.json");
+    const mismatchEvidenceRoot = join(storageRoot, "retained", mismatchRunKey, "evidence");
+    const mismatchOutput = join(storageRoot, "mismatch-monitor-binding.json");
+    await mkdir(mismatchRuntimeRoot, { recursive: true });
+    await mkdir(mismatchDeclaredRoot, { recursive: true });
+    await mkdir(mismatchEvidenceRoot, { recursive: true });
+    await writeFile(mismatchConfigPath, JSON.stringify({
+      journeyId: "journey_abcdefghijklmnop",
+      target: {
+        handleId: "target_ref_abcdefghijklmnop",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R-12345",
+      },
+      roots: { runtime: { path: mismatchDeclaredRoot } },
+    }));
+    assert.notEqual(await runWindowsIsolatedStage2Acceptance([
+      "monitor-binding", mismatchOutput,
+      "--evidence-root", mismatchEvidenceRoot,
+      "--config", mismatchConfigPath,
+    ], { runnerPath: fixture }), 0);
+    await assert.rejects(() => readFile(mismatchOutput), /ENOENT/u);
   } finally {
     await rm(storageRoot, { recursive: true, force: true });
   }

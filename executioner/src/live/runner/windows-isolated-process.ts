@@ -279,10 +279,14 @@ function Get-ProcessBinding([string]$configPath, [string]$evidenceRoot) {
         $runKey = [IO.Path]::GetFileName($runRoot)
         $transient = [IO.Directory]::GetParent($runRoot).FullName
         $storage = [IO.Directory]::GetParent($transient).FullName
+        $expectedRuntime = [IO.Path]::GetFullPath([IO.Path]::Combine($runRoot, 'runtime'))
+        $runtimeRoot = [IO.Path]::GetFullPath([string]$owner.roots.runtime.path)
         $expectedEvidence = [IO.Path]::GetFullPath([IO.Path]::Combine($storage, 'retained', $runKey, 'evidence'))
         if (
             $runKey -notmatch '^run_\d{8}_[a-z0-9]{16}$' -or
             [IO.Path]::GetFileName($transient) -ne 'transient' -or
+            -not [IO.Directory]::Exists($runtimeRoot) -or
+            -not $expectedRuntime.Equals($runtimeRoot, [StringComparison]::OrdinalIgnoreCase) -or
             -not $expectedEvidence.Equals([IO.Path]::GetFullPath($evidenceRoot), [StringComparison]::OrdinalIgnoreCase) -or
             [string]$owner.journeyId -notmatch '^journey_[A-Za-z0-9_-]{16,64}$' -or
             [string]$owner.target.handleId -notmatch '^target_ref_[A-Za-z0-9_-]{16,64}$' -or
@@ -298,7 +302,7 @@ function Get-ProcessBinding([string]$configPath, [string]$evidenceRoot) {
             host = [string]$owner.target.host
             tenant = [string]$owner.target.tenant
             posting = [string]$owner.target.posting
-            runtimeRoot = $runRoot
+            runtimeRoot = $runtimeRoot
             configSha256 = Get-Sha256Hex $configBytes
         }
     } finally {

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
 import type { BrowserContext } from "playwright";
 
 import { assertCurrentProcessIsOnIsolatedDesktop } from
@@ -104,7 +103,7 @@ try {
       await report("page_binding", "pass");
       try {
         await report("monitor", "started");
-        const monitorRuntimeRoot = dirname(args.configPath);
+        const monitorRuntimeRoot = args.runtimeRoot;
         const processNonce = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
         const processIssuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;
         if (processNonce === undefined || processIssuedAt === undefined) throw new Error("process binding unavailable");
@@ -190,13 +189,13 @@ async function safeFailure(
 }
 
 function parseArgs(values: readonly string[]) {
-  if (values.length !== 14) invalid();
+  if (values.length !== 16) invalid();
   const parsed = new Map<string, string>();
   for (let index = 0; index < values.length; index += 2) {
     const key = values[index];
     const value = values[index + 1];
     if (key === undefined || value === undefined || parsed.has(key) ||
-        !["--profile-root", "--page-url", "--monitor-origin", "--token", "--evidence-root", "--source-revision", "--config"].includes(key)) invalid();
+        !["--profile-root", "--page-url", "--monitor-origin", "--token", "--evidence-root", "--runtime-root", "--source-revision", "--config"].includes(key)) invalid();
     parsed.set(key, value);
   }
   const profileRoot = parsed.get("--profile-root");
@@ -204,15 +203,18 @@ function parseArgs(values: readonly string[]) {
   const monitorOrigin = parsed.get("--monitor-origin");
   const token = parsed.get("--token");
   const evidenceRoot = parsed.get("--evidence-root");
+  const runtimeRoot = parsed.get("--runtime-root");
   const sourceRevision = parsed.get("--source-revision");
   const configPath = parsed.get("--config");
   if (profileRoot === undefined || pageUrl === undefined || monitorOrigin === undefined || token === undefined ||
-      evidenceRoot === undefined || sourceRevision === undefined || configPath === undefined ||
+      evidenceRoot === undefined || runtimeRoot === undefined || sourceRevision === undefined || configPath === undefined ||
       !/^[0-9a-f]{40}$/u.test(sourceRevision) ||
       !URL.canParse(pageUrl) || !URL.canParse(monitorOrigin) ||
       new URL(pageUrl).hostname !== "127.0.0.1" || new URL(monitorOrigin).hostname !== "127.0.0.1" ||
       !/^[A-Za-z0-9_-]{43}$/u.test(token)) invalid();
-  return Object.freeze({ profileRoot, pageUrl, monitorOrigin, token, evidenceRoot, sourceRevision, configPath });
+  return Object.freeze({
+    profileRoot, pageUrl, monitorOrigin, token, evidenceRoot, runtimeRoot, sourceRevision, configPath,
+  });
 }
 
 function invalid(): never {

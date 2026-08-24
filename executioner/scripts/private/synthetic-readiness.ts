@@ -211,7 +211,8 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
   const evidenceRoot = join(options.storageRoot, "retained", runId, "evidence");
   const journeyId = "journey_readiness_synthetic_01";
   const targetHandleId = "target_ref_readiness_synthetic_01";
-  const profileRoot = join(runRoot, "browser-profiles", journeyId, targetHandleId);
+  const runtimeRoot = join(runRoot, "runtime");
+  const profileRoot = join(runtimeRoot, "browser-profiles", journeyId, targetHandleId);
   const configPath = join(runRoot, "owner-input.json");
   const logFile = `${runId}.ndjson`;
   const early: Omit<LogRecord, "sequence">[] = [];
@@ -273,6 +274,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
         tenant: "readiness",
         posting: "R-READY-01",
       },
+      roots: { runtime: { path: runtimeRoot } },
     })}\n`, { flag: "wx", mode: 0o600 });
     const logPath = join(evidenceRoot, logFile);
     writeFileSync(logPath, "", { flag: "wx", mode: 0o600 });
@@ -302,6 +304,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
         "--monitor-origin", `http://127.0.0.1:${options.monitorPort}`,
         "--token", token,
         "--evidence-root", evidenceRoot,
+        "--runtime-root", runtimeRoot,
         "--config", configPath,
         "--source-revision", options.sourceRevision,
       ], {
