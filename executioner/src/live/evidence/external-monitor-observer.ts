@@ -354,7 +354,8 @@ $allow = @(
   'Email Address', 'Password', 'Forgot Password', 'Forgot your password?', 'Reset Password', 'Send Verification Email',
   'My Information', 'My Experience', 'Application Questions', 'Voluntary Disclosures',
   'Self Identify', 'Review', 'Submit', 'Submit application', 'Next', 'Save and Continue',
-  'Upload a resume', 'Upload Resume'
+  'Upload a resume', 'Upload Resume', 'Resume, Cover Letter and References',
+  'Upload a file (5MB max)'
 )
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
@@ -514,7 +515,8 @@ function canonicalObservedFlag(value: string): string {
     "Email Address", "Password", "Forgot Password", "Forgot your password?", "Reset Password", "Send Verification Email",
     "My Information", "My Experience", "Application Questions", "Voluntary Disclosures",
     "Self Identify", "Review", "Submit", "Submit application", "Next", "Save and Continue",
-    "Upload a resume", "Upload Resume",
+    "Upload a resume", "Upload Resume", "Resume, Cover Letter and References",
+    "Upload a file (5MB max)",
   ].find((candidate) => candidate.toLowerCase() === value.toLowerCase());
   return canonical ?? value;
 }
@@ -539,11 +541,15 @@ export function observedStructurePage(
       return "questionnaire";
     }
     if (active === "My Experience" &&
-        (flags.has("Upload a resume") || flags.has("Upload Resume"))) return "resume";
+        (flags.has("Upload a resume") || flags.has("Upload Resume") ||
+          flags.has("Resume, Cover Letter and References") ||
+          flags.has("Upload a file (5MB max)"))) return "resume";
     if (active === "My Information" || active === "My Experience") return "profile";
   }
   if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
-  if (flags.has("Upload a resume") || flags.has("Upload Resume")) return "resume";
+  if (flags.has("Upload a resume") || flags.has("Upload Resume") ||
+      flags.has("Resume, Cover Letter and References") ||
+      flags.has("Upload a file (5MB max)")) return "resume";
   if (flags.has("My Information") || flags.has("My Experience")) return "profile";
   if (flags.has("Apply Manually")) return "apply_choice";
   if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";

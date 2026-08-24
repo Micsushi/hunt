@@ -29,6 +29,7 @@ export interface AtomicJsonEvidenceRequest {
   readonly value: unknown;
   readonly sensitiveValues: readonly string[];
   readonly reviewedStructuralValues?: readonly string[];
+  readonly reviewedOpaqueIdKeys?: readonly string[];
   readonly reviewedSha256Keys?: readonly string[];
   readonly label: string;
   readonly fileName?:
@@ -57,10 +58,18 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): str
   const root = admittedRoot(request.root, unavailable);
   const target = join(root, request.fileName ?? "acceptance.json");
   if (existsSync(target)) unavailable();
-  const retainedStrings: { readonly key: string; readonly value: string }[] = [];
+  const retainedStrings: {
+    readonly key: string;
+    readonly value: string;
+    readonly opaqueId: boolean;
+  }[] = [];
   const serialized = JSON.stringify(request.value, (key, value: unknown) => {
     if (typeof value === "string") {
-      retainedStrings.push({ key, value: withoutOpaquePrefix(value) });
+      retainedStrings.push({
+        key,
+        value: withoutOpaquePrefix(value),
+        opaqueId: isOpaqueId(value),
+      });
     }
     return value;
   }, 2);
@@ -83,9 +92,10 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): str
     const normalizedSensitive = withoutOpaquePrefix(sensitive);
     const retainedIndex = normalizedSensitive.length < 3
       ? -1
-      : retainedStrings.findIndex(({ key, value }) =>
+      : retainedStrings.findIndex(({ key, value, opaqueId }) =>
         value.includes(normalizedSensitive) &&
         !request.reviewedStructuralValues?.includes(value) &&
+        !(opaqueId && request.reviewedOpaqueIdKeys?.includes(key)) &&
         !(
           request.reviewedSha256Keys?.includes(key) &&
           /^[0-9a-f]{64}$/u.test(value)
@@ -133,6 +143,12 @@ function withoutOpaquePrefix(value: string): string {
   if (prefix === undefined) return value;
   const suffix = value.slice(prefix.length);
   return /^[A-Za-z0-9_-]{16,64}$/u.test(suffix) ? suffix : value;
+}
+
+function isOpaqueId(value: string): boolean {
+  const prefix = OPAQUE_ID_PREFIXES.find((candidate) => value.startsWith(candidate));
+  if (prefix === undefined) return false;
+  return /^[A-Za-z0-9_-]{16,64}$/u.test(value.slice(prefix.length));
 }
 
 function admittedRoot(value: string, unavailable: () => never): string {

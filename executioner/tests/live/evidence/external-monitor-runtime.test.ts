@@ -1596,6 +1596,10 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     new Set(["My Information", "My Experience", "Application Questions"]),
     ["My Information"],
   ), "profile");
+  assert.equal(observedStructurePage(
+    new Set(["My Experience", "Resume, Cover Letter and References"]),
+    ["My Experience"],
+  ), "resume");
   assert.deepEqual(observedActiveStageTitles({
     myInformation: 2,
     myExperience: 2,

@@ -516,6 +516,66 @@ fields: [{
   }
 });
 
+test("generated operation ids do not collide with private answer fragments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-operation-id-"));
+  const observe = observer();
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({
+      pageType: "profile",
+      controls: [{
+        controlId: "linkedin-control",
+        fieldId: "social.linkedin",
+        required: false,
+        uiBehavior: "text",
+        uiVariant: "workday_text_v2",
+        readback: null,
+      }],
+      rows: [],
+    }),
+    plan: {
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [{
+        fieldId: "social.linkedin",
+        questionType: "social_network",
+        answerType: "text",
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "000",
+          provenance: "generated_default",
+          lane: "synthetic_test_default",
+        },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["000"],
+    observeControl: async (control) => {
+      const observed = await observe(control);
+      return {
+        ...observed,
+        binding: {
+          ...observed.binding,
+          operationId: "operation_profile_learning_0001",
+        },
+      };
+    },
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const text = readFileSync(join(root, "profile-field-learning.json"), "utf8");
+    assert.equal(text.includes('"000"'), false);
+    assert.equal(
+      admitProfileFieldLearningEvidence(JSON.parse(text)).fields[0]?.observationBinding?.operationId,
+      "operation_profile_learning_0001",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("admits reviewed website repeatable identities", () => {
   const admitted = admitProfileFieldLearningEvidence({
     schemaVersion: 5,

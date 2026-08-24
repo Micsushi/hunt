@@ -349,6 +349,7 @@ export function createProfileFieldLearningCapture(input: {
           sensitiveValues: input.sensitiveValues.filter((value) =>
             value.length < 3 || !reviewedStructuralCollision(value)
           ),
+          reviewedOpaqueIdKeys: ["operationId"],
           label: "profile-field-learning",
           fileName: input.fileName ?? "profile-field-learning.json",
         });
