@@ -194,7 +194,7 @@ function processStartedAt(pid: number): string {
   const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")`;
   return timestamp(execFileSync("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
     "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
-  ], { encoding: "utf8", windowsHide: true, timeout: 5_000 }).trim());
+  ], { encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim());
 }
 
 function instanceDigest(pid: number, startedAt: string): string {

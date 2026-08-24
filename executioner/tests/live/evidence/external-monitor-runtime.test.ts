@@ -22,7 +22,7 @@ import {
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
 import { createStage2ExternalMonitorObserverAuthority } from
   "../../../src/live/evidence/external-monitor-authority.ts";
-import { normalizeObservedChromeTitle, observedStructurePage } from
+import { normalizeObservedAddressHost, normalizeObservedChromeTitle, observedStructurePage } from
   "../../../src/live/evidence/external-monitor-observer.ts";
 
 const binding = {
@@ -1540,6 +1540,14 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   );
   assert.equal(normalizeObservedChromeTitle("My Information"), "My Information");
   assert.throws(() => normalizeObservedChromeTitle("\u0000"), /external monitor observer denied/u);
+  assert.equal(
+    normalizeObservedAddressHost("readiness.wd5.myworkdayjobs.com/en-US/Careers/apply"),
+    "readiness.wd5.myworkdayjobs.com",
+  );
+  assert.equal(
+    normalizeObservedAddressHost("https://readiness.wd5.myworkdayjobs.com/en-US/Careers/apply"),
+    "readiness.wd5.myworkdayjobs.com",
+  );
   assert.equal(observedStructurePage(new Set(["Review", "Submit application"])), "review");
   assert.equal(observedStructurePage(new Set(["My Information", "Next"])), "profile");
 });

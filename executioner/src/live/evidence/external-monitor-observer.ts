@@ -212,17 +212,38 @@ $payload = [ordered]@{
   };
   if (typeof observed.title !== "string" || !Array.isArray(observed.flags) ||
       observed.flags.some((value) => typeof value !== "string")) denied();
-  if (typeof observed.address === "string" && observed.address.length > 0) {
-    const url = new URL(observed.address);
-    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== binding.host) denied();
-  }
-  const flags = new Set(observed.flags);
+  if (typeof observed.address === "string" && observed.address.length > 0 &&
+      normalizeObservedAddressHost(observed.address) !== binding.host) denied();
+  const flags = new Set(observed.flags.map(canonicalObservedFlag));
   const page = observedStructurePage(flags);
   return Object.freeze({
     title: normalizeObservedChromeTitle(observed.title),
     page,
     submitPresent: flags.has("Submit") || flags.has("Submit application"),
   });
+}
+
+export function normalizeObservedAddressHost(address: string): string {
+  const normalized = address.normalize("NFC").trim();
+  if (normalized.length < 1 || normalized.length > 2_048 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    denied();
+  }
+  const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(normalized)
+    ? normalized
+    : `https://${normalized}`);
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") denied();
+  return url.hostname.toLowerCase();
+}
+
+function canonicalObservedFlag(value: string): string {
+  const canonical = [
+    "Apply", "Apply Now", "Apply Manually", "Sign in with email", "Create Account", "Sign In",
+    "Email Address", "Password", "Forgot Password", "Reset Password", "Send Verification Email",
+    "My Information", "My Experience", "Application Questions", "Voluntary Disclosures",
+    "Self Identify", "Review", "Submit", "Submit application", "Next", "Save and Continue",
+    "Upload a resume", "Upload Resume",
+  ].find((candidate) => candidate.toLowerCase() === value.toLowerCase());
+  return canonical ?? value;
 }
 
 export function observedStructurePage(flags: ReadonlySet<string>): string {
