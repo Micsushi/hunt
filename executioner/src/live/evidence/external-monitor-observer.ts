@@ -123,6 +123,8 @@ const OBSERVER_FAILURE_CODES = [
   "owned_browser_observation",
   "browser_process_binding",
   "accessibility_tree",
+  "browser_observation_command",
+  "accessibility_payload",
   "address_identity",
   "structure_classification",
   "title_identity",
@@ -254,15 +256,16 @@ $payload = [ordered]@{
       : undefined;
     if (status === 41) observerFailure("browser_process_binding");
     if (status === 42 || status === 43) observerFailure("accessibility_tree");
-    throw error;
+    observerFailure("browser_observation_command");
   }
-  const observed = JSON.parse(Buffer.from(output, "base64").toString("utf8")) as {
-    readonly title?: unknown;
-    readonly address?: unknown;
-    readonly flags?: unknown;
-  };
+  let observed: { readonly title?: unknown; readonly address?: unknown; readonly flags?: unknown };
+  try {
+    observed = JSON.parse(Buffer.from(output, "base64").toString("utf8"));
+  } catch { return observerFailure("accessibility_payload"); }
   if (typeof observed.title !== "string" || !Array.isArray(observed.flags) ||
-      observed.flags.some((value) => typeof value !== "string")) denied();
+      observed.flags.some((value) => typeof value !== "string")) {
+    observerFailure("accessibility_payload");
+  }
   if (typeof observed.address === "string" && observed.address.length > 0) {
     let host: string;
     try { host = normalizeObservedAddressHost(observed.address); }
