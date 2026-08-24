@@ -45,6 +45,8 @@ export type {
 export { profileMetadataMismatchReasons } from "./types.ts";
 export {
   classifyProfileInspectionFailure,
+  createProfileInspectionFailure,
   profileInspectionDiagnostic,
+  profileInspectionFailureFromError,
   profileInspectionTraceDetails,
 } from "./inspection.ts";

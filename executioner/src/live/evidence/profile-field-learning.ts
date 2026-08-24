@@ -16,8 +16,8 @@ import type {
 import {
   createProfileInspectionFailure,
   profileInspectionFailureFromError,
-} from "../../ats/workday/application/profile/inspection.ts";
-import { profileLearningConversionFromFailure } from
+  profileLearningConversionFromFailure,
+} from
   "../../ats/workday/application/profile/index.ts";
 import {
   answerLaneAdmitted,
