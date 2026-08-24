@@ -15,8 +15,10 @@ import {
   createStage2ExternalMonitorObserverAuthority,
 } from "./external-monitor-authority.ts";
 import { reviewedMonitorStructureId } from "./monitor-structures.ts";
-import { writeStage2ExternalMonitorAcknowledgement } from
-  "./external-monitor-runtime.ts";
+import {
+  canonicalMonitorIdentityTitle,
+  writeStage2ExternalMonitorAcknowledgement,
+} from "./external-monitor-runtime.ts";
 
 const DESKTOP_BINDING_FILE = "isolated-desktop.json";
 const OWNER_LIVE_FILE = "external-monitor-live.json";
@@ -129,7 +131,8 @@ export function reconcileObservedMonitorSurface(
     ? request.capturedIdentityDigests.titleSha256
     : undefined;
   if (typeof titleSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(titleSha256) ||
-      createHash("sha256").update(observed.title, "utf8").digest("hex") !== titleSha256) {
+      createHash("sha256").update(canonicalMonitorIdentityTitle(observed.title), "utf8")
+        .digest("hex") !== titleSha256) {
     observerFailure("title_identity_reconciliation");
   }
   if (observed.submitPresent !== (request.page === "review")) {

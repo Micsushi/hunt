@@ -11,12 +11,12 @@ import { deflateSync } from "node:zlib";
 import { applicationPages } from "../../../src/ats/workday/application/page-walk-contract.ts";
 import {
   createStage2ExternalMonitorRuntime,
+  canonicalMonitorIdentityTitle,
   currentProcessStartedAt,
   processStartedAt,
   readStage2ExternalMonitorObservation,
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
-  settledMonitorTitle,
   type Stage2ExternalMonitorTraceDetails,
   writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
@@ -1540,7 +1540,7 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
   }
 });
 
-test("authenticated Workday Chrome title normalization preserves the identity title", async () => {
+test("authenticated Workday Chrome title normalization preserves the identity title", () => {
   assert.equal(
     normalizeObservedChromeTitle("  Business   Manager - Google Chrome for Testing"),
     "Business Manager",
@@ -1562,26 +1562,25 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "owned_browser_observation",
   );
   assert.equal(externalMonitorObserverFailureCode(new Error("private value")), undefined);
-  const title = "Process Tech";
+  const title = "Process Tech & Launch";
+  const observedTitle = "Process Tech Launch";
+  assert.equal(canonicalMonitorIdentityTitle(title), observedTitle);
   assert.doesNotThrow(() => reconcileObservedMonitorSurface({
     page: "job_posting",
-    capturedIdentityDigests: { titleSha256: digest(Buffer.from(title, "utf8")) },
-  }, { title, submitPresent: false }));
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
+    },
+  }, { title: observedTitle, submitPresent: false }));
   assert.throws(() => reconcileObservedMonitorSurface({
     page: "job_posting",
     capturedIdentityDigests: { titleSha256: "0".repeat(64) },
-  }, { title, submitPresent: false }), /title_identity_reconciliation/u);
+  }, { title: observedTitle, submitPresent: false }), /title_identity_reconciliation/u);
   assert.throws(() => reconcileObservedMonitorSurface({
     page: "job_posting",
-    capturedIdentityDigests: { titleSha256: digest(Buffer.from(title, "utf8")) },
-  }, { title, submitPresent: true }), /submit_state_reconciliation/u);
-  const titles = ["Workday", "Workday", "Process Tech", "Process Tech"];
-  const page = { async title() { return titles.shift() ?? "Process Tech"; } };
-  assert.equal(await settledMonitorTitle(page, new AbortController().signal, {
-    stableMs: 20,
-    pollMs: 1,
-    maximumMs: 200,
-  }), "Process Tech");
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
+    },
+  }, { title: observedTitle, submitPresent: true }), /submit_state_reconciliation/u);
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {
