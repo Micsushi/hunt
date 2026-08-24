@@ -923,7 +923,7 @@ async function writeReviewEvidence(
       uiType: "text",
       uiVariant: "workday_text_v2",
       questionCategory: "social_network",
-      answerCategory: "text",
+      answerCategory: "url",
       required: false,
       answerState: "unset",
       lane: null,
