@@ -488,11 +488,6 @@ export function admitProfileFieldLearningEvidence(
     value.fields.length < 1 || value.fields.length > 128 ||
     value.visibleControlCount !== value.fields.length
   ) denied();
-  if (
-    value.executionMode === "synthetic_test_non_submittable" &&
-    value.learningConversion === undefined &&
-    !value.fields.some(({ lane }) => lane === "synthetic_test_default")
-  ) denied("synthetic_mode");
   const identities = new Set<string>();
   for (const field of value.fields) {
     if (!validFieldIdentity(field.fieldIdentity)) denied("field_identity");

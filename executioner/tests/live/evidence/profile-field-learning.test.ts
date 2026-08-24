@@ -519,6 +519,80 @@ fields: [{
   }
 });
 
+test("admits a synthetic non-submittable page with only owner facts and optional unset controls", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-owner-only-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({
+      pageType: "profile",
+      controls: [
+        {
+          controlId: "linkedin-control",
+          fieldId: "social.linkedin",
+          required: false,
+          uiBehavior: "text",
+          uiVariant: "workday_text_v2",
+          readback: "https://www.linkedin.com/in/example",
+        },
+        {
+          controlId: "facebook-control",
+          fieldId: "social.facebook",
+          required: false,
+          uiBehavior: "text",
+          uiVariant: "workday_text_v2",
+          readback: null,
+        },
+        {
+          controlId: "twitter-control",
+          fieldId: "social.twitter",
+          required: false,
+          uiBehavior: "text",
+          uiVariant: "workday_text_v2",
+          readback: null,
+        },
+      ],
+      rows: [],
+    }),
+    plan: {
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [{
+        fieldId: "social.linkedin",
+        questionType: "social_network",
+        answerType: "url",
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "https://www.linkedin.com/in/example",
+          provenance: "resume_verified",
+          lane: "live_owner_fact",
+        },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["https://www.linkedin.com/in/example"],
+    observeControl: observer(),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(
+      readFileSync(join(root, "profile-field-learning.json"), "utf8"),
+    ));
+    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
+    assert.equal(evidence.testOnly, true);
+    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.fields.some(({ lane }) => lane === "synthetic_test_default"), false);
+    assert.deepEqual(evidence.fields.map(({ fieldIdentity }) => fieldIdentity), [
+      "profile.social.linkedin",
+      "profile.social.facebook",
+      "profile.social.twitter",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("generated operation ids do not collide with private answer fragments", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-operation-id-"));
   const observe = observer();
@@ -852,12 +926,6 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
     })()] },
     { ...base, fields: [{ ...base.fields[0], lane: "invalid" }] },
     { ...base, fields: [{ ...base.fields[0], lane: "synthetic_test_default" }] },
-    {
-      ...base,
-      executionMode: "synthetic_test_non_submittable",
-      testOnly: true,
-      liveAcceptanceEligible: false,
-    },
     {
       ...base,
       fields: [{ ...base.fields[0], visibleOptionIds: ["Canada"] }],

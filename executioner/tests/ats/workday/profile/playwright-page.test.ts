@@ -1784,6 +1784,40 @@ test("inventories optional custom ARIA and contenteditable controls", async () =
   }
 });
 
+test("recognizes optional Adient social account controls by stable Workday ids", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <label for="socialNetworkAccounts--linkedInAccount">LinkedIn</label>
+          <input id="socialNetworkAccounts--linkedInAccount">
+          <label for="socialNetworkAccounts--facebookAccount">Facebook</label>
+          <input id="socialNetworkAccounts--facebookAccount">
+          <label for="socialNetworkAccounts--twitterAccount">Twitter</label>
+          <input id="socialNetworkAccounts--twitterAccount">
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+    })), [
+      { fieldId: "social.linkedin", uiBehavior: "text", required: false },
+      { fieldId: "social.facebook", uiBehavior: "text", required: false },
+      { fieldId: "social.twitter", uiBehavior: "text", required: false },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a combined page excludes only the exact Resume-owned file control", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

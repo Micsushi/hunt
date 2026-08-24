@@ -562,6 +562,8 @@ export const retainedIntakeControlGuide: readonly RetainedIntakeControlGuideEntr
     retained("profile", "employment.previously_worked_for_organization", "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
     retained("profile", "skills.values", "Type to Add Skills", "skill", "search_select", "multi_select", false, "workday_multi_select_v1"),
     retained("profile", "social.linkedin", "LinkedIn", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("profile", "social.facebook", "Facebook", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("profile", "social.twitter", "Twitter", "social_network", "text", "text", false, "workday_text_v2"),
     retained("profile", "social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
     retained("profile", "website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
     retained("questionnaire", "age_requirement_met", "Do you certify that you are 18 years of age or older?", "legal", "select", "single_select", null, "workday_select_v1"),

@@ -245,7 +245,7 @@ test("answer guide exposes types, options, and replacement-required learning def
 });
 
 test("retained Integer page shapes expose editable explicit-unset control metadata", () => {
-  assert.equal(retainedIntakeControlGuide.length, 44);
+  assert.equal(retainedIntakeControlGuide.length, 46);
   assert.equal(retainedIntakeControlGuide.every((entry) =>
     entry.initialState === "unset" && entry.uiVariant.length > 0 &&
     Array.isArray(entry.allowedOptions) && typeof entry.allowsCustomValue === "boolean" &&
@@ -300,7 +300,7 @@ test("exact retained Integer labels resolve or remain deliberately unidentified"
     "Yes, I have read and consent to the terms and conditions",
     "Language", "Name", "Date", "Please check one of the boxes below",
     "Work Experience Add", "Education Add", "Type to Add Skills",
-    "Upload a file (5MB max)", "Websites Add",
+    "Facebook", "Twitter", "Upload a file (5MB max)", "Websites Add",
   ]) assert.equal(labels.has(label), true, label);
   const unresolved = retainedIntakeControlGuide.find(({ identity }) => identity === "unresolved");
   assert.equal(unresolved?.sanitizedLabel, null);

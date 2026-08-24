@@ -57,6 +57,8 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
     retained("employment.previously_worked_for_organization", "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.", "prior_employment", "radio", "single_select", true, "workday_previous_worker_radio_v1", ["Yes", "No"]),
     retained("skills.values", "Type to Add Skills", "skill", "multi_select", "multi_select", false, "workday_multi_select_v1"),
     retained("social.linkedin", "LinkedIn", "social_network", "text", "url", false, "workday_text_v2"),
+    retained("social.facebook", "Facebook", "social_network", "text", "text", false, "workday_text_v2"),
+    retained("social.twitter", "Twitter", "social_network", "text", "text", false, "workday_text_v2"),
     retained("social.github", "GitHub", "social_network", "text", "text", false, "workday_text_v2"),
     retained("website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
   ]);
@@ -249,6 +251,8 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiVariant: "workday_multi_select_v1",
     },
     v2Text("social.linkedin", "socialNetworkAccounts--linkedInAccount"),
+    v2Text("social.facebook", "socialNetworkAccounts--facebookAccount"),
+    v2Text("social.twitter", "socialNetworkAccounts--twitterAccount"),
     {
       fieldId: "social.github",
       selector: [

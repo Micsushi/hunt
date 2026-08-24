@@ -1410,6 +1410,27 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
   ]);
 });
 
+test("leaves recognized unplanned optional social controls untouched", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      { ...control("social.facebook", "text", null, "workday_text_v2"), required: false },
+      { ...control("social.twitter", "text", null, "workday_text_v2"), required: false },
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
 test("canonicalizes a bare LinkedIn host for Workday URL validation", async () => {
   const linkedin = field(
     "social.linkedin",
