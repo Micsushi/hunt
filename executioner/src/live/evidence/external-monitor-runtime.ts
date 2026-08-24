@@ -278,7 +278,10 @@ export class Stage2ExternalMonitorRuntime {
       validateStage2MonitorPng(screenshot);
       emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_captured", traceContext);
       failureStage = "title_capture";
-      const title = boundedTitle(await page.title());
+      const title = this.#options.observer !== undefined &&
+          pageName === "job_posting" && moment === "before_navigation"
+        ? await settledMonitorTitle(page, signal)
+        : boundedTitle(await page.title());
       emitMonitorTrace(this.#options.trace, "external_monitor_title_captured", traceContext);
       failureStage = "url_after_read";
       const urlAfter = await page.url();
@@ -1067,6 +1070,34 @@ function exactStructuralIds(value: readonly string[], page?: string): readonly s
 function boundedTitle(value: string): string {
   const title = value.normalize("NFC").replace(/\s+/gu, " ").trim();
   if (title.length < 1 || title.length > 256 || /[\u0000-\u001f\u007f]/u.test(title)) denied();
+  return title;
+}
+
+export async function settledMonitorTitle(
+  page: Pick<Stage2MonitorPage, "title">,
+  signal: AbortSignal,
+  timing: {
+    readonly stableMs: number;
+    readonly pollMs: number;
+    readonly maximumMs: number;
+  } = { stableMs: 3_000, pollMs: 100, maximumMs: 12_000 },
+): Promise<string> {
+  if (!Number.isSafeInteger(timing.stableMs) || !Number.isSafeInteger(timing.pollMs) ||
+      !Number.isSafeInteger(timing.maximumMs) || timing.stableMs < 1 || timing.pollMs < 1 ||
+      timing.stableMs > timing.maximumMs || timing.maximumMs > 30_000 || signal.aborted) denied();
+  const startedAt = Date.now();
+  let stableAt = startedAt;
+  let title = boundedTitle(await page.title());
+  while (Date.now() - stableAt < timing.stableMs) {
+    if (signal.aborted || Date.now() - startedAt >= timing.maximumMs) denied();
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, timing.pollMs));
+    if (signal.aborted) denied();
+    const next = boundedTitle(await page.title());
+    if (next !== title) {
+      title = next;
+      stableAt = Date.now();
+    }
+  }
   return title;
 }
 

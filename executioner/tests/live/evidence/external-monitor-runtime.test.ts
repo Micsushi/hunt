@@ -16,6 +16,7 @@ import {
   readStage2ExternalMonitorObservation,
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
+  settledMonitorTitle,
   type Stage2ExternalMonitorTraceDetails,
   writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
@@ -1539,7 +1540,7 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
   }
 });
 
-test("authenticated Workday Chrome title normalization preserves the identity title", () => {
+test("authenticated Workday Chrome title normalization preserves the identity title", async () => {
   assert.equal(
     normalizeObservedChromeTitle("  Business   Manager - Google Chrome for Testing"),
     "Business Manager",
@@ -1574,6 +1575,13 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     page: "job_posting",
     capturedIdentityDigests: { titleSha256: digest(Buffer.from(title, "utf8")) },
   }, { title, submitPresent: true }), /submit_state_reconciliation/u);
+  const titles = ["Workday", "Workday", "Process Tech", "Process Tech"];
+  const page = { async title() { return titles.shift() ?? "Process Tech"; } };
+  assert.equal(await settledMonitorTitle(page, new AbortController().signal, {
+    stableMs: 20,
+    pollMs: 1,
+    maximumMs: 200,
+  }), "Process Tech");
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {
