@@ -28,6 +28,7 @@ import {
   externalMonitorObserverFailureCode,
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
+  observedActiveStageTitles,
   observedChromeIdentityTitleSha256s,
   observedStructureIdentityTitles,
   observedStructurePage,
@@ -1575,13 +1576,33 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     digest(Buffer.from("My Information", "utf8")),
   ]);
   assert.deepEqual(
-    observedStructureIdentityTitles("profile", new Set(["My Information", "Review"])),
+    observedStructureIdentityTitles("profile", new Set(["My Information", "Review"]), ["My Information"]),
     ["My Information"],
   );
   assert.deepEqual(
-    observedStructureIdentityTitles("questionnaire", new Set(["My Information", "Self Identify"])),
+    observedStructureIdentityTitles("questionnaire", new Set(["My Information", "Self Identify"]), ["Self Identify"]),
     ["Self Identify"],
   );
+  assert.deepEqual(observedActiveStageTitles({
+    myInformation: 2,
+    myExperience: 1,
+    applicationQuestions: 1,
+    voluntaryDisclosures: 1,
+    selfIdentify: 1,
+    review: 1,
+  }), ["My Information"]);
+  assert.equal(observedStructurePage(
+    new Set(["My Information", "My Experience", "Application Questions"]),
+    ["My Information"],
+  ), "profile");
+  assert.deepEqual(observedActiveStageTitles({
+    myInformation: 2,
+    myExperience: 2,
+    applicationQuestions: 1,
+    voluntaryDisclosures: 1,
+    selfIdentify: 1,
+    review: 1,
+  }), []);
   assert.throws(() => selectObservedChromeIdentityTitle(
     digest(Buffer.from("My Information", "utf8")),
     staleWindow,

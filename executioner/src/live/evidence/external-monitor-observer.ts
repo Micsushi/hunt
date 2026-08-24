@@ -359,12 +359,30 @@ $allow = @(
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
 $documentTitles = [Collections.Generic.List[string]]::new()
+$stageCounts = [ordered]@{
+  myInformation = 0
+  myExperience = 0
+  applicationQuestions = 0
+  voluntaryDisclosures = 0
+  selfIdentify = 0
+  review = 0
+}
 $address = $null
 foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
     $visible = -not $element.Current.IsOffscreen
     if ($visible -and $allow -contains $name) { [void]$seen.Add($name) }
+    if ($visible) {
+      switch ($name) {
+        'My Information' { $stageCounts.myInformation = 1 + [int]$stageCounts.myInformation }
+        'My Experience' { $stageCounts.myExperience = 1 + [int]$stageCounts.myExperience }
+        'Application Questions' { $stageCounts.applicationQuestions = 1 + [int]$stageCounts.applicationQuestions }
+        'Voluntary Disclosures' { $stageCounts.voluntaryDisclosures = 1 + [int]$stageCounts.voluntaryDisclosures }
+        'Self Identify' { $stageCounts.selfIdentify = 1 + [int]$stageCounts.selfIdentify }
+        'Review' { $stageCounts.review = 1 + [int]$stageCounts.review }
+      }
+    }
     if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
         $element.Current.ControlType.Id -eq 50019) {
       $selection = $null
@@ -391,6 +409,7 @@ $payload = [ordered]@{
   title = [string]$window.Current.Name
   selectedTabTitles = @($selectedTabTitles)
   documentTitles = @($documentTitles)
+  stageCounts = $stageCounts
   address = $address
   flags = @($seen | Sort-Object)
 }
@@ -426,6 +445,7 @@ try {
     readonly title?: unknown;
     readonly selectedTabTitles?: unknown;
     readonly documentTitles?: unknown;
+    readonly stageCounts?: unknown;
     readonly address?: unknown;
     readonly flags?: unknown;
   };
@@ -441,6 +461,7 @@ try {
       observed.flags.some((value) => typeof value !== "string")) {
     observerFailure("accessibility_payload");
   }
+  const stageCounts = admitObservedStageCounts(observed.stageCounts);
   if (typeof observed.address === "string" && observed.address.length > 0) {
     let host: string;
     try { host = normalizeObservedAddressHost(observed.address); }
@@ -448,14 +469,15 @@ try {
     if (host !== binding.host) observerFailure("address_identity");
   }
   const flags = new Set(observed.flags.map(canonicalObservedFlag));
+  const activeStageTitles = observedActiveStageTitles(stageCounts);
   let page: string;
-  try { page = observedStructurePage(flags); }
+  try { page = observedStructurePage(flags, activeStageTitles); }
   catch { return observerFailure("structure_classification"); }
   let title: string;
   const identityTitles = [
     ...(observed.selectedTabTitles as string[]),
     ...(observed.documentTitles as string[]),
-    ...observedStructureIdentityTitles(page, flags),
+    ...observedStructureIdentityTitles(page, flags, activeStageTitles),
   ];
   try {
     title = selectObservedChromeIdentityTitle(
@@ -499,7 +521,10 @@ function canonicalObservedFlag(value: string): string {
   return canonical ?? value;
 }
 
-export function observedStructurePage(flags: ReadonlySet<string>): string {
+export function observedStructurePage(
+  flags: ReadonlySet<string>,
+  activeStageTitles: readonly string[] = [],
+): string {
   if (flags.has("Review") && (flags.has("Submit") || flags.has("Submit application"))) return "review";
   if (flags.has("Sign In") && flags.has("Forgot your password?")) return "sign_in";
   if (flags.has("Create Account") ||
@@ -510,6 +535,15 @@ export function observedStructurePage(flags: ReadonlySet<string>): string {
   if (flags.has("Send Verification Email")) return "verification_required";
   if (flags.has("Forgot Password")) return "password_reset_request";
   if (flags.has("Sign in with email")) return "email_sign_in_choice";
+  if (activeStageTitles.length === 1) {
+    const active = activeStageTitles[0]!;
+    if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(active)) {
+      return "questionnaire";
+    }
+    if (active === "My Experience" &&
+        (flags.has("Upload a resume") || flags.has("Upload Resume"))) return "resume";
+    if (active === "My Information" || active === "My Experience") return "profile";
+  }
   if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
   if (flags.has("Upload a resume") || flags.has("Upload Resume")) return "resume";
   if (flags.has("My Information") || flags.has("My Experience")) return "profile";
@@ -522,6 +556,7 @@ export function observedStructurePage(flags: ReadonlySet<string>): string {
 export function observedStructureIdentityTitles(
   page: string,
   flags: ReadonlySet<string>,
+  activeStageTitles: readonly string[] = [],
 ): readonly string[] {
   const titles = page === "profile"
     ? ["My Information", "My Experience"]
@@ -530,7 +565,46 @@ export function observedStructureIdentityTitles(
       : page === "review"
         ? ["Review"]
         : [];
-  return Object.freeze(titles.filter((title) => flags.has(title)));
+  const active = new Set(activeStageTitles);
+  return Object.freeze(titles.filter((title) => flags.has(title) && active.has(title)));
+}
+
+interface ObservedStageCounts {
+  readonly myInformation: number;
+  readonly myExperience: number;
+  readonly applicationQuestions: number;
+  readonly voluntaryDisclosures: number;
+  readonly selfIdentify: number;
+  readonly review: number;
+}
+
+function admitObservedStageCounts(value: unknown): ObservedStageCounts {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) denied();
+  const candidate = value as Record<string, unknown>;
+  const keys = [
+    "myInformation", "myExperience", "applicationQuestions",
+    "voluntaryDisclosures", "selfIdentify", "review",
+  ] as const;
+  if (Object.keys(candidate).length !== keys.length ||
+      keys.some((key) => !Number.isInteger(candidate[key]) ||
+        (candidate[key] as number) < 0 || (candidate[key] as number) > 16)) denied();
+  return Object.freeze(Object.fromEntries(keys.map((key) => [key, candidate[key]]))) as unknown as
+    ObservedStageCounts;
+}
+
+export function observedActiveStageTitles(counts: ObservedStageCounts): readonly string[] {
+  const entries = [
+    ["My Information", counts.myInformation],
+    ["My Experience", counts.myExperience],
+    ["Application Questions", counts.applicationQuestions],
+    ["Voluntary Disclosures", counts.voluntaryDisclosures],
+    ["Self Identify", counts.selfIdentify],
+    ["Review", counts.review],
+  ] as const;
+  const maximum = Math.max(...entries.map(([, count]) => count));
+  if (maximum < 2) return Object.freeze([]);
+  const titles = entries.filter(([, count]) => count === maximum).map(([title]) => title);
+  return Object.freeze(titles.length === 1 ? titles : []);
 }
 
 function compatibleObservedPage(requestPage: string, observedPage: string): boolean {
