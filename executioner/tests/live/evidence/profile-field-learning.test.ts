@@ -117,6 +117,83 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("admits dynamic search catalogs when selection reveals more options", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-dynamic-options-"));
+  const sourceControl = (readback: string | null): ProfilePageSnapshot => ({
+    pageType: "profile",
+    controls: [{
+      controlId: "source-control",
+      fieldId: "source.how_did_you_hear",
+      required: true,
+      uiBehavior: "search_select",
+      uiVariant: "workday_source_select_v1",
+      readback,
+    }],
+    rows: [],
+  });
+  const port = new FakeProfilePort(sourceControl(null));
+  const baseObserver = observer();
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: {
+      mode: "live",
+      pageType: "profile",
+      fields: [{
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "LinkedIn",
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+        },
+        optionMapping: {
+          canonicalValue: "LinkedIn",
+          visibleOption: "LinkedIn",
+          provenance: "visible_option",
+        },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["LinkedIn"],
+    observeControl: async (control) => {
+      const observed = await baseObserver(control);
+      return {
+        ...observed,
+        observation: {
+          ...observed.observation,
+          optionCatalogState: "observed" as const,
+          visibleOptionIds: optionIds(["LinkedIn"]),
+        },
+      };
+    },
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("source-control", 1, "before_mutation"));
+    await capture.page.commit({
+      controlId: "source-control",
+      uiBehavior: "search_select",
+      value: "LinkedIn",
+    }, AbortSignal.any([]));
+    capture.monitorAck(monitor("source-control", 1, "after_readback"));
+    port.current = sourceControl("LinkedIn");
+    await capture.page.inspect(AbortSignal.any([]));
+
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
+      join(root, "profile-field-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.fields[0]!.metadataReconciliation, "matched");
+    assert.equal(evidence.fields[0]!.terminalDisposition, "verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("returns all value-free metadata mismatches for learning conversion", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-metadata-mismatch-"));
   const fields = [
@@ -894,6 +971,18 @@ class FakeProfilePort implements WorkdayProfilePagePort {
   }
 
   interaction(controlId: string) {
+    if (controlId === "source-control" && this.commitFailure === undefined) {
+      return {
+        popupBound: true,
+        optionFocused: true,
+        optionActivated: true,
+        popupClosed: true,
+        backingValueCommitted: true,
+        validationCleared: true,
+        visibleOptionCount: 27,
+        selectedOptionOrdinal: 16,
+      };
+    }
     if (controlId === "row-a-company" && this.commitFailure === undefined) {
       return {
         popupBound: null,

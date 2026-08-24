@@ -1051,7 +1051,9 @@ function applyInteraction(
     interaction.visibleOptionCount >= 0 &&
     interaction.visibleOptionCount <= 64
   ) {
-    if (record.optionCatalogState === "observed" &&
+    const guide = retainedProfileGuide.get(record.fieldIdentity.slice("profile.".length));
+    if ((guide?.allowedOptions.length ?? 0) > 0 &&
+        record.optionCatalogState === "observed" &&
         interaction.visibleOptionCount !== record.visibleOptionIds.length) {
       record.metadataReconciliation = "mismatch";
     }
