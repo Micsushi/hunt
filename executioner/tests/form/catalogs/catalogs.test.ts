@@ -86,6 +86,7 @@ test("prior-employment and employee-referral semantics stay tenant-scoped", () =
   for (const label of [
     "Have you previously worked for this organization?",
     "Have you ever been employed by our company or an affiliate?",
+    "Have you ever been employed by Adient?",
   ]) {
     assert.deepEqual(resolveQuestion(label), {
       kind: "resolved",

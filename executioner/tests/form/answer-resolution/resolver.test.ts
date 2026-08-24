@@ -618,6 +618,7 @@ test("durable prior-employment and employee-referral facts resolve to No", async
   ]);
   for (const label of [
     "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.",
+    "Have you ever been employed by Adient?",
     "Have you been referred by an associate?",
   ]) {
     const result = await resolver.resolve(
@@ -634,6 +635,7 @@ test("durable prior-employment and employee-referral facts resolve to No", async
     assert.equal(result.value.lane, "live_owner_fact");
   }
   assert.deepEqual(queried, [
+    "previously_worked_for_organization",
     "previously_worked_for_organization",
     "associate_referral",
   ]);

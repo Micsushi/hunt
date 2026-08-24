@@ -186,6 +186,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry(
     "workday-placeholder-prior-employment",
     [
+      "Have you ever been employed by Adient?",
       "Have you ever been employed by QTS Data Centers?",
       "Have you ever worked for Pyramid Global Hospitality?",
       "Have you previously worked for HRI Hospitality?",
