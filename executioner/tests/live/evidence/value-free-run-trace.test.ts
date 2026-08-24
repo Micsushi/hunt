@@ -317,7 +317,7 @@ test("profile inspection retry exhaustion survives runtime flattening and value-
       assert.equal(result.code, "profile_port_unavailable");
       assert.equal(result.profileInspectionDiagnostic?.classification, item.classification);
       assert.ok((result.profileInspectionDiagnostic?.retryCount ?? 0) > 0);
-      assert.equal(result.profileInspectionDiagnostic?.deadlineMs, 1_000);
+      assert.equal(result.profileInspectionDiagnostic?.deadlineMs, 5_000);
       assert.equal(
         result.profileInspectionDiagnostic?.deadlineOutcome,
         "deadline_exceeded_before_return",

@@ -888,7 +888,8 @@ async function inspect(
   readonly metadataReconciliationFailure?: BlockedResult["metadataReconciliationFailure"];
 }> {
   const started = Date.now();
-  const deadline = started + 1_000;
+  const deadlineMs = 5_000;
+  const deadline = started + deadlineMs;
   let retryCount = 0;
   let lastError: unknown;
   while (true) {
@@ -910,7 +911,7 @@ async function inspect(
           lastError,
           page.inspectionFailure?.() ?? profileInspectionFailureFromError(lastError),
           retryCount,
-          1_000,
+          deadlineMs,
           Date.now() - started,
           deadlineOutcome,
           page.inspectionFacts?.(),
