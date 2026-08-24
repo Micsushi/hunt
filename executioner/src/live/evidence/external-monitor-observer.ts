@@ -455,6 +455,7 @@ try {
   const identityTitles = [
     ...(observed.selectedTabTitles as string[]),
     ...(observed.documentTitles as string[]),
+    ...observedStructureIdentityTitles(page, flags),
   ];
   try {
     title = selectObservedChromeIdentityTitle(
@@ -516,6 +517,20 @@ export function observedStructurePage(flags: ReadonlySet<string>): string {
   if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";
   if (flags.has("Sign In")) return "account_entry";
   denied();
+}
+
+export function observedStructureIdentityTitles(
+  page: string,
+  flags: ReadonlySet<string>,
+): readonly string[] {
+  const titles = page === "profile"
+    ? ["My Information", "My Experience"]
+    : page === "questionnaire"
+      ? ["Application Questions", "Voluntary Disclosures", "Self Identify"]
+      : page === "review"
+        ? ["Review"]
+        : [];
+  return Object.freeze(titles.filter((title) => flags.has(title)));
 }
 
 function compatibleObservedPage(requestPage: string, observedPage: string): boolean {

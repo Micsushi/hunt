@@ -29,6 +29,7 @@ import {
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
   observedChromeIdentityTitleSha256s,
+  observedStructureIdentityTitles,
   observedStructurePage,
   reconcileObservedMonitorSurface,
   selectObservedChromeIdentityTitle,
@@ -1573,6 +1574,14 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     digest(Buffer.from("Create Account", "utf8")),
     digest(Buffer.from("My Information", "utf8")),
   ]);
+  assert.deepEqual(
+    observedStructureIdentityTitles("profile", new Set(["My Information", "Review"])),
+    ["My Information"],
+  );
+  assert.deepEqual(
+    observedStructureIdentityTitles("questionnaire", new Set(["My Information", "Self Identify"])),
+    ["Self Identify"],
+  );
   assert.throws(() => selectObservedChromeIdentityTitle(
     digest(Buffer.from("My Information", "utf8")),
     staleWindow,
