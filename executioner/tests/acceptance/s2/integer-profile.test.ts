@@ -317,3 +317,37 @@ test("Integer Profile observation fails closed on duplicate popup ownership", as
     await browser.close();
   }
 });
+
+test("Integer Profile observes derived country phone code without opening its selector", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(fixture);
+    const countryCode = page.locator("#phoneNumber--countryPhoneCode");
+    await countryCode.evaluate((element) => {
+      element.addEventListener("focus", () => element.setAttribute("data-test-focused", "true"));
+      element.addEventListener("click", () => element.setAttribute("data-test-clicked", "true"));
+    });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "phone.country_code",
+    );
+    assert.ok(control !== undefined);
+
+    const observed = await adapter.observeControl(control.controlId, AbortSignal.any([]), true);
+
+    assert.deepEqual({
+      optionCatalogState: observed.optionCatalogState,
+      visibleOptionIds: observed.visibleOptionIds,
+      focused: await countryCode.getAttribute("data-test-focused"),
+      clicked: await countryCode.getAttribute("data-test-clicked"),
+    }, {
+      optionCatalogState: "unknown",
+      visibleOptionIds: [],
+      focused: null,
+      clicked: null,
+    });
+  } finally {
+    await browser.close();
+  }
+});

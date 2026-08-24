@@ -30,6 +30,7 @@ import type { ProfileInspectionFailure } from "./types.ts";
 
 interface ResolvedControl {
   readonly locator: Locator;
+  readonly fieldId: string;
   readonly uiBehavior: ProfileControlSnapshot["uiBehavior"];
   readonly uiVariant: string;
   readonly binderStrategy: ProfileControlObservation["binderStrategy"];
@@ -340,7 +341,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const optionLabels = await this.#observeOptionLabels(
       resolved,
       controls,
-      inspectInteractiveOptions,
+      // Workday derives this prefilled value from Country; opening its input is
+      // not a read-only observation and can wait forever on a non-editable field.
+      inspectInteractiveOptions && resolved.fieldId !== "phone.country_code",
     );
     const after = await resolvedReadback(resolved);
     const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
@@ -607,6 +610,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const controlId = [rowIdValue ?? "scalar", entry.fieldId, 0].join(":");
       this.#controls.set(controlId, {
         locator,
+        fieldId: entry.fieldId,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
@@ -627,6 +631,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const controlId = [rowIdValue ?? "scalar", entry.fieldId, index].join(":");
       this.#controls.set(controlId, {
         locator: match,
+        fieldId: entry.fieldId,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
@@ -853,6 +858,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       });
       this.#controls.set(`unknown-required:${ordinal}`, {
         locator: candidate,
+        fieldId: unknown[unknown.length - 1]!.fieldId,
         uiBehavior: unknown[unknown.length - 1]!.uiBehavior,
         uiVariant: "workday_unknown_required_v1",
         binderStrategy: "opaque_machine_key",
