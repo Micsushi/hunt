@@ -332,39 +332,55 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   ): Promise<ProfileControlObservation> {
     abort(signal);
     const resolved = this.#controls.get(controlId);
-    if (resolved === undefined) throw new TypeError("profile control observation binding unavailable");
-    const controls = await visibleLocators(resolved.locator);
-    if (controls.length === 0) throw new TypeError("profile control observation target unavailable");
-    const before = await resolvedReadback(resolved);
-    const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
-    const label = await observedControlLabel(controls[0]!, resolved.uiBehavior);
-    const optionLabels = await this.#observeOptionLabels(
-      resolved,
-      controls,
-      // Workday derives this prefilled value from Country; opening its input is
-      // not a read-only observation and can wait forever on a non-editable field.
-      inspectInteractiveOptions && resolved.fieldId !== "phone.country_code",
-    );
-    const after = await resolvedReadback(resolved);
-    const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
-    if (before !== after || validationBefore !== validationAfter) {
-      throw new TypeError("profile control observation changed backing state");
+    const bindingId = resolved?.fieldId ?? controlId;
+    try {
+      if (resolved === undefined) {
+        throw new TypeError("profile control observation binding unavailable");
+      }
+      const controls = await visibleLocators(resolved.locator);
+      if (controls.length === 0) {
+        throw new TypeError("profile control observation target unavailable");
+      }
+      const before = await resolvedReadback(resolved);
+      const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
+      const label = await observedControlLabel(controls[0]!, resolved.uiBehavior);
+      const optionLabels = await this.#observeOptionLabels(
+        resolved,
+        controls,
+        // Workday derives this prefilled value from Country; opening its input is
+        // not a read-only observation and can wait forever on a non-editable field.
+        inspectInteractiveOptions && resolved.fieldId !== "phone.country_code",
+      );
+      const after = await resolvedReadback(resolved);
+      const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
+      if (before !== after || validationBefore !== validationAfter) {
+        throw new TypeError("profile control observation changed backing state");
+      }
+      const visibleOptionIds = Object.freeze(optionLabels.map(optionId));
+      const selected = before === null ? null : optionId(before);
+      abort(signal);
+      return Object.freeze({
+        controlId,
+        binderStrategy: resolved.binderStrategy,
+        sanitizedLabelSha256: label === null ? null : retainedProfileTextSha256(label),
+        backingState: before === null ? "unset" : "set",
+        validationState: validationAfter ? "clear" : "invalid",
+        optionCatalogState: isChoice(resolved.uiBehavior)
+          ? visibleOptionIds.length === 0 ? "unknown" : "observed"
+          : "not_applicable",
+        visibleOptionIds,
+        selectedOptionId: selected !== null && visibleOptionIds.includes(selected) ? selected : null,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw this.#recordInspectionFailure(
+        "unknown_controls",
+        [bindingId],
+        ["profile.control.observation"],
+        [bindingId],
+        error,
+      );
     }
-    const visibleOptionIds = Object.freeze(optionLabels.map(optionId));
-    const selected = before === null ? null : optionId(before);
-    abort(signal);
-    return Object.freeze({
-      controlId,
-      binderStrategy: resolved.binderStrategy,
-      sanitizedLabelSha256: label === null ? null : retainedProfileTextSha256(label),
-      backingState: before === null ? "unset" : "set",
-      validationState: validationAfter ? "clear" : "invalid",
-      optionCatalogState: isChoice(resolved.uiBehavior)
-        ? visibleOptionIds.length === 0 ? "unknown" : "observed"
-        : "not_applicable",
-      visibleOptionIds,
-      selectedOptionId: selected !== null && visibleOptionIds.includes(selected) ? selected : null,
-    });
   }
 
   async #observeOptionLabels(

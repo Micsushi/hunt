@@ -305,6 +305,33 @@ test("reports the exact catalog identity for ambiguous visible scalar controls",
   }
 });
 
+test("reports the exact catalog identity when control observation loses its target", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <label>LinkedIn<input id="socialNetworkAccounts--linkedInAccount"></label>
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const linkedIn = snapshot.controls.find(({ fieldId }) => fieldId === "social.linkedin")!;
+    await page.locator('[id="socialNetworkAccounts--linkedInAccount"]')
+      .evaluate((element) => element.remove());
+
+    await assert.rejects(
+      () => adapter.observeControl(linkedIn.controlId, AbortSignal.any([])),
+      /profile inspection failed/u,
+    );
+    assert.deepEqual(adapter.inspectionFailure()?.bindingIds, ["social.linkedin"]);
+    assert.deepEqual(adapter.inspectionFailure()?.bindingPaths, ["profile.control.observation"]);
+    assert.equal(adapter.inspectionFailure()?.phase, "unknown_controls");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("associated Workday labels override aria labels containing selected values", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
