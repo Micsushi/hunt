@@ -197,6 +197,7 @@ $escaped = [regex]::Escape($profile)
 $profileArgument = '(?i)(?:^|\s)--user-data-dir=(?:"' + $escaped + '"|' + $escaped + ')(?=\s|$)'
 try { $browsers = @($all | Where-Object {
   $_.Name -eq 'chrome.exe' -and $_.CommandLine -match $profileArgument -and
+  $_.CommandLine -notmatch '(?i)(?:^|\s)--type=' -and
   (Test-OwnedAncestor ([int]$_.ProcessId) ([int]$owner.processOwnerPid))
 } | ForEach-Object {
   [pscustomobject]@{ Pid = [int]$_.ProcessId }
