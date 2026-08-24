@@ -451,10 +451,17 @@ export function createApplicationAnswerResolver(
               : generatedLearningIntent(field, request.resumeArtifact, generatedDate) ?? intended,
           );
         }
-        return success({
-          kind: "profile_answer_missing",
-          questionId: questionId(canonicalQuestionId),
-        });
+        const generated = generatedLearningIntent(
+          field,
+          request.resumeArtifact,
+          generatedDate,
+        );
+        return generated === undefined
+          ? success({
+              kind: "profile_answer_missing",
+              questionId: questionId(canonicalQuestionId),
+            })
+          : success(generated);
       }
       if (
         question.source.ownerProvidedOnly === true &&

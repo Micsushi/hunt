@@ -82,6 +82,35 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
   });
 });
 
+test("prior-employment and employee-referral semantics stay tenant-scoped", () => {
+  for (const label of [
+    "Have you previously worked for this organization?",
+    "Have you ever been employed by our company or an affiliate?",
+  ]) {
+    assert.deepEqual(resolveQuestion(label), {
+      kind: "resolved",
+      id: "workday-placeholder-prior-employment",
+      provenance: "reviewed_catalog",
+    });
+  }
+  assert.deepEqual(resolveQuestion("Were you referred by an employee of Acme?"), {
+    kind: "resolved",
+    id: "workday-placeholder-associate-referral",
+    provenance: "reviewed_catalog",
+  });
+  for (const unrelated of [
+    "Please provide your previous employment history",
+    "Have you previously worked for a staffing agency?",
+  ]) {
+    assert.deepEqual(resolveQuestion(unrelated), { kind: "unknown" });
+  }
+  assert.deepEqual(resolveQuestion("How did you hear about us? Employee Referral"), {
+    kind: "resolved",
+    id: "workday-placeholder-application-source",
+    provenance: "reviewed_catalog",
+  });
+});
+
 test("normalization removes accessible required suffixes without changing question text", () => {
   assert.equal(
     normalizeCatalogText("How Did You Hear About Us? Required"),

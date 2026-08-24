@@ -594,3 +594,75 @@ test("missing protected profile facts never fall back to a visible learning opti
     },
   });
 });
+
+test("durable prior-employment and employee-referral facts resolve to No", async () => {
+  const queried: string[] = [];
+  const profile: ApplicationProfileQuery = Object.freeze({
+    async query(input: Parameters<ApplicationProfileQuery["query"]>[0]) {
+      queried.push(input.factId);
+      return Object.freeze({
+        ok: true as const,
+        value: Object.freeze({
+          kind: "answered" as const,
+          value: false,
+          provenance: "owner_provided" as const,
+          lane: "live_owner_fact" as const,
+        }),
+      });
+    },
+  });
+  const resolver = createAnswerResolver(profile, "I am interested in this role.");
+  const options = Object.freeze([
+    { id: optionId("answer-yes"), label: boundedText("Yes") },
+    { id: optionId("answer-no"), label: boundedText("No") },
+  ]);
+  for (const label of [
+    "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.",
+    "Have you been referred by an associate?",
+  ]) {
+    const result = await resolver.resolve(
+      request(field(label, "radio", options)),
+      new AbortController().signal,
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.value.kind, "resolved");
+    if (!result.ok || result.value.kind !== "resolved" || result.value.intent.kind !== "choice") {
+      continue;
+    }
+    assert.equal(result.value.intent.expectedOption, "No");
+    assert.equal(result.value.intent.provenance, "owner_provided");
+    assert.equal(result.value.lane, "live_owner_fact");
+  }
+  assert.deepEqual(queried, [
+    "previously_worked_for_organization",
+    "associate_referral",
+  ]);
+});
+
+test("missing known facts use editable defaults only in non-submittable learning mode", async () => {
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const options = Object.freeze([
+    { id: optionId("experience-placeholder"), label: boundedText("Select One") },
+    { id: optionId("experience-first"), label: boundedText("Less than one year") },
+  ]);
+  assert.deepEqual(await resolver.resolve(syntheticRequest(field(
+    "Years of Experience",
+    "select",
+    options,
+  )), new AbortController().signal), {
+    ok: true,
+    value: {
+      kind: "resolved",
+      lane: "synthetic_test_default",
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "experience-first",
+        expectedOption: "Less than one year",
+        provenance: "visible_option",
+      },
+    },
+  });
+});
