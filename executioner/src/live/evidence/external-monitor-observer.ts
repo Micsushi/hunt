@@ -81,6 +81,7 @@ function acknowledge(
     readonly page?: unknown;
     readonly moment?: unknown;
     readonly screenshotFile?: unknown;
+    readonly capturedIdentityDigests?: unknown;
   };
   if (typeof request.page !== "string" || typeof request.moment !== "string" ||
       typeof request.screenshotFile !== "string") denied();
@@ -92,6 +93,7 @@ function acknowledge(
   const visual = observerStage("owned_browser_observation", () =>
     ownedBrowserObservation(runtimeRoot, binding));
   if (!compatibleObservedPage(request.page, visual.page)) denied();
+  reconcileObservedMonitorSurface(request, visual);
   observerStage("acknowledgement_admission", () =>
     writeStage2ExternalMonitorAcknowledgement({
     runtimeRoot,
@@ -117,6 +119,24 @@ function acknowledge(
     }));
 }
 
+export function reconcileObservedMonitorSurface(
+  request: { readonly page?: unknown; readonly capturedIdentityDigests?: unknown },
+  observed: { readonly title: string; readonly submitPresent: boolean },
+): void {
+  const titleSha256 = typeof request.capturedIdentityDigests === "object" &&
+      request.capturedIdentityDigests !== null &&
+      "titleSha256" in request.capturedIdentityDigests
+    ? request.capturedIdentityDigests.titleSha256
+    : undefined;
+  if (typeof titleSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(titleSha256) ||
+      createHash("sha256").update(observed.title, "utf8").digest("hex") !== titleSha256) {
+    observerFailure("title_identity_reconciliation");
+  }
+  if (observed.submitPresent !== (request.page === "review")) {
+    observerFailure("submit_state_reconciliation");
+  }
+}
+
 const OBSERVER_FAILURE_CODES = [
   "request_admission",
   "screenshot_admission",
@@ -132,6 +152,8 @@ const OBSERVER_FAILURE_CODES = [
   "address_identity",
   "structure_classification",
   "title_identity",
+  "title_identity_reconciliation",
+  "submit_state_reconciliation",
   "acknowledgement_admission",
 ] as const;
 

@@ -27,6 +27,7 @@ import {
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
   observedStructurePage,
+  reconcileObservedMonitorSurface,
 } from
   "../../../src/live/evidence/external-monitor-observer.ts";
 
@@ -1560,6 +1561,19 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "owned_browser_observation",
   );
   assert.equal(externalMonitorObserverFailureCode(new Error("private value")), undefined);
+  const title = "Process Tech";
+  assert.doesNotThrow(() => reconcileObservedMonitorSurface({
+    page: "job_posting",
+    capturedIdentityDigests: { titleSha256: digest(Buffer.from(title, "utf8")) },
+  }, { title, submitPresent: false }));
+  assert.throws(() => reconcileObservedMonitorSurface({
+    page: "job_posting",
+    capturedIdentityDigests: { titleSha256: "0".repeat(64) },
+  }, { title, submitPresent: false }), /title_identity_reconciliation/u);
+  assert.throws(() => reconcileObservedMonitorSurface({
+    page: "job_posting",
+    capturedIdentityDigests: { titleSha256: digest(Buffer.from(title, "utf8")) },
+  }, { title, submitPresent: true }), /submit_state_reconciliation/u);
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {
