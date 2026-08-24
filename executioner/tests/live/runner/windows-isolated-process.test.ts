@@ -173,6 +173,16 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
     assert.ok(Date.parse(audit.processExitObservedAt) <= Date.parse(audit.checkedAt));
     assert.equal(audit.monitorFileCount, 0);
     assert.match(audit.monitorChainSha256, /^[0-9a-f]{64}$/u);
+    await assert.rejects(
+      () => readFile(join(
+        runtimeRoot,
+        "browser-profiles",
+        "journey_abcdefghijklmnop",
+        "target_ref_abcdefghijklmnop",
+        "owned-browser-residue",
+      )),
+      /ENOENT/u,
+    );
     for (const name of [
       "isolated-desktop.json",
       "external-monitor-observer-live.json",

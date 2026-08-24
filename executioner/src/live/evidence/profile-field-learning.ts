@@ -347,9 +347,7 @@ export function createProfileFieldLearningCapture(input: {
               : fields.map((field) => convertedField(field)),
           }),
           sensitiveValues: input.sensitiveValues.filter((value) =>
-            value.length < 3 || !reviewedStructuralStrings.some((structural) =>
-              structural.includes(value)
-            )
+            value.length < 3 || !reviewedStructuralCollision(value)
           ),
           label: "profile-field-learning",
           fileName: input.fileName ?? "profile-field-learning.json",
@@ -364,6 +362,13 @@ export function createProfileFieldLearningCapture(input: {
       }
     },
   });
+}
+
+function reviewedStructuralCollision(value: string): boolean {
+  const normalized = value.normalize("NFC").toLocaleLowerCase("en-US");
+  return reviewedStructuralStrings.some((structural) =>
+    structural.normalize("NFC").toLocaleLowerCase("en-US").includes(normalized)
+  );
 }
 
 function operationUsedByAnotherRecord(

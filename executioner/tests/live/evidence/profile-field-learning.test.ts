@@ -419,7 +419,7 @@ fields: [{
       repeatables: [],
     },
     root,
-    sensitiveValues: ["linkedin"],
+    sensitiveValues: ["linkedin", "None"],
     observeControl: observer(),
   });
   try {
@@ -427,6 +427,7 @@ fields: [{
     assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
     const text = readFileSync(join(root, "profile-field-learning.json"), "utf8");
     assert.equal(text.includes('"linkedin"'), false);
+    assert.equal(text.includes('"None"'), false);
     assert.equal(text.includes("profile.social.linkedin"), true);
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
     assert.equal(evidence.executionMode, "synthetic_test_non_submittable");

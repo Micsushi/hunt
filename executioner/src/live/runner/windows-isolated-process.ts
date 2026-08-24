@@ -263,6 +263,24 @@ function Test-ProcessExited([int]$identifier) {
     finally { [HuntC3IsolatedRunner]::CloseHandle($handle) | Out-Null }
 }
 
+function Remove-ClosedBrowserProfile($binding) {
+    if ($binding -eq $null) { return }
+    $profileRoot = [IO.Path]::GetFullPath([IO.Path]::Combine(
+        $binding.runtimeRoot, 'browser-profiles', $binding.journeyId, $binding.targetHandleId
+    ))
+    $expectedRoot = [IO.Path]::GetFullPath([IO.Path]::Combine($binding.runtimeRoot, 'browser-profiles')) + [IO.Path]::DirectorySeparatorChar
+    if (-not $profileRoot.StartsWith($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'browser profile cleanup target invalid'
+    }
+    if (-not [IO.Directory]::Exists($profileRoot)) { return }
+    $item = Get-Item -LiteralPath $profileRoot -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'browser profile cleanup target invalid'
+    }
+    [IO.Directory]::Delete($profileRoot, $true)
+    if ([IO.Directory]::Exists($profileRoot)) { throw 'browser profile cleanup incomplete' }
+}
+
 function Get-Sha256Hex([byte[]]$bytes) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
@@ -573,6 +591,8 @@ try {
         if (-not (Test-ProcessExited $identifier)) { $aliveAfterClose++ }
     }
     if ($aliveAfterClose -ne 0) { $processAuditPassed = $false }
+    try { Remove-ClosedBrowserProfile $processBinding }
+    catch { $processAuditPassed = $false }
     [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
     if ($desktopBindingPath -ne $null -and [IO.File]::Exists($desktopBindingPath)) { [IO.File]::Delete($desktopBindingPath) }
     if ($observerStopPath -ne $null -and [IO.File]::Exists($observerStopPath)) { [IO.File]::Delete($observerStopPath) }

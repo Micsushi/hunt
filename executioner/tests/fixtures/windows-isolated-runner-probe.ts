@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { assertCurrentProcessIsOnIsolatedDesktop } from "../../src/browser/playwright-live/private/windows-isolated-desktop-attestation.ts";
@@ -20,6 +20,22 @@ if (mode === "argv") {
   await assertCurrentProcessIsOnIsolatedDesktop();
   await writeFile(outputPath, "ok", "utf8");
 } else if (mode === "identity") {
+  const configIndex = values.indexOf("--config");
+  if (configIndex >= 0) {
+    const config = JSON.parse(await readFile(values[configIndex + 1]!, "utf8")) as {
+      readonly journeyId: string;
+      readonly target: { readonly handleId: string };
+      readonly roots: { readonly runtime: { readonly path: string } };
+    };
+    const profilePath = join(
+      config.roots.runtime.path,
+      "browser-profiles",
+      config.journeyId,
+      config.target.handleId,
+    );
+    await mkdir(profilePath, { recursive: true });
+    await writeFile(join(profilePath, "owned-browser-residue"), "closed", "utf8");
+  }
   await writeFile(outputPath, JSON.stringify({ pid: process.pid }), "utf8");
 } else if (mode === "environment") {
   await writeFile(outputPath, process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE ?? "missing", "utf8");
