@@ -92,8 +92,15 @@ async function acknowledge(
   const screenshotPath = join(dirname(requestPath), request.screenshotFile);
   const screenshot = observerStage("screenshot_admission", () =>
     stableFile(screenshotPath, 12 * 1024 * 1024));
+  const expectedTitleSha256 = typeof request.capturedIdentityDigests === "object" &&
+      request.capturedIdentityDigests !== null &&
+      "titleSha256" in request.capturedIdentityDigests &&
+      typeof request.capturedIdentityDigests.titleSha256 === "string"
+    ? request.capturedIdentityDigests.titleSha256
+    : undefined;
   const visual = await waitForReconciledMonitorSurface(request, () =>
-    observerStage("owned_browser_observation", () => ownedBrowserObservation(runtimeRoot, binding)));
+    observerStage("owned_browser_observation", () =>
+      ownedBrowserObservation(runtimeRoot, binding, expectedTitleSha256)));
   observerStage("acknowledgement_admission", () =>
     writeStage2ExternalMonitorAcknowledgement({
     runtimeRoot,
@@ -254,6 +261,7 @@ function pendingRequests(evidenceRoot: string): string[] {
 function ownedBrowserObservation(
   runtimeRoot: string,
   binding: DesktopBinding,
+  expectedTitleSha256: string | undefined,
 ): ObservedMonitorSurface {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -314,12 +322,21 @@ $allow = @(
   'Upload a resume', 'Upload Resume'
 )
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$selectedTabTitles = [Collections.Generic.List[string]]::new()
 $address = $null
 foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
     $visible = -not $element.Current.IsOffscreen
     if ($visible -and $allow -contains $name) { [void]$seen.Add($name) }
+    if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
+        $element.Current.ControlType.Id -eq 50019) {
+      $selection = $null
+      if ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection) -and
+          ([Windows.Automation.SelectionItemPattern]$selection).Current.IsSelected) {
+        $selectedTabTitles.Add($name)
+      }
+    }
     if ($visible -and $address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and
         ([string]$element.Current.AutomationId -eq 'view_1021' -or $name -eq 'Address and search bar')) {
       $pattern = $null
@@ -332,6 +349,7 @@ foreach ($element in $elements) {
 $payload = [ordered]@{
   pid = $browsers[0].Pid
   title = [string]$window.Current.Name
+  selectedTabTitles = @($selectedTabTitles)
   address = $address
   flags = @($seen | Sort-Object)
 }
@@ -363,11 +381,19 @@ try {
     if (status === 46) observerFailure("accessibility_payload");
     observerFailure("browser_observation_command");
   }
-  let observed: { readonly title?: unknown; readonly address?: unknown; readonly flags?: unknown };
+  let observed: {
+    readonly title?: unknown;
+    readonly selectedTabTitles?: unknown;
+    readonly address?: unknown;
+    readonly flags?: unknown;
+  };
   try {
     observed = JSON.parse(Buffer.from(output, "base64").toString("utf8"));
   } catch { return observerFailure("accessibility_payload"); }
-  if (typeof observed.title !== "string" || !Array.isArray(observed.flags) ||
+  if (typeof observed.title !== "string" || !Array.isArray(observed.selectedTabTitles) ||
+      observed.selectedTabTitles.length > 8 ||
+      observed.selectedTabTitles.some((value) => typeof value !== "string") ||
+      !Array.isArray(observed.flags) ||
       observed.flags.some((value) => typeof value !== "string")) {
     observerFailure("accessibility_payload");
   }
@@ -382,7 +408,13 @@ try {
   try { page = observedStructurePage(flags); }
   catch { return observerFailure("structure_classification"); }
   let title: string;
-  try { title = normalizeObservedChromeTitle(observed.title); }
+  try {
+    title = selectObservedChromeIdentityTitle(
+      expectedTitleSha256,
+      observed.title,
+      observed.selectedTabTitles as string[],
+    );
+  }
   catch { return observerFailure("title_identity"); }
   return Object.freeze({
     title,
@@ -450,6 +482,26 @@ export function normalizeObservedChromeTitle(windowTitle: string): string {
     denied();
   }
   return normalized;
+}
+
+export function selectObservedChromeIdentityTitle(
+  expectedTitleSha256: string | undefined,
+  windowTitle: string,
+  selectedTabTitles: readonly string[],
+): string {
+  const windowIdentity = normalizeObservedChromeTitle(windowTitle);
+  if (expectedTitleSha256 === undefined || !/^[0-9a-f]{64}$/u.test(expectedTitleSha256)) {
+    return windowIdentity;
+  }
+  if (selectedTabTitles.length > 8) denied();
+  const candidates = new Set([windowIdentity]);
+  for (const candidate of selectedTabTitles) {
+    candidates.add(normalizeObservedChromeTitle(candidate));
+  }
+  const matches = [...candidates].filter((candidate) =>
+    createHash("sha256").update(canonicalMonitorIdentityTitle(candidate), "utf8")
+      .digest("hex") === expectedTitleSha256);
+  return matches.length === 1 ? matches[0]! : windowIdentity;
 }
 
 async function waitForDesktopBinding(runtimeRoot: string, token: string): Promise<DesktopBinding> {

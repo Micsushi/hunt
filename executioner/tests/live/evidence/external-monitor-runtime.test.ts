@@ -30,6 +30,7 @@ import {
   normalizeObservedChromeTitle,
   observedStructurePage,
   reconcileObservedMonitorSurface,
+  selectObservedChromeIdentityTitle,
   waitForReconciledMonitorSurface,
 } from
   "../../../src/live/evidence/external-monitor-observer.ts";
@@ -1551,6 +1552,22 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "Business Manager",
   );
   assert.equal(normalizeObservedChromeTitle("My Information"), "My Information");
+  const staleWindow = "Create Account - Google Chrome for Testing";
+  assert.equal(selectObservedChromeIdentityTitle(
+    digest(Buffer.from("My Information", "utf8")),
+    staleWindow,
+    ["My Information"],
+  ), "My Information");
+  assert.equal(selectObservedChromeIdentityTitle(
+    digest(Buffer.from("My Information", "utf8")),
+    staleWindow,
+    ["My Experience"],
+  ), "Create Account");
+  assert.throws(() => selectObservedChromeIdentityTitle(
+    digest(Buffer.from("My Information", "utf8")),
+    staleWindow,
+    Array.from({ length: 9 }, () => "My Information"),
+  ), /external monitor observer denied/u);
   assert.throws(() => normalizeObservedChromeTitle("\u0000"), /external monitor observer denied/u);
   assert.equal(
     normalizeObservedAddressHost("readiness.wd5.myworkdayjobs.com/en-US/Careers/apply"),
