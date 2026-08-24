@@ -133,6 +133,28 @@ test("walks bounded repeated Questionnaire pages", async () => {
   );
 });
 
+test("rescans a Questionnaire after an answer reveals a required control", async () => {
+  const calls: string[] = [];
+  const revealed = incompleteTruth("questionnaire");
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("questionnaire"), revealed, truth("questionnaire"), truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    { pageRetryLimit: 1 },
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(calls.slice(0, 5), [
+    "observe:questionnaire",
+    "reconcile:questionnaire:1",
+    "observe:questionnaire",
+    "reconcile:questionnaire:2",
+    "observe:questionnaire",
+  ]);
+});
+
 test("rejects an unbounded repeated Questionnaire loop", async () => {
   const result = await runApplicationPageWalk(
     dependenciesFor(Array.from({ length: 21 }, () => truth("questionnaire")), []),

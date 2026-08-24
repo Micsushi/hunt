@@ -376,6 +376,7 @@ export function createProfileFieldLearningCapture(input: {
             ...(field.selectedOptionId === null ? [] : [field.selectedOptionId]),
           ]),
           reviewedOpaqueIdKeys: ["operationId"],
+          reviewedSha256Keys: ["sanitizedLabelSha256"],
           label: "profile-field-learning",
           fileName: input.fileName ?? "profile-field-learning.json",
         });

@@ -80,6 +80,7 @@ test("retains value-free field learning through prefill, driver, and readback", 
     sensitiveValues: [
       "Ada", "Canada", "United States", "private@example.invalid",
       retainedIntakeTextSha256("Canada").slice(8, 20),
+      retainedProfileTextSha256("Country").slice(8, 20),
     ],
     observeControl: observer(),
   });

@@ -211,6 +211,13 @@ export async function runApplicationPageWalk(
         );
         check = pageCheck(lane, expectedCheckpoint, truth);
         if (check.requiredFields === check.verifiedFields && check.duplicateRows === 0) break;
+        if (
+          lane === "questionnaire" && check.duplicateRows === 0 &&
+          attempt <= retryLimit
+        ) {
+          verifiedPageId = undefined;
+          continue;
+        }
         if (attempt > retryLimit) {
           const duplicate = check.duplicateRows > 0;
           return failure(lane, internalFailure(
