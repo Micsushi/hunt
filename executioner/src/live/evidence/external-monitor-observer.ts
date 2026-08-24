@@ -122,6 +122,8 @@ const OBSERVER_FAILURE_CODES = [
   "screenshot_admission",
   "owned_browser_observation",
   "browser_process_binding",
+  "browser_window_missing",
+  "browser_window_ambiguous",
   "process_inventory",
   "accessibility_tree",
   "browser_observation_command",
@@ -201,7 +203,8 @@ try { $windows = @($all | Where-Object {
     [pscustomobject]@{ Pid = [int]$_.ProcessId; Handle = $process.MainWindowHandle; Title = [string]$process.MainWindowTitle }
   }
 }) } catch { exit 45 }
-if ($windows.Count -ne 1) { exit 41 }
+if ($windows.Count -eq 0) { exit 47 }
+if ($windows.Count -ne 1) { exit 48 }
 try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes
@@ -259,7 +262,8 @@ try {
     const status = typeof error === "object" && error !== null && "status" in error
       ? error.status
       : undefined;
-    if (status === 41) observerFailure("browser_process_binding");
+    if (status === 47) observerFailure("browser_window_missing");
+    if (status === 48) observerFailure("browser_window_ambiguous");
     if (status === 40) observerFailure("process_inventory");
     if (status === 42 || status === 43 || status === 44) observerFailure("accessibility_tree");
     if (status === 45) observerFailure("browser_process_binding");
