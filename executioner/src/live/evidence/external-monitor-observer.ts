@@ -122,6 +122,7 @@ const OBSERVER_FAILURE_CODES = [
   "screenshot_admission",
   "owned_browser_observation",
   "browser_process_binding",
+  "process_inventory",
   "accessibility_tree",
   "browser_observation_command",
   "accessibility_payload",
@@ -178,7 +179,7 @@ $root = $env:HUNT_C3_OBSERVER_RUNTIME_ROOT
 $binding = Get-Content -LiteralPath ([IO.Path]::Combine($root, 'isolated-desktop.json')) -Raw | ConvertFrom-Json
 $owner = Get-Content -LiteralPath ([IO.Path]::Combine($root, 'external-monitor-live.json')) -Raw | ConvertFrom-Json
 $profile = [string]$binding.browserProfilePath
-$all = @(Get-CimInstance Win32_Process)
+try { $all = @(Get-CimInstance Win32_Process) } catch { exit 40 }
 $byPid = @{}; foreach ($item in $all) { $byPid[[int]$item.ProcessId] = $item }
 function Test-OwnedAncestor([int]$pid, [int]$ownerPid) {
   for ($depth = 0; $depth -lt 32; $depth++) {
@@ -191,7 +192,7 @@ function Test-OwnedAncestor([int]$pid, [int]$ownerPid) {
 }
 $escaped = [regex]::Escape($profile)
 $profileArgument = '(?i)(?:^|\s)--user-data-dir=(?:"' + $escaped + '"|' + $escaped + ')(?=\s|$)'
-$windows = @($all | Where-Object {
+try { $windows = @($all | Where-Object {
   $_.Name -eq 'chrome.exe' -and $_.CommandLine -match $profileArgument -and
   (Test-OwnedAncestor ([int]$_.ProcessId) ([int]$owner.processOwnerPid))
 } | ForEach-Object {
@@ -199,10 +200,12 @@ $windows = @($all | Where-Object {
   if ($process.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($process.MainWindowTitle)) {
     [pscustomobject]@{ Pid = [int]$_.ProcessId; Handle = $process.MainWindowHandle; Title = [string]$process.MainWindowTitle }
   }
-})
+}) } catch { exit 45 }
 if ($windows.Count -ne 1) { exit 41 }
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+try {
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+} catch { exit 44 }
 $window = [Windows.Automation.AutomationElement]::FromHandle($windows[0].Handle)
 if ($null -eq $window) { exit 42 }
 try {
@@ -237,7 +240,9 @@ $payload = [ordered]@{
   address = $address
   flags = @($seen | Sort-Object)
 }
-[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
+try {
+  [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
+} catch { exit 46 }
 `.trim();
   let output: string;
   try {
@@ -255,7 +260,10 @@ $payload = [ordered]@{
       ? error.status
       : undefined;
     if (status === 41) observerFailure("browser_process_binding");
-    if (status === 42 || status === 43) observerFailure("accessibility_tree");
+    if (status === 40) observerFailure("process_inventory");
+    if (status === 42 || status === 43 || status === 44) observerFailure("accessibility_tree");
+    if (status === 45) observerFailure("browser_process_binding");
+    if (status === 46) observerFailure("accessibility_payload");
     observerFailure("browser_observation_command");
   }
   let observed: { readonly title?: unknown; readonly address?: unknown; readonly flags?: unknown };
