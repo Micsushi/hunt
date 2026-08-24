@@ -1307,7 +1307,6 @@ export class PlaywrightPersistentBrowserSession
     const marker = this.#marker;
     const closedSession = this.#session;
     const page = this.#page;
-    const pageWasOpen = page !== undefined && !page.isClosed();
     const logoutPassed = !this.#options.logoutOnCloseForTesting ||
       await this.#logoutBeforeClose();
     const inspectionPassed = await this.#holdBeforeCleanup(context);
@@ -1316,7 +1315,7 @@ export class PlaywrightPersistentBrowserSession
       () => this.#options.profiles.cleanup(profilePath, marker),
     );
     const contextCleanup = contextCleanupAttempt ||
-      (pageWasOpen && page !== undefined && page.isClosed());
+      (page !== undefined && page.isClosed());
     this.#context = undefined;
     this.#page = undefined;
     this.#approvedTarget = undefined;
@@ -1366,13 +1365,12 @@ export class PlaywrightPersistentBrowserSession
     const context = this.#context;
     const failedSession = this.#session;
     const page = this.#page;
-    const pageWasOpen = page !== undefined && !page.isClosed();
     const inspectionPassed = await this.#holdBeforeCleanup(context);
     const contextCleanupAttempt = await this.#boundedCleanup(
       () => context?.close() ?? Promise.resolve(),
     );
     const contextCleaned = contextCleanupAttempt ||
-      (pageWasOpen && page !== undefined && page.isClosed());
+      (page !== undefined && page.isClosed());
     const profileCleaned = await this.#boundedCleanup(() => marker === undefined
       ? this.#options.profiles.cleanupPartial(profilePath)
       : this.#options.profiles.cleanup(profilePath, marker));

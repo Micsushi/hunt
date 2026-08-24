@@ -24,6 +24,7 @@ import { applicationMonitorPages } from "../../../src/live/evidence/review-monit
 import { createStage2ExternalMonitorObserverAuthority } from
   "../../../src/live/evidence/external-monitor-authority.ts";
 import {
+  externalMonitorObserverFailureDiagnostic,
   externalMonitorObserverFailureCode,
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
@@ -1585,10 +1586,22 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
       titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
     },
   }, { title: observedTitle, submitPresent: false }));
-  assert.throws(() => reconcileObservedMonitorSurface({
-    page: "job_posting",
-    capturedIdentityDigests: { titleSha256: "0".repeat(64) },
-  }, { title: observedTitle, submitPresent: false }), /title_identity_reconciliation/u);
+  let mismatch: unknown;
+  try {
+    reconcileObservedMonitorSurface({
+      page: "job_posting",
+      capturedIdentityDigests: { titleSha256: "0".repeat(64) },
+    }, { title: observedTitle, submitPresent: false });
+  } catch (error) {
+    mismatch = error;
+  }
+  assert.match(String(mismatch), /title_identity_reconciliation/u);
+  assert.deepEqual(externalMonitorObserverFailureDiagnostic(mismatch), {
+    expectedTitleSha256: "0".repeat(64),
+    observedTitleSha256: digest(Buffer.from(observedTitle, "utf8")),
+  });
+  assert.doesNotMatch(JSON.stringify(externalMonitorObserverFailureDiagnostic(mismatch)),
+    /Process Tech/u);
   assert.throws(() => reconcileObservedMonitorSurface({
     page: "job_posting",
     capturedIdentityDigests: {

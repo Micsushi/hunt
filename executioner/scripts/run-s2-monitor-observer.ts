@@ -1,4 +1,5 @@
 import {
+  externalMonitorObserverFailureDiagnostic,
   externalMonitorObserverFailureCode,
   runStage2ExternalMonitorObserver,
 } from
@@ -9,10 +10,12 @@ try {
 } catch (error) {
   const failureCode = externalMonitorObserverFailureCode(error);
   if (failureCode !== undefined) {
+    const diagnostic = externalMonitorObserverFailureDiagnostic(error);
     process.stderr.write(`${JSON.stringify({
       status: "failed",
       component: "external_monitor_observer",
       failureCode,
+      ...(diagnostic ?? {}),
     })}\n`);
   }
   process.exitCode = 1;

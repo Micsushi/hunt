@@ -161,10 +161,15 @@ export function reconcileObservedMonitorSurface(
       "titleSha256" in request.capturedIdentityDigests
     ? request.capturedIdentityDigests.titleSha256
     : undefined;
+  const observedTitleSha256 = createHash("sha256")
+    .update(canonicalMonitorIdentityTitle(observed.title), "utf8")
+    .digest("hex");
   if (typeof titleSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(titleSha256) ||
-      createHash("sha256").update(canonicalMonitorIdentityTitle(observed.title), "utf8")
-        .digest("hex") !== titleSha256) {
-    observerFailure("title_identity_reconciliation");
+      observedTitleSha256 !== titleSha256) {
+    observerFailure("title_identity_reconciliation",
+      typeof titleSha256 === "string" && /^[0-9a-f]{64}$/u.test(titleSha256)
+        ? { expectedTitleSha256: titleSha256, observedTitleSha256 }
+        : undefined);
   }
   if (observed.submitPresent !== (request.page === "review")) {
     observerFailure("submit_state_reconciliation");
@@ -193,6 +198,13 @@ const OBSERVER_FAILURE_CODES = [
 
 type ObserverFailureCode = typeof OBSERVER_FAILURE_CODES[number];
 
+export interface ExternalMonitorObserverFailureDiagnostic {
+  readonly expectedTitleSha256: string;
+  readonly observedTitleSha256: string;
+}
+
+const observerFailureDiagnostics = new WeakMap<Error, ExternalMonitorObserverFailureDiagnostic>();
+
 function observerStage<T>(code: ObserverFailureCode, run: () => T): T {
   try {
     return run();
@@ -202,8 +214,19 @@ function observerStage<T>(code: ObserverFailureCode, run: () => T): T {
   }
 }
 
-function observerFailure(code: ObserverFailureCode): never {
-  throw new Error(`external monitor observer failed: ${code}`);
+function observerFailure(
+  code: ObserverFailureCode,
+  diagnostic?: ExternalMonitorObserverFailureDiagnostic,
+): never {
+  const error = new Error(`external monitor observer failed: ${code}`);
+  if (diagnostic !== undefined) observerFailureDiagnostics.set(error, diagnostic);
+  throw error;
+}
+
+export function externalMonitorObserverFailureDiagnostic(
+  error: unknown,
+): ExternalMonitorObserverFailureDiagnostic | undefined {
+  return error instanceof Error ? observerFailureDiagnostics.get(error) : undefined;
 }
 
 export function externalMonitorObserverFailureCode(error: unknown): ObserverFailureCode | undefined {

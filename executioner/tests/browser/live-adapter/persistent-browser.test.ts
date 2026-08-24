@@ -1373,6 +1373,30 @@ test("account invalidation reconciles a Playwright close rejection after the own
   );
 });
 
+test("account invalidation reconciles a close rejection when its owned page was already closed", async () => {
+  const context = new FakeContext([]);
+  context.failClose = true;
+  const { provider, opened } = await openedProviderThatInvalidatesAfterFill(
+    new MemoryProfiles(),
+    context,
+  );
+  if (!opened.ok) return;
+  const page = context.ownedPages.at(-1);
+  assert.ok(page !== undefined);
+  page.closed = true;
+
+  await invalidateWithOneFill(provider, opened.value.session.sessionId);
+  assert.deepEqual(
+    await provider.close({
+      schemaVersion: 1,
+      journeyId: liveFixtures.journeyId,
+      operationId: generatedOperationId("operation_close_preinvalidated_reconciled_1"),
+      sessionId: opened.value.session.sessionId,
+    }, new AbortController().signal),
+    { ok: true, value: undefined },
+  );
+});
+
 test("close preserves account invalidation cleanup failure for the exact session", async () => {
   const profiles = new MemoryProfiles();
   profiles.failCleanup = true;
