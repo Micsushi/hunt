@@ -107,6 +107,8 @@ import {
   type Stage2ExternalMonitorRuntime,
   type Stage2ExternalMonitorTraceDetails,
 } from "../live/evidence/external-monitor-runtime.ts";
+import { readStage2ExternalMonitorObserverBinding } from
+  "../live/evidence/external-monitor-authority.ts";
 import type { Stage2ApplicationWalkTraceEvent } from
   "../live/runner/application-walk.ts";
 import type {
@@ -864,6 +866,13 @@ function productionExternalMonitor(
       processIssuedAt: issuedAt,
       processOwnerPid: process.pid,
       processOwnerStartedAt: currentProcessStartedAt(),
+      observer: readStage2ExternalMonitorObserverBinding(
+        request.owner.roots.runtime.path,
+        {
+          journeyId: request.owner.journeyId,
+          targetHandleId: request.owner.target.handleId,
+        },
+      ),
       trace,
     });
   } finally {

@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const MAX_ARGUMENT_BYTES = 32 * 1024;
 
@@ -11,6 +14,7 @@ export function supportsWindowsIsolatedNodeRuntime(version: string): boolean {
 export interface WindowsIsolatedRunnerOptions {
   readonly executable?: string;
   readonly runnerPath?: string;
+  readonly monitorPath?: string;
   readonly signal?: AbortSignal;
   readonly environment?: NodeJS.ProcessEnv;
 }
@@ -19,6 +23,7 @@ export function runWindowsIsolatedStage2Acceptance(
   arguments_: readonly string[],
   options: WindowsIsolatedRunnerOptions = {},
 ): Promise<number> {
+  if (options.signal?.aborted) return Promise.resolve(130);
   const executable = options.executable ?? process.execPath;
   const runnerPath = options.runnerPath ?? resolve(
     import.meta.dirname,
@@ -28,13 +33,24 @@ export function runWindowsIsolatedStage2Acceptance(
     "scripts",
     "run-s2-real.ts",
   );
-  validateInputs(executable, runnerPath, arguments_);
+  const monitorPath = options.monitorPath ?? resolve(
+    import.meta.dirname,
+    "..",
+    "..",
+    "..",
+    "scripts",
+    "run-s2-monitor-observer.ts",
+  );
+  validateInputs(executable, runnerPath, arguments_, monitorPath);
   const encodedArguments = Buffer.from(JSON.stringify(arguments_), "utf8").toString("base64");
+  const cancellationPath = join(tmpdir(), `hunt-c3-cancel-${randomUUID()}.signal`);
   const environment = {
     ...(options.environment ?? process.env),
     HUNT_C3_ISOLATED_NODE: executable,
     HUNT_C3_ISOLATED_RUNNER: runnerPath,
+    HUNT_C3_ISOLATED_MONITOR: monitorPath,
     HUNT_C3_ISOLATED_ARGUMENTS_B64: encodedArguments,
+    HUNT_C3_ISOLATED_CANCELLATION_PATH: cancellationPath,
   };
   return new Promise((resolveResult, reject) => {
     const child = spawn(
@@ -63,16 +79,22 @@ export function runWindowsIsolatedStage2Acceptance(
       settled = true;
       if (cancellationTimeout !== undefined) clearTimeout(cancellationTimeout);
       options.signal?.removeEventListener("abort", cancel);
+      rmSync(cancellationPath, { force: true });
       if (error !== undefined) reject(error);
       else resolveResult(code!);
     };
     const cancel = () => {
       if (settled || cancellationRequested) return;
       cancellationRequested = true;
-      child.kill();
+      try {
+        writeFileSync(cancellationPath, "cancel\n", { flag: "wx", mode: 0o600 });
+      } catch {
+        child.kill();
+      }
       cancellationTimeout = setTimeout(() => {
+        child.kill();
         finish(new Error("isolated live runner cleanup unconfirmed"));
-      }, 5_000);
+      }, 15_000);
     };
     child.once("error", () => finish(new Error("isolated live runner unavailable")));
     child.once("close", (code, signal) => {
@@ -86,10 +108,6 @@ export function runWindowsIsolatedStage2Acceptance(
       }
       finish(undefined, code);
     });
-    if (options.signal?.aborted) {
-      cancel();
-      return;
-    }
     options.signal?.addEventListener("abort", cancel, { once: true });
   });
 }
@@ -98,8 +116,9 @@ function validateInputs(
   executable: string,
   runnerPath: string,
   arguments_: readonly string[],
+  monitorPath: string,
 ): void {
-  const values = [executable, runnerPath, ...arguments_];
+  const values = [executable, runnerPath, monitorPath, ...arguments_];
   if (
     !/^[A-Za-z]:\\[^\0\r\n"]+$/u.test(executable) ||
     !/^[A-Za-z]:\\[^\0\r\n"]+$/u.test(runnerPath) ||
@@ -116,11 +135,18 @@ export function windowsIsolatedRunnerScript(): string {
 $ErrorActionPreference = 'Stop'
 $node = $env:HUNT_C3_ISOLATED_NODE
 $runner = $env:HUNT_C3_ISOLATED_RUNNER
+$monitor = $env:HUNT_C3_ISOLATED_MONITOR
 $argumentsB64 = $env:HUNT_C3_ISOLATED_ARGUMENTS_B64
+$cancellationPath = $env:HUNT_C3_ISOLATED_CANCELLATION_PATH
 $env:HUNT_C3_ISOLATED_NODE = $null
 $env:HUNT_C3_ISOLATED_RUNNER = $null
+$env:HUNT_C3_ISOLATED_MONITOR = $null
 $env:HUNT_C3_ISOLATED_ARGUMENTS_B64 = $null
-if (-not [IO.Path]::IsPathRooted($node) -or -not [IO.Path]::IsPathRooted($runner)) { exit 121 }
+$env:HUNT_C3_ISOLATED_CANCELLATION_PATH = $null
+if (-not [IO.Path]::IsPathRooted($node) -or -not [IO.Path]::IsPathRooted($runner) -or
+    -not [IO.Path]::IsPathRooted($monitor) -or
+    -not [IO.Path]::IsPathRooted($cancellationPath) -or
+    [IO.Path]::GetFileName($cancellationPath) -notmatch '^hunt-c3-cancel-[0-9a-f-]{36}\.signal$') { exit 121 }
 $argumentJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($argumentsB64))
 $decodedArguments = ConvertFrom-Json -InputObject $argumentJson
 $runnerArguments = [Collections.Generic.List[string]]::new()
@@ -176,6 +202,7 @@ public static class HuntC3IsolatedRunner
 
     public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     public const uint CREATE_SUSPENDED = 0x00000004;
+    public const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     public const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     public static readonly IntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST = new IntPtr(0x0002000D);
 
@@ -258,12 +285,20 @@ function Get-ProcessBinding([string]$configPath, [string]$evidenceRoot) {
             [IO.Path]::GetFileName($transient) -ne 'transient' -or
             -not $expectedEvidence.Equals([IO.Path]::GetFullPath($evidenceRoot), [StringComparison]::OrdinalIgnoreCase) -or
             [string]$owner.journeyId -notmatch '^journey_[A-Za-z0-9_-]{16,64}$' -or
-            [string]$owner.target.handleId -notmatch '^target_ref_[A-Za-z0-9_-]{16,64}$'
+            [string]$owner.target.handleId -notmatch '^target_ref_[A-Za-z0-9_-]{16,64}$' -or
+            [string]$owner.target.host -notmatch '^[a-z0-9.-]{4,253}$' -or
+            [string]$owner.target.tenant -notmatch '^[a-z0-9-]{2,64}$' -or
+            [string]$owner.target.posting -notmatch '^[A-Za-z0-9-]{2,64}$' -or
+            -not ([string]$owner.target.host).StartsWith(([string]$owner.target.tenant + '.'), [StringComparison]::Ordinal)
         ) { throw 'process binding invalid' }
         return [ordered]@{
             runKey = $runKey
             journeyId = [string]$owner.journeyId
             targetHandleId = [string]$owner.target.handleId
+            host = [string]$owner.target.host
+            tenant = [string]$owner.target.tenant
+            posting = [string]$owner.target.posting
+            runtimeRoot = $runRoot
             configSha256 = Get-Sha256Hex $configBytes
         }
     } finally {
@@ -373,9 +408,14 @@ if ($job -eq [IntPtr]::Zero) {
     exit 124
 }
 $processInfo = New-Object HuntC3IsolatedRunner+PROCESS_INFORMATION
+$observerInfo = New-Object HuntC3IsolatedRunner+PROCESS_INFORMATION
 $attributeList = [IntPtr]::Zero
 $jobValue = [IntPtr]::Zero
+$observerEnvironment = [IntPtr]::Zero
 $created = $false
+$observerCreated = $false
+$desktopBindingPath = $null
+$observerStopPath = $null
 $childExit = [uint32]125
 $jobMembers = @()
 $processAuditPassed = $true
@@ -411,10 +451,68 @@ try {
     $startupInfo.hStdOutput = [HuntC3IsolatedRunner]::GetStdHandle(-11)
     $startupInfo.hStdError = [HuntC3IsolatedRunner]::GetStdHandle(-12)
     $startup.StartupInfo = $startupInfo
+    $creationFlags = [HuntC3IsolatedRunner]::CREATE_SUSPENDED -bor [HuntC3IsolatedRunner]::EXTENDED_STARTUPINFO_PRESENT
+    if ($processBinding -ne $null) {
+        $observerTokenBytes = [byte[]]::new(32)
+        $observerRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $observerRng.GetBytes($observerTokenBytes) } finally { $observerRng.Dispose() }
+        $observerToken = [Convert]::ToBase64String($observerTokenBytes)
+        $observerTokenSha256 = Get-Sha256Hex $observerTokenBytes
+        [Array]::Clear($observerTokenBytes, 0, $observerTokenBytes.Length)
+        $desktopBindingPath = [IO.Path]::Combine($processBinding.runtimeRoot, 'isolated-desktop.json')
+        $observerStopPath = [IO.Path]::Combine($processBinding.runtimeRoot, 'external-monitor-observer-stop')
+        $desktopBinding = [ordered]@{
+            schemaVersion = 1
+            bindingRevision = 's2-isolated-desktop-binding-v2'
+            runKey = $processBinding.runKey
+            journeyId = $processBinding.journeyId
+            targetHandleId = $processBinding.targetHandleId
+            desktopName = $desktopName
+            host = $processBinding.host
+            tenant = $processBinding.tenant
+            posting = $processBinding.posting
+            browserProfilePath = [IO.Path]::Combine($processBinding.runtimeRoot, 'browser-profiles', $processBinding.journeyId, $processBinding.targetHandleId)
+            observerAuthorityTokenSha256 = $observerTokenSha256
+        }
+        [IO.File]::WriteAllText($desktopBindingPath, (($desktopBinding | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $observerCommandLine = New-Object Text.StringBuilder
+        [void]$observerCommandLine.Append((Quote-WindowsArgument $node)).Append(' ').Append((Quote-WindowsArgument $monitor))
+        [void]$observerCommandLine.Append(' --runtime-root ').Append((Quote-WindowsArgument $processBinding.runtimeRoot))
+        [void]$observerCommandLine.Append(' --evidence-root ').Append((Quote-WindowsArgument $evidenceRoot))
+        $env:HUNT_C3_MONITOR_OBSERVER_TOKEN = $observerToken
+        try {
+            $observerEnvironmentText = (@(
+                'ComSpec=' + $env:ComSpec
+                'HUNT_C3_MONITOR_OBSERVER_TOKEN=' + $observerToken
+                'Path=' + $env:Path
+                'PATHEXT=' + $env:PATHEXT
+                'SystemRoot=' + $env:SystemRoot
+                'TEMP=' + $env:TEMP
+                'TMP=' + $env:TMP
+                'WINDIR=' + $env:WINDIR
+            ) | Sort-Object) -join ([char]0)
+            $observerEnvironment = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($observerEnvironmentText + [char]0 + [char]0)
+            $observerFlags = $creationFlags -bor [HuntC3IsolatedRunner]::CREATE_UNICODE_ENVIRONMENT
+            $observerCreated = [HuntC3IsolatedRunner]::CreateProcess($node, $observerCommandLine, [IntPtr]::Zero, [IntPtr]::Zero, $true, $observerFlags, $observerEnvironment, (Split-Path -Parent $monitor), [ref]$startup, [ref]$observerInfo)
+        } finally {
+            $env:HUNT_C3_MONITOR_OBSERVER_TOKEN = $null
+            $observerToken = $null
+        }
+        if (-not $observerCreated) { exit 137 }
+        if ([HuntC3IsolatedRunner]::ResumeThread($observerInfo.hThread) -eq [uint32]::MaxValue) {
+            [HuntC3IsolatedRunner]::TerminateProcess($observerInfo.hProcess, 138) | Out-Null
+            exit 138
+        }
+        $observerLivePath = [IO.Path]::Combine($processBinding.runtimeRoot, 'external-monitor-observer-live.json')
+        $observerDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while (-not [IO.File]::Exists($observerLivePath)) {
+            if ([HuntC3IsolatedRunner]::WaitForSingleObject($observerInfo.hProcess, 0) -eq 0 -or [DateTime]::UtcNow -ge $observerDeadline) { exit 139 }
+            Start-Sleep -Milliseconds 25
+        }
+    }
     $commandLine = New-Object Text.StringBuilder
     [void]$commandLine.Append((Quote-WindowsArgument $node)).Append(' ').Append((Quote-WindowsArgument $runner))
     foreach ($argument in $runnerArguments) { [void]$commandLine.Append(' ').Append((Quote-WindowsArgument ([string]$argument))) }
-    $creationFlags = [HuntC3IsolatedRunner]::CREATE_SUSPENDED -bor [HuntC3IsolatedRunner]::EXTENDED_STARTUPINFO_PRESENT
     $created = [HuntC3IsolatedRunner]::CreateProcess($node, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $true, $creationFlags, [IntPtr]::Zero, (Split-Path -Parent $runner), [ref]$startup, [ref]$processInfo)
     if (-not $created) {
         [Console]::Error.WriteLine('isolated runner CreateProcess failed: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
@@ -426,21 +524,42 @@ try {
         [HuntC3IsolatedRunner]::TerminateProcess($processInfo.hProcess, 128) | Out-Null
         exit 128
     }
-    if ([HuntC3IsolatedRunner]::WaitForSingleObject($processInfo.hProcess, [uint32]::MaxValue) -ne 0) { exit 129 }
-    if (-not [HuntC3IsolatedRunner]::GetExitCodeProcess($processInfo.hProcess, [ref]$childExit)) { exit 130 }
+    while ($true) {
+        $wait = [HuntC3IsolatedRunner]::WaitForSingleObject($processInfo.hProcess, 250)
+        if ($wait -eq 0) { break }
+        if ($wait -ne 258) { exit 129 }
+        if ([IO.File]::Exists($cancellationPath)) {
+            [HuntC3IsolatedRunner]::TerminateProcess($processInfo.hProcess, 130) | Out-Null
+            if ([HuntC3IsolatedRunner]::WaitForSingleObject($processInfo.hProcess, 5000) -ne 0) { exit 129 }
+            $childExit = [uint32]130
+            break
+        }
+    }
+    if ($childExit -ne 130 -and -not [HuntC3IsolatedRunner]::GetExitCodeProcess($processInfo.hProcess, [ref]$childExit)) { exit 130 }
     $processExitObservedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
 } finally {
     $env:HUNT_C3_WINDOWS_DESKTOP_NAME = $null
     $env:HUNT_C3_PROCESS_LIVE_NONCE = $null
     $env:HUNT_C3_PROCESS_ISSUED_AT = $null
+    if ([IO.File]::Exists($cancellationPath)) { [IO.File]::Delete($cancellationPath) }
     $processLiveNonce = $null
+    if ($observerStopPath -ne $null -and $observerCreated) {
+        try { [IO.File]::WriteAllText($observerStopPath, ('stop' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false)) } catch {}
+        if ([HuntC3IsolatedRunner]::WaitForSingleObject($observerInfo.hProcess, 5000) -ne 0) {
+            [HuntC3IsolatedRunner]::TerminateProcess($observerInfo.hProcess, 140) | Out-Null
+            [HuntC3IsolatedRunner]::WaitForSingleObject($observerInfo.hProcess, 5000) | Out-Null
+        }
+    }
     if ($attributeList -ne [IntPtr]::Zero) {
         [HuntC3IsolatedRunner]::DeleteProcThreadAttributeList($attributeList)
         [Runtime.InteropServices.Marshal]::FreeHGlobal($attributeList)
     }
     if ($jobValue -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($jobValue) }
+    if ($observerEnvironment -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($observerEnvironment) }
     if ($processInfo.hThread -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($processInfo.hThread) | Out-Null }
     if ($processInfo.hProcess -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($processInfo.hProcess) | Out-Null }
+    if ($observerInfo.hThread -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($observerInfo.hThread) | Out-Null }
+    if ($observerInfo.hProcess -ne [IntPtr]::Zero) { [HuntC3IsolatedRunner]::CloseHandle($observerInfo.hProcess) | Out-Null }
     # Query exact job membership, close the job, then prove every observed member exited.
     try { $jobMembers = @(Get-JobProcessIds $job) }
     catch { $processAuditPassed = $false; $jobMembers = @() }
@@ -451,6 +570,8 @@ try {
     }
     if ($aliveAfterClose -ne 0) { $processAuditPassed = $false }
     [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
+    if ($desktopBindingPath -ne $null -and [IO.File]::Exists($desktopBindingPath)) { [IO.File]::Delete($desktopBindingPath) }
+    if ($observerStopPath -ne $null -and [IO.File]::Exists($observerStopPath)) { [IO.File]::Delete($observerStopPath) }
     if ($evidenceRoot -ne $null) {
         if ($processExitObservedAt -eq $null) { $processExitObservedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'") }
         try { Write-ProcessAudit $evidenceRoot $processBinding $processLiveNonceSha256 $processIssuedAt $processOwnerPid $processOwnerStartedAt $processExitObservedAt $jobMembers $aliveAfterClose }

@@ -206,10 +206,13 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
   readonly sourceRevision: string;
   readonly now: () => string;
 }): Promise<Stage2ReadinessRunResult> {
-  const runId = `run_${String(options.runOrdinal).padStart(2, "0")}_${randomBytes(8).toString("hex")}`;
+  const runId = `run_${new Date().toISOString().slice(0, 10).replace(/-/gu, "")}_${randomBytes(8).toString("hex")}`;
   const runRoot = join(options.storageRoot, "transient", runId);
-  const evidenceRoot = join(options.retainedRoot, runId);
-  const profileRoot = join(runRoot, "profile");
+  const evidenceRoot = join(options.storageRoot, "retained", runId, "evidence");
+  const journeyId = "journey_readiness_synthetic_01";
+  const targetHandleId = "target_ref_readiness_synthetic_01";
+  const profileRoot = join(runRoot, "browser-profiles", journeyId, targetHandleId);
+  const configPath = join(runRoot, "owner-input.json");
   const logFile = `${runId}.ndjson`;
   const early: Omit<LogRecord, "sequence">[] = [];
   let logger: ((record: Omit<LogRecord, "sequence">) => void) | undefined;
@@ -262,6 +265,15 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
     mkdirSync(profileRoot, { recursive: true, mode: 0o700 });
     runRootCreated = true;
     mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(configPath, `${JSON.stringify({
+      journeyId,
+      target: {
+        handleId: targetHandleId,
+        host: "readiness.wd5.myworkdayjobs.com",
+        tenant: "readiness",
+        posting: "R-READY-01",
+      },
+    })}\n`, { flag: "wx", mode: 0o600 });
     const logPath = join(evidenceRoot, logFile);
     writeFileSync(logPath, "", { flag: "wx", mode: 0o600 });
     let sequence = 0;
@@ -290,6 +302,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
         "--monitor-origin", `http://127.0.0.1:${options.monitorPort}`,
         "--token", token,
         "--evidence-root", evidenceRoot,
+        "--config", configPath,
         "--source-revision", options.sourceRevision,
       ], {
         executable: options.nodeExecutable,

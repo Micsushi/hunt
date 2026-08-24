@@ -40,6 +40,10 @@ test("Windows live runner owns an unswitched desktop and kill-on-close process j
     "s2-windows-process-audit-v2",
     "processLiveNonceSha256",
     "monitorChainSha256",
+    "HUNT_C3_MONITOR_OBSERVER_TOKEN",
+    "CREATE_UNICODE_ENVIRONMENT",
+    "external-monitor-observer-live.json",
+    "external-monitor-observer-stop",
     "isolated runner CreateDesktop failed:",
     "isolated runner CreateJobObject failed:",
   ]) assert.match(source, new RegExp(required, "u"), required);
@@ -141,7 +145,12 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
     await mkdir(evidenceRoot, { recursive: true });
     await writeFile(configPath, JSON.stringify({
       journeyId: "journey_abcdefghijklmnop",
-      target: { handleId: "target_ref_abcdefghijklmnop" },
+      target: {
+        handleId: "target_ref_abcdefghijklmnop",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R-12345",
+      },
     }));
     const argvOutput = join(storageRoot, "argv.json");
     assert.equal(await runWindowsIsolatedStage2Acceptance([
@@ -162,6 +171,11 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
     assert.ok(Date.parse(audit.processExitObservedAt) <= Date.parse(audit.checkedAt));
     assert.equal(audit.monitorFileCount, 0);
     assert.match(audit.monitorChainSha256, /^[0-9a-f]{64}$/u);
+    for (const name of [
+      "isolated-desktop.json",
+      "external-monitor-observer-live.json",
+      "external-monitor-observer-stop",
+    ]) await assert.rejects(() => readFile(join(resolve(configPath, ".."), name)), /ENOENT/u);
   } finally {
     await rm(storageRoot, { recursive: true, force: true });
   }
@@ -175,7 +189,10 @@ test("cancellation waits for the isolated runner and its descendant to exit", {
   const output = join(directory, "pids.json");
   const controller = new AbortController();
   try {
-    const running = runWindowsIsolatedStage2Acceptance(["linger", output], {
+    const running = runWindowsIsolatedStage2Acceptance([
+      "linger", output,
+      "--evidence-root", directory,
+    ], {
       runnerPath: fixture,
       signal: controller.signal,
     });
@@ -187,6 +204,9 @@ test("cancellation waits for the isolated runner and its descendant to exit", {
     assert.equal(await running, 130);
     assert.equal(isProcessAlive(pids.runnerPid), false);
     assert.equal(isProcessAlive(pids.descendantPid), false);
+    const audit = JSON.parse(await readFile(join(directory, "process-audit.json"), "utf8"));
+    assert.equal(audit.status, "pass");
+    assert.equal(audit.membersAliveAfterClose, 0);
   } finally {
     controller.abort();
     await rm(directory, { recursive: true, force: true });

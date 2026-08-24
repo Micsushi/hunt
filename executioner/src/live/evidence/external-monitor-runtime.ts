@@ -22,6 +22,13 @@ import {
   validateStage2MonitorPng,
 } from "./review-monitor-chain.ts";
 import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
+import {
+  readStage2ExternalMonitorObserverBinding,
+  signStage2ExternalMonitorAcknowledgement,
+  type Stage2ExternalMonitorObserverBinding,
+  type Stage2ExternalMonitorObserverSigner,
+  verifyStage2ExternalMonitorAcknowledgement,
+} from "./external-monitor-authority.ts";
 export {
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
@@ -116,6 +123,7 @@ export interface Stage2ExternalMonitorRuntimeOptions {
   readonly processOwnerPid: number;
   readonly processOwnerStartedAt: string;
   readonly processLiveness?: (pid: number, startedAt: string) => boolean;
+  readonly observer?: Stage2ExternalMonitorObserverBinding;
   readonly now?: () => string;
   readonly acknowledgementTimeoutMs?: number;
   readonly acknowledgementPollMs?: number;
@@ -187,6 +195,7 @@ export class Stage2ExternalMonitorRuntime {
         options.processOwnerPid,
         options.processOwnerStartedAt,
       ),
+      ...(options.observer === undefined ? {} : observerFields(options.observer)),
     };
     writeJson(this.#livePath, live);
   }
@@ -315,7 +324,9 @@ export class Stage2ExternalMonitorRuntime {
         : this.#previousApplicationAck;
       const request = {
         schemaVersion: 1,
-        requestRevision: "s2-external-monitor-request-v1",
+        requestRevision: this.#options.observer === undefined
+          ? "s2-external-monitor-request-v1"
+          : "s2-external-monitor-request-v2",
         journeyId: this.#options.journeyId,
         targetHandleId: this.#options.targetHandleId,
         operationId: event.operationId,
@@ -339,6 +350,7 @@ export class Stage2ExternalMonitorRuntime {
         sourceRevision: this.#options.sourceRevision,
         configSha256: this.#options.configSha256,
         capturedIdentityDigests,
+        ...(this.#options.observer === undefined ? {} : observerFields(this.#options.observer)),
       } as const;
       const requestBytes = jsonBytes(request);
       const requestPath = join(root, requestFile);
@@ -360,6 +372,7 @@ export class Stage2ExternalMonitorRuntime {
         await this.#options.waitForAcknowledgement(binding);
       } else {
         await waitForAck(
+          this.#runtimeRoot,
           root,
           ackFile,
           request,
@@ -514,6 +527,10 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
   readonly structuralDescriptionIds: readonly string[];
   readonly observedAt?: string;
   readonly journeyId?: string;
+  readonly observer?: Stage2ExternalMonitorObserverSigner;
+  readonly observedStructurePage?: string;
+  readonly observedSubmitPresent?: boolean;
+  readonly privacyScan?: "separate_evidence_required";
 }): void {
   try {
     const evidenceRoot = directory(request.evidenceRoot, "external monitor acknowledgement denied");
@@ -555,7 +572,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       monitorRequest.screenshotSha256 !== digest(screenshotBytes) ||
       observedScreenshotSha256 !== monitorRequest.screenshotSha256
     ) ackDenied();
-    const ack = {
+    const unsignedAck = {
       schemaVersion: 2,
       evidenceRevision: "s2-external-monitor-ack-v2",
       status: "acknowledged",
@@ -578,12 +595,30 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
         request.structuralDescriptionIds,
         page,
       ),
-      privacyScan: "pass",
+      privacyScan: "pass" as "pass" | "separate_evidence_required",
       submitPresent: page === "review",
       submitActivated: false,
       observedAt: canonicalTimestamp(request.observedAt ?? new Date().toISOString()),
     } as const;
-    if (Date.parse(ack.observedAt) < Date.parse(monitorRequest.issuedAt as string)) ackDenied();
+    if (Date.parse(unsignedAck.observedAt) < Date.parse(monitorRequest.issuedAt as string)) ackDenied();
+    const observerBound = monitorRequest.requestRevision === "s2-external-monitor-request-v2";
+    const observedStructurePage = request.observedStructurePage;
+    if (observerBound && (
+      typeof observedStructurePage !== "string" ||
+      request.observedSubmitPresent !== (page === "review") ||
+      request.privacyScan !== "separate_evidence_required"
+    )) ackDenied();
+    const boundUnsignedAck = observerBound
+      ? Object.freeze({
+          ...unsignedAck,
+          privacyScan: request.privacyScan,
+          submitPresent: request.observedSubmitPresent,
+          observedStructurePage,
+        })
+      : unsignedAck;
+    const ack = observerBound
+      ? signedAcknowledgement(boundUnsignedAck, monitorRequest, request.observer)
+      : unsignedAck;
     writeJson(join(parent, `${prefix}.ack.json`), ack);
   } catch {
     ackDenied();
@@ -633,6 +668,7 @@ export function readStage2ExternalMonitorObservation(
 }
 
 async function waitForAck(
+  runtimeRoot: string,
   root: string,
   ackFile: string,
   request: Record<string, unknown>,
@@ -649,6 +685,16 @@ async function waitForAck(
       return;
     } catch {
       if (Date.now() >= deadline) throw new Error("external monitor acknowledgement unavailable");
+      if (request.requestRevision === "s2-external-monitor-request-v2") {
+        try {
+          readStage2ExternalMonitorObserverBinding(runtimeRoot, {
+            journeyId: request.journeyId as string,
+            targetHandleId: request.targetHandleId as string,
+          });
+        } catch {
+          throw new Error("external monitor observer unavailable");
+        }
+      }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, pollMs));
     }
   }
@@ -662,29 +708,104 @@ function validateAck(
 ): string {
   const bytes = readStable(join(root, ackFile), 16 * 1024, 2);
   const ack = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+  const observerBound = request.requestRevision === "s2-external-monitor-request-v2";
   const expectedClassification = request.page === "review" && request.moment === "review_readback"
     ? "review_verified"
     : request.page === "application_ready" && request.moment === "state_observed"
       ? "account_verified"
     : "safe_to_continue";
   if (
-    ack.schemaVersion !== 2 || ack.evidenceRevision !== "s2-external-monitor-ack-v2" ||
+    ack.schemaVersion !== (observerBound ? 3 : 2) ||
+    ack.evidenceRevision !== (observerBound
+      ? "s2-external-monitor-ack-v3"
+      : "s2-external-monitor-ack-v2") ||
     ack.status !== "acknowledged" || ack.observer !== "independent_visual_monitor" ||
     ack.journeyId !== request.journeyId || ack.targetHandleId !== request.targetHandleId ||
     ack.operationId !== request.operationId || ack.attempt !== request.attempt ||
     ack.ordinal !== request.ordinal || ack.page !== request.page || ack.moment !== request.moment ||
     ack.requestSha256 !== requestSha256 || ack.classification !== expectedClassification ||
     ack.observedScreenshotSha256 !== request.screenshotSha256 ||
-    ack.identityReconciliation !== "matched" || ack.privacyScan !== "pass" ||
+    ack.identityReconciliation !== "matched" ||
+    ack.privacyScan !== (observerBound ? "separate_evidence_required" : "pass") ||
     ack.submitPresent !== (request.page === "review") || ack.submitActivated !== false ||
     JSON.stringify(ack.observedIdentityDigests) !== JSON.stringify(request.capturedIdentityDigests) ||
     !isReviewedMonitorStructuralIds(ack.structuralDescriptionIds, request.page as string) ||
     !Array.isArray(ack.identityDimensions) ||
     ack.identityDimensions.join("\0") !== ["host", "posting", "title"].join("\0") ||
     !canonicalTimestamp(ack.observedAt as string) ||
-    Date.parse(ack.observedAt as string) < Date.parse(request.issuedAt as string)
+    Date.parse(ack.observedAt as string) < Date.parse(request.issuedAt as string) ||
+    observerBound && (
+      typeof ack.observedStructurePage !== "string" ||
+      !compatibleObservedStructure(request.page as string, ack.observedStructurePage) ||
+      !validSignedAcknowledgement(ack, request)
+    )
   ) throw new Error("external monitor acknowledgement unavailable");
   return digest(bytes);
+}
+
+function observerFields(binding: Stage2ExternalMonitorObserverBinding) {
+  return Object.freeze({
+    observerPid: binding.observerPid,
+    observerStartedAt: binding.observerStartedAt,
+    observerInstanceSha256: binding.observerInstanceSha256,
+    observerPublicKeySpki: binding.publicKeySpki,
+    observerPublicKeySha256: binding.publicKeySha256,
+  });
+}
+
+function compatibleObservedStructure(requestPage: string, observedPage: unknown): boolean {
+  if (requestPage === observedPage) return true;
+  return requestPage === "application_ready" && typeof observedPage === "string" &&
+    ["resume", "profile", "questionnaire", "review"].includes(observedPage);
+}
+
+function signedAcknowledgement(
+  acknowledgement: Record<string, unknown>,
+  monitorRequest: Record<string, unknown>,
+  signer: Stage2ExternalMonitorObserverSigner | undefined,
+): Record<string, unknown> {
+  if (signer === undefined ||
+      signer.binding.journeyId !== monitorRequest.journeyId ||
+      signer.binding.targetHandleId !== monitorRequest.targetHandleId ||
+      Object.entries(observerFields(signer.binding)).some(([key, value]) =>
+        monitorRequest[key] !== value
+      )) ackDenied();
+  const unsigned = Object.freeze({
+    ...acknowledgement,
+    schemaVersion: 3,
+    evidenceRevision: "s2-external-monitor-ack-v3",
+    observerInstanceSha256: signer.binding.observerInstanceSha256,
+    observerPublicKeySha256: signer.binding.publicKeySha256,
+  });
+  return Object.freeze({
+    ...unsigned,
+    observerSignature: signStage2ExternalMonitorAcknowledgement(unsigned, signer),
+  });
+}
+
+function validSignedAcknowledgement(
+  acknowledgement: Record<string, unknown>,
+  request: Record<string, unknown>,
+): boolean {
+  try {
+    const { observerSignature, ...unsigned } = acknowledgement;
+    const binding = Object.freeze({
+      schemaVersion: 1 as const,
+      liveRevision: "s2-external-monitor-observer-live-v1" as const,
+      journeyId: request.journeyId as string,
+      targetHandleId: request.targetHandleId as string,
+      observerPid: request.observerPid as number,
+      observerStartedAt: request.observerStartedAt as string,
+      observerInstanceSha256: request.observerInstanceSha256 as string,
+      publicKeySpki: request.observerPublicKeySpki as string,
+      publicKeySha256: request.observerPublicKeySha256 as string,
+    });
+    return acknowledgement.observerInstanceSha256 === binding.observerInstanceSha256 &&
+      acknowledgement.observerPublicKeySha256 === binding.publicKeySha256 &&
+      verifyStage2ExternalMonitorAcknowledgement(unsigned, observerSignature, binding);
+  } catch {
+    return false;
+  }
 }
 
 function exactTaxonomy(value: Record<string, unknown>): Record<string, unknown> {
@@ -802,7 +923,15 @@ function validateOptions(options: Stage2ExternalMonitorRuntimeOptions): Stage2Ex
       options.trace !== undefined && typeof options.trace !== "function" ||
       !/^[a-z0-9.-]{4,253}$/u.test(options.host) ||
       !/^[a-z0-9-]{2,64}$/u.test(options.tenant) ||
-      !/^[A-Za-z0-9-]{2,64}$/u.test(options.posting)) denied();
+      !/^[A-Za-z0-9-]{2,64}$/u.test(options.posting) ||
+      options.observer !== undefined && (
+        options.observer.journeyId !== options.journeyId ||
+        options.observer.targetHandleId !== options.targetHandleId ||
+        !(options.processLiveness ?? processInstanceAlive)(
+          options.observer.observerPid,
+          options.observer.observerStartedAt,
+        )
+      )) denied();
   return Object.freeze({ ...options });
 }
 
@@ -882,6 +1011,9 @@ function validateLiveFile(path: string, expected: Record<string, unknown>): void
     "schemaVersion", "liveRevision", "journeyId", "targetHandleId",
     "processLiveNonceSha256", "monitorLiveTokenSha256", "processIssuedAt",
     "processOwnerPid", "processOwnerStartedAt", "processInstanceSha256",
+    ...(expected.requestRevision === "s2-external-monitor-request-v2"
+      ? ["observerPid", "observerStartedAt", "observerInstanceSha256", "observerPublicKeySpki", "observerPublicKeySha256"]
+      : []),
   ];
   if (keys.length !== exact.length || exact.some((key, index) => key !== keys[index]) ||
       value.schemaVersion !== 1 || value.liveRevision !== "s2-external-monitor-live-v1" ||
@@ -894,6 +1026,9 @@ function validateLiveFile(path: string, expected: Record<string, unknown>): void
         value.processOwnerPid as number,
         value.processOwnerStartedAt as string,
       )) ackDenied();
+  if (expected.requestRevision === "s2-external-monitor-request-v2" &&
+      ["observerPid", "observerStartedAt", "observerInstanceSha256", "observerPublicKeySpki", "observerPublicKeySha256"]
+        .some((key) => value[key] !== expected[key])) ackDenied();
 }
 
 export function currentProcessStartedAt(): string {

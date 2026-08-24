@@ -1,6 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { BrowserContext } from "playwright";
 
 import { assertCurrentProcessIsOnIsolatedDesktop } from
@@ -10,8 +10,9 @@ import { PlaywrightPersistentContextLauncher } from
 import {
   createStage2ExternalMonitorRuntime,
   currentProcessStartedAt,
-  writeStage2ExternalMonitorAcknowledgement,
 } from "../src/live/evidence/external-monitor-runtime.ts";
+import { readStage2ExternalMonitorObserverBinding } from
+  "../src/live/evidence/external-monitor-authority.ts";
 
 const SYNTHETIC_HOST = "readiness.wd5.myworkdayjobs.com";
 const SYNTHETIC_TENANT = "readiness";
@@ -103,45 +104,33 @@ try {
       await report("page_binding", "pass");
       try {
         await report("monitor", "started");
-        const monitorRuntimeRoot = join(dirname(args.profileRoot), "monitor-runtime");
-        mkdirSync(monitorRuntimeRoot, { recursive: true, mode: 0o700 });
+        const monitorRuntimeRoot = dirname(args.configPath);
+        const processNonce = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
+        const processIssuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;
+        if (processNonce === undefined || processIssuedAt === undefined) throw new Error("process binding unavailable");
         const productionMonitor = createStage2ExternalMonitorRuntime({
           runtimeRoot: monitorRuntimeRoot,
           evidenceRoot: args.evidenceRoot,
           journeyId: "journey_readiness_synthetic_01",
           targetHandleId: "target_ref_readiness_synthetic_01",
           sourceRevision: args.sourceRevision,
-          configSha256: createHash("sha256").update("c3-readiness-config-v1").digest("hex"),
+          configSha256: createHash("sha256").update(readFileSync(args.configPath)).digest("hex"),
           host: SYNTHETIC_HOST,
           tenant: SYNTHETIC_TENANT,
           posting: SYNTHETIC_POSTING,
-          processLiveNonceSha256: createHash("sha256").update(randomBytes(32)).digest("hex"),
-          processIssuedAt: new Date().toISOString(),
+          processLiveNonceSha256: createHash("sha256").update(Buffer.from(processNonce, "base64")).digest("hex"),
+          processIssuedAt,
           processOwnerPid: process.pid,
           processOwnerStartedAt: currentProcessStartedAt(),
           acknowledgementTimeoutMs: 10_000,
           acknowledgementPollMs: 25,
-          waitForAcknowledgement: async (request) => {
-            const screenshotPath = request.path.replace(/\.request\.json$/u, ".png");
-            writeStage2ExternalMonitorAcknowledgement({
-              runtimeRoot: monitorRuntimeRoot,
-              evidenceRoot: args.evidenceRoot,
-              requestPath: request.path,
-              classification: "safe_to_continue",
-              observedScreenshotSha256: createHash("sha256").update(readFileSync(screenshotPath)).digest("hex"),
-              observedIdentity: {
-                host: SYNTHETIC_HOST,
-                tenant: SYNTHETIC_TENANT,
-                posting: SYNTHETIC_POSTING,
-                title: await page.title(),
-              },
-              structuralDescriptionIds: ["monitor_structure_job_posting_v1"],
-              observedAt: new Date().toISOString(),
-            });
-          },
+          observer: readStage2ExternalMonitorObserverBinding(monitorRuntimeRoot, {
+            journeyId: "journey_readiness_synthetic_01",
+            targetHandleId: "target_ref_readiness_synthetic_01",
+          }),
         });
         try {
-          await productionMonitor.auth(page, "job_posting", "before_navigation", {
+          await productionMonitor.application(page, "review", "review_readback", {
             fieldCount: 0,
             requiredFieldCount: 0,
             controlTypes: [],
@@ -201,13 +190,13 @@ async function safeFailure(
 }
 
 function parseArgs(values: readonly string[]) {
-  if (values.length !== 12) invalid();
+  if (values.length !== 14) invalid();
   const parsed = new Map<string, string>();
   for (let index = 0; index < values.length; index += 2) {
     const key = values[index];
     const value = values[index + 1];
     if (key === undefined || value === undefined || parsed.has(key) ||
-        !["--profile-root", "--page-url", "--monitor-origin", "--token", "--evidence-root", "--source-revision"].includes(key)) invalid();
+        !["--profile-root", "--page-url", "--monitor-origin", "--token", "--evidence-root", "--source-revision", "--config"].includes(key)) invalid();
     parsed.set(key, value);
   }
   const profileRoot = parsed.get("--profile-root");
@@ -216,12 +205,14 @@ function parseArgs(values: readonly string[]) {
   const token = parsed.get("--token");
   const evidenceRoot = parsed.get("--evidence-root");
   const sourceRevision = parsed.get("--source-revision");
+  const configPath = parsed.get("--config");
   if (profileRoot === undefined || pageUrl === undefined || monitorOrigin === undefined || token === undefined ||
-      evidenceRoot === undefined || sourceRevision === undefined || !/^[0-9a-f]{40}$/u.test(sourceRevision) ||
+      evidenceRoot === undefined || sourceRevision === undefined || configPath === undefined ||
+      !/^[0-9a-f]{40}$/u.test(sourceRevision) ||
       !URL.canParse(pageUrl) || !URL.canParse(monitorOrigin) ||
       new URL(pageUrl).hostname !== "127.0.0.1" || new URL(monitorOrigin).hostname !== "127.0.0.1" ||
       !/^[A-Za-z0-9_-]{43}$/u.test(token)) invalid();
-  return Object.freeze({ profileRoot, pageUrl, monitorOrigin, token, evidenceRoot, sourceRevision });
+  return Object.freeze({ profileRoot, pageUrl, monitorOrigin, token, evidenceRoot, sourceRevision, configPath });
 }
 
 function invalid(): never {

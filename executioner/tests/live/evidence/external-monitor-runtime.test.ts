@@ -20,6 +20,10 @@ import {
   writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
+import { createStage2ExternalMonitorObserverAuthority } from
+  "../../../src/live/evidence/external-monitor-authority.ts";
+import { normalizeObservedChromeTitle, observedStructurePage } from
+  "../../../src/live/evidence/external-monitor-observer.ts";
 
 const binding = {
   journeyId: "journey_monitor_runtime_01",
@@ -1528,6 +1532,201 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("authenticated Workday Chrome title normalization preserves the identity title", () => {
+  assert.equal(
+    normalizeObservedChromeTitle("  Business   Manager - Google Chrome for Testing"),
+    "Business Manager",
+  );
+  assert.equal(normalizeObservedChromeTitle("My Information"), "My Information");
+  assert.throws(() => normalizeObservedChromeTitle("\u0000"), /external monitor observer denied/u);
+  assert.equal(observedStructurePage(new Set(["Review", "Submit application"])), "review");
+  assert.equal(observedStructurePage(new Set(["My Information", "Next"])), "profile");
+});
+
+test("production-bound monitor creates and consumes an independently signed ACK", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-signed-monitor-"));
+  const authority = createBoundTestAuthority(root);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      runtimeRoot: root,
+      evidenceRoot: root,
+      observer: authority.binding,
+      now: ordinalClock(),
+      acknowledgementTimeoutMs: 2_000,
+      acknowledgementPollMs: 10,
+    });
+    timer = setInterval(() => {
+      const requestName = readdirSync(join(root, "auth-monitor"))
+        .find((name) => name.endsWith(".request.json"));
+      if (requestName === undefined) return;
+      clearInterval(timer);
+      timer = undefined;
+      const requestPath = join(root, "auth-monitor", requestName);
+      writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath,
+        classification: "account_verified",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor("application_ready")],
+        observer: authority,
+        observedStructurePage: "profile",
+        observedSubmitPresent: false,
+        privacyScan: "separate_evidence_required",
+        observedAt: "2026-08-10T12:00:00.010Z",
+      });
+    }, 10);
+    await runtime.auth(fixturePage(), "application_ready", "state_observed", taxonomy(), {
+      operationId: "operation_signed_monitor_ack_01", attempt: 1,
+    }, new AbortController().signal);
+    const ackName = readdirSync(join(root, "auth-monitor")).find((name) => name.endsWith(".ack.json"));
+    assert.ok(ackName);
+    const ack = JSON.parse(readFileSync(join(root, "auth-monitor", ackName), "utf8"));
+    assert.equal(ack.schemaVersion, 3);
+    assert.equal(ack.evidenceRevision, "s2-external-monitor-ack-v3");
+    assert.match(ack.observerSignature, /^[A-Za-z0-9_-]{80,128}$/u);
+    runtime.close();
+    const chain = readStage2AuthMonitorChain(join(root, "auth-monitor"), {
+      journeyId: binding.journeyId,
+      targetHandleId: binding.targetHandleId,
+      sourceRevision: binding.sourceRevision,
+      configSha256: binding.configSha256,
+      hostSha256: digest(Buffer.from(binding.host)),
+      tenantSha256: digest(Buffer.from(binding.tenant)),
+      postingSha256: digest(Buffer.from(binding.posting)),
+      processLiveNonceSha256: binding.processLiveNonceSha256,
+      processIssuedAt: binding.processIssuedAt,
+      processInstanceSha256: processInstanceSha256(),
+      processExitObservedAt: "2026-08-10T12:00:01.000Z",
+      processCheckedAt: "2026-08-10T12:00:02.000Z",
+    });
+    assert.equal(chain.classification, "account_verified");
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+    authority.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production-bound monitor rejects owner-style unsigned and mismatched-title ACKs", async () => {
+  for (const mismatch of [false, true]) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-signed-monitor-deny-"));
+    const authority = createBoundTestAuthority(root);
+    try {
+      const runtime = createStage2ExternalMonitorRuntime({
+        ...binding,
+        runtimeRoot: root,
+        evidenceRoot: root,
+        observer: authority.binding,
+        now: ordinalClock(),
+        waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+          runtimeRoot: root,
+          evidenceRoot: root,
+          requestPath: request.path,
+          classification: "account_verified",
+          observedIdentity: mismatch
+            ? { ...observedIdentity(), title: "Public posting title" }
+            : observedIdentity(),
+          structuralDescriptionIds: [structuralIdFor(request.page)],
+          ...(mismatch ? { observer: authority } : {}),
+          ...(mismatch
+            ? {
+                observedStructurePage: "profile",
+                observedSubmitPresent: false,
+                privacyScan: "separate_evidence_required" as const,
+              }
+            : {}),
+          observedAt: "2026-08-10T12:00:00.010Z",
+        }),
+      });
+      await assert.rejects(() => runtime.auth(
+        fixturePage(), "application_ready", "state_observed", taxonomy(),
+        { operationId: `operation_signed_monitor_deny_${mismatch ? "title" : "owner"}`, attempt: 1 },
+        new AbortController().signal,
+      ), /external monitor acknowledgement denied/u);
+      runtime.close();
+    } finally {
+      authority.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("production-bound monitor fails promptly when its observer exits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-observer-exit-"));
+  const authority = createBoundTestAuthority(root);
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      runtimeRoot: root,
+      evidenceRoot: root,
+      observer: authority.binding,
+      now: ordinalClock(),
+      acknowledgementTimeoutMs: 5_000,
+      acknowledgementPollMs: 10,
+    });
+    authority.close();
+    const startedAt = Date.now();
+    await assert.rejects(() => runtime.auth(
+      fixturePage(), "application_ready", "state_observed", taxonomy(),
+      { operationId: "operation_observer_exit_0001", attempt: 1 },
+      new AbortController().signal,
+    ), /external monitor observer unavailable/u);
+    assert.ok(Date.now() - startedAt < 1_000);
+    runtime.close();
+  } finally {
+    authority.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("owner-process authority creation is denied without the wrapper capability", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-owner-authority-deny-"));
+  const token = writeTestDesktopBinding(root);
+  try {
+    assert.throws(() => createStage2ExternalMonitorObserverAuthority({
+      runtimeRoot: root,
+      journeyId: binding.journeyId,
+      targetHandleId: binding.targetHandleId,
+      authorityToken: Buffer.alloc(32, 9).toString("base64"),
+    }), /external monitor observer authority denied/u);
+    assert.notEqual(token, Buffer.alloc(32, 9).toString("base64"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function createBoundTestAuthority(root: string) {
+  const authorityToken = writeTestDesktopBinding(root);
+  return createStage2ExternalMonitorObserverAuthority({
+    runtimeRoot: root,
+    journeyId: binding.journeyId,
+    targetHandleId: binding.targetHandleId,
+    authorityToken,
+  });
+}
+
+function writeTestDesktopBinding(root: string): string {
+  const authorityToken = Buffer.alloc(32, 7).toString("base64");
+  writeFileSync(join(root, "isolated-desktop.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    bindingRevision: "s2-isolated-desktop-binding-v2",
+    runKey: "run_20260824_0123456789abcdef",
+    journeyId: binding.journeyId,
+    targetHandleId: binding.targetHandleId,
+    desktopName: `HuntC3_${"1".repeat(32)}`,
+    host: binding.host,
+    tenant: binding.tenant,
+    posting: binding.posting,
+    browserProfilePath: join(root, "browser-profiles", binding.journeyId, binding.targetHandleId),
+    observerAuthorityTokenSha256: digest(Buffer.from(authorityToken, "base64")),
+  })}\n`);
+  return authorityToken;
+}
+
 function taxonomy() {
   return {
     fieldCount: 2,

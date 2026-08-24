@@ -10,6 +10,10 @@ import {
   type ApplicationHandlerPage,
 } from "../../ats/workday/application/page-walk-contract.ts";
 import { isReviewedMonitorStructuralIds } from "./monitor-structures.ts";
+import {
+  type Stage2ExternalMonitorObserverBinding,
+  verifyStage2ExternalMonitorAcknowledgement,
+} from "./external-monitor-authority.ts";
 
 const MAX_RECORDS = 512;
 const AUTH_PAGES = new Set([
@@ -140,17 +144,22 @@ function readMonitorChain(
       ) denied();
       diagnosticStage = "request";
       const request = record(JSON.parse(requestBytes.toString("utf8")));
+      const observerBound = request.requestRevision === "s2-external-monitor-request-v2";
       exactKeys(request, [
         "schemaVersion", "requestRevision", "journeyId", "targetHandleId", "operationId",
         "attempt", "ordinal", "page", "moment", "screenshotFile", "screenshotSha256", "taxonomyFile",
         "taxonomySha256", "previousAckSha256", "processLiveNonceSha256",
         "processIssuedAt", "processInstanceSha256", "monitorLiveTokenSha256", "issuedAt", "sourceRevision", "configSha256",
         "capturedIdentityDigests",
+        ...(observerBound
+          ? ["observerPid", "observerStartedAt", "observerInstanceSha256", "observerPublicKeySpki", "observerPublicKeySha256"]
+          : []),
       ]);
       const issuedAt = timestamp(request.issuedAt);
       const processIssuedAt = timestamp(expected.processIssuedAt);
       if (
-        request.schemaVersion !== 1 || request.requestRevision !== "s2-external-monitor-request-v1" ||
+        request.schemaVersion !== 1 ||
+        !["s2-external-monitor-request-v1", "s2-external-monitor-request-v2"].includes(request.requestRevision as string) ||
         !sameMoment(request, expected, ordinal, page, moment) ||
         !opaque(request.operationId, "operation") || !attempt(request.attempt) ||
         request.screenshotFile !== screenshotFile || request.screenshotSha256 !== digest(screenshot) ||
@@ -175,13 +184,19 @@ function readMonitorChain(
         "classification", "observedScreenshotSha256", "identityReconciliation", "identityDimensions",
         "observedIdentityDigests", "structuralDescriptionIds", "privacyScan",
         "submitPresent", "submitActivated", "observedAt",
+        ...(observerBound
+          ? ["observedStructurePage", "observerInstanceSha256", "observerPublicKeySha256", "observerSignature"]
+          : []),
       ]);
       const expectedClassification = index === records.length - 1
         ? finalClassification
         : "safe_to_continue";
       const observedAt = timestamp(ack.observedAt);
       if (
-        ack.schemaVersion !== 2 || ack.evidenceRevision !== "s2-external-monitor-ack-v2" ||
+        ack.schemaVersion !== (observerBound ? 3 : 2) ||
+        ack.evidenceRevision !== (observerBound
+          ? "s2-external-monitor-ack-v3"
+          : "s2-external-monitor-ack-v2") ||
         ack.status !== "acknowledged" || ack.observer !== "independent_visual_monitor" ||
         !sameMoment(ack, expected, ordinal, page, moment) || ack.requestFile !== requestFile ||
         ack.operationId !== request.operationId || ack.attempt !== request.attempt ||
@@ -193,10 +208,15 @@ function readMonitorChain(
         JSON.stringify(ack.observedIdentityDigests) !==
           JSON.stringify(request.capturedIdentityDigests) ||
         !structuralIds(ack.structuralDescriptionIds, page) ||
-        ack.privacyScan !== "pass" || ack.submitPresent !== (page === "review") ||
+        ack.privacyScan !== (observerBound ? "separate_evidence_required" : "pass") ||
+        ack.submitPresent !== (page === "review") ||
         ack.submitActivated !== false || observedAt < issuedAt ||
         observedAt >= timestamp(expected.processExitObservedAt) ||
-        timestamp(expected.processExitObservedAt) > timestamp(expected.processCheckedAt)
+        timestamp(expected.processExitObservedAt) > timestamp(expected.processCheckedAt) ||
+        observerBound && (
+          !compatibleObservedStructure(page, ack.observedStructurePage) ||
+          !validObserverAcknowledgement(request, ack)
+        )
       ) denied();
       previousObservedAt = observedAt;
       previousAckSha256 = digest(ackBytes);
@@ -234,6 +254,37 @@ function readMonitorChain(
       } })}\n`);
     }
     return denied();
+  }
+}
+
+function compatibleObservedStructure(requestPage: string, observedPage: unknown): boolean {
+  if (requestPage === observedPage) return true;
+  return requestPage === "application_ready" && typeof observedPage === "string" &&
+    ["resume", "profile", "questionnaire", "review"].includes(observedPage);
+}
+
+function validObserverAcknowledgement(
+  request: Readonly<Record<string, unknown>>,
+  acknowledgement: Readonly<Record<string, unknown>>,
+): boolean {
+  try {
+    const binding = Object.freeze({
+      schemaVersion: 1 as const,
+      liveRevision: "s2-external-monitor-observer-live-v1" as const,
+      journeyId: request.journeyId as string,
+      targetHandleId: request.targetHandleId as string,
+      observerPid: request.observerPid as number,
+      observerStartedAt: request.observerStartedAt as string,
+      observerInstanceSha256: request.observerInstanceSha256 as string,
+      publicKeySpki: request.observerPublicKeySpki as string,
+      publicKeySha256: request.observerPublicKeySha256 as string,
+    }) satisfies Stage2ExternalMonitorObserverBinding;
+    const { observerSignature, ...unsigned } = acknowledgement;
+    return acknowledgement.observerInstanceSha256 === binding.observerInstanceSha256 &&
+      acknowledgement.observerPublicKeySha256 === binding.publicKeySha256 &&
+      verifyStage2ExternalMonitorAcknowledgement(unsigned, observerSignature, binding);
+  } catch {
+    return false;
   }
 }
 
