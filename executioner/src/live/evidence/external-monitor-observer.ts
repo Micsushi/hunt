@@ -254,7 +254,7 @@ try {
 } catch { exit 43 }
 $allow = @(
   'Apply', 'Apply Now', 'Apply Manually', 'Sign in with email', 'Create Account', 'Sign In',
-  'Email Address', 'Password', 'Forgot Password', 'Reset Password', 'Send Verification Email',
+  'Email Address', 'Password', 'Forgot Password', 'Forgot your password?', 'Reset Password', 'Send Verification Email',
   'My Information', 'My Experience', 'Application Questions', 'Voluntary Disclosures',
   'Self Identify', 'Review', 'Submit', 'Submit application', 'Next', 'Save and Continue',
   'Upload a resume', 'Upload Resume'
@@ -352,7 +352,7 @@ export function normalizeObservedAddressHost(address: string): string {
 function canonicalObservedFlag(value: string): string {
   const canonical = [
     "Apply", "Apply Now", "Apply Manually", "Sign in with email", "Create Account", "Sign In",
-    "Email Address", "Password", "Forgot Password", "Reset Password", "Send Verification Email",
+    "Email Address", "Password", "Forgot Password", "Forgot your password?", "Reset Password", "Send Verification Email",
     "My Information", "My Experience", "Application Questions", "Voluntary Disclosures",
     "Self Identify", "Review", "Submit", "Submit application", "Next", "Save and Continue",
     "Upload a resume", "Upload Resume",
@@ -362,6 +362,7 @@ function canonicalObservedFlag(value: string): string {
 
 export function observedStructurePage(flags: ReadonlySet<string>): string {
   if (flags.has("Review") && (flags.has("Submit") || flags.has("Submit application"))) return "review";
+  if (flags.has("Sign In") && flags.has("Forgot your password?")) return "sign_in";
   if (flags.has("Create Account") ||
       (flags.has("Sign In") && flags.has("Email Address") && flags.has("Password"))) {
     return "account_entry";
