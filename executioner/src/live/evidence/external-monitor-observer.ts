@@ -61,7 +61,7 @@ export async function runStage2ExternalMonitorObserver(
       ownerSeen ||= ownerLive;
       if (ownerSeen && !ownerLive) return;
       for (const requestPath of pendingRequests(evidenceRoot)) {
-        acknowledge(runtimeRoot, evidenceRoot, requestPath, binding, authority);
+        await acknowledge(runtimeRoot, evidenceRoot, requestPath, binding, authority);
       }
       await delay(50);
     }
@@ -71,13 +71,13 @@ export async function runStage2ExternalMonitorObserver(
   }
 }
 
-function acknowledge(
+async function acknowledge(
   runtimeRoot: string,
   evidenceRoot: string,
   requestPath: string,
   binding: DesktopBinding,
   observer: ReturnType<typeof createStage2ExternalMonitorObserverAuthority>,
-): void {
+): Promise<void> {
   const request = observerStage("request_admission", () =>
     JSON.parse(stableFile(requestPath, 16 * 1024).toString("utf8"))) as {
     readonly page?: unknown;
@@ -92,10 +92,8 @@ function acknowledge(
   const screenshotPath = join(dirname(requestPath), request.screenshotFile);
   const screenshot = observerStage("screenshot_admission", () =>
     stableFile(screenshotPath, 12 * 1024 * 1024));
-  const visual = observerStage("owned_browser_observation", () =>
-    ownedBrowserObservation(runtimeRoot, binding));
-  if (!compatibleObservedPage(request.page, visual.page)) observerFailure("structure_classification");
-  reconcileObservedMonitorSurface(request, visual);
+  const visual = await waitForReconciledMonitorSurface(request, () =>
+    observerStage("owned_browser_observation", () => ownedBrowserObservation(runtimeRoot, binding)));
   observerStage("acknowledgement_admission", () =>
     writeStage2ExternalMonitorAcknowledgement({
     runtimeRoot,
@@ -119,6 +117,39 @@ function acknowledge(
     privacyScan: "separate_evidence_required",
       observer,
     }));
+}
+
+interface ObservedMonitorSurface {
+  readonly title: string;
+  readonly page: string;
+  readonly submitPresent: boolean;
+}
+
+export async function waitForReconciledMonitorSurface(
+  request: { readonly page?: unknown; readonly capturedIdentityDigests?: unknown },
+  observe: () => ObservedMonitorSurface | Promise<ObservedMonitorSurface>,
+  options: {
+    readonly attempts?: number;
+    readonly pause?: () => Promise<void>;
+  } = {},
+): Promise<ObservedMonitorSurface> {
+  const attempts = options.attempts ?? 4;
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10) denied();
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const observed = await observe();
+    if (typeof request.page !== "string" || !compatibleObservedPage(request.page, observed.page)) {
+      observerFailure("structure_classification");
+    }
+    try {
+      reconcileObservedMonitorSurface(request, observed);
+      return observed;
+    } catch (error) {
+      if (externalMonitorObserverFailureCode(error) !== "title_identity_reconciliation" ||
+          attempt === attempts) throw error;
+      await (options.pause ?? (() => delay(100)))();
+    }
+  }
+  return observerFailure("title_identity_reconciliation");
 }
 
 export function reconcileObservedMonitorSurface(
@@ -200,7 +231,7 @@ function pendingRequests(evidenceRoot: string): string[] {
 function ownedBrowserObservation(
   runtimeRoot: string,
   binding: DesktopBinding,
-): { readonly title: string; readonly page: string; readonly submitPresent: boolean } {
+): ObservedMonitorSurface {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 $root = $env:HUNT_C3_OBSERVER_RUNTIME_ROOT

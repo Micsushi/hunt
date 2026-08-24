@@ -29,6 +29,7 @@ import {
   normalizeObservedChromeTitle,
   observedStructurePage,
   reconcileObservedMonitorSurface,
+  waitForReconciledMonitorSurface,
 } from
   "../../../src/live/evidence/external-monitor-observer.ts";
 
@@ -1540,7 +1541,7 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
   }
 });
 
-test("authenticated Workday Chrome title normalization preserves the identity title", () => {
+test("authenticated Workday Chrome title normalization preserves the identity title", async () => {
   const observerSource = readFileSync("src/live/evidence/external-monitor-observer.ts", "utf8");
   assert.match(observerSource, /\$visible = -not \$element\.Current\.IsOffscreen/u);
   assert.match(observerSource, /if \(\$visible -and \$allow -contains \$name\)/u);
@@ -1594,6 +1595,25 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
       titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
     },
   }, { title: observedTitle, submitPresent: true }), /submit_state_reconciliation/u);
+
+  const authenticatedTitle = "My Information";
+  const observedTitles = ["Sign In", authenticatedTitle];
+  let waits = 0;
+  const reconciled = await waitForReconciledMonitorSurface({
+    page: "application_ready",
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from(authenticatedTitle, "utf8")),
+    },
+  }, () => ({
+    title: observedTitles.shift() ?? authenticatedTitle,
+    page: "profile",
+    submitPresent: false,
+  }), {
+    attempts: 2,
+    pause: async () => { waits += 1; },
+  });
+  assert.equal(reconciled.title, authenticatedTitle);
+  assert.equal(waits, 1);
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {

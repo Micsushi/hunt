@@ -1365,10 +1365,14 @@ export class PlaywrightPersistentBrowserSession
     this.#profileSessionRetentionRequest = undefined;
     const context = this.#context;
     const failedSession = this.#session;
+    const page = this.#page;
+    const pageWasOpen = page !== undefined && !page.isClosed();
     const inspectionPassed = await this.#holdBeforeCleanup(context);
-    const contextCleaned = await this.#boundedCleanup(
+    const contextCleanupAttempt = await this.#boundedCleanup(
       () => context?.close() ?? Promise.resolve(),
     );
+    const contextCleaned = contextCleanupAttempt ||
+      (pageWasOpen && page !== undefined && page.isClosed());
     const profileCleaned = await this.#boundedCleanup(() => marker === undefined
       ? this.#options.profiles.cleanupPartial(profilePath)
       : this.#options.profiles.cleanup(profilePath, marker));

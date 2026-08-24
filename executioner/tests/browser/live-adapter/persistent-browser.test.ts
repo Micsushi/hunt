@@ -1352,6 +1352,27 @@ test("close succeeds after account ownership invalidation cleaned the exact sess
   );
 });
 
+test("account invalidation reconciles a Playwright close rejection after the owned page closed", async () => {
+  const context = new FakeContext([]);
+  context.failCloseAfterClosing = true;
+  const { provider, opened } = await openedProviderThatInvalidatesAfterFill(
+    new MemoryProfiles(),
+    context,
+  );
+  if (!opened.ok) return;
+
+  await invalidateWithOneFill(provider, opened.value.session.sessionId);
+  assert.deepEqual(
+    await provider.close({
+      schemaVersion: 1,
+      journeyId: liveFixtures.journeyId,
+      operationId: generatedOperationId("operation_close_invalidated_reconciled_1"),
+      sessionId: opened.value.session.sessionId,
+    }, new AbortController().signal),
+    { ok: true, value: undefined },
+  );
+});
+
 test("close preserves account invalidation cleanup failure for the exact session", async () => {
   const profiles = new MemoryProfiles();
   profiles.failCleanup = true;
@@ -1633,13 +1654,14 @@ test("reconcile preserves each exact target fact without normalization", async (
 
 async function openedProviderThatInvalidatesAfterFill(
   profiles = new MemoryProfiles(),
+  context = new FakeContext([]),
 ) {
   let inspections = 0;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(),
     launcher: {
       async launchPersistentContext() {
-        return new FakeContext([]);
+        return context;
       },
     },
     probe: {

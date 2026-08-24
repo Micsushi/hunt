@@ -129,6 +129,28 @@ try {
           }),
         });
         try {
+          const reviewSurface = await page.evaluate(() => ({
+            title: document.title,
+            body: document.body.innerHTML,
+          }));
+          await page.evaluate(() => {
+            document.title = "My Information";
+            document.body.innerHTML = "<main><h1>My Information</h1><button type=\"button\">Next</button></main>";
+          });
+          await productionMonitor.auth(page, "application_ready", "after_readback", {
+            fieldCount: 0,
+            requiredFieldCount: 0,
+            controlTypes: [],
+            questionTypes: [],
+            answerTypes: [],
+            validationState: "clear",
+            submitPresent: false,
+            submitActivated: false,
+          }, { operationId: "operation_readiness_auth_monitor_01", attempt: 1 }, new AbortController().signal);
+          await page.evaluate((surface) => {
+            document.title = surface.title;
+            document.body.innerHTML = surface.body;
+          }, reviewSurface);
           await productionMonitor.application(page, "review", "review_readback", {
             fieldCount: 0,
             requiredFieldCount: 0,
