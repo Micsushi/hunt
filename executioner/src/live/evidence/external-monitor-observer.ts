@@ -358,6 +358,7 @@ $allow = @(
 )
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
+$documentTitles = [Collections.Generic.List[string]]::new()
 $address = $null
 foreach ($element in $elements) {
   try {
@@ -372,6 +373,10 @@ foreach ($element in $elements) {
         [void]$selectedTabTitles.Add($name)
       }
     }
+    if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
+        $element.Current.ControlType.Id -eq 50030 -and $documentTitles.Count -lt 8) {
+      [void]$documentTitles.Add($name)
+    }
     if ($visible -and $address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and
         ([string]$element.Current.AutomationId -eq 'view_1021' -or $name -eq 'Address and search bar')) {
       $pattern = $null
@@ -385,6 +390,7 @@ $payload = [ordered]@{
   pid = $browsers[0].Pid
   title = [string]$window.Current.Name
   selectedTabTitles = @($selectedTabTitles)
+  documentTitles = @($documentTitles)
   address = $address
   flags = @($seen | Sort-Object)
 }
@@ -419,6 +425,7 @@ try {
   let observed: {
     readonly title?: unknown;
     readonly selectedTabTitles?: unknown;
+    readonly documentTitles?: unknown;
     readonly address?: unknown;
     readonly flags?: unknown;
   };
@@ -428,6 +435,8 @@ try {
   if (typeof observed.title !== "string" || !Array.isArray(observed.selectedTabTitles) ||
       observed.selectedTabTitles.length > 8 ||
       observed.selectedTabTitles.some((value) => typeof value !== "string") ||
+      !Array.isArray(observed.documentTitles) || observed.documentTitles.length > 8 ||
+      observed.documentTitles.some((value) => typeof value !== "string") ||
       !Array.isArray(observed.flags) ||
       observed.flags.some((value) => typeof value !== "string")) {
     observerFailure("accessibility_payload");
@@ -443,11 +452,15 @@ try {
   try { page = observedStructurePage(flags); }
   catch { return observerFailure("structure_classification"); }
   let title: string;
+  const identityTitles = [
+    ...(observed.selectedTabTitles as string[]),
+    ...(observed.documentTitles as string[]),
+  ];
   try {
     title = selectObservedChromeIdentityTitle(
       expectedTitleSha256,
       observed.title,
-      observed.selectedTabTitles as string[],
+      identityTitles,
     );
   }
   catch { return observerFailure("title_identity"); }
@@ -455,7 +468,7 @@ try {
     title,
     titleCandidateSha256s: observedChromeIdentityTitleSha256s(
       observed.title,
-      observed.selectedTabTitles as string[],
+      identityTitles,
     ),
     page,
     submitPresent: flags.has("Submit") || flags.has("Submit application"),
