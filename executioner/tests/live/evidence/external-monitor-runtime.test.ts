@@ -22,7 +22,12 @@ import {
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
 import { createStage2ExternalMonitorObserverAuthority } from
   "../../../src/live/evidence/external-monitor-authority.ts";
-import { normalizeObservedAddressHost, normalizeObservedChromeTitle, observedStructurePage } from
+import {
+  externalMonitorObserverFailureCode,
+  normalizeObservedAddressHost,
+  normalizeObservedChromeTitle,
+  observedStructurePage,
+} from
   "../../../src/live/evidence/external-monitor-observer.ts";
 
 const binding = {
@@ -1550,6 +1555,11 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   );
   assert.equal(observedStructurePage(new Set(["Review", "Submit application"])), "review");
   assert.equal(observedStructurePage(new Set(["My Information", "Next"])), "profile");
+  assert.equal(
+    externalMonitorObserverFailureCode(new Error("external monitor observer failed: owned_browser_observation")),
+    "owned_browser_observation",
+  );
+  assert.equal(externalMonitorObserverFailureCode(new Error("private value")), undefined);
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {

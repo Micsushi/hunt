@@ -76,7 +76,8 @@ function acknowledge(
   binding: DesktopBinding,
   observer: ReturnType<typeof createStage2ExternalMonitorObserverAuthority>,
 ): void {
-  const request = JSON.parse(stableFile(requestPath, 16 * 1024).toString("utf8")) as {
+  const request = observerStage("request_admission", () =>
+    JSON.parse(stableFile(requestPath, 16 * 1024).toString("utf8"))) as {
     readonly page?: unknown;
     readonly moment?: unknown;
     readonly screenshotFile?: unknown;
@@ -86,10 +87,13 @@ function acknowledge(
   const structure = reviewedMonitorStructureId(request.page);
   if (structure === undefined) denied();
   const screenshotPath = join(dirname(requestPath), request.screenshotFile);
-  const screenshot = stableFile(screenshotPath, 12 * 1024 * 1024);
-  const visual = ownedBrowserObservation(runtimeRoot, binding);
+  const screenshot = observerStage("screenshot_admission", () =>
+    stableFile(screenshotPath, 12 * 1024 * 1024));
+  const visual = observerStage("owned_browser_observation", () =>
+    ownedBrowserObservation(runtimeRoot, binding));
   if (!compatibleObservedPage(request.page, visual.page)) denied();
-  writeStage2ExternalMonitorAcknowledgement({
+  observerStage("acknowledgement_admission", () =>
+    writeStage2ExternalMonitorAcknowledgement({
     runtimeRoot,
     evidenceRoot,
     requestPath,
@@ -109,8 +113,33 @@ function acknowledge(
     observedStructurePage: visual.page,
     observedSubmitPresent: visual.submitPresent,
     privacyScan: "separate_evidence_required",
-    observer,
-  });
+      observer,
+    }));
+}
+
+const OBSERVER_FAILURE_CODES = [
+  "request_admission",
+  "screenshot_admission",
+  "owned_browser_observation",
+  "acknowledgement_admission",
+] as const;
+
+type ObserverFailureCode = typeof OBSERVER_FAILURE_CODES[number];
+
+function observerStage<T>(code: ObserverFailureCode, run: () => T): T {
+  try {
+    return run();
+  } catch {
+    throw new Error(`external monitor observer failed: ${code}`);
+  }
+}
+
+export function externalMonitorObserverFailureCode(error: unknown): ObserverFailureCode | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const prefix = "external monitor observer failed: ";
+  if (!error.message.startsWith(prefix)) return undefined;
+  const code = error.message.slice(prefix.length);
+  return OBSERVER_FAILURE_CODES.find((candidate) => candidate === code);
 }
 
 function pendingRequests(evidenceRoot: string): string[] {
