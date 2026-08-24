@@ -183,12 +183,12 @@ $owner = Get-Content -LiteralPath ([IO.Path]::Combine($root, 'external-monitor-l
 $profile = [string]$binding.browserProfilePath
 try { $all = @(Get-CimInstance Win32_Process) } catch { exit 40 }
 $byPid = @{}; foreach ($item in $all) { $byPid[[int]$item.ProcessId] = $item }
-function Test-OwnedAncestor([int]$pid, [int]$ownerPid) {
+function Test-OwnedAncestor([int]$candidatePid, [int]$ownerPid) {
   for ($depth = 0; $depth -lt 32; $depth++) {
-    if ($pid -eq $ownerPid) { return $true }
-    if (-not $byPid.ContainsKey($pid)) { return $false }
-    $pid = [int]$byPid[$pid].ParentProcessId
-    if ($pid -le 0) { return $false }
+    if ($candidatePid -eq $ownerPid) { return $true }
+    if (-not $byPid.ContainsKey($candidatePid)) { return $false }
+    $candidatePid = [int]$byPid[$candidatePid].ParentProcessId
+    if ($candidatePid -le 0) { return $false }
   }
   return $false
 }
