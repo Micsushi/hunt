@@ -373,15 +373,13 @@ foreach ($element in $elements) {
     $name = [string]$element.Current.Name
     $visible = -not $element.Current.IsOffscreen
     if ($visible -and $allow -contains $name) { [void]$seen.Add($name) }
-    if ($visible) {
-      switch ($name) {
-        'My Information' { $stageCounts.myInformation = 1 + [int]$stageCounts.myInformation }
-        'My Experience' { $stageCounts.myExperience = 1 + [int]$stageCounts.myExperience }
-        'Application Questions' { $stageCounts.applicationQuestions = 1 + [int]$stageCounts.applicationQuestions }
-        'Voluntary Disclosures' { $stageCounts.voluntaryDisclosures = 1 + [int]$stageCounts.voluntaryDisclosures }
-        'Self Identify' { $stageCounts.selfIdentify = 1 + [int]$stageCounts.selfIdentify }
-        'Review' { $stageCounts.review = 1 + [int]$stageCounts.review }
-      }
+    switch ($name) {
+      'My Information' { $stageCounts.myInformation = 1 + [int]$stageCounts.myInformation }
+      'My Experience' { $stageCounts.myExperience = 1 + [int]$stageCounts.myExperience }
+      'Application Questions' { $stageCounts.applicationQuestions = 1 + [int]$stageCounts.applicationQuestions }
+      'Voluntary Disclosures' { $stageCounts.voluntaryDisclosures = 1 + [int]$stageCounts.voluntaryDisclosures }
+      'Self Identify' { $stageCounts.selfIdentify = 1 + [int]$stageCounts.selfIdentify }
+      'Review' { $stageCounts.review = 1 + [int]$stageCounts.review }
     }
     if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
         $element.Current.ControlType.Id -eq 50019) {
@@ -566,7 +564,7 @@ export function observedStructureIdentityTitles(
         ? ["Review"]
         : [];
   const active = new Set(activeStageTitles);
-  return Object.freeze(titles.filter((title) => flags.has(title) && active.has(title)));
+  return Object.freeze(titles.filter((title) => active.has(title)));
 }
 
 interface ObservedStageCounts {
