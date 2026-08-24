@@ -121,6 +121,11 @@ const OBSERVER_FAILURE_CODES = [
   "request_admission",
   "screenshot_admission",
   "owned_browser_observation",
+  "browser_process_binding",
+  "accessibility_tree",
+  "address_identity",
+  "structure_classification",
+  "title_identity",
   "acknowledgement_admission",
 ] as const;
 
@@ -129,9 +134,14 @@ type ObserverFailureCode = typeof OBSERVER_FAILURE_CODES[number];
 function observerStage<T>(code: ObserverFailureCode, run: () => T): T {
   try {
     return run();
-  } catch {
+  } catch (error) {
+    if (externalMonitorObserverFailureCode(error) !== undefined) throw error;
     throw new Error(`external monitor observer failed: ${code}`);
   }
+}
+
+function observerFailure(code: ObserverFailureCode): never {
+  throw new Error(`external monitor observer failed: ${code}`);
 }
 
 export function externalMonitorObserverFailureCode(error: unknown): ObserverFailureCode | undefined {
@@ -188,12 +198,14 @@ $windows = @($all | Where-Object {
     [pscustomobject]@{ Pid = [int]$_.ProcessId; Handle = $process.MainWindowHandle; Title = [string]$process.MainWindowTitle }
   }
 })
-if ($windows.Count -ne 1) { throw 'owned browser window unavailable' }
+if ($windows.Count -ne 1) { exit 41 }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $window = [Windows.Automation.AutomationElement]::FromHandle($windows[0].Handle)
-if ($null -eq $window) { throw 'owned browser accessibility unavailable' }
-$elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+if ($null -eq $window) { exit 42 }
+try {
+  $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+} catch { exit 43 }
 $allow = @(
   'Apply', 'Apply Now', 'Apply Manually', 'Sign in with email', 'Create Account', 'Sign In',
   'Email Address', 'Password', 'Forgot Password', 'Reset Password', 'Send Verification Email',
@@ -225,15 +237,25 @@ $payload = [ordered]@{
 }
 [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
 `.trim();
-  const output = execFileSync("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
-  ], {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 10_000,
-    env: { ...process.env, HUNT_C3_OBSERVER_RUNTIME_ROOT: runtimeRoot },
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  let output: string;
+  try {
+    output = execFileSync("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
+    ], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10_000,
+      env: { ...process.env, HUNT_C3_OBSERVER_RUNTIME_ROOT: runtimeRoot },
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch (error) {
+    const status = typeof error === "object" && error !== null && "status" in error
+      ? error.status
+      : undefined;
+    if (status === 41) observerFailure("browser_process_binding");
+    if (status === 42 || status === 43) observerFailure("accessibility_tree");
+    throw error;
+  }
   const observed = JSON.parse(Buffer.from(output, "base64").toString("utf8")) as {
     readonly title?: unknown;
     readonly address?: unknown;
@@ -241,12 +263,21 @@ $payload = [ordered]@{
   };
   if (typeof observed.title !== "string" || !Array.isArray(observed.flags) ||
       observed.flags.some((value) => typeof value !== "string")) denied();
-  if (typeof observed.address === "string" && observed.address.length > 0 &&
-      normalizeObservedAddressHost(observed.address) !== binding.host) denied();
+  if (typeof observed.address === "string" && observed.address.length > 0) {
+    let host: string;
+    try { host = normalizeObservedAddressHost(observed.address); }
+    catch { return observerFailure("address_identity"); }
+    if (host !== binding.host) observerFailure("address_identity");
+  }
   const flags = new Set(observed.flags.map(canonicalObservedFlag));
-  const page = observedStructurePage(flags);
+  let page: string;
+  try { page = observedStructurePage(flags); }
+  catch { return observerFailure("structure_classification"); }
+  let title: string;
+  try { title = normalizeObservedChromeTitle(observed.title); }
+  catch { return observerFailure("title_identity"); }
   return Object.freeze({
-    title: normalizeObservedChromeTitle(observed.title),
+    title,
     page,
     submitPresent: flags.has("Submit") || flags.has("Submit application"),
   });
