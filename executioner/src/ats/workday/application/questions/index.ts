@@ -293,8 +293,12 @@ export function createQuestionnairePageHandler(
           recordUnset();
           return blocked("profile_answer_missing", field.fieldId, category);
         }
+        const syntheticLearningDefault =
+          mode === "synthetic_test_non_submittable" &&
+          answer.value.lane === "synthetic_test_default";
         if (
           category !== null &&
+          !syntheticLearningDefault &&
           !protectedAnswerProvenanceAllowed(
             answer.value.intent.provenance,
             definition?.source.kind === "neutral_disclosure" &&
@@ -307,6 +311,7 @@ export function createQuestionnairePageHandler(
         }
         if (
           category !== null &&
+          !syntheticLearningDefault &&
           answer.value.intent.kind === "text" &&
           isPlaceholder(answer.value.intent.value)
         ) {

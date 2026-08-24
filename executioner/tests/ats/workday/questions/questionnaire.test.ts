@@ -483,6 +483,67 @@ test("missing protected facts require owner input", async () => {
   assert.equal(calls.verified, 0);
 });
 
+test("protected choice defaults remain synthetic and non-submittable while learning UI", async () => {
+  const sponsorship = field(
+    "s2-field-sponsorship",
+    "Do you require a work permit or VISA sponsorship?",
+    "listbox",
+    [
+      { id: optionId("s2-option-sponsorship-select"), label: boundedText("Select One") },
+      { id: optionId("s2-option-sponsorship-yes"), label: boundedText("Yes") },
+      { id: optionId("s2-option-sponsorship-no"), label: boundedText("No") },
+    ],
+  );
+  const profile: ProfileQuery = {
+    async query() {
+      return { ok: true, value: { kind: "profile_answer_missing" } };
+    },
+  };
+  const { handler, calls } = dependencies({ profile });
+
+  assert.deepEqual(await handler.complete(
+    { ...request([sponsorship]), mode: "synthetic_test_non_submittable" },
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "verified",
+      answers: [],
+      protectedPlaceholderCount: 0,
+    },
+  });
+  assert.equal(calls.driven, 1);
+  assert.equal(calls.verified, 1);
+});
+
+test("protected text defaults remain synthetic and non-submittable while learning UI", async () => {
+  const compensation = field(
+    "s2-field-compensation-learning",
+    "Please indicate your annual salary and/or total compensation requirements",
+    "textarea",
+  );
+  const profile: ProfileQuery = {
+    async query() {
+      return { ok: true, value: { kind: "profile_answer_missing" } };
+    },
+  };
+  const { handler, calls } = dependencies({ profile });
+
+  assert.deepEqual(await handler.complete(
+    { ...request([compensation]), mode: "synthetic_test_non_submittable" },
+    new AbortController().signal,
+  ), {
+    ok: true,
+    value: {
+      kind: "verified",
+      answers: [],
+      protectedPlaceholderCount: 0,
+    },
+  });
+  assert.equal(calls.driven, 1);
+  assert.equal(calls.verified, 1);
+});
+
 test("an unresolved narrative requires owner input while other owner facts remain usable", async () => {
   const unresolved = createConfiguredNarrativeProvider({
     revision: "narrative-questionnaire-v1",
