@@ -286,7 +286,7 @@ test("retained run-99 Profile labels and requiredness stay evidence-bound", () =
   ]));
   assert.deepEqual([...retained.entries()].filter(([label]) => new Set([
     "How Did You Hear About Us?",
-    "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+    "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.",
     "Country", "First Name", "Last Name", "Address Line 1", "City",
     "Province or Territory", "Postal Code", "Email", "Phone Device Type",
     "Country Phone Code", "Phone Number", "Phone Extension",
@@ -305,7 +305,7 @@ test("retained run-99 Profile labels and requiredness stay evidence-bound", () =
     ["Phone Extension", { required: false, allowedOptions: [] }],
     ["How Did You Hear About Us?", { required: true, allowedOptions: [] }],
     [
-      "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+      "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.",
       { required: true, allowedOptions: ["Yes", "No"] },
     ],
   ]);

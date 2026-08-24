@@ -349,7 +349,7 @@ test("generated prior-employment defaults fail closed before mutation", async ()
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile" data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
-    <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span><fieldset role="radiogroup"><legend>Have you previously worked for our company (this does not apply to contingent/contract work)?</legend>
+    <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span><fieldset role="radiogroup"><legend>Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.</legend>
       <input id="previous-yes" type="radio" name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
       <input id="previous-no" type="radio" name="candidateIsPreviousWorker" value="false"><label for="previous-no">No</label>
     </fieldset></div>
@@ -443,7 +443,7 @@ fields: [{
       answerState: "unset",
       lane: null,
       binderStrategy: "catalog_selector_exact",
-      sanitizedLabelSha256: "6d98f0476b6f333e02d6e2c85da12ef51b5f32a57eff587fd3be1f424eed7e46",
+      sanitizedLabelSha256: "cb8a534730a85fc9b2d2ae0ba130d05cdd5300666fac5bcc82c29fa0b7655fd8",
       metadataReconciliation: "matched",
       backingState: "unset",
       validationState: "clear",

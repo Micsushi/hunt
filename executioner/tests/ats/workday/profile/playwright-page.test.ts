@@ -10,6 +10,8 @@ import {
   type ProfileFieldPlan,
   type WorkdayProfilePagePort,
 } from "../../../../src/ats/workday/application/profile/index.ts";
+import { retainedProfileTextSha256 } from
+  "../../../../src/ats/workday/application/profile/catalog.ts";
 
 const fixture = await readFile(
   new URL("./fixtures/profile-contact.html", import.meta.url),
@@ -280,6 +282,54 @@ test("v2 semantic ids bind exact profile controls and accessible required wordin
     assert.equal(readback.get("phone.country_code"), "Canada (+1)");
     assert.equal(readback.get("phone.number"), "5550100");
     assert.equal(readback.get("identity.has_preferred_name"), "true");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("associated Workday labels override aria labels containing selected values", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <label for="source--source">How Did You Hear About Us?</label>
+          <button id="source--source" type="button" data-automation-id="sourcePrompt"
+            aria-haspopup="listbox" aria-label="How Did You Hear About Us? Select One Required">
+            Select One
+          </button>
+          <label for="country--country">Country</label>
+          <button id="country--country" aria-haspopup="listbox"
+            aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+          <label for="address--countryRegion">Province or Territory</label>
+          <button id="address--countryRegion" aria-haspopup="listbox"
+            aria-label="Province or Territory Alberta Not Required"
+            aria-valuetext="Alberta">Alberta</button>
+          <label for="phoneNumber--phoneType">Phone Device Type</label>
+          <button id="phoneNumber--phoneType" aria-haspopup="listbox"
+            aria-label="Phone Device Type Mobile Required"
+            aria-valuetext="Mobile">Mobile</button>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const controls = await adapter.inspect(AbortSignal.any([]));
+    for (const [fieldId, label] of [
+      ["source.how_did_you_hear", "How Did You Hear About Us?"],
+      ["address.country", "Country"],
+      ["address.region", "Province or Territory"],
+      ["phone.device_type", "Phone Device Type"],
+    ] as const) {
+      const control = controls.controls.find((candidate) => candidate.fieldId === fieldId);
+      assert.ok(control !== undefined);
+      const observed = await adapter.observeControl(
+        control.controlId,
+        AbortSignal.any([]),
+        false,
+      );
+      assert.equal(observed.sanitizedLabelSha256, retainedProfileTextSha256(label));
+    }
   } finally {
     await browser.close();
   }

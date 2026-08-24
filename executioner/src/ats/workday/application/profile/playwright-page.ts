@@ -1874,6 +1874,11 @@ async function observedControlLabel(
       const legend = element.closest("fieldset")?.querySelector("legend");
       return normalized(legend?.textContent);
     }
+    if (element.id !== "") {
+      const owned = [...document.querySelectorAll("label")].find((label) => label.htmlFor === element.id);
+      const label = normalized(owned?.textContent);
+      if (label !== "") return label;
+    }
     const labelledBy = element.getAttribute("aria-labelledby");
     if (labelledBy !== null && labelledBy !== "") {
       const labels = labelledBy.split(/\s+/u).map((id) => document.getElementById(id)?.textContent ?? "");
@@ -1882,11 +1887,6 @@ async function observedControlLabel(
     }
     const aria = normalized(element.getAttribute("aria-label"));
     if (aria !== "") return aria;
-    if (element.id !== "") {
-      const owned = [...document.querySelectorAll("label")].find((label) => label.htmlFor === element.id);
-      const label = normalized(owned?.textContent);
-      if (label !== "") return label;
-    }
     const parentLabel = normalized(element.closest("label")?.textContent);
     if (parentLabel !== "") return parentLabel;
     const field = element.closest(
