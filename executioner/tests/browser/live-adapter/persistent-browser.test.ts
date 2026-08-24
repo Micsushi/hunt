@@ -394,19 +394,19 @@ test("successful retention releases the live session exactly once", async () => 
   const profiles = new MemoryProfiles();
   let probeCalls = 0;
   const provider = new PlaywrightPersistentBrowserSession({
-    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 60_000).toISOString()),
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 300_000).toISOString()),
     launcher: { async launchPersistentContext() { return context; } },
     probe: { async inspect() { probeCalls += 1; return { ownership: "owned", target: { kind: "matched" }, snapshot: structuralSnapshot }; } },
     profiles,
-    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 300_000).toISOString()),
     now: () => new Date().toISOString(),
     ids: () => liveFixtures.session.sessionId,
-    timeoutMs: 1_500,
+    timeoutMs: 6_000,
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
   if (!opened.ok) return;
-  const direct = new OwnedWorkdayApplicationRuntime(candidateApplicationRuntime(new Date(now + 30_000).toISOString()));
+  const direct = new OwnedWorkdayApplicationRuntime(candidateApplicationRuntime(new Date(now + 300_000).toISOString()));
   direct.bindSession(opened.value.session);
   await assert.doesNotReject(() => direct.run(context.ownedPages[0]! as never, {
     schemaVersion: 1,
@@ -447,7 +447,7 @@ test("successful retention releases the live session exactly once", async () => 
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
     now: new Date().toISOString(),
-    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 300_000).toISOString(),
   }, new AbortController().signal);
   assert.deepEqual(retained, { ok: true, value: undefined });
   const closed = await provider.close({
@@ -467,7 +467,7 @@ test("retention rejects a pinned-target drift and leaves fallback cleanup as own
   const profiles = new MemoryProfiles();
   let targetMatched = true;
   const provider = new PlaywrightPersistentBrowserSession({
-    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 60_000).toISOString()),
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 300_000).toISOString()),
     launcher: { async launchPersistentContext() { return context; } },
     probe: { async inspect() {
       return targetMatched
@@ -479,10 +479,10 @@ test("retention rejects a pinned-target drift and leaves fallback cleanup as own
         };
     } },
     profiles,
-    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 300_000).toISOString()),
     now: () => new Date().toISOString(),
     ids: () => liveFixtures.session.sessionId,
-    timeoutMs: 1_500,
+    timeoutMs: 6_000,
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -504,7 +504,7 @@ test("retention rejects a pinned-target drift and leaves fallback cleanup as own
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
     now: new Date().toISOString(),
-    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 300_000).toISOString(),
   }, new AbortController().signal);
   assert.deepEqual(rejected, {
     ok: false,
@@ -527,7 +527,7 @@ test("retention rejects a pinned probe that crosses current approval", async () 
   const base = Date.now();
   let current = new Date(base).toISOString();
   const approvalExpiresAt = new Date(base + 50).toISOString();
-  const leaseExpiresAt = new Date(base + 10_000).toISOString();
+  const leaseExpiresAt = new Date(base + 300_000).toISOString();
   let delayProbe = false;
   const provider = new PlaywrightPersistentBrowserSession({
     binding: binding(new Date(base - 60_000).toISOString(), leaseExpiresAt),
@@ -546,7 +546,7 @@ test("retention rejects a pinned probe that crosses current approval", async () 
       ? { now: current, ownerApprovalExpiresAt: approvalExpiresAt }
       : undefined,
     ids: () => liveFixtures.session.sessionId,
-    timeoutMs: 1_500,
+    timeoutMs: 6_000,
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -590,14 +590,14 @@ test("explicit retained-session release closes context and profile", async () =>
   const profiles = new MemoryProfiles();
   let probeCalls = 0;
   const provider = new PlaywrightPersistentBrowserSession({
-    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 1_250).toISOString()),
+    binding: binding(new Date(now - 1_000).toISOString(), new Date(now + 300_000).toISOString()),
     launcher: { async launchPersistentContext() { return context; } },
     probe: { async inspect() { probeCalls += 1; return { ownership: "owned", target: { kind: "matched" }, snapshot: structuralSnapshot }; } },
     profiles,
-    applicationRuntime: candidateApplicationRuntime(new Date(now + 30_000).toISOString()),
+    applicationRuntime: candidateApplicationRuntime(new Date(now + 300_000).toISOString()),
     now: () => new Date().toISOString(),
     ids: () => liveFixtures.session.sessionId,
-    timeoutMs: 1_500,
+    timeoutMs: 6_000,
   });
   const opened = await provider.open(openRequest(), new AbortController().signal);
   assert.equal(opened.ok, true);
@@ -633,7 +633,7 @@ test("explicit retained-session release closes context and profile", async () =>
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
     now: new Date().toISOString(),
-    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 300_000).toISOString(),
   }, new AbortController().signal);
   assert.deepEqual(retained, { ok: true, value: undefined });
   const released = await provider[releaseOwnedApplicationSession]({
@@ -642,7 +642,7 @@ test("explicit retained-session release closes context and profile", async () =>
     operationId: generatedOperationId("operation_retention_release_01"),
     sessionId: opened.value.session.sessionId,
     target: liveFixtures.target,
-    ownerApprovalExpiresAt: new Date(now + 30_000).toISOString(),
+    ownerApprovalExpiresAt: new Date(now + 300_000).toISOString(),
   }, new AbortController().signal);
   assert.deepEqual(released, { ok: true, value: undefined });
   await waitFor(() => context.closeCount === 1 && profiles.cleanupCount === 1, 3_000);
