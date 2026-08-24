@@ -28,6 +28,7 @@ import {
   externalMonitorObserverFailureCode,
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
+  observedChromeIdentityTitleSha256s,
   observedStructurePage,
   reconcileObservedMonitorSurface,
   selectObservedChromeIdentityTitle,
@@ -1564,6 +1565,10 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     staleWindow,
     ["My Experience"],
   ), "Create Account");
+  assert.deepEqual(observedChromeIdentityTitleSha256s(staleWindow, ["My Information"]), [
+    digest(Buffer.from("Create Account", "utf8")),
+    digest(Buffer.from("My Information", "utf8")),
+  ]);
   assert.throws(() => selectObservedChromeIdentityTitle(
     digest(Buffer.from("My Information", "utf8")),
     staleWindow,

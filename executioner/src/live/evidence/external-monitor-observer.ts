@@ -128,6 +128,7 @@ async function acknowledge(
 
 interface ObservedMonitorSurface {
   readonly title: string;
+  readonly titleCandidateSha256s?: readonly string[];
   readonly page: string;
   readonly submitPresent: boolean;
 }
@@ -161,7 +162,11 @@ export async function waitForReconciledMonitorSurface(
 
 export function reconcileObservedMonitorSurface(
   request: { readonly page?: unknown; readonly capturedIdentityDigests?: unknown },
-  observed: { readonly title: string; readonly submitPresent: boolean },
+  observed: {
+    readonly title: string;
+    readonly titleCandidateSha256s?: readonly string[];
+    readonly submitPresent: boolean;
+  },
 ): void {
   const titleSha256 = typeof request.capturedIdentityDigests === "object" &&
       request.capturedIdentityDigests !== null &&
@@ -175,7 +180,13 @@ export function reconcileObservedMonitorSurface(
       observedTitleSha256 !== titleSha256) {
     observerFailure("title_identity_reconciliation",
       typeof titleSha256 === "string" && /^[0-9a-f]{64}$/u.test(titleSha256)
-        ? { expectedTitleSha256: titleSha256, observedTitleSha256 }
+        ? {
+            expectedTitleSha256: titleSha256,
+            observedTitleSha256,
+            ...(observed.titleCandidateSha256s === undefined
+              ? {}
+              : { observedTitleCandidateSha256s: observed.titleCandidateSha256s }),
+          }
         : undefined);
   }
   if (observed.submitPresent !== (request.page === "review")) {
@@ -208,6 +219,7 @@ type ObserverFailureCode = typeof OBSERVER_FAILURE_CODES[number];
 export interface ExternalMonitorObserverFailureDiagnostic {
   readonly expectedTitleSha256: string;
   readonly observedTitleSha256: string;
+  readonly observedTitleCandidateSha256s?: readonly string[];
 }
 
 const observerFailureDiagnostics = new WeakMap<Error, ExternalMonitorObserverFailureDiagnostic>();
@@ -418,6 +430,10 @@ try {
   catch { return observerFailure("title_identity"); }
   return Object.freeze({
     title,
+    titleCandidateSha256s: observedChromeIdentityTitleSha256s(
+      observed.title,
+      observed.selectedTabTitles as string[],
+    ),
     page,
     submitPresent: flags.has("Submit") || flags.has("Submit application"),
   });
@@ -502,6 +518,20 @@ export function selectObservedChromeIdentityTitle(
     createHash("sha256").update(canonicalMonitorIdentityTitle(candidate), "utf8")
       .digest("hex") === expectedTitleSha256);
   return matches.length === 1 ? matches[0]! : windowIdentity;
+}
+
+export function observedChromeIdentityTitleSha256s(
+  windowTitle: string,
+  selectedTabTitles: readonly string[],
+): readonly string[] {
+  if (selectedTabTitles.length > 8) denied();
+  const candidates = new Set([normalizeObservedChromeTitle(windowTitle)]);
+  for (const candidate of selectedTabTitles) {
+    candidates.add(normalizeObservedChromeTitle(candidate));
+  }
+  return Object.freeze([...candidates].map((candidate) =>
+    createHash("sha256").update(canonicalMonitorIdentityTitle(candidate), "utf8")
+      .digest("hex")));
 }
 
 async function waitForDesktopBinding(runtimeRoot: string, token: string): Promise<DesktopBinding> {
