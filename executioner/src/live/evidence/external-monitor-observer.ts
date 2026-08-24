@@ -362,16 +362,20 @@ function canonicalObservedFlag(value: string): string {
 
 export function observedStructurePage(flags: ReadonlySet<string>): string {
   if (flags.has("Review") && (flags.has("Submit") || flags.has("Submit application"))) return "review";
-  if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
-  if (flags.has("Upload a resume") || flags.has("Upload Resume")) return "resume";
-  if (flags.has("My Information") || flags.has("My Experience")) return "profile";
+  if (flags.has("Create Account") ||
+      (flags.has("Sign In") && flags.has("Email Address") && flags.has("Password"))) {
+    return "account_entry";
+  }
   if (flags.has("Reset Password")) return "password_reset_set";
   if (flags.has("Send Verification Email")) return "verification_required";
   if (flags.has("Forgot Password")) return "password_reset_request";
   if (flags.has("Sign in with email")) return "email_sign_in_choice";
+  if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
+  if (flags.has("Upload a resume") || flags.has("Upload Resume")) return "resume";
+  if (flags.has("My Information") || flags.has("My Experience")) return "profile";
   if (flags.has("Apply Manually")) return "apply_choice";
   if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";
-  if (flags.has("Create Account") || flags.has("Sign In")) return "account_entry";
+  if (flags.has("Sign In")) return "account_entry";
   denied();
 }
 

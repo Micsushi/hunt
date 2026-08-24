@@ -1560,6 +1560,13 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   );
   assert.equal(observedStructurePage(new Set(["Review", "Submit application"])), "review");
   assert.equal(observedStructurePage(new Set(["My Information", "Next"])), "profile");
+  assert.equal(observedStructurePage(new Set([
+    "Create Account", "Email Address", "Password", "My Information", "My Experience",
+    "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",
+  ])), "account_entry");
+  assert.equal(observedStructurePage(new Set([
+    "Sign In", "Email Address", "Password", "My Information", "Application Questions", "Review",
+  ])), "account_entry");
   assert.equal(
     externalMonitorObserverFailureCode(new Error("external monitor observer failed: owned_browser_observation")),
     "owned_browser_observation",
