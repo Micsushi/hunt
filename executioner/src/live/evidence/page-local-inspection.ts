@@ -5,6 +5,7 @@ import type { ConsoleMessage, Page, Request } from "playwright";
 
 import type { PersistentPage } from
   "../../browser/playwright-live/private/types.ts";
+import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 
 const evidenceRevision = "s2-page-local-inspection-v1";
 const recordLimit = 128;
@@ -63,7 +64,7 @@ export function createPageLocalInspection(evidenceRoot: string): {
     }
     await mkdir(evidenceRoot, { recursive: true });
     await page.screenshot({
-      path: join(evidenceRoot, "page-local-visible.png"),
+      path: join(evidenceRoot, MONITOR_SCREENSHOT_FILE),
       animations: "disabled",
       fullPage: true,
     });

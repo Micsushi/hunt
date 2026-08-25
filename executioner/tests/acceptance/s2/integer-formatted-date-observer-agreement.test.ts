@@ -219,7 +219,7 @@ test("retained Integer formatted dates agree across every completion observer", 
     assert.ok(Array.isArray(inspectionEvidence.consoleTypes));
     assert.ok(Array.isArray(inspectionEvidence.pageErrorNames));
     assert.ok(Array.isArray(inspectionEvidence.requestFailures));
-    assert.equal(existsSync(join(evidenceRoot, "page-local-visible.png")), true);
+    assert.equal(existsSync(join(evidenceRoot, "monitor-visible.png")), true);
   } finally {
     await browser.close();
     rmSync(evidenceRoot, { recursive: true, force: true });
