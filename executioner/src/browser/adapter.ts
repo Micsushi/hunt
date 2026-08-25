@@ -1670,13 +1670,19 @@ export async function applyMutation(
         // though the owning field has the exact committed value. Accept only
         // that independently readable, target-local result; otherwise retain
         // the original uncertainty and let the session fail closed.
-        if (await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
+        if (
+          await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs) &&
+          await stabilizeExactFieldPopupTarget(page, target, mutation.option, timeoutMs)
+        ) {
           return "applied";
         }
         throw error;
       }
       if (!await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
         throw new TypeError("Workday prompt option did not commit");
+      }
+      if (!await stabilizeExactFieldPopupTarget(page, target, mutation.option, timeoutMs)) {
+        throw new TypeError("Workday prompt owner did not rebind");
       }
       return "applied";
     }
@@ -1767,6 +1773,61 @@ async function fieldPopupSelection(
     )].filter(visible));
     return named.length === 1 ? selected(named[0]!) : undefined;
   }, { declaredToken: target.declaredToken, expectedName: target.name });
+}
+
+async function rebindExactFieldPopupTarget(
+  page: Page,
+  target: ResolvedBrowserTarget,
+): Promise<boolean> {
+  return await page.evaluate(({ declaredToken, expectedName }) => {
+    const normalize = (value: string | null | undefined): string =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        element.getClientRects().length > 0;
+    };
+    const marked = [...document.querySelectorAll<HTMLElement>(
+      `[data-hunt-target-token="${declaredToken}"]`,
+    )];
+    const visibleMarked = marked.filter(visible);
+    if (visibleMarked.length === 1) return true;
+    if (visibleMarked.length > 1) return false;
+    const candidates = [...document.querySelectorAll<HTMLElement>(
+      '[role="combobox"], [aria-haspopup="listbox"]',
+    )].filter(visible).filter((control) => {
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      return normalize(field?.querySelector("label, legend")?.textContent) === expectedName;
+    });
+    if (candidates.length !== 1) return false;
+    const candidate = candidates[0]!;
+    const existing = normalize(candidate.getAttribute("data-hunt-target-token"));
+    if (existing !== "" && existing !== declaredToken) return false;
+    marked.forEach((element) => element.removeAttribute("data-hunt-target-token"));
+    candidate.setAttribute("data-hunt-target-token", declaredToken);
+    return true;
+  }, { declaredToken: target.declaredToken, expectedName: target.name });
+}
+
+async function stabilizeExactFieldPopupTarget(
+  page: Page,
+  target: ResolvedBrowserTarget,
+  option: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + Math.min(750, timeoutMs);
+  while (true) {
+    if (
+      !await rebindExactFieldPopupTarget(page, target) ||
+      await fieldPopupSelection(page, target) !== option
+    ) return false;
+    if (Date.now() >= deadline) return true;
+    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
 }
 
 export async function clickNext(

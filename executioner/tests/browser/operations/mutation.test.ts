@@ -818,15 +818,22 @@ test("waits for a delayed Workday prompt-button commit", async () => {
       <script>
         const button = document.querySelector('#agreement');
         const options = document.querySelector('#options');
+        const field = button.closest('[data-automation-id^="formField-"]');
         button.addEventListener('click', () => { options.hidden = false; });
         options.addEventListener('click', () => {
           setTimeout(() => { button.textContent = 'No'; }, 250);
           setTimeout(() => {
+            const replacement = button.cloneNode(true);
+            replacement.textContent = 'No';
+            replacement.removeAttribute('data-hunt-target-token');
+            button.replaceWith(replacement);
+          }, 400);
+          setTimeout(() => {
             const stale = document.createElement('div');
             stale.dataset.automationId = 'selectedItem';
             stale.textContent = 'Yes';
-            button.closest('[data-automation-id^="formField-"]').append(stale);
-          }, 300);
+            field.append(stale);
+          }, 450);
         }, { once: true });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
