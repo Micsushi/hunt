@@ -884,7 +884,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
       <script>
         let button = document.querySelector('#agreement');
         const options = document.querySelector('#options');
-        button.addEventListener('click', () => { options.hidden = false; });
+        document.addEventListener('click', event => {
+          if (event.target === button) options.hidden = !options.hidden;
+        });
         options.addEventListener('click', event => {
           button.textContent = event.target.textContent.trim();
           button.focus();
@@ -895,9 +897,6 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
             button = replacement;
           }, { once: true });
         }, { once: true });
-        document.addEventListener('keydown', event => {
-          if (event.key === 'Escape' && event.target === button) options.hidden = true;
-        });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");

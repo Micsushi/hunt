@@ -1862,12 +1862,22 @@ async function settleExactFieldPopupCommit(
   if (!await rebindExactFieldPopupTarget(page, target)) return false;
   control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   if (await control.count() !== 1) return false;
-  if (
-    await page.locator(
+  let stillOpen = await page.locator(
+    '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+      '[data-automation-id="promptLeafNode"]:visible',
+  ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+  if (stillOpen) {
+    await control.click({ timeout: 250 });
+    await page.waitForTimeout(100);
+    if (!await rebindExactFieldPopupTarget(page, target)) return false;
+    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+    if (await control.count() !== 1) return false;
+    stillOpen = await page.locator(
       '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
         '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true"
-  ) return false;
+    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+  }
+  if (stillOpen) return false;
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
 }
 
