@@ -974,10 +974,23 @@ function readApplicationSnapshot(
     } else if (control instanceof HTMLSelectElement) {
       verified = verified && control.value.trim() !== "";
     } else if (role === "combobox" || control.matches('button[aria-haspopup="listbox"]')) {
-      const value = control instanceof HTMLInputElement ? control.value :
-        control.getAttribute("aria-valuetext") ?? text(control.textContent);
+      const declared = text(control.getAttribute("aria-valuetext"));
+      const declaredPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
+        declared.toLocaleLowerCase("en-US"),
+      );
+      const selectedLabel = text(control.getAttribute("data-selected-label"));
+      const selectedLabelPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
+        selectedLabel.toLocaleLowerCase("en-US"),
+      );
+      const value = control instanceof HTMLInputElement
+        ? control.value
+        : declared !== "" && !declaredPlaceholder
+          ? declared
+          : selectedLabel !== "" && !selectedLabelPlaceholder
+            ? selectedLabel
+            : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
-      const placeholder = /^(?:select one|select|choose|none)$/u.test(normalizedValue);
+      const placeholder = /^(?:select one|select|choose|choose one|none)$/u.test(normalizedValue);
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
       );

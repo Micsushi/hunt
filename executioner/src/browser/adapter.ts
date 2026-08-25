@@ -1666,6 +1666,7 @@ export async function applyMutation(
         'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption"][1]',
       );
       const ownedOption = await optionOwner.count() === 1 && await optionOwner.isVisible();
+      await bindExactFieldPopupOwner(page, target, exact.locator);
       try {
         await (ownedOption ? optionOwner : exact.locator).click({
           timeout: timeoutMs,
@@ -1752,7 +1753,9 @@ async function fieldPopupSelection(
     };
     const selected = (control: Element): string | undefined => {
       const declared = normalize(control.getAttribute("aria-valuetext"));
-      if (declared !== "") return declared;
+      if (!/^(?:select|select one|choose|choose one)$/iu.test(declared) && declared !== "") {
+        return declared;
+      }
       const buttonText = control instanceof HTMLButtonElement || control.getAttribute("role") === "button"
         ? normalize(control.textContent)
         : "";
@@ -1826,15 +1829,72 @@ async function stabilizeExactFieldPopupTarget(
   option: string,
   timeoutMs: number,
 ): Promise<boolean> {
-  const deadline = Date.now() + Math.min(750, timeoutMs);
+  const stableWindowMs = Math.min(750, timeoutMs);
+  const deadline = Date.now() + Math.min(3_000, timeoutMs);
+  let stableSince: number | undefined;
   while (true) {
-    if (
-      !await rebindExactFieldPopupTarget(page, target) ||
-      await fieldPopupSelection(page, target) !== option
-    ) return false;
-    if (Date.now() >= deadline) return true;
-    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+    const now = Date.now();
+    const exact = await rebindExactFieldPopupTarget(page, target) &&
+      await fieldPopupSelection(page, target) === option;
+    if (exact) {
+      stableSince ??= now;
+      if (now - stableSince >= stableWindowMs) return true;
+    } else {
+      stableSince = undefined;
+    }
+    if (now >= deadline) return false;
+    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - now)));
   }
+}
+
+async function bindExactFieldPopupOwner(
+  page: Page,
+  target: ResolvedBrowserTarget,
+  option: Locator,
+): Promise<void> {
+  await option.evaluate((element, { declaredToken }) => {
+    const visible = (candidate: Element): candidate is HTMLElement => {
+      if (!(candidate instanceof HTMLElement) || candidate.hidden ||
+          candidate.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(candidate);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        candidate.getClientRects().length > 0;
+    };
+    const controls = [...document.querySelectorAll<HTMLElement>(
+      `[data-hunt-target-token="${declaredToken}"]`,
+    )].filter(visible);
+    if (controls.length !== 1) throw new TypeError("Workday prompt control ownership changed");
+    const promptSelector =
+      '[role="option"], [data-automation-id="promptOption"], ' +
+      '[data-automation-id="promptLeafNode"]';
+    let popupRoot: Element | null = element.closest(
+      '[role="listbox"], [role="dialog"], [data-automation-id="promptMenu"], ' +
+        '[data-automation-id="promptPopup"]',
+    );
+    if (popupRoot === null) {
+      for (let ancestor = element.parentElement;
+        ancestor !== null && ancestor !== document.body;
+        ancestor = ancestor.parentElement) {
+        if (ancestor.matches(
+          '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+        )) break;
+        if (!ancestor.matches(promptSelector) && ancestor.querySelector(promptSelector) !== null) {
+          popupRoot = ancestor;
+          break;
+        }
+      }
+    }
+    popupRoot ??= element.closest(
+      '[role="option"], [data-automation-id="promptOption"]',
+    ) ?? element;
+    popupRoot.setAttribute("data-hunt-field-popup-owner", declaredToken);
+    const global = window as unknown as Record<string, unknown>;
+    const registry = global.__huntFieldPopupOwners instanceof Map
+      ? global.__huntFieldPopupOwners as Map<string, { control: Element; popupRoot: Element }>
+      : new Map<string, { control: Element; popupRoot: Element }>();
+    registry.set(declaredToken, { control: controls[0]!, popupRoot });
+    global.__huntFieldPopupOwners = registry;
+  }, { declaredToken: target.declaredToken });
 }
 
 async function settleExactFieldPopupCommit(
@@ -1844,140 +1904,12 @@ async function settleExactFieldPopupCommit(
   timeoutMs: number,
 ): Promise<boolean> {
   if (!await rebindExactFieldPopupTarget(page, target)) return false;
-  let control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  const control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   if (await control.count() !== 1) return false;
   await control.blur({ timeout: timeoutMs }).catch(() => undefined);
-  const deadline = Date.now() + Math.min(1_000, timeoutMs);
-  while (Date.now() < deadline) {
-    if (!await rebindExactFieldPopupTarget(page, target)) {
-      await page.waitForTimeout(50);
-      continue;
-    }
-    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-    if (await control.count() !== 1) {
-      await page.waitForTimeout(50);
-      continue;
-    }
-    const open = await page.locator(
-      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-        '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-    if (!open) break;
-    await control.press("Escape", { timeout: 250 });
-    await page.waitForTimeout(100);
-  }
-  if (!await rebindExactFieldPopupTarget(page, target)) return false;
-  control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-  if (await control.count() !== 1) return false;
-  let stillOpen = await page.locator(
-    '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-      '[data-automation-id="promptLeafNode"]:visible',
-  ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-  if (stillOpen) {
-    const exact = await waitForExactFieldPopupOption(page, option, Math.min(250, timeoutMs));
-    if (exact.count === 1 && exact.locator !== undefined) {
-      const optionOwner = exact.locator.locator(
-        'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption"][1]',
-      );
-      const activation = await optionOwner.count() === 1 && await optionOwner.isVisible()
-        ? optionOwner
-        : exact.locator;
-      await activation.click({ timeout: 250, position: { x: 2, y: 2 } });
-      await page.waitForTimeout(100);
-      if (!await rebindExactFieldPopupTarget(page, target)) return false;
-      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-      if (await control.count() !== 1) return false;
-      stillOpen = await page.locator(
-        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-          '[data-automation-id="promptLeafNode"]:visible',
-      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-    }
-  }
-  if (stillOpen) {
-    await control.press("Tab", { timeout: 250 });
-    await page.waitForTimeout(100);
-    if (!await rebindExactFieldPopupTarget(page, target)) return false;
-    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-    if (await control.count() !== 1) return false;
-    stillOpen = await page.locator(
-      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-        '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-  }
-  if (stillOpen) {
-    const dismissalSurfaceBound = await page.evaluate(({ declaredToken, expectedName }) => {
-      const normalize = (value: string | null | undefined): string =>
-        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
-      const visible = (element: Element): element is HTMLElement => {
-        if (!(element instanceof HTMLElement) || element.hidden ||
-            element.getAttribute("aria-hidden") === "true") return false;
-        const style = getComputedStyle(element);
-        return style.display !== "none" && style.visibility !== "hidden" &&
-          element.getClientRects().length > 0;
-      };
-      document.querySelectorAll("[data-hunt-popup-dismiss-token]").forEach((element) =>
-        element.removeAttribute("data-hunt-popup-dismiss-token")
-      );
-      const controls = [...document.querySelectorAll<HTMLElement>(
-        `[data-hunt-target-token="${declaredToken}"]`,
-      )].filter(visible);
-      if (controls.length !== 1) return false;
-      const field = controls[0]!.closest(
-        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
-      );
-      const labels = field === null ? [] : [...field.querySelectorAll<HTMLElement>(
-        "label, legend",
-      )].filter(visible).filter((label) => normalize(label.textContent) === expectedName);
-      if (labels.length !== 1) return false;
-      labels[0]!.setAttribute("data-hunt-popup-dismiss-token", declaredToken);
-      return true;
-    }, { declaredToken: target.declaredToken, expectedName: target.name });
-    if (dismissalSurfaceBound) {
-      await page.locator(
-        `[data-hunt-popup-dismiss-token="${target.declaredToken}"]`,
-      ).click({ timeout: 250 });
-      await page.waitForTimeout(100);
-      if (!await rebindExactFieldPopupTarget(page, target)) return false;
-      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-      if (await control.count() !== 1) return false;
-      stillOpen = await page.locator(
-        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-          '[data-automation-id="promptLeafNode"]:visible',
-      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-    }
-  }
-  if (stillOpen) {
-    const questionnaireHeading = page.getByRole("heading", {
-      name: "Application Questions",
-      exact: true,
-    });
-    if (await questionnaireHeading.count() === 1 && await questionnaireHeading.isVisible()) {
-      await questionnaireHeading.click({ timeout: 250 });
-      await page.waitForTimeout(100);
-      if (!await rebindExactFieldPopupTarget(page, target)) return false;
-      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-      if (await control.count() !== 1) return false;
-      stillOpen = await page.locator(
-        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-          '[data-automation-id="promptLeafNode"]:visible',
-      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-    }
-  }
-  if (stillOpen) {
-    const safeFocusTarget = page.locator("textarea:visible");
-    if (await safeFocusTarget.count() === 1) {
-      await safeFocusTarget.click({ timeout: 250 });
-      await page.waitForTimeout(100);
-      if (!await rebindExactFieldPopupTarget(page, target)) return false;
-      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-      if (await control.count() !== 1) return false;
-      stillOpen = await page.locator(
-        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-          '[data-automation-id="promptLeafNode"]:visible',
-      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
-    }
-  }
-  if (stillOpen) return false;
+  // A Workday single-select can retain its exact, target-owned prompt after
+  // committing. Popup visibility is presentation state; the admitted effect is
+  // proven by a unique rebound target and stable exact readback below.
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
 }
 
@@ -2084,9 +2016,13 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     };
     const selectedPopupLabel = (element: Element): string => {
       const declared = normalize(element.getAttribute("aria-valuetext"));
-      if (declared.length > 0) return declared;
+      if (!/^(?:select|select one|choose|choose one)$/iu.test(declared) && declared.length > 0) {
+        return declared;
+      }
       const selectedLabel = normalize(element.getAttribute("data-selected-label"));
-      if (selectedLabel.length > 0) return selectedLabel;
+      if (!/^(?:select|select one|choose|choose one)$/iu.test(selectedLabel) && selectedLabel.length > 0) {
+        return selectedLabel;
+      }
       const buttonText = element instanceof HTMLButtonElement || element.getAttribute("role") === "button"
         ? normalize(element.textContent)
         : "";

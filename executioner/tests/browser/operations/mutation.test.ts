@@ -691,7 +691,7 @@ test("rebinds one uniquely observed Workday checkbox group after its target toke
   }
 });
 
-test("re-commits an exact Workday prompt-button selection", async () => {
+test("accepts a stable exact Workday prompt selection while its owned popup remains open", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed02") });
@@ -715,7 +715,7 @@ test("re-commits an exact Workday prompt-button selection", async () => {
           if (option === null) return;
           button.textContent = option.textContent.trim();
           button.dataset.committed = 'true';
-          options.hidden = true;
+          options.dataset.committedOpen = 'true';
         });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
@@ -734,6 +734,11 @@ test("re-commits an exact Workday prompt-button selection", async () => {
     assert.equal(result.ok, true);
     assert.equal(
       await context.pages()[0]!.locator("#authorization").getAttribute("data-committed"),
+      "true",
+    );
+    assert.equal(await context.pages()[0]!.locator("#options").isVisible(), true);
+    assert.equal(
+      await context.pages()[0]!.locator("#options").getAttribute("data-committed-open"),
       "true",
     );
   } finally {
@@ -854,7 +859,7 @@ test("waits for a delayed Workday prompt-button commit", async () => {
     ), new AbortController().signal);
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
-    assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
+    assert.equal(await context.pages()[0]!.locator("#options").isVisible(), true);
     await context.pages()[0]!.waitForTimeout(100);
     const readback = await provider.observe(started.value, new AbortController().signal);
     assert.deepEqual(readback.ok ? readback.value.targets[0]?.readback : undefined, {
@@ -867,7 +872,7 @@ test("waits for a delayed Workday prompt-button commit", async () => {
   }
 });
 
-test("rebinds a Workday prompt button remounted by blur before popup settlement", async () => {
+test("rebinds a Workday prompt button remounted by blur with its owned popup still open", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed10") });
@@ -894,6 +899,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         document.querySelector('#safe-focus').addEventListener('click', () => {
           options.hidden = true;
         });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') options.hidden = true;
+        });
         document.addEventListener('click', event => {
           if (event.target === button) options.hidden = false;
         });
@@ -902,9 +910,12 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
           button.focus();
           button.addEventListener('blur', () => {
             const replacement = button.cloneNode(true);
+            replacement.textContent = 'Select One';
+            replacement.setAttribute('aria-valuetext', 'Select One');
             replacement.removeAttribute('data-hunt-target-token');
             button.replaceWith(replacement);
             button = replacement;
+            setTimeout(() => { replacement.textContent = 'No'; }, 250);
           }, { once: true });
         };
         document.querySelector('#leaf').addEventListener('click', event => {
@@ -934,7 +945,11 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
     ), new AbortController().signal);
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
-    assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
+    assert.equal(
+      await context.pages()[0]!.locator("#agreement").getAttribute("aria-valuetext"),
+      "Select One",
+    );
+    assert.equal(await context.pages()[0]!.locator("#options").isVisible(), true);
     assert.equal(await context.pages()[0]!.locator("#safe-focus").inputValue(), "");
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activated"),
@@ -942,10 +957,75 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
     );
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activation-count"),
-      "2",
+      "1",
     );
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-hunt-target-token"),
+      "target-agreement",
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("ignores stale and unrelated Workday portals after the exact control remounts", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed12") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-agreement">
+        <label>Are you subject to an agreement?</label>
+        <button id="agreement" type="button" aria-haspopup="listbox" aria-expanded="false"
+          data-hunt-target-token="target-agreement">Select One</button>
+      </div>
+      <div id="target-popup" role="listbox" hidden>
+        <div role="option" data-automation-id="promptOption">
+          <div data-automation-id="promptLeafNode">No</div>
+        </div>
+      </div>
+      <div id="unrelated-popup" role="listbox">
+        <div role="option" data-automation-id="promptOption">Unrelated</div>
+      </div>
+      <script>
+        let button = document.querySelector('#agreement');
+        const popup = document.querySelector('#target-popup');
+        button.addEventListener('click', () => {
+          popup.hidden = false;
+          button.setAttribute('aria-expanded', 'true');
+          button.setAttribute('aria-controls', 'target-popup');
+        });
+        popup.addEventListener('click', event => {
+          if (event.target.closest('[data-automation-id="promptOption"]') === null) return;
+          const replacement = button.cloneNode(true);
+          replacement.textContent = 'No';
+          replacement.removeAttribute('data-hunt-target-token');
+          replacement.setAttribute('aria-expanded', 'true');
+          button.replaceWith(replacement);
+          button = replacement;
+        });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "No" as never },
+      "ededededededed13",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    const page = context.pages()[0]!;
+    assert.equal(await page.locator("#agreement").innerText(), "No");
+    assert.equal(await page.locator("#target-popup").isVisible(), true);
+    assert.equal(await page.locator("#unrelated-popup").isVisible(), true);
+    assert.equal(
+      await page.locator("#agreement").getAttribute("data-hunt-target-token"),
       "target-agreement",
     );
   } finally {

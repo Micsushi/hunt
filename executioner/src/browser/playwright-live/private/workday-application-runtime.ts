@@ -1213,6 +1213,11 @@ export class OwnedWorkdayApplicationRuntime {
         submitActivated: false,
         privacyScan: "pass",
       }));
+      // The independent monitor can blur the last control and Workday can then
+      // remount the questionnaire root. Rebind the stable, value-free target
+      // identities before the final review-expectation readback just as the
+      // per-field verifier does above.
+      await bindQuestionnaireTargets(page, input.pageId);
       const after = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
       if (!after.ok) throw new TypeError("questionnaire review truth unavailable");
       const targets = new Map(after.value.targets.map((target) => [target.token, target]));
@@ -2394,6 +2399,13 @@ export async function bindQuestionnaireTargets(
         label = normalize(control.labels?.[0]?.textContent);
       }
       if (label === "") label = normalize(control.getAttribute("placeholder"));
+      const fieldIdentity = field?.getAttribute("data-automation-id") ?? "";
+      // Workday regenerates ids such as mcvf1 whenever React remounts a field.
+      // A target remains the same question across that remount, so bind it to
+      // the stable form-field owner and label instead of the ephemeral id.
+      const stableControlId = /^mcvf\d+$/iu.test(control.id)
+        ? fieldIdentity
+        : control.id;
       const reviewed: Record<string, string> = {
         "Given name": "target-s1-field-given-name",
         "Family name": "target-s1-field-family-name",
@@ -2411,7 +2423,7 @@ export async function bindQuestionnaireTargets(
         control.getAttribute("type") ?? "",
         control.getAttribute("role") ?? "",
         control.getAttribute("data-automation-id") ?? "",
-        control.id,
+        stableControlId,
         control.getAttribute("name") ?? "",
         ...(isConditionalApplicationDate
           ? [field?.getAttribute("data-automation-id") ?? field?.id ?? ""]
