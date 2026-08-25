@@ -1867,6 +1867,48 @@ async function settleExactFieldPopupCommit(
       '[data-automation-id="promptLeafNode"]:visible',
   ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
   if (stillOpen) {
+    const dismissalSurfaceBound = await page.evaluate(({ declaredToken, expectedName }) => {
+      const normalize = (value: string | null | undefined): string =>
+        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+      const visible = (element: Element): element is HTMLElement => {
+        if (!(element instanceof HTMLElement) || element.hidden ||
+            element.getAttribute("aria-hidden") === "true") return false;
+        const style = getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden" &&
+          element.getClientRects().length > 0;
+      };
+      document.querySelectorAll("[data-hunt-popup-dismiss-token]").forEach((element) =>
+        element.removeAttribute("data-hunt-popup-dismiss-token")
+      );
+      const controls = [...document.querySelectorAll<HTMLElement>(
+        `[data-hunt-target-token="${declaredToken}"]`,
+      )].filter(visible);
+      if (controls.length !== 1) return false;
+      const field = controls[0]!.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const labels = field === null ? [] : [...field.querySelectorAll<HTMLElement>(
+        "label, legend",
+      )].filter(visible).filter((label) => normalize(label.textContent) === expectedName);
+      if (labels.length !== 1) return false;
+      labels[0]!.setAttribute("data-hunt-popup-dismiss-token", declaredToken);
+      return true;
+    }, { declaredToken: target.declaredToken, expectedName: target.name });
+    if (dismissalSurfaceBound) {
+      await page.locator(
+        `[data-hunt-popup-dismiss-token="${target.declaredToken}"]`,
+      ).click({ timeout: 250 });
+      await page.waitForTimeout(100);
+      if (!await rebindExactFieldPopupTarget(page, target)) return false;
+      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+      if (await control.count() !== 1) return false;
+      stillOpen = await page.locator(
+        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+          '[data-automation-id="promptLeafNode"]:visible',
+      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+    }
+  }
+  if (stillOpen) {
     await control.click({ timeout: 250 });
     await page.waitForTimeout(100);
     if (!await rebindExactFieldPopupTarget(page, target)) return false;
