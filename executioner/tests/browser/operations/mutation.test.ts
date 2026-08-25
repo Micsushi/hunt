@@ -874,7 +874,7 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
   try {
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
       <div data-automation-id="formField-agreement">
-        <label id="agreement-label">Are you subject to an agreement?</label>
+        <label>Are you subject to an agreement?</label>
         <button id="agreement" type="button" aria-haspopup="listbox"
           data-hunt-target-token="target-agreement">Select One</button>
         <div id="options" hidden>
@@ -886,7 +886,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         const options = document.querySelector('#options');
         document.addEventListener('click', event => {
           if (event.target === button) options.hidden = false;
-          if (event.target === document.querySelector('#agreement-label')) options.hidden = true;
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Tab') options.hidden = true;
         });
         options.addEventListener('click', event => {
           button.textContent = event.target.textContent.trim();

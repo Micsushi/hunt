@@ -1867,6 +1867,17 @@ async function settleExactFieldPopupCommit(
       '[data-automation-id="promptLeafNode"]:visible',
   ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
   if (stillOpen) {
+    await control.press("Tab", { timeout: 250 });
+    await page.waitForTimeout(100);
+    if (!await rebindExactFieldPopupTarget(page, target)) return false;
+    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+    if (await control.count() !== 1) return false;
+    stillOpen = await page.locator(
+      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+        '[data-automation-id="promptLeafNode"]:visible',
+    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+  }
+  if (stillOpen) {
     const dismissalSurfaceBound = await page.evaluate(({ declaredToken, expectedName }) => {
       const normalize = (value: string | null | undefined): string =>
         (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -1907,17 +1918,6 @@ async function settleExactFieldPopupCommit(
           '[data-automation-id="promptLeafNode"]:visible',
       ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
     }
-  }
-  if (stillOpen) {
-    await control.click({ timeout: 250 });
-    await page.waitForTimeout(100);
-    if (!await rebindExactFieldPopupTarget(page, target)) return false;
-    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
-    if (await control.count() !== 1) return false;
-    stillOpen = await page.locator(
-      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
-        '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
   }
   if (stillOpen) return false;
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
