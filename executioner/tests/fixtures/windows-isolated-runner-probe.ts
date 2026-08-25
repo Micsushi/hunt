@@ -19,7 +19,7 @@ if (mode === "argv") {
 } else if (mode === "attest") {
   await assertCurrentProcessIsOnIsolatedDesktop();
   await writeFile(outputPath, "ok", "utf8");
-} else if (mode === "identity") {
+} else if (mode === "identity" || mode === "cleanup-terminal") {
   const configIndex = values.indexOf("--config");
   if (configIndex >= 0) {
     const config = JSON.parse(await readFile(values[configIndex + 1]!, "utf8")) as {
@@ -35,6 +35,22 @@ if (mode === "argv") {
     );
     await mkdir(profilePath, { recursive: true });
     await writeFile(join(profilePath, "owned-browser-residue"), "closed", "utf8");
+  }
+  if (mode === "cleanup-terminal") {
+    const evidenceRoot = argument(values, "--evidence-root");
+    await writeFile(join(evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "pre_review_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: "journey_abcdefghijklmnop",
+        status: "failed",
+        completedPages: 3,
+        errorCode: "browser_effect_uncertain",
+      },
+      cleanupErrorCode: "browser_profile_cleanup_failed",
+    }), "utf8");
   }
   await writeFile(outputPath, JSON.stringify({ pid: process.pid }), "utf8");
 } else if (mode === "environment") {

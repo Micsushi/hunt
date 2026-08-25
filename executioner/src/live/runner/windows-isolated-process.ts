@@ -281,6 +281,35 @@ function Remove-ClosedBrowserProfile($binding) {
     if ([IO.Directory]::Exists($profileRoot)) { throw 'browser profile cleanup incomplete' }
 }
 
+function Reconcile-TerminalCleanupEvidence([string]$root, $binding) {
+    if ($binding -eq $null) { return }
+    $profileRoot = [IO.Path]::GetFullPath([IO.Path]::Combine(
+        $binding.runtimeRoot, 'browser-profiles', $binding.journeyId, $binding.targetHandleId
+    ))
+    if ([IO.Directory]::Exists($profileRoot)) { throw 'browser profile cleanup reconciliation denied' }
+    $target = [IO.Path]::Combine($root, 'terminal-artifact.json')
+    if (-not [IO.File]::Exists($target)) { return }
+    $artifact = [IO.File]::ReadAllText($target, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($artifact.cleanupErrorCode -eq $null) { return }
+    if (
+        [int]$artifact.schemaVersion -ne 1 -or
+        [string]$artifact.evidenceRevision -ne 's2-terminal-artifact-v1' -or
+        [string]$artifact.cleanupErrorCode -ne 'browser_profile_cleanup_failed' -or
+        [string]$artifact.resultCode -eq 'browser_profile_cleanup_failed' -or
+        [string]$artifact.terminal.errorCode -eq 'browser_profile_cleanup_failed'
+    ) { throw 'terminal cleanup reconciliation denied' }
+    [void]$artifact.PSObject.Properties.Remove('cleanupErrorCode')
+    $partial = [IO.Path]::Combine($root, '.terminal-artifact-cleanup-' + [guid]::NewGuid().ToString('N') + '.partial')
+    $backup = [IO.Path]::Combine($root, '.terminal-artifact-cleanup-' + [guid]::NewGuid().ToString('N') + '.backup')
+    try {
+        [IO.File]::WriteAllText($partial, (($artifact | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        [IO.File]::Replace($partial, $target, $backup)
+    } finally {
+        if ([IO.File]::Exists($partial)) { [IO.File]::Delete($partial) }
+        if ([IO.File]::Exists($backup)) { [IO.File]::Delete($backup) }
+    }
+}
+
 function Get-Sha256Hex([byte[]]$bytes) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
@@ -593,6 +622,13 @@ try {
     if ($aliveAfterClose -ne 0) { $processAuditPassed = $false }
     try { Remove-ClosedBrowserProfile $processBinding }
     catch { $processAuditPassed = $false }
+    if ($processAuditPassed -and $aliveAfterClose -eq 0 -and $evidenceRoot -ne $null) {
+        try { Reconcile-TerminalCleanupEvidence $evidenceRoot $processBinding }
+        catch {
+            [Console]::Error.WriteLine('terminal cleanup reconciliation failed: ' + $_.Exception.Message)
+            $processAuditPassed = $false
+        }
+    }
     [HuntC3IsolatedRunner]::CloseDesktop($desktop) | Out-Null
     if ($desktopBindingPath -ne $null -and [IO.File]::Exists($desktopBindingPath)) { [IO.File]::Delete($desktopBindingPath) }
     if ($observerStopPath -ne $null -and [IO.File]::Exists($observerStopPath)) { [IO.File]::Delete($observerStopPath) }

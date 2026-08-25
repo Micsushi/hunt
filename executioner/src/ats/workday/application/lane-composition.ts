@@ -130,13 +130,21 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
       if (!liveLaneAcceptance(acceptance)) {
         throw new TypeError("application lane acceptance provenance is invalid");
       }
-      const candidate = [...records, acceptance];
+      const replacesRevealedQuestionnaireProof =
+        acceptance.checkpoint === "questionnaire_verified" &&
+        records.at(-1)?.checkpoint === "questionnaire_verified";
+      const candidate = [
+        ...records.slice(0, replacesRevealedQuestionnaireProof ? -1 : records.length),
+        acceptance,
+      ];
       if (!isValidApplicationPageSequence(candidate.map(({ checkpoint }) =>
         applicationPageForCheckpoint(checkpoint)
       ))) {
         throw new TypeError("application lane acceptance order is invalid");
       }
-      records.push(deepFreeze(structuredClone(acceptance)));
+      const sealed = deepFreeze(structuredClone(acceptance));
+      if (replacesRevealedQuestionnaireProof) records[records.length - 1] = sealed;
+      else records.push(sealed);
     },
     snapshot(checkpoint: ApplicationCheckpoint): readonly ApplicationLaneAcceptance[] {
       let count = records.length;

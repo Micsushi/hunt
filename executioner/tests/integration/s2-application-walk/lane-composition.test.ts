@@ -107,6 +107,11 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
     pageId: walkFixture.pages.questionnaire,
     attempt: 1,
   }, signal);
+  const revealedQuestionRetryResult = await handlers.questionnaire.reconcile({
+    journeyId: walkFixture.journeyId,
+    pageId: walkFixture.pages.questionnaire,
+    attempt: 2,
+  }, signal);
 
   assert.deepEqual(resumeResult.ok && resumeResult.value, {
     page: "resume",
@@ -126,6 +131,7 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
     checkpoint: "questionnaire_verified",
     independentlyVerified: true,
   });
+  assert.deepEqual(revealedQuestionRetryResult, questionResult);
   assert.deepEqual(
     acceptances.snapshot("questionnaire_verified").map(({ checkpoint }) =>
       checkpoint

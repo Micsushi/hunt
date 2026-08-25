@@ -193,6 +193,44 @@ test("Windows Review runner binds process cleanup to config, run, target, and li
   }
 });
 
+test("Windows Review runner clears a secondary cleanup error after exact job and profile cleanup", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "hunt-c3-cleanup-reconciled-"));
+  const runKey = "run_20260824_cleanupreconcile";
+  const configPath = join(storageRoot, "transient", runKey, "owner-input.json");
+  const runtimeRoot = join(storageRoot, "transient", runKey, "runtime");
+  const evidenceRoot = join(storageRoot, "retained", runKey, "evidence");
+  const output = join(storageRoot, "identity.json");
+  try {
+    await mkdir(runtimeRoot, { recursive: true });
+    await mkdir(evidenceRoot, { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      journeyId: "journey_abcdefghijklmnop",
+      target: {
+        handleId: "target_ref_abcdefghijklmnop",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R-12345",
+      },
+      roots: { runtime: { path: runtimeRoot } },
+    }));
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "cleanup-terminal", output,
+      "--evidence-root", evidenceRoot,
+      "--config", configPath,
+    ], { runnerPath: fixture }), 0);
+    const terminal = JSON.parse(await readFile(join(evidenceRoot, "terminal-artifact.json"), "utf8"));
+    assert.equal(terminal.resultCode, "pre_review_failed");
+    assert.equal(terminal.terminal.errorCode, "browser_effect_uncertain");
+    assert.equal("cleanupErrorCode" in terminal, false);
+    const audit = JSON.parse(await readFile(join(evidenceRoot, "process-audit.json"), "utf8"));
+    assert.equal(audit.status, "pass");
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Windows Review runner constructs the production monitor from the declared nested runtime root", {
   skip: process.platform !== "win32",
 }, async () => {
