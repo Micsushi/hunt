@@ -1740,17 +1740,19 @@ async function fieldPopupSelection(
     const selected = (control: Element): string | undefined => {
       const declared = normalize(control.getAttribute("aria-valuetext"));
       if (declared !== "") return declared;
+      const buttonText = control instanceof HTMLButtonElement || control.getAttribute("role") === "button"
+        ? normalize(control.textContent)
+        : "";
+      if (!/^(?:select|select one|choose|choose one)$/iu.test(buttonText) && buttonText !== "") {
+        return buttonText;
+      }
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
       const items = field === null ? [] : [...field.querySelectorAll(
         '[data-automation-id="selectedItem"]',
       )].filter(visible).map((item) => normalize(item.textContent)).filter(Boolean);
-      if (items.length === 1) return items[0];
-      const text = normalize(control.textContent);
-      return /^(?:select|select one|choose|choose one)$/iu.test(text) || text === ""
-        ? undefined
-        : text;
+      return items.length === 1 ? items[0] : undefined;
     };
     const marked = [...document.querySelectorAll(
       `[data-hunt-target-token="${declaredToken}"]`,
@@ -1873,6 +1875,12 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       if (declared.length > 0) return declared;
       const selectedLabel = normalize(element.getAttribute("data-selected-label"));
       if (selectedLabel.length > 0) return selectedLabel;
+      const buttonText = element instanceof HTMLButtonElement || element.getAttribute("role") === "button"
+        ? normalize(element.textContent)
+        : "";
+      if (!/^(?:select|select one|choose|choose one)$/iu.test(buttonText) && buttonText !== "") {
+        return buttonText;
+      }
       const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
       const selected = field === null
         ? []
@@ -1880,10 +1888,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           .map((item) => normalize(item.textContent))
           .filter(Boolean);
       if (selected.length === 1) return selected[0]!;
-      const buttonText = element instanceof HTMLButtonElement || element.getAttribute("role") === "button"
-        ? normalize(element.textContent)
-        : "";
-      return /^(?:select|select one|choose|choose one)$/iu.test(buttonText) ? "" : buttonText;
+      return "";
     };
     const fieldPopupOptions = (element: Element): string[] => {
       const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');

@@ -819,9 +819,15 @@ test("waits for a delayed Workday prompt-button commit", async () => {
         const button = document.querySelector('#agreement');
         const options = document.querySelector('#options');
         button.addEventListener('click', () => { options.hidden = false; });
-        options.addEventListener('click', () => setTimeout(() => {
-          button.textContent = 'No';
-        }, 250), { once: true });
+        options.addEventListener('click', () => {
+          setTimeout(() => { button.textContent = 'No'; }, 250);
+          setTimeout(() => {
+            const stale = document.createElement('div');
+            stale.dataset.automationId = 'selectedItem';
+            stale.textContent = 'Yes';
+            button.closest('[data-automation-id^="formField-"]').append(stale);
+          }, 300);
+        }, { once: true });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
@@ -838,6 +844,7 @@ test("waits for a delayed Workday prompt-button commit", async () => {
     ), new AbortController().signal);
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
+    await context.pages()[0]!.waitForTimeout(100);
     const readback = await provider.observe(started.value, new AbortController().signal);
     assert.deepEqual(readback.ok ? readback.value.targets[0]?.readback : undefined, {
       kind: "selected",
