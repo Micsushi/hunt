@@ -17,6 +17,7 @@ import {
 } from "../../../src/form/questions/catalog.ts";
 import {
   retainedProfileControlGuide,
+  retainedProfileLabelSha256Matches,
   retainedProfileTextSha256,
 } from "../../../src/ats/workday/application/profile/catalog.ts";
 import {
@@ -360,6 +361,22 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
     retainedProfileTextSha256("  Have You\u2019re Applied  "),
     retainedIntakeTextSha256("  Have You\u2019re Applied  "),
   );
+  assert.equal(retainedProfileLabelSha256Matches(
+    "employment.previously_worked_for_organization",
+    retainedProfileTextSha256(
+      "Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.",
+    ),
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
+    "employment.previously_worked_for_organization",
+    retainedProfileTextSha256(
+      "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+    ),
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
+    "employment.previously_worked_for_organization",
+    retainedProfileTextSha256("Have you previously worked for an unrelated company?"),
+  ), false);
 });
 
 test("question catalog is exactly the frozen ten-row S1 matrix", () => {

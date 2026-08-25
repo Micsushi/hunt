@@ -63,12 +63,33 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
     retained("website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
   ]);
 
+const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({
+    "employment.previously_worked_for_organization": Object.freeze([
+      "Have you previously worked for our company (this does not apply to contingent/contract work)?",
+    ]),
+  });
+
 export function retainedProfileTextSha256(value: string): string {
   return createHash("sha256").update(
     value.normalize("NFC").replace(/[\u2018\u2019\u02bc]/gu, "'")
       .replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US"),
     "utf8",
   ).digest("hex");
+}
+
+export function retainedProfileLabelSha256Matches(
+  identity: string,
+  observedSha256: string | null,
+): boolean {
+  if (observedSha256 === null) return false;
+  const guide = retainedProfileControlGuide.find((entry) => entry.identity === identity);
+  if (guide === undefined) return false;
+  const labels = [
+    guide.sanitizedLabel,
+    ...(retainedProfileSanitizedLabelAliases[identity] ?? []),
+  ];
+  return labels.some((label) => retainedProfileTextSha256(label) === observedSha256);
 }
 
 function retained(

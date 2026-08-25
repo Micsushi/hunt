@@ -30,6 +30,7 @@ import {
 } from "../../ats/workday/application/profile/index.ts";
 import {
   retainedProfileControlGuide,
+  retainedProfileLabelSha256Matches,
   retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
@@ -470,7 +471,7 @@ function metadataMismatchReasons(
   ]);
   const reasons: ProfileMetadataMismatchReason[] = [];
   if (record.binderStrategy !== "catalog_selector_exact") reasons.push("binder_strategy");
-  if (record.sanitizedLabelSha256 !== retainedProfileTextSha256(guide.sanitizedLabel)) {
+  if (!retainedProfileLabelSha256Matches(guide.identity, record.sanitizedLabelSha256)) {
     reasons.push("label_digest");
   }
   if (record.questionCategory !== guide.normalizedQuestionType) {
@@ -753,7 +754,7 @@ function guideMetadataMatches(
     JSON.stringify(field.visibleOptionIds) === JSON.stringify(expectedOptions)
   );
   return field.binderStrategy === "catalog_selector_exact" &&
-    field.sanitizedLabelSha256 === retainedProfileTextSha256(guide.sanitizedLabel) &&
+    retainedProfileLabelSha256Matches(guide.identity, field.sanitizedLabelSha256) &&
     field.questionCategory === guide.normalizedQuestionType &&
     field.answerCategory === guide.answerType &&
     guideBehaviorMatches(guide.behavior, field.uiType, field.uiVariant) &&
