@@ -2082,6 +2082,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       const requiredOwner = element.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
+      const requiredOwnerLabel = normalize(
+        requiredOwner?.querySelector("label, legend")?.textContent,
+      );
       return [{
         index,
         declaredToken: normalize(element.getAttribute("data-hunt-target-token")),
@@ -2094,7 +2097,11 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
               .some((radio) => radio.required)) ||
           (requiredOwner !== null && requiredOwner.querySelector(
             '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
-          ) !== null),
+          ) !== null) ||
+          (["dateSection", "dateInputWrapper"].includes(
+            element.getAttribute("data-automation-id") ?? "",
+          ) && requiredOwnerLabel.endsWith("*") &&
+            !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(requiredOwnerLabel)),
         control,
         state,
         readback,

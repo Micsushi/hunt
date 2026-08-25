@@ -2326,7 +2326,8 @@ export async function bindQuestionnaireTargets(
       .filter(visible);
     if (roots.length !== 1) return false;
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
-    const controls = roots[0]!.querySelectorAll<HTMLElement>(
+    const questionnaireRoot = roots[0]!;
+    const controls = questionnaireRoot.querySelectorAll<HTMLElement>(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
@@ -2371,8 +2372,15 @@ export async function bindQuestionnaireTargets(
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
+      const isConditionalApplicationDate = dateOwner === control && questionnaireRoot.matches([
+        selectors.primaryQuestions,
+        selectors.primaryQuestionnaire,
+        selectors.applicationQuestions,
+      ].join(", "));
       let label = control instanceof HTMLInputElement && control.type === "checkbox"
         ? normalize(field?.textContent)
+        : isConditionalApplicationDate
+        ? normalize(field?.querySelector("label, legend")?.textContent)
         : control.getAttribute("aria-haspopup") === "listbox"
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : "";
@@ -2404,6 +2412,9 @@ export async function bindQuestionnaireTargets(
         control.getAttribute("data-automation-id") ?? "",
         control.id,
         control.getAttribute("name") ?? "",
+        ...(isConditionalApplicationDate
+          ? [field?.getAttribute("data-automation-id") ?? field?.id ?? ""]
+          : []),
       ].join("\u0000");
       const identityHash = hash(identity);
       const occurrence = (identities.get(identityHash) ?? 0) + 1;

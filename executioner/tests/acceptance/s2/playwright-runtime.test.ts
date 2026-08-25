@@ -173,6 +173,72 @@ test("questionnaire adapter fills Workday segmented signed dates", async () => {
   }
 });
 
+test("conditional Workday dates retain distinct required target identities", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div id="questions">
+          <div id="availability-field" data-automation-id="formField-availability">
+            <label>When are you available to start?*</label>
+            <div data-automation-id="dateInputWrapper">
+              <input data-automation-id="dateSectionMonth-input">
+              <input data-automation-id="dateSectionDay-input">
+              <input data-automation-id="dateSectionYear-input">
+            </div>
+          </div>
+        </div>
+      </main>
+    `);
+    const pageId = "page-conditional-workday-dates" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const availability = page.locator("#availability-field [data-automation-id=dateInputWrapper]");
+    const originalAvailabilityToken = await availability.getAttribute("data-hunt-target-token");
+
+    await page.locator("#questions").evaluate((questions) => {
+      questions.insertAdjacentHTML("afterbegin", `
+        <div id="niv-field" data-automation-id="formField-finalNiv">
+          <label>What is your final NIV date?*</label>
+          <div data-automation-id="dateInputWrapper">
+            <input data-automation-id="dateSectionMonth-input">
+            <input data-automation-id="dateSectionDay-input">
+            <input data-automation-id="dateSectionYear-input">
+          </div>
+        </div>
+      `);
+    });
+    await bindQuestionnaireTargets(page, pageId);
+
+    const niv = page.locator("#niv-field [data-automation-id=dateInputWrapper]");
+    assert.equal(
+      await availability.getAttribute("data-hunt-target-token"),
+      originalAvailabilityToken,
+    );
+    assert.notEqual(
+      await niv.getAttribute("data-hunt-target-token"),
+      originalAvailabilityToken,
+    );
+    const inspection = await inspectPage(
+      page,
+      "live_session_conditional_dates_01" as never,
+      pageId,
+      new Map(),
+    );
+    const dates = [...inspection.targets.values()].flat()
+      .filter(({ control }) => control.kind === "date");
+    assert.deepEqual(
+      dates.map(({ name, required }) => ({ name, required })),
+      [
+        { name: "What is your final NIV date?*", required: true },
+        { name: "When are you available to start?*", required: true },
+      ],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("repeated questionnaire navigation distinguishes the destination by exact field truth", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
