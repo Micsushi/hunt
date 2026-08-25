@@ -861,8 +861,8 @@ test("accepts a detached Workday prompt option only after exact field readback",
           option.dataset.automationId = 'promptOption';
           option.textContent = 'Yes';
           option.addEventListener('mousedown', () => {
-            button.textContent = 'Yes';
             option.remove();
+            setTimeout(() => { button.textContent = 'Yes'; }, 250);
           });
           document.body.append(option);
         }, { once: true });

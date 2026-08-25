@@ -1670,7 +1670,7 @@ export async function applyMutation(
         // though the owning field has the exact committed value. Accept only
         // that independently readable, target-local result; otherwise retain
         // the original uncertainty and let the session fail closed.
-        if (await fieldPopupSelection(page, target) === mutation.option) {
+        if (await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
           return "applied";
         }
         throw error;
