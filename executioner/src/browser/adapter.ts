@@ -1837,24 +1837,36 @@ async function settleExactFieldPopupCommit(
   timeoutMs: number,
 ): Promise<boolean> {
   if (!await rebindExactFieldPopupTarget(page, target)) return false;
-  const control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  let control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   if (await control.count() !== 1) return false;
   await control.blur({ timeout: timeoutMs }).catch(() => undefined);
   const deadline = Date.now() + Math.min(1_000, timeoutMs);
   while (Date.now() < deadline) {
+    if (!await rebindExactFieldPopupTarget(page, target)) {
+      await page.waitForTimeout(50);
+      continue;
+    }
+    control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+    if (await control.count() !== 1) {
+      await page.waitForTimeout(50);
+      continue;
+    }
     const open = await page.locator(
       '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
         '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded") === "true";
+    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
     if (!open) break;
     await page.keyboard.press("Escape");
     await page.waitForTimeout(100);
   }
+  if (!await rebindExactFieldPopupTarget(page, target)) return false;
+  control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  if (await control.count() !== 1) return false;
   if (
     await page.locator(
       '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
         '[data-automation-id="promptLeafNode"]:visible',
-    ).count() > 0 || await control.getAttribute("aria-expanded") === "true"
+    ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true"
   ) return false;
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
 }

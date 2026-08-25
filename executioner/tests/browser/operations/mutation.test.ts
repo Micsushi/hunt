@@ -867,6 +867,62 @@ test("waits for a delayed Workday prompt-button commit", async () => {
   }
 });
 
+test("rebinds a Workday prompt button remounted by blur before popup settlement", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed10") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-agreement">
+        <label>Are you subject to an agreement?</label>
+        <button id="agreement" type="button" aria-haspopup="listbox"
+          data-hunt-target-token="target-agreement">Select One</button>
+        <div id="options" hidden>
+          <div role="option" data-automation-id="promptOption">No</div>
+        </div>
+      </div>
+      <script>
+        let button = document.querySelector('#agreement');
+        const options = document.querySelector('#options');
+        button.addEventListener('click', () => { options.hidden = false; });
+        options.addEventListener('click', event => {
+          button.textContent = event.target.textContent.trim();
+          button.focus();
+          button.addEventListener('blur', () => {
+            const replacement = button.cloneNode(true);
+            replacement.removeAttribute('data-hunt-target-token');
+            button.replaceWith(replacement);
+            button = replacement;
+            options.hidden = true;
+          }, { once: true });
+        }, { once: true });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "No" as never },
+      "ededededededed11",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
+    assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
+    assert.equal(
+      await context.pages()[0]!.locator("#agreement").getAttribute("data-hunt-target-token"),
+      "target-agreement",
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("accepts a detached Workday prompt option only after exact field readback", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
