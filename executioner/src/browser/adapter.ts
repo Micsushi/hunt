@@ -1871,6 +1871,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     const selectedPopupLabel = (element: Element): string => {
       const declared = normalize(element.getAttribute("aria-valuetext"));
       if (declared.length > 0) return declared;
+      const selectedLabel = normalize(element.getAttribute("data-selected-label"));
+      if (selectedLabel.length > 0) return selectedLabel;
       const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
       const selected = field === null
         ? []
