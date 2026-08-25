@@ -243,6 +243,41 @@ test("Review completion admits cumulative learning across repeated questionnaire
   }
 });
 
+test("Review completion reconciles Profile controls embedded on Resume with failed learning attempts", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-combined-profile-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_combinedprofilex",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(
+      layout.evidenceRoot,
+      configSha256,
+      journeyId,
+      false,
+      false,
+      true,
+      false,
+      1,
+      false,
+      true,
+    );
+
+    const audit = await auditStage2Completion(layout.evidenceRoot) as {
+      readonly status: string;
+      readonly profileFieldLearningSha256: string | null;
+    };
+    assert.equal(audit.status, "pass");
+    assert.equal(
+      audit.profileFieldLearningSha256,
+      digest(readFileSync(join(layout.evidenceRoot, "profile-field-learning-02.json"))),
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Review completion admits bound non-submittable synthetic questionnaire learning", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-synthetic-questions-"));
   try {
@@ -899,8 +934,9 @@ async function writeReviewEvidence(
   repeatedQuestionnaire = false,
   profileMutationAttempt = 1,
   syntheticQuestionnaire = false,
+  combinedResumeProfile = false,
 ): Promise<void> {
-  const learningBytes = Buffer.from(`${JSON.stringify({
+  let learningBytes = Buffer.from(`${JSON.stringify({
     schemaVersion: 5,
     evidenceRevision: "s2-profile-field-learning-v5",
     page: "profile",
@@ -987,10 +1023,103 @@ async function writeReviewEvidence(
       },
     }],
   }, null, 2)}\n`, "utf8");
+  if (combinedResumeProfile) {
+    const learning = JSON.parse(learningBytes.toString("utf8"));
+    learning.executionMode = "synthetic_test_non_submittable";
+    learning.testOnly = true;
+    learning.liveAcceptanceEligible = false;
+    learning.fields[0].lane = "synthetic_test_default";
+    learningBytes = Buffer.from(`${JSON.stringify(learning, null, 2)}\n`, "utf8");
+  }
   if (!directReview) {
     writeFileSync(join(root, "profile-field-learning.json"), learningBytes);
   }
   const profileFieldLearningSha256 = digest(learningBytes);
+  let combinedProfileFieldLearningSha256: string | undefined;
+  if (combinedResumeProfile) {
+    const template = JSON.parse(learningBytes.toString("utf8"));
+    const linkedIn = {
+      ...template.fields[0],
+      fieldIdentity: "profile.social.linkedin",
+      questionCategory: "social_network",
+      answerCategory: "url",
+      required: false,
+      lane: "live_owner_fact",
+      sanitizedLabelSha256: "84308bea454057aa509a12fbd5212988973d7cd513bc555a24a06dd2cc72e39e",
+      observationBinding: {
+        operationId: "operation_resume_profile_observation_01",
+        attempt: 1,
+        stateObservedAck: true,
+      },
+      monitorBinding: {
+        operationId: "operation_resume_profile_mutation_01",
+        attempt: 2,
+        beforeMutationAck: true,
+        afterReadbackAck: true,
+      },
+    };
+    const failed = {
+      fieldIdentity: "profile.skills.values",
+      uiType: "multi_select",
+      uiVariant: "workday_multi_select_v1",
+      questionCategory: "skill",
+      answerCategory: "multi_select",
+      required: false,
+      answerState: "answered",
+      lane: "live_owner_fact",
+      binderStrategy: "catalog_selector_exact",
+      sanitizedLabelSha256: "c8ef807f501a67099c3f7d98ee9b554fa8140756d2de1902a776bcf8503ad53a",
+      metadataReconciliation: "matched",
+      backingState: "unset",
+      validationState: "clear",
+      optionCatalogState: "unknown",
+      observationBinding: {
+        operationId: "operation_resume_profile_observation_02",
+        attempt: 2,
+        stateObservedAck: true,
+      },
+      visibleOptionIds: [],
+      selectedOptionId: null,
+      optionMapping: "owner_visible_option",
+      prefillDisposition: "blank",
+      driverAttempt: "multi_select",
+      monitorBinding: {
+        operationId: "operation_resume_profile_mutation_02",
+        attempt: 3,
+        beforeMutationAck: true,
+        afterReadbackAck: true,
+      },
+      terminalDisposition: "driver_failed",
+      mechanics: {
+        popupBound: "not_observed",
+        optionFocused: "not_observed",
+        optionActivated: "not_observed",
+        popupClosed: "not_observed",
+        backingValueCommitted: "not_observed",
+        validationCleared: "not_observed",
+        persistentReadback: "driver_failed",
+      },
+    };
+    const optional = {
+      ...template.fields[1],
+      fieldIdentity: "profile.social.twitter",
+      questionCategory: "social_network",
+      answerCategory: "text",
+      sanitizedLabelSha256: "7352f353c460e74c7ae226952d04f8aa307b12329c5512ec8cb6f1a0f8f9b2cb",
+      observationBinding: {
+        operationId: "operation_resume_profile_observation_03",
+        attempt: 3,
+        stateObservedAck: true,
+      },
+    };
+    const combinedBytes = Buffer.from(`${JSON.stringify({
+      ...template,
+      visibleControlCount: 3,
+      fields: [linkedIn, failed, optional],
+    }, null, 2)}\n`, "utf8");
+    writeFileSync(join(root, "profile-field-learning-02.json"), combinedBytes);
+    combinedProfileFieldLearningSha256 = digest(combinedBytes);
+  }
   if (!directReview) {
     writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
       schemaVersion: 4,
@@ -1102,6 +1231,7 @@ async function writeReviewEvidence(
       directReview,
       repeatedQuestionnaire,
       syntheticQuestionnaire,
+      combinedProfileFieldLearningSha256,
     ),
     sensitiveValues: [],
   });
@@ -1149,7 +1279,9 @@ async function writeReviewEvidence(
       {
         kind: "required_fields",
         status: "verified",
-        verifiedCount: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+        verifiedCount: directReview ? 0 : repeatedQuestionnaire
+          ? 4
+          : skipResume ? 2 : 3,
       },
       { kind: "review", status: "verified", verifiedCount: 1 },
       { kind: "submit_guard", status: "verified", verifiedCount: 1 },
@@ -1181,6 +1313,7 @@ async function writeReviewEvidence(
     skipResume,
     directReview,
     repeatedQuestionnaire,
+    combinedResumeProfile,
   );
   writeProcessAudit(root, "2026-08-10T12:01:00.000Z", configSha256);
   writeStage2TerminalArtifact(root, {
@@ -1191,7 +1324,9 @@ async function writeReviewEvidence(
       schemaVersion: 4,
       journeyId: journeyId as never,
       status: "review_reached",
-      completedPages: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+      completedPages: directReview ? 0 : repeatedQuestionnaire || combinedResumeProfile
+        ? 4
+        : skipResume ? 2 : 3,
     },
   });
   if (writeTrace) {
@@ -1205,7 +1340,9 @@ async function writeReviewEvidence(
       journeyId,
       status: "passed",
       checkpoint: "pre_review",
-      completedPages: directReview ? 1 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+      completedPages: directReview ? 1 : repeatedQuestionnaire || combinedResumeProfile
+        ? 4
+        : skipResume ? 2 : 3,
       submitActivated: false,
     });
   }
@@ -1242,11 +1379,12 @@ function writeMonitorChain(
   skipResume = false,
   directReview = false,
   repeatedQuestionnaire = false,
+  combinedResumeProfile = false,
 ): void {
   writeExternalMonitorChain(
     root,
     "monitor",
-    applicationMoments(skipResume, directReview, repeatedQuestionnaire),
+    applicationMoments(skipResume, directReview, repeatedQuestionnaire, combinedResumeProfile),
     "review_verified",
     signatureOnly,
     configSha256,
@@ -1257,6 +1395,7 @@ function applicationMoments(
   skipResume = false,
   directReview = false,
   repeatedQuestionnaire = false,
+  combinedResumeProfile = false,
 ): Array<readonly [string, string, string, number]> {
   if (directReview) return [
     ["review", "review_readback", "operation_review_readback_01", 1],
@@ -1283,6 +1422,15 @@ function applicationMoments(
     ["resume", "transition", "operation_profile_navigation_01", 1],
     ["resume", "before_mutation", "operation_resume_mutation_01", 1],
     ["resume", "after_readback", "operation_resume_mutation_01", 1],
+    ...(combinedResumeProfile ? [
+      ["resume", "state_observed", "operation_resume_profile_observation_01", 1],
+      ["resume", "state_observed", "operation_resume_profile_observation_02", 2],
+      ["resume", "state_observed", "operation_resume_profile_observation_03", 3],
+      ["resume", "before_mutation", "operation_resume_profile_mutation_01", 2],
+      ["resume", "after_readback", "operation_resume_profile_mutation_01", 2],
+      ["resume", "before_mutation", "operation_resume_profile_mutation_02", 3],
+      ["resume", "after_readback", "operation_resume_profile_mutation_02", 3],
+    ] as const : []),
     ["resume", "before_navigation", "operation_resume_navigation_01", 1],
     ["questionnaire", "transition", "operation_resume_navigation_01", 1],
     ["questionnaire", "before_mutation", "operation_question_mutation_01", 1],
@@ -1324,6 +1472,9 @@ function writeExternalMonitorChain(
   monitorLiveToken = monitorLiveTokenSha256(),
 ): void {
   const monitorRoot = join(root, directory);
+  const combinedResumeProfile = moments.some(([, , operationId]) =>
+    operationId.startsWith("operation_resume_profile_")
+  );
   mkdirSync(monitorRoot);
   let previousAckSha256: string | null = null;
   for (const [index, [page, moment, operationId, attempt]] of moments.entries()) {
@@ -1344,7 +1495,9 @@ function writeExternalMonitorChain(
       ordinal: index + 1,
       page,
       moment,
-      fieldCount: page === "review" ? 3 : page === "profile" ? 2 : 1,
+      fieldCount: page === "review"
+        ? 3
+        : page === "profile" ? 2 : page === "resume" && combinedResumeProfile ? 4 : 1,
       requiredFieldCount: 1,
       controlTypes: ["text"],
       questionTypes: page === "application_ready" || page === "profile"
@@ -1521,6 +1674,7 @@ function applicationWalk(
   directReview = false,
   repeatedQuestionnaire = false,
   syntheticQuestionnaire = false,
+  combinedProfileFieldLearningSha256?: string,
 ) {
   const pageChecks = [
     pageCheck("profile", "profile_verified"),
@@ -1529,10 +1683,18 @@ function applicationWalk(
   ];
   const questionnaire = questionnaireAcceptance();
   const laneAcceptances = [
-    profileAcceptance(profileFieldLearningSha256),
+    profileAcceptance(profileFieldLearningSha256, combinedProfileFieldLearningSha256 !== undefined),
     resumeAcceptance(),
     syntheticQuestionnaire ? { ...questionnaire, answers: [] } : questionnaire,
   ];
+  if (combinedProfileFieldLearningSha256 !== undefined) {
+    pageChecks.splice(2, 0, pageCheck("profile", "profile_verified", 0));
+    laneAcceptances.splice(2, 0, profileAcceptance(
+      combinedProfileFieldLearningSha256,
+      false,
+      "social.linkedin",
+    ));
+  }
   if (repeatedQuestionnaire) {
     pageChecks.push(pageCheck("questionnaire", "questionnaire_verified"));
     const revealed = questionnaireAcceptance(
@@ -1560,7 +1722,10 @@ function applicationWalk(
     approvalId,
     journeyId,
     targetHandleId,
-    completedPages: directReview ? 0 : repeatedQuestionnaire ? 4 : skipResume ? 2 : 3,
+    completedPages: directReview ? 0 : repeatedQuestionnaire ||
+        combinedProfileFieldLearningSha256 !== undefined
+      ? 4
+      : skipResume ? 2 : 3,
     pageChecks: directReview
       ? []
       : skipResume ? [pageChecks[0]!, pageChecks[2]!] : pageChecks,
@@ -1575,19 +1740,23 @@ function applicationWalk(
   };
 }
 
-function profileAcceptance(profileFieldLearningSha256: string) {
+function profileAcceptance(
+  profileFieldLearningSha256: string,
+  synthetic = false,
+  field = "identity.given_name",
+) {
   return {
     schemaVersion: 1 as const,
     checkpoint: "profile_verified" as const,
     pageType: "profile" as const,
     verifiedFields: [{
-      fieldId: "identity.given_name",
-      questionType: "identity" as const,
-      answerType: "text" as const,
+      fieldId: field,
+      questionType: field === "social.linkedin" ? "social_network" as const : "identity" as const,
+      answerType: field === "social.linkedin" ? "url" as const : "text" as const,
       uiBehavior: "text" as const,
       uiVariant: "workday_text_v2",
-      provenance: "owner_provided" as const,
-      lane: "live_owner_fact" as const,
+      provenance: synthetic ? "generated_default" as const : "owner_provided" as const,
+      lane: synthetic ? "synthetic_test_default" as const : "live_owner_fact" as const,
     }],
     ownedDuplicateRows: 0 as const,
     independentlyVerified: true as const,
@@ -1648,13 +1817,14 @@ function questionnaireAcceptance(
 function pageCheck(
   page: "resume" | "profile" | "questionnaire",
   checkpoint: "resume_verified" | "profile_verified" | "questionnaire_verified",
+  requiredFields = 1,
 ) {
   return {
     page,
     checkpoint,
     independentlyVerified: true as const,
-    requiredFields: 1,
-    verifiedFields: 1,
+    requiredFields,
+    verifiedFields: requiredFields,
     duplicateRows: 0,
   };
 }

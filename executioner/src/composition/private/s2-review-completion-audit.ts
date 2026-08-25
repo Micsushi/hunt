@@ -265,6 +265,7 @@ function questionLearningDigest(
       ),
       monitorOperations,
       "questionnaire",
+      false,
     );
     return digest(bytes);
   }
@@ -313,13 +314,19 @@ function profileLearningDigest(
     return null;
   }
   if (profiles.length > paths.length) denied();
-  const monitoredStates = monitorOperations.filter(({ page, moment }) =>
+  const profileMonitoredStates = monitorOperations.filter(({ page, moment }) =>
     page === "profile" && moment === "before_navigation"
   );
-  if (monitoredStates.length !== profiles.length) denied();
+  const resumeMonitoredStates = monitorOperations.filter(({ page, moment }) =>
+    page === "resume" && moment === "before_navigation"
+  );
   let latest: string | null = null;
-  const observationBindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["observationBinding"]>[] = [];
-  const mutationBindings: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[] = [];
+  let profileMonitorIndex = 0;
+  let resumeProfileMonitorIndex = 0;
+  const monitorGroups = new Map<"profile" | "resume", {
+    observations: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["observationBinding"]>[];
+    mutations: NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[];
+  }>();
   for (const [index, profile] of profiles.entries()) {
     if (profile.checkpoint !== "profile_verified") denied();
     const sha256 = profile.profileFieldLearningSha256;
@@ -334,13 +341,21 @@ function profileLearningDigest(
     );
     const laneIndex = application.laneAcceptances.indexOf(profile);
     const pageCheck = application.pageChecks[laneIndex];
-    const monitoredState = monitoredStates[index];
+    const precedingLane = laneIndex > 0 ? application.laneAcceptances[laneIndex - 1] : undefined;
+    const precedingPageCheck = laneIndex > 0 ? application.pageChecks[laneIndex - 1] : undefined;
+    const combinedResumeProfile = precedingLane?.checkpoint === "resume_verified" &&
+      precedingPageCheck?.page === "resume";
+    const monitoredState = combinedResumeProfile
+      ? resumeMonitoredStates[resumeProfileMonitorIndex++]
+      : profileMonitoredStates[profileMonitorIndex++];
     const answeredFields = learning.fields.filter(({ answerState }) =>
       answerState === "answered"
     );
-    const synthetic = profile.verifiedFields.some(({ lane }) =>
-      lane === "synthetic_test_default"
-    );
+    const synthetic = profile.verifiedFields.some(({ lane }) => lane === "synthetic_test_default") ||
+      application.laneAcceptances.some((acceptance) =>
+        acceptance.checkpoint === "profile_verified" &&
+        acceptance.verifiedFields.some(({ lane }) => lane === "synthetic_test_default")
+      );
     const matchesVerified = (field: ProfileFieldLearningEvidenceV2["fields"][number]) =>
       profile.verifiedFields.filter((verified) =>
         field.fieldIdentity === `profile.${verified.fieldId}` &&
@@ -351,11 +366,19 @@ function profileLearningDigest(
       learning.testOnly !== synthetic ||
       learning.liveAcceptanceEligible !== !synthetic ||
       pageCheck === undefined || monitoredState === undefined ||
-      learning.visibleControlCount !== monitoredState.fieldCount ||
+      (learning.visibleControlCount !== monitoredState.fieldCount &&
+        (!combinedResumeProfile || learning.visibleControlCount + 1 !== monitoredState.fieldCount)) ||
       learning.fields.filter(({ required }) => required).length !== pageCheck.requiredFields ||
-      pageCheck.requiredFields !== monitoredState.requiredFieldCount ||
-      answeredFields.length !== profile.verifiedFields.length ||
-      answeredFields.some((field) => !matchesVerified(field)) ||
+      (combinedResumeProfile
+        ? pageCheck.requiredFields + precedingPageCheck.requiredFields !== monitoredState.requiredFieldCount
+        : pageCheck.requiredFields !== monitoredState.requiredFieldCount) ||
+      answeredFields.filter(matchesVerified).length !== profile.verifiedFields.length ||
+      answeredFields.some((field) =>
+        !matchesVerified(field) &&
+        field.terminalDisposition !== "driver_failed" &&
+        field.terminalDisposition !== "verification_failed" &&
+        field.terminalDisposition !== "pending"
+      ) ||
       profile.verifiedFields.some((verified) =>
         learning.fields.filter((field) =>
           field.fieldIdentity === `profile.${verified.fieldId}` &&
@@ -366,17 +389,25 @@ function profileLearningDigest(
         observationBinding === null || metadataReconciliation !== "matched"
       )
     ) denied();
-    observationBindings.push(...learning.fields.flatMap(({ observationBinding }) =>
+    const monitorPage = monitoredState.page;
+    if (monitorPage !== "profile" && monitorPage !== "resume") denied();
+    const monitorGroup = monitorGroups.get(monitorPage) ?? { observations: [], mutations: [] };
+    monitorGroup.observations.push(...learning.fields.flatMap(({ observationBinding }) =>
       observationBinding === null ? [] : [observationBinding]
     ));
-    mutationBindings.push(...learning.fields.flatMap(({ monitorBinding }) =>
+    monitorGroup.mutations.push(...learning.fields.flatMap(({ monitorBinding }) =>
       monitorBinding === null ? [] : [monitorBinding]
     ));
+    monitorGroups.set(monitorPage, monitorGroup);
     if (digest(learningBytes) !== sha256) denied();
     latest = sha256;
   }
   if (paths.slice(profiles.length).some(existsSync)) denied();
-  validateProfileMonitorBindings(observationBindings, mutationBindings, monitorOperations);
+  if (profileMonitorIndex !== profileMonitoredStates.length ||
+      resumeProfileMonitorIndex > resumeMonitoredStates.length) denied();
+  for (const [page, { observations, mutations }] of monitorGroups) {
+    validateProfileMonitorBindings(observations, mutations, monitorOperations, page);
+  }
   return latest;
 }
 
@@ -384,21 +415,22 @@ function validateProfileMonitorBindings(
   observations: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["observationBinding"]>[],
   mutations: readonly NonNullable<ProfileFieldLearningEvidenceV2["fields"][number]["monitorBinding"]>[],
   operations: readonly Stage2MonitorOperationV1[],
+  page: "profile" | "resume",
 ): void {
-  validateControlMonitorBindings(mutations, operations, "profile");
+  validateControlMonitorBindings(mutations, operations, page, page === "profile");
   if (new Set(observations.map(({ operationId }) => operationId)).size !== observations.length) denied();
   for (const binding of observations) {
-    const matches = operations.filter(({ operationId, attempt, page, moment }) =>
+    const matches = operations.filter(({ operationId, attempt, page: operationPage, moment }) =>
       operationId === binding.operationId && attempt === binding.attempt &&
-      page === "profile" && moment === "state_observed"
+      operationPage === page && moment === "state_observed"
     );
     if (matches.length !== 1) denied();
   }
   const observedKeys = new Set(observations.map(({ operationId, attempt }) =>
     `${operationId}\u0000${attempt}`
   ));
-  const stateOperations = operations.filter(({ page, moment }) =>
-    page === "profile" && moment === "state_observed"
+  const stateOperations = operations.filter(({ page: operationPage, moment }) =>
+    operationPage === page && moment === "state_observed"
   );
   if (stateOperations.length !== observations.length ||
       stateOperations.some(({ operationId, attempt }) =>
@@ -414,7 +446,8 @@ function validateControlMonitorBindings(
     readonly afterReadbackAck: true;
   }[],
   operations: readonly Stage2MonitorOperationV1[],
-  page: "profile" | "questionnaire",
+  page: "profile" | "resume" | "questionnaire",
+  exhaustive = true,
 ): void {
   if (new Set(bindings.map(({ operationId }) => operationId)).size !== bindings.length) denied();
   for (const binding of bindings) {
@@ -433,8 +466,8 @@ function validateControlMonitorBindings(
     (operation.moment === "before_mutation" || operation.moment === "after_readback")
   );
   const boundOperations = new Set(bindings.map(({ operationId }) => operationId));
-  if (attempted.length !== bindings.length * 2 ||
-      attempted.some(({ operationId }) => !boundOperations.has(operationId))) denied();
+  if (exhaustive && (attempted.length !== bindings.length * 2 ||
+      attempted.some(({ operationId }) => !boundOperations.has(operationId)))) denied();
 }
 
 function validateValueFreeTrace(path: string, application: ApplicationWalkAcceptanceV1): void {
