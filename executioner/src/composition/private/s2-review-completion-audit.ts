@@ -232,12 +232,42 @@ function questionLearningDigest(
   );
   const path = join(root, "question-answer-learning.json");
   const expectedAnswers = questionnaires.flatMap(({ answers }) => answers);
-  if (questionnaires.length === 0 || expectedAnswers.length === 0) {
+  if (questionnaires.length === 0) {
     if (existsSync(path)) denied();
     return null;
   }
   const bytes = readStableFile(path, 128 * 1024);
   const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
+  if (expectedAnswers.length === 0) {
+    const questionnaireChecks = application.pageChecks.filter(({ page }) =>
+      page === "questionnaire"
+    );
+    const requiredQuestions = questionnaireChecks.reduce(
+      (count, { requiredFields }) => count + requiredFields,
+      0,
+    );
+    if (
+      questionnaires.length !== 1 ||
+      questionnaireChecks.length === 0 ||
+      learning.executionMode !== "synthetic_test_non_submittable" ||
+      !learning.testOnly ||
+      learning.liveAcceptanceEligible ||
+      !learning.questions.some(({ lane }) => lane === "synthetic_test_default") ||
+      learning.questions.filter(({ required }) => required).length !== requiredQuestions ||
+      learning.questions.some(({ answerState, lane, verificationResult, monitorBinding }) =>
+        answerState !== "answered" || lane === null ||
+        verificationResult !== "verified" || monitorBinding === null
+      )
+    ) denied();
+    validateControlMonitorBindings(
+      learning.questions.flatMap(({ monitorBinding }) =>
+        monitorBinding === null ? [] : [monitorBinding]
+      ),
+      monitorOperations,
+      "questionnaire",
+    );
+    return digest(bytes);
+  }
   const synthetic = expectedAnswers.some(({ lane }) => lane === "synthetic_test_default");
   if (
     learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||

@@ -243,6 +243,36 @@ test("Review completion admits cumulative learning across repeated questionnaire
   }
 });
 
+test("Review completion admits bound non-submittable synthetic questionnaire learning", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-synthetic-questions-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_syntheticquestxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(
+      layout.evidenceRoot,
+      configSha256,
+      journeyId,
+      false,
+      false,
+      true,
+      false,
+      1,
+      true,
+    );
+    const audit = await auditStage2Completion(layout.evidenceRoot) as {
+      readonly status: string;
+      readonly questionAnswerLearningSha256: string | null;
+    };
+    assert.equal(audit.status, "pass");
+    assert.match(audit.questionAnswerLearningSha256 ?? "", /^[0-9a-f]{64}$/u);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Review finalization rejects schema-valid profile learning replaced after audit sealing", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-learning-tamper-"));
   try {
@@ -868,6 +898,7 @@ async function writeReviewEvidence(
   writeTrace = true,
   repeatedQuestionnaire = false,
   profileMutationAttempt = 1,
+  syntheticQuestionnaire = false,
 ): Promise<void> {
   const learningBytes = Buffer.from(`${JSON.stringify({
     schemaVersion: 5,
@@ -965,9 +996,9 @@ async function writeReviewEvidence(
       schemaVersion: 4,
       evidenceRevision: "s2-question-answer-learning-v4",
       page: "questionnaire",
-      executionMode: "live",
-      testOnly: false,
-      liveAcceptanceEligible: true,
+      executionMode: syntheticQuestionnaire ? "synthetic_test_non_submittable" : "live",
+      testOnly: syntheticQuestionnaire,
+      liveAcceptanceEligible: !syntheticQuestionnaire,
       questions: [{
         questionId: "s1-question-work-authorization",
         fieldId: "authorization-answer",
@@ -977,11 +1008,11 @@ async function writeReviewEvidence(
         answerType: "single_select",
         possibleAnswers: ["Yes", "No"],
         answerState: "answered",
-        lane: "live_owner_fact",
-        chosenAnswer: "owner_answer_applied",
-        strategy: "owner_answer",
-        provenance: "owner_provided",
-        replaceWithOwnerAnswer: false,
+        lane: syntheticQuestionnaire ? "synthetic_test_default" : "live_owner_fact",
+        chosenAnswer: syntheticQuestionnaire ? "synthetic_choice_applied" : "owner_answer_applied",
+        strategy: syntheticQuestionnaire ? "first_visible_option" : "owner_answer",
+        provenance: syntheticQuestionnaire ? "reviewed_catalog" : "owner_provided",
+        replaceWithOwnerAnswer: syntheticQuestionnaire,
         interactionState: "attempted",
         monitorBinding: {
           operationId: "operation_question_mutation_01",
@@ -1070,6 +1101,7 @@ async function writeReviewEvidence(
       skipResume,
       directReview,
       repeatedQuestionnaire,
+      syntheticQuestionnaire,
     ),
     sensitiveValues: [],
   });
@@ -1488,16 +1520,18 @@ function applicationWalk(
   skipResume = false,
   directReview = false,
   repeatedQuestionnaire = false,
+  syntheticQuestionnaire = false,
 ) {
   const pageChecks = [
     pageCheck("profile", "profile_verified"),
     pageCheck("resume", "resume_verified"),
     pageCheck("questionnaire", "questionnaire_verified"),
   ];
+  const questionnaire = questionnaireAcceptance();
   const laneAcceptances = [
     profileAcceptance(profileFieldLearningSha256),
     resumeAcceptance(),
-    questionnaireAcceptance(),
+    syntheticQuestionnaire ? { ...questionnaire, answers: [] } : questionnaire,
   ];
   if (repeatedQuestionnaire) {
     pageChecks.push(pageCheck("questionnaire", "questionnaire_verified"));
