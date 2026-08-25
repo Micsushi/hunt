@@ -1943,6 +1943,20 @@ async function settleExactFieldPopupCommit(
       ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
     }
   }
+  if (stillOpen) {
+    const safeFocusTarget = page.locator("textarea:visible");
+    if (await safeFocusTarget.count() === 1) {
+      await safeFocusTarget.click({ timeout: 250 });
+      await page.waitForTimeout(100);
+      if (!await rebindExactFieldPopupTarget(page, target)) return false;
+      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+      if (await control.count() !== 1) return false;
+      stillOpen = await page.locator(
+        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+          '[data-automation-id="promptLeafNode"]:visible',
+      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+    }
+  }
   if (stillOpen) return false;
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
 }

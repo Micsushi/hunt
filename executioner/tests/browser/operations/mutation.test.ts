@@ -874,6 +874,7 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
   try {
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
       <h2 id="page-heading">Application Questions</h2>
+      <textarea id="safe-focus"></textarea>
       <div data-automation-id="formField-agreement">
         <label>Are you subject to an agreement?</label>
         <button id="agreement" type="button" aria-haspopup="listbox"
@@ -888,6 +889,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         let button = document.querySelector('#agreement');
         const options = document.querySelector('#options');
         document.querySelector('#page-heading').addEventListener('click', () => {
+          // This Workday variant ignores page-heading click-away.
+        });
+        document.querySelector('#safe-focus').addEventListener('click', () => {
           options.hidden = true;
         });
         document.addEventListener('click', event => {
@@ -928,6 +932,7 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
     assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
+    assert.equal(await context.pages()[0]!.locator("#safe-focus").inputValue(), "");
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activated"),
       "true",
