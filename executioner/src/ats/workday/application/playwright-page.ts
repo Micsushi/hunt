@@ -654,6 +654,12 @@ function readApplicationSnapshot(
     const field = control.closest(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
+    const fieldLabel = text(field?.querySelector("label, legend")?.textContent);
+    const requiredWorkdayDate = control.matches(
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+    ) && fieldLabel.endsWith("*") &&
+      !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(fieldLabel);
+    if (requiredWorkdayDate) return true;
     return field !== null && field.querySelector(
       '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
     ) !== null;

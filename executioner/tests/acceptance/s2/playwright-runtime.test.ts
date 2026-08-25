@@ -18,6 +18,8 @@ import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { PlaywrightWorkdayApplicationPage } from
+  "../../../src/ats/workday/application/playwright-page.ts";
 import { applyMutation, inspectPage } from "../../../src/browser/adapter.ts";
 import type {
   PersistentContext,
@@ -37,10 +39,76 @@ import {
   hydrateQuestionnairePopupOptions,
   isReviewExpectedField,
   isWorkdayReviewOmittedProfileField,
+  monitorQuestionnaireCoverage,
   OwnedWorkdayApplicationRuntime,
   reviewAnswerCandidates,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("retained Integer questionnaire date marker agrees across all coverage observers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const selectLabels = [
+      "Do you certify that you are 18 years of age or older?",
+      "Have you been referred by an Integer associate?",
+      "Are you a current Integer associate (this does not apply to contingent/contract work)?",
+      "Have you previously applied for a position with our company?",
+      "Do you have any relatives currently employed by Integer?",
+      "Do you now, or will you in the future, require sponsorship to work legally for Integer in the U.S.?",
+      "Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job?",
+      "Are you currently subject to any company agreement that would prevent you from working with Integer?",
+    ];
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      ${selectLabels.map((label, index) => `<div data-automation-id="formField-select-${index}">
+        <label>${label}<span data-automation-id="required">*</span></label>
+        <button aria-haspopup="listbox">Select One</button>
+      </div>`).join("")}
+      <div data-automation-id="formField-start-date">
+        <label>When are you available to start?*</label>
+        <div data-automation-id="dateInputWrapper">
+          <input data-automation-id="dateSectionMonth-input">
+          <input data-automation-id="dateSectionDay-input">
+          <input data-automation-id="dateSectionYear-input">
+        </div>
+      </div>
+      <div data-automation-id="formField-salary">
+        <label>Salary expectations<span data-automation-id="required">*</span></label>
+        <textarea required></textarea>
+      </div>
+    </main>`);
+    const pageId = "page-integer-required-date" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    await page.locator('button[aria-haspopup="listbox"]').evaluateAll((buttons) =>
+      buttons.forEach((button) =>
+        button.setAttribute("data-hunt-popup-options", JSON.stringify(["Yes", "No"]))
+      )
+    );
+
+    const semantic = await inspectPage(
+      page,
+      "live_session_integer_required_date_01" as never,
+      pageId,
+      new Map(),
+    );
+    const monitor = await monitorQuestionnaireCoverage(page);
+    const application = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+
+    assert.equal(semantic.observation.targets.length, 10);
+    assert.equal(semantic.observation.targets.filter(({ required }) => required).length, 10);
+    assert.deepEqual(monitor, {
+      fieldCount: 10,
+      requiredFieldCount: 10,
+      typeCounts: { select: 8, date: 1, textarea: 1 },
+    });
+    assert.equal(application.ok, true);
+    assert.equal(application.ok && application.value.requiredFields.length, 10);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("questionnaire popup hydration ignores a stale unrelated portal across control remount", async () => {
   const browser = await chromium.launch({ headless: true });

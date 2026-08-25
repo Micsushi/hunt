@@ -1013,6 +1013,13 @@ export class OwnedWorkdayApplicationRuntime {
       ]);
       const visibleFields = snapshot.fields.filter(({ state }) => state !== "hidden");
       const requiredFieldCount = visibleFields.filter(({ required }) => required).length;
+      this.#trace?.("questionnaire_coverage_observed", {
+        semanticFields: visibleFields.length,
+        semanticRequired: requiredFieldCount,
+        applicationFields: application.ok ? application.value.requiredFields.length : -1,
+        taxonomyFields: taxonomy.fieldCount,
+        taxonomyRequired: taxonomy.requiredFieldCount,
+      });
       if (
         visibleFields.length === 0 ||
         !application.ok || application.value.page !== "questionnaire" ||
@@ -1525,7 +1532,7 @@ function monitorTitles(
   return new Set(["Application Questions", "Voluntary Disclosures", "Self Identify"]);
 }
 
-async function monitorQuestionnaireCoverage(page: Page): Promise<{
+export async function monitorQuestionnaireCoverage(page: Page): Promise<{
   readonly fieldCount: number;
   readonly requiredFieldCount: number;
   readonly typeCounts: Readonly<Record<string, number>>;
@@ -1652,13 +1659,20 @@ async function monitorQuestionnaireCoverage(page: Page): Promise<{
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
+      const fieldLabel = (field?.querySelector("label, legend")?.textContent ?? "")
+        .normalize("NFC").replace(/\s+/gu, " ").trim();
+      const requiredWorkdayDate = control.matches(
+        '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+      ) && fieldLabel.endsWith("*") &&
+        !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(fieldLabel);
       if (
         control.hasAttribute("required") || control.getAttribute("aria-required") === "true" ||
         accessibleRequired(control) ||
         control instanceof HTMLFieldSetElement &&
           [...control.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
             .some((radio) => radio.required) ||
-        field !== null && field.querySelector(requiredMarker) !== null
+        field !== null && field.querySelector(requiredMarker) !== null ||
+        requiredWorkdayDate
       ) requiredFieldCount += 1;
     }
     return { fieldCount: controls.length, requiredFieldCount, typeCounts };
