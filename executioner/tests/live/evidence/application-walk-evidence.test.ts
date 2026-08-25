@@ -63,6 +63,31 @@ test("admits evidence in the exact observed route instead of a tenant-global ord
   }
 });
 
+test("admits one cumulative lane proof for consecutive revealed questionnaire pages", async () => {
+  const baseline = packet();
+  const questionnaire = baseline.pageChecks[2]!;
+  const acceptance = {
+    ...baseline,
+    completedPages: 5,
+    pageChecks: [
+      ...baseline.pageChecks,
+      { ...questionnaire, requiredFields: 2, verifiedFields: 2 },
+      { ...questionnaire, requiredFields: 3, verifiedFields: 3 },
+    ],
+  };
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-revealed-"));
+  try {
+    await writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: [] });
+    assert.equal(
+      JSON.parse(readFileSync(join(root, "application-walk-acceptance.json"), "utf8"))
+        .pageChecks.length,
+      5,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("admits derived source-select and owner-backed prior-worker radio mechanics", async () => {
   const baseline = packet();
   const profile = baseline.laneAcceptances[0];

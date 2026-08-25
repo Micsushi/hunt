@@ -1501,12 +1501,20 @@ function applicationWalk(
   ];
   if (repeatedQuestionnaire) {
     pageChecks.push(pageCheck("questionnaire", "questionnaire_verified"));
-    laneAcceptances.push(questionnaireAcceptance(
+    const revealed = questionnaireAcceptance(
       "privacy-answer",
       "observed-question-0123456789abcdef01234567",
       "owner_provided",
       "consent",
-    ));
+    );
+    const cumulativeQuestionnaire = laneAcceptances[2]!;
+    if (cumulativeQuestionnaire.checkpoint !== "questionnaire_verified") {
+      throw new Error("questionnaire fixture unavailable");
+    }
+    laneAcceptances[2] = {
+      ...cumulativeQuestionnaire,
+      answers: [...cumulativeQuestionnaire.answers, ...revealed.answers],
+    };
   }
   return {
     schemaVersion: 1 as const,

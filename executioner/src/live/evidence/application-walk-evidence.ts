@@ -78,9 +78,10 @@ export function admitApplicationWalkAcceptance(
     value.cleanup !== "pass"
   ) denied("header");
   if (!validPageChecks(value.pageChecks)) denied("page_checks");
-  if (value.laneAcceptances.length !== count) denied("lane_count");
+  const laneChecks = collapseRevealedQuestionnaireChecks(value.pageChecks);
+  if (value.laneAcceptances.length !== laneChecks.length) denied("lane_count");
   const invalidLane = value.laneAcceptances.findIndex((lane, index) =>
-    !validLaneAcceptances([lane], [value.pageChecks[index]!])
+    !validLaneAcceptances([lane], [laneChecks[index]!])
   );
   if (invalidLane !== -1) denied(`lane_${invalidLane}`);
   return Object.freeze({
@@ -90,6 +91,20 @@ export function admitApplicationWalkAcceptance(
       structuredClone(item)
     )),
   });
+}
+
+function collapseRevealedQuestionnaireChecks(
+  values: readonly ApplicationPageCheck[],
+): readonly ApplicationPageCheck[] {
+  const checks: ApplicationPageCheck[] = [];
+  for (const value of values) {
+    if (
+      value.checkpoint === "questionnaire_verified" &&
+      checks.at(-1)?.checkpoint === "questionnaire_verified"
+    ) checks[checks.length - 1] = value;
+    else checks.push(value);
+  }
+  return checks;
 }
 
 function validPageChecks(values: readonly ApplicationPageCheck[]): boolean {
