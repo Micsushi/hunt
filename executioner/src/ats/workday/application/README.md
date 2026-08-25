@@ -41,6 +41,11 @@ The composition owner supplies three other adapters:
 browser-truth failures, incomplete required fields, and owned duplicate rows
 spend that shared local budget. The central orchestrator still owns outer
 journey recovery, event IDs, terminalization, and persistence policy.
+Questionnaire reconciliation may continue beyond that ordinary retry budget,
+up to 16 total passes, only while independent browser truth shows monotonic
+progress in required or verified field counts. This bounded fixed-point pass
+allows chained conditional reveals while stopping immediately when a page
+stalls.
 
 Question classification first uses exact reviewed labels, then reviewed
 keyword groups that ignore presentation wording such as “what is” or “select

@@ -35,6 +35,7 @@ const classifierSet = new Set<string>(applicationClassifiers);
 const primitiveSet = new Set<string>(applicationPrimitives);
 const unknownLayerSet = new Set<string>(applicationUnknownLayers);
 const navigationLoadingShellTimeoutMs = 60_000;
+const maximumQuestionnaireReconciliationPasses = 16;
 const transientDestinationObservationCodes = new Set([
   "browser_target_ambiguous",
   "browser_target_stale",
@@ -168,9 +169,13 @@ export async function runApplicationPageWalk(
       );
       const handler = dependencies.handlers[lane];
       let check: ApplicationPageCheck | undefined;
+      let previousIncompleteCheck: ApplicationPageCheck | undefined;
       let verifiedPageId: ApplicationPageTruth["pageId"] | undefined;
       const expectedCheckpoint = checkpointForApplicationPage(lane);
-      for (let attempt = 1; attempt <= retryLimit + 1; attempt += 1) {
+      const attemptLimit = lane === "questionnaire"
+        ? Math.max(retryLimit + 1, maximumQuestionnaireReconciliationPasses)
+        : retryLimit + 1;
+      for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
         if (verifiedPageId === undefined) {
           const handled = await handler.reconcile(
             { journeyId: input.journeyId, pageId: truth.pageId, attempt }, signal,
@@ -211,14 +216,20 @@ export async function runApplicationPageWalk(
         );
         check = pageCheck(lane, expectedCheckpoint, truth);
         if (check.requiredFields === check.verifiedFields && check.duplicateRows === 0) break;
+        const questionnaireProgressed = lane === "questionnaire" &&
+          previousIncompleteCheck !== undefined &&
+          (check.requiredFields > previousIncompleteCheck.requiredFields ||
+            check.verifiedFields > previousIncompleteCheck.verifiedFields);
         if (
           lane === "questionnaire" && check.duplicateRows === 0 &&
-          attempt <= retryLimit
+          (attempt <= retryLimit ||
+            (questionnaireProgressed && attempt < attemptLimit))
         ) {
+          previousIncompleteCheck = check;
           verifiedPageId = undefined;
           continue;
         }
-        if (attempt > retryLimit) {
+        if (attempt > retryLimit || attempt >= attemptLimit) {
           const duplicate = check.duplicateRows > 0;
           return failure(lane, internalFailure(
             "page_incomplete",

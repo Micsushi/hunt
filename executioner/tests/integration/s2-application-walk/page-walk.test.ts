@@ -427,6 +427,73 @@ test("stops when a page handler causes an unapproved transition", async () => {
   ]);
 });
 
+test("converges through chained questionnaire conditional reveals", async () => {
+  const calls: string[] = [];
+  const questionnaireTruth = (
+    requiredFields: number,
+    verifiedFields: number,
+  ) => ({
+    ...truth("questionnaire"),
+    requiredFields: Array.from({ length: requiredFields }, (_, index) => ({
+      ...truth("questionnaire").requiredFields[0]!,
+      verification: index < verifiedFields ? "verified" as const : "unverified" as const,
+    })),
+  });
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("resume"), truth("resume"),
+      truth("questionnaire"),
+      questionnaireTruth(2, 1),
+      questionnaireTruth(3, 2),
+      questionnaireTruth(3, 3),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    { pageRetryLimit: 1 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("reconcile:questionnaire")),
+    [
+      "reconcile:questionnaire:1",
+      "reconcile:questionnaire:2",
+      "reconcile:questionnaire:3",
+    ],
+  );
+});
+
+test("stops a questionnaire fixed-point pass when browser truth stalls", async () => {
+  const calls: string[] = [];
+  const incomplete = {
+    ...truth("questionnaire"),
+    requiredFields: [{
+      ...truth("questionnaire").requiredFields[0]!,
+      verification: "unverified" as const,
+    }],
+  };
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("resume"), truth("resume"),
+      truth("questionnaire"), incomplete, incomplete,
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    { pageRetryLimit: 1 },
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.failure.attempt, 2);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("reconcile:questionnaire")),
+    ["reconcile:questionnaire:1", "reconcile:questionnaire:2"],
+  );
+});
+
 test("stops immediately if browser truth reports Submit activation", async () => {
   const calls: string[] = [];
   const dependencies = dependenciesFor(
