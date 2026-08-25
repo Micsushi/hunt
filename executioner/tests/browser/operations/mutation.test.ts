@@ -914,6 +914,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         document.querySelector('#option').addEventListener('click', () => {
           commit();
           button.dataset.optionOwnerActivated = 'true';
+          const count = Number(button.dataset.optionOwnerActivationCount ?? '0') + 1;
+          button.dataset.optionOwnerActivationCount = String(count);
+          if (count === 2) options.hidden = true;
         });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
@@ -936,6 +939,10 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activated"),
       "true",
+    );
+    assert.equal(
+      await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activation-count"),
+      "2",
     );
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-hunt-target-token"),

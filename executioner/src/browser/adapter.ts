@@ -1874,6 +1874,26 @@ async function settleExactFieldPopupCommit(
       '[data-automation-id="promptLeafNode"]:visible',
   ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
   if (stillOpen) {
+    const exact = await waitForExactFieldPopupOption(page, option, Math.min(250, timeoutMs));
+    if (exact.count === 1 && exact.locator !== undefined) {
+      const optionOwner = exact.locator.locator(
+        'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption"][1]',
+      );
+      const activation = await optionOwner.count() === 1 && await optionOwner.isVisible()
+        ? optionOwner
+        : exact.locator;
+      await activation.click({ timeout: 250, position: { x: 2, y: 2 } });
+      await page.waitForTimeout(100);
+      if (!await rebindExactFieldPopupTarget(page, target)) return false;
+      control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+      if (await control.count() !== 1) return false;
+      stillOpen = await page.locator(
+        '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+          '[data-automation-id="promptLeafNode"]:visible',
+      ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
+    }
+  }
+  if (stillOpen) {
     await control.press("Tab", { timeout: 250 });
     await page.waitForTimeout(100);
     if (!await rebindExactFieldPopupTarget(page, target)) return false;
