@@ -291,13 +291,41 @@ function Reconcile-TerminalCleanupEvidence([string]$root, $binding) {
     if (-not [IO.File]::Exists($target)) { return }
     $artifact = [IO.File]::ReadAllText($target, [Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($artifact.cleanupErrorCode -eq $null) { return }
+    $primaryCleanupFailure =
+        [string]$artifact.resultCode -eq 'cleanup_failed' -and
+        [string]$artifact.terminal.errorCode -eq 'browser_profile_cleanup_failed'
     if (
         [int]$artifact.schemaVersion -ne 1 -or
         [string]$artifact.evidenceRevision -ne 's2-terminal-artifact-v1' -or
         [string]$artifact.cleanupErrorCode -ne 'browser_profile_cleanup_failed' -or
-        [string]$artifact.resultCode -eq 'browser_profile_cleanup_failed' -or
-        [string]$artifact.terminal.errorCode -eq 'browser_profile_cleanup_failed'
+        [string]$artifact.resultCode -eq 'browser_profile_cleanup_failed'
     ) { throw 'terminal cleanup reconciliation denied' }
+    if ($primaryCleanupFailure) {
+        $reviewPath = [IO.Path]::Combine($root, 'review-acceptance.json')
+        if (-not [IO.File]::Exists($reviewPath)) { throw 'terminal cleanup reconciliation denied' }
+        $review = [IO.File]::ReadAllText($reviewPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if (
+            [int]$review.schemaVersion -ne 1 -or
+            [string]$review.evidenceRevision -ne 's2-review-acceptance-v1' -or
+            [string]$review.configSha256 -ne [string]$binding.configSha256 -or
+            [string]$review.journeyId -ne [string]$binding.journeyId -or
+            [string]$review.targetHandleId -ne [string]$binding.targetHandleId -or
+            [string]$review.checkpoint -ne 'review' -or
+            [string]$review.status -ne 'passed' -or
+            [string]$review.reviewProof -ne 'independently_verified' -or
+            [bool]$review.submitPresent -ne $true -or
+            [bool]$review.submitActivated -ne $false -or
+            [string]$review.privacyScan -ne 'pass' -or
+            [int]$artifact.terminal.schemaVersion -ne 4 -or
+            [string]$artifact.terminal.journeyId -ne [string]$binding.journeyId -or
+            [int]$artifact.terminal.completedPages -lt 1
+        ) { throw 'terminal cleanup reconciliation denied' }
+        $artifact.resultCode = 'review_reached'
+        $artifact.terminal.status = 'review_reached'
+        [void]$artifact.terminal.PSObject.Properties.Remove('errorCode')
+    } elseif ([string]$artifact.terminal.errorCode -eq 'browser_profile_cleanup_failed') {
+        throw 'terminal cleanup reconciliation denied'
+    }
     [void]$artifact.PSObject.Properties.Remove('cleanupErrorCode')
     $partial = [IO.Path]::Combine($root, '.terminal-artifact-cleanup-' + [guid]::NewGuid().ToString('N') + '.partial')
     $backup = [IO.Path]::Combine($root, '.terminal-artifact-cleanup-' + [guid]::NewGuid().ToString('N') + '.backup')

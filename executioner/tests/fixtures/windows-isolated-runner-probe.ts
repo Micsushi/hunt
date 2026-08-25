@@ -19,7 +19,10 @@ if (mode === "argv") {
 } else if (mode === "attest") {
   await assertCurrentProcessIsOnIsolatedDesktop();
   await writeFile(outputPath, "ok", "utf8");
-} else if (mode === "identity" || mode === "cleanup-terminal") {
+} else if (
+  mode === "identity" || mode === "cleanup-terminal" ||
+  mode === "cleanup-terminal-primary"
+) {
   const configIndex = values.indexOf("--config");
   if (configIndex >= 0) {
     const config = JSON.parse(await readFile(values[configIndex + 1]!, "utf8")) as {
@@ -48,6 +51,45 @@ if (mode === "argv") {
         status: "failed",
         completedPages: 3,
         errorCode: "browser_effect_uncertain",
+      },
+      cleanupErrorCode: "browser_profile_cleanup_failed",
+    }), "utf8");
+  }
+  if (mode === "cleanup-terminal-primary") {
+    const evidenceRoot = argument(values, "--evidence-root");
+    const configPath = argument(values, "--config");
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      readonly journeyId: string;
+      readonly target: { readonly handleId: string };
+    };
+    const configSha256 = createHash("sha256").update(await readFile(configPath)).digest("hex");
+    await writeFile(join(evidenceRoot, "review-acceptance.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-review-acceptance-v1",
+      sourceRevision: "a".repeat(40),
+      configSha256,
+      contractRevision: "s2-owner-inputs-v1",
+      revisionId: "revision_abcdefghijklmnop",
+      approvalId: "approval_abcdefghijklmnop",
+      journeyId: config.journeyId,
+      targetHandleId: config.target.handleId,
+      checkpoint: "review",
+      status: "passed",
+      reviewProof: "independently_verified",
+      submitPresent: true,
+      submitActivated: false,
+      privacyScan: "pass",
+    }), "utf8");
+    await writeFile(join(evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "cleanup_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: config.journeyId,
+        status: "failed",
+        completedPages: 3,
+        errorCode: "browser_profile_cleanup_failed",
       },
       cleanupErrorCode: "browser_profile_cleanup_failed",
     }), "utf8");

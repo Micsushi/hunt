@@ -128,6 +128,30 @@ test("question learning redacts owner text while preserving the question contrac
   }
 });
 
+test("question learning admits reviewed opaque operation ids that collide with sensitive suffixes", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-operation-id-"));
+  try {
+    const operationId = operation(22);
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "live",
+      sensitiveValues: [operationId.replace(/^operation_/u, "")],
+    });
+    const value = ownerChoice(22);
+    capture.recordAttempt({ operationId, ...value });
+    capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId, ...value });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
+      readFileSync(join(root, "question-answer-learning.json"), "utf8"),
+    ));
+    assert.equal(evidence.questions[0]?.attemptHistory[0]?.operationId, operationId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("question learning redacts the selected owner choice", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-owner-controls-"));
   try {

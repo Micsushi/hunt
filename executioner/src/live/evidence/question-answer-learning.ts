@@ -248,6 +248,7 @@ export function createQuestionAnswerLearningCapture(input: {
           sensitiveValues: (input.sensitiveValues ?? []).filter((sensitive) =>
             !publicUiStrings.some((value) => value.includes(sensitive))
           ),
+          reviewedOpaqueIdKeys: ["operationId"],
           label: "question answer learning",
           fileName: "question-answer-learning.json",
         });

@@ -231,6 +231,54 @@ test("Windows Review runner clears a secondary cleanup error after exact job and
   }
 });
 
+test("Windows Review runner restores a proven Review result after exact outer cleanup", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "hunt-c3-primary-cleanup-reconciled-"));
+  const runKey = "run_20260824_primarycleanupxx";
+  const configPath = join(storageRoot, "transient", runKey, "owner-input.json");
+  const runtimeRoot = join(storageRoot, "transient", runKey, "runtime");
+  const evidenceRoot = join(storageRoot, "retained", runKey, "evidence");
+  const output = join(storageRoot, "identity.json");
+  try {
+    await mkdir(runtimeRoot, { recursive: true });
+    await mkdir(evidenceRoot, { recursive: true });
+    await writeFile(configPath, JSON.stringify({
+      journeyId: "journey_abcdefghijklmnop",
+      target: {
+        handleId: "target_ref_abcdefghijklmnop",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R-12345",
+      },
+      roots: { runtime: { path: runtimeRoot } },
+    }));
+    assert.equal(await runWindowsIsolatedStage2Acceptance([
+      "cleanup-terminal-primary", output,
+      "--evidence-root", evidenceRoot,
+      "--config", configPath,
+    ], { runnerPath: fixture }), 0);
+    assert.deepEqual(
+      JSON.parse(await readFile(join(evidenceRoot, "terminal-artifact.json"), "utf8")),
+      {
+        schemaVersion: 1,
+        evidenceRevision: "s2-terminal-artifact-v1",
+        resultCode: "review_reached",
+        terminal: {
+          schemaVersion: 4,
+          journeyId: "journey_abcdefghijklmnop",
+          status: "review_reached",
+          completedPages: 3,
+        },
+      },
+    );
+    const audit = JSON.parse(await readFile(join(evidenceRoot, "process-audit.json"), "utf8"));
+    assert.equal(audit.status, "pass");
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Windows Review runner constructs the production monitor from the declared nested runtime root", {
   skip: process.platform !== "win32",
 }, async () => {
