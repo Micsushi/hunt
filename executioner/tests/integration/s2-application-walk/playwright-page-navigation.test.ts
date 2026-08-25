@@ -815,6 +815,45 @@ test("required Workday listbox buttons use non-placeholder visible text as verif
   });
 });
 
+test("a filled Workday textarea ignores an uncorroborated stale aria-invalid flag", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-conditional-detail">
+          <span data-automation-id="required"></span>
+          <textarea id="conditional-detail" required aria-invalid="true">Editable learning answer</textarea>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [{
+      fieldId: "conditional-detail",
+      page: "questionnaire",
+      verification: "verified",
+    }]);
+  });
+});
+
+test("a filled Workday textarea remains unverified when a visible error corroborates aria-invalid", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-conditional-detail">
+          <span data-automation-id="required"></span>
+          <textarea id="conditional-detail" required aria-invalid="true" aria-errormessage="detail-error">Too long</textarea>
+          <div id="detail-error" role="alert">Maximum length exceeded</div>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [{
+      fieldId: "conditional-detail",
+      page: "questionnaire",
+      verification: "unverified",
+    }]);
+  });
+});
+
 test("required Workday radio groups and tokenized comboboxes verify their committed state", async () => {
   await withPage(async (page) => {
     await page.setContent(`

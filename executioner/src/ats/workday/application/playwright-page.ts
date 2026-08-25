@@ -681,7 +681,32 @@ function readApplicationSnapshot(
       : undefined;
     if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
     if (radioKey !== undefined) seenRadioGroups.add(radioKey);
-    let verified = control.getAttribute("aria-invalid") !== "true";
+    const nativeInvalid = (
+      control instanceof HTMLInputElement ||
+      control instanceof HTMLTextAreaElement ||
+      control instanceof HTMLSelectElement
+    ) && !control.validity.valid;
+    const referencedValidation = [
+      control.getAttribute("aria-errormessage"),
+      control.getAttribute("aria-describedby"),
+    ].filter((ids): ids is string => ids !== null)
+      .flatMap((ids) => ids.split(/\s+/u))
+      .map((id) => document.getElementById(id))
+      .some((element) => element !== null && visible(element) && text(element.textContent) !== "");
+    const ownedValidation = fieldOwner !== null && [...fieldOwner.querySelectorAll<HTMLElement>(
+      '[role="alert"], [data-automation-id="inputAlert"], [data-automation-id*="error" i]',
+    )].some((element) => visible(element) && text(element.textContent) !== "");
+    const unownedValidation = fieldOwner === null &&
+      control.getAttribute("aria-invalid") === "true" &&
+      [...root.querySelectorAll<HTMLElement>(
+        '[role="alert"], [data-automation-id="inputAlert"], [data-automation-id*="error" i]',
+      )].some((element) => visible(element) && text(element.textContent) !== "");
+    // Workday can leave aria-invalid="true" on a conditionally revealed
+    // textarea after a successful fill and blur. Treat the flag as stale only
+    // when native validity passes and no owned, referenced, or unowned visible
+    // validation message corroborates it.
+    let verified = !nativeInvalid && !referencedValidation &&
+      !ownedValidation && !unownedValidation;
     let dateReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["dateReactHandlerLayers"];
     let checkboxReactHandlerLayers:
@@ -994,7 +1019,10 @@ function readApplicationSnapshot(
         fieldOwnerCheckedCount: fieldOwnerRadios.filter(isChecked).length,
         nearestSelectedItemCount: selectedItems.length,
         fieldOwnerSelectedItemCount: fieldOwnerSelectedItems.length,
-        inputNonEmpty: input?.value.trim() !== "",
+        inputNonEmpty: (
+          control instanceof HTMLInputElement ||
+          control instanceof HTMLTextAreaElement
+        ) && control.value.trim() !== "",
         ariaValueNonEmpty: text(control.getAttribute("aria-valuetext")) !== "",
         ...(dateReactHandlerLayers === undefined ? {} : { dateReactHandlerLayers }),
         ...(checkboxReactHandlerLayers === undefined ? {} : { checkboxReactHandlerLayers }),
