@@ -1672,7 +1672,7 @@ export async function applyMutation(
         // the original uncertainty and let the session fail closed.
         if (
           await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs) &&
-          await stabilizeExactFieldPopupTarget(page, target, mutation.option, timeoutMs)
+          await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs)
         ) {
           return "applied";
         }
@@ -1681,7 +1681,7 @@ export async function applyMutation(
       if (!await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
         throw new TypeError("Workday prompt option did not commit");
       }
-      if (!await stabilizeExactFieldPopupTarget(page, target, mutation.option, timeoutMs)) {
+      if (!await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs)) {
         throw new TypeError("Workday prompt owner did not rebind");
       }
       return "applied";
@@ -1828,6 +1828,35 @@ async function stabilizeExactFieldPopupTarget(
     if (Date.now() >= deadline) return true;
     await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
   }
+}
+
+async function settleExactFieldPopupCommit(
+  page: Page,
+  target: ResolvedBrowserTarget,
+  option: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!await rebindExactFieldPopupTarget(page, target)) return false;
+  const control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  if (await control.count() !== 1) return false;
+  await control.blur({ timeout: timeoutMs }).catch(() => undefined);
+  const deadline = Date.now() + Math.min(1_000, timeoutMs);
+  while (Date.now() < deadline) {
+    const open = await page.locator(
+      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+        '[data-automation-id="promptLeafNode"]:visible',
+    ).count() > 0 || await control.getAttribute("aria-expanded") === "true";
+    if (!open) break;
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(100);
+  }
+  if (
+    await page.locator(
+      '[role="option"]:visible, [data-automation-id="promptOption"]:visible, ' +
+        '[data-automation-id="promptLeafNode"]:visible',
+    ).count() > 0 || await control.getAttribute("aria-expanded") === "true"
+  ) return false;
+  return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
 }
 
 export async function clickNext(

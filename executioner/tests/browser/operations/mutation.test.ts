@@ -820,6 +820,9 @@ test("waits for a delayed Workday prompt-button commit", async () => {
         const options = document.querySelector('#options');
         const field = button.closest('[data-automation-id^="formField-"]');
         button.addEventListener('click', () => { options.hidden = false; });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') options.hidden = true;
+        });
         options.addEventListener('click', () => {
           setTimeout(() => { button.textContent = 'No'; }, 250);
           setTimeout(() => {
@@ -851,6 +854,7 @@ test("waits for a delayed Workday prompt-button commit", async () => {
     ), new AbortController().signal);
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
+    assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
     await context.pages()[0]!.waitForTimeout(100);
     const readback = await provider.observe(started.value, new AbortController().signal);
     assert.deepEqual(readback.ok ? readback.value.targets[0]?.readback : undefined, {
