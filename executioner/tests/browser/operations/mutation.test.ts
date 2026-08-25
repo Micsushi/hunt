@@ -893,9 +893,11 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
             replacement.removeAttribute('data-hunt-target-token');
             button.replaceWith(replacement);
             button = replacement;
-            options.hidden = true;
           }, { once: true });
         }, { once: true });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape' && event.target === button) options.hidden = true;
+        });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");

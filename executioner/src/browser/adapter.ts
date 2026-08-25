@@ -1856,7 +1856,7 @@ async function settleExactFieldPopupCommit(
         '[data-automation-id="promptLeafNode"]:visible',
     ).count() > 0 || await control.getAttribute("aria-expanded", { timeout: 250 }) === "true";
     if (!open) break;
-    await page.keyboard.press("Escape");
+    await control.press("Escape", { timeout: 250 });
     await page.waitForTimeout(100);
   }
   if (!await rebindExactFieldPopupTarget(page, target)) return false;
