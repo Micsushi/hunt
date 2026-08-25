@@ -94,6 +94,36 @@ test("questionnaire binding owns every admitted visible Workday question root", 
   }
 });
 
+test("questionnaire binding excludes navigation buttons from semantic field ownership", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-age">
+          <label>Do you certify that you are 18 years of age or older?
+            <span data-automation-id="required">*</span>
+          </label>
+          <button type="button" aria-haspopup="listbox">Select One</button>
+        </div>
+        <button type="button" data-automation-id="pageFooterNextButton">Next</button>
+      </main>
+    `);
+    await bindQuestionnaireTargets(page, "questionnaire-navigation-fixture" as never);
+    assert.match(
+      await page.locator('button[aria-haspopup="listbox"]').getAttribute("data-hunt-target-token") ?? "",
+      /^target-workday-[a-f0-9]{8}-1$/u,
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="pageFooterNextButton"]')
+        .getAttribute("data-hunt-target-token"),
+      null,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("questionnaire binding gives unknown questions stable value-free target identities", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

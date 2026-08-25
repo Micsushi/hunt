@@ -2331,7 +2331,8 @@ export async function bindQuestionnaireTargets(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
-        'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], button',
+        'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], ' +
+        'button[aria-haspopup="listbox"]',
     );
     const identities = new Map<string, number>();
     const hash = (value: string) => {
