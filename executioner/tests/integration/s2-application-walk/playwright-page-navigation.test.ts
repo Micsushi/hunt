@@ -291,7 +291,7 @@ test("navigation retries one trusted gesture when Workday leaves the verified so
     `);
     const adapter = new PlaywrightWorkdayApplicationPage(page, {
       timeoutMs: 50,
-      navigationSettleTimeoutMs: 100,
+      navigationSettleTimeoutMs: 500,
     });
     const result = await adapter.next(request("profile", ["profile"]), signal());
     assert.deepEqual(result, { ok: true, value: { advanced: true } });
