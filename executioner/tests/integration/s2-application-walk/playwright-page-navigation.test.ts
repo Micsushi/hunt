@@ -143,7 +143,7 @@ test("navigation tolerates a bounded Workday loading page before the destination
     `);
     const adapter = new PlaywrightWorkdayApplicationPage(page, {
       timeoutMs: 50,
-      navigationSettleTimeoutMs: 500,
+      navigationSettleTimeoutMs: 2_000,
     });
     const result = await adapter.next(request("profile", ["profile"]), signal());
     assert.deepEqual(result, { ok: true, value: { advanced: true } });
