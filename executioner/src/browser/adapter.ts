@@ -1675,6 +1675,9 @@ export async function applyMutation(
         }
         throw error;
       }
+      if (!await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
+        throw new TypeError("Workday prompt option did not commit");
+      }
       return "applied";
     }
     let optionOwner = target.interaction === "owned-popup"
@@ -2262,6 +2265,20 @@ async function waitForExactFieldPopupOption(
         ...(matches.length === 1 ? { locator: candidates.nth(matches[0]!.index) } : {}),
       };
     }
+    await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+}
+
+async function waitForExactFieldPopupSelection(
+  page: Page,
+  target: ResolvedBrowserTarget,
+  option: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    if (await fieldPopupSelection(page, target) === option) return true;
+    if (Date.now() >= deadline) return false;
     await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
   }
 }

@@ -796,6 +796,50 @@ test("opens a Workday prompt button before requiring its lazily mounted option",
   }
 });
 
+test("waits for a delayed Workday prompt-button commit", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed08") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-agreement">
+        <label>Are you subject to an agreement?</label>
+        <button id="agreement" type="button" aria-haspopup="listbox"
+          data-hunt-target-token="target-agreement">Select One</button>
+        <div id="options" hidden>
+          <div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div>
+        </div>
+      </div>
+      <script>
+        const button = document.querySelector('#agreement');
+        const options = document.querySelector('#options');
+        button.addEventListener('click', () => { options.hidden = false; });
+        options.addEventListener('click', () => setTimeout(() => {
+          button.textContent = 'No';
+          options.hidden = true;
+        }, 250), { once: true });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "No" as never },
+      "ededededededed09",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("accepts a detached Workday prompt option only after exact field readback", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
