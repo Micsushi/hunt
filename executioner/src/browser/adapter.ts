@@ -1662,8 +1662,15 @@ export async function applyMutation(
         await locator.press("Escape", { timeout: timeoutMs }).catch(() => undefined);
         return exact.count === 0 ? "invalid" : "ambiguous";
       }
+      const optionOwner = exact.locator.locator(
+        'xpath=ancestor-or-self::*[@role="option" or @data-automation-id="promptOption"][1]',
+      );
+      const ownedOption = await optionOwner.count() === 1 && await optionOwner.isVisible();
       try {
-        await exact.locator.click({ timeout: timeoutMs });
+        await (ownedOption ? optionOwner : exact.locator).click({
+          timeout: timeoutMs,
+          ...(ownedOption ? { position: { x: 2, y: 2 } } : {}),
+        });
       } catch (error) {
         // Workday can commit a prompt option and immediately replace the
         // clicked option node. Playwright then reports a detached click even

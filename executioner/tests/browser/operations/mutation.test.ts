@@ -878,7 +878,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         <button id="agreement" type="button" aria-haspopup="listbox"
           data-hunt-target-token="target-agreement">Select One</button>
         <div id="options" hidden>
-          <div role="option" data-automation-id="promptOption">No</div>
+          <div id="option" role="option" data-automation-id="promptOption" style="padding: 10px">
+            <div id="leaf" data-automation-id="promptLeafNode" style="margin-left: 20px">No</div>
+          </div>
         </div>
       </div>
       <script>
@@ -887,11 +889,8 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         document.addEventListener('click', event => {
           if (event.target === button) options.hidden = false;
         });
-        document.addEventListener('keydown', event => {
-          if (event.key === 'Tab') options.hidden = true;
-        });
-        options.addEventListener('click', event => {
-          button.textContent = event.target.textContent.trim();
+        const commit = () => {
+          button.textContent = 'No';
           button.focus();
           button.addEventListener('blur', () => {
             const replacement = button.cloneNode(true);
@@ -899,7 +898,15 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
             button.replaceWith(replacement);
             button = replacement;
           }, { once: true });
-        }, { once: true });
+        };
+        document.querySelector('#leaf').addEventListener('click', event => {
+          commit();
+          event.stopPropagation();
+        });
+        document.querySelector('#option').addEventListener('click', () => {
+          commit();
+          options.hidden = true;
+        });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
