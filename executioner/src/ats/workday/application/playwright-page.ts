@@ -748,7 +748,7 @@ function readApplicationSnapshot(
     )) {
       const parts = ["dateSectionMonth", "dateSectionDay", "dateSectionYear"].map(
         (automationId) => [...control.querySelectorAll<HTMLInputElement>(
-          `[data-automation-id="${automationId}"]`,
+          `[data-automation-id="${automationId}"], [data-automation-id="${automationId}-input"]`,
         )],
       );
       const values = parts.map((matches) => matches.length === 1 ? matches[0]!.value.trim() : "");

@@ -555,6 +555,30 @@ test("conditional Workday dates retain distinct required target identities", asy
         { name: "When are you available to start?*", required: true },
       ],
     );
+    await availability.locator("input").evaluateAll((inputs) => {
+      ["08", "25", "2026"].forEach((value, index) => {
+        (inputs[index] as HTMLInputElement).value = value;
+      });
+    });
+    const oneCommitted = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+    assert.deepEqual(
+      oneCommitted.ok && oneCommitted.value.requiredFields.map(({ verification }) => verification),
+      ["unverified", "verified"],
+    );
+    await niv.locator("input").evaluateAll((inputs) => {
+      ["08", "26", "2026"].forEach((value, index) => {
+        (inputs[index] as HTMLInputElement).value = value;
+      });
+    });
+    const bothCommitted = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+    assert.deepEqual(
+      bothCommitted.ok && bothCommitted.value.requiredFields.map(({ verification }) => verification),
+      ["verified", "verified"],
+    );
   } finally {
     await browser.close();
   }
