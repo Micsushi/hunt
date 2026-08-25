@@ -27,6 +27,7 @@ import {
   captureResumeArtifact,
   fieldId,
   guardRevision,
+  questionId,
   upstreamProfileId,
   upstreamResumeId,
   type BrowserSessionId,
@@ -139,6 +140,44 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
     ["profile_verified", "resume_verified", "questionnaire_verified"],
   );
   assert.doesNotMatch(JSON.stringify(acceptances.snapshot("questionnaire_verified")), /Ada/u);
+});
+
+test("collector retains cumulative answers across consecutive questionnaire pages", () => {
+  const collector = createApplicationLaneAcceptanceCollector();
+  const proof = (
+    answerFieldId: string,
+    answerQuestionId: string,
+  ) => ({
+    schemaVersion: 1 as const,
+    checkpoint: "questionnaire_verified" as const,
+    answers: [{
+      fieldId: fieldId(answerFieldId),
+      questionId: questionId(answerQuestionId),
+      provenance: "owner_provided" as const,
+      lane: "live_owner_fact" as const,
+      protectedCategory: null,
+      templateRevision: null,
+      verification: "independent" as const,
+    }],
+    protectedPlaceholderCount: 0 as const,
+    independentlyVerified: true as const,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
+  });
+  collector.record(proof("first-answer", "first-question"));
+  collector.record(proof("second-answer", "second-question"));
+  collector.record({ ...proof("second-answer", "second-question"), answers: [] });
+
+  const snapshot = collector.snapshot("questionnaire_verified");
+  assert.equal(snapshot.length, 1);
+  const questionnaire = snapshot[0];
+  assert.equal(questionnaire?.checkpoint, "questionnaire_verified");
+  assert.deepEqual(
+    questionnaire?.checkpoint === "questionnaire_verified"
+      ? questionnaire.answers.map(({ fieldId: id }) => id)
+      : [],
+    ["first-answer", "second-answer"],
+  );
 });
 
 test("captures profile and questionnaire inputs as immutable source snapshots", () => {

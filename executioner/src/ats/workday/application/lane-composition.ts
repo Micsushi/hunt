@@ -133,16 +133,28 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
       const replacesRevealedQuestionnaireProof =
         acceptance.checkpoint === "questionnaire_verified" &&
         records.at(-1)?.checkpoint === "questionnaire_verified";
+      const effectiveAcceptance = replacesRevealedQuestionnaireProof
+        ? mergeQuestionnaireAcceptances(
+          records.at(-1) as Extract<
+            ApplicationLaneAcceptance,
+            { readonly checkpoint: "questionnaire_verified" }
+          >,
+          acceptance as Extract<
+            ApplicationLaneAcceptance,
+            { readonly checkpoint: "questionnaire_verified" }
+          >,
+        )
+        : acceptance;
       const candidate = [
         ...records.slice(0, replacesRevealedQuestionnaireProof ? -1 : records.length),
-        acceptance,
+        effectiveAcceptance,
       ];
       if (!isValidApplicationPageSequence(candidate.map(({ checkpoint }) =>
         applicationPageForCheckpoint(checkpoint)
       ))) {
         throw new TypeError("application lane acceptance order is invalid");
       }
-      const sealed = deepFreeze(structuredClone(acceptance));
+      const sealed = deepFreeze(structuredClone(effectiveAcceptance));
       if (replacesRevealedQuestionnaireProof) records[records.length - 1] = sealed;
       else records.push(sealed);
     },
@@ -163,6 +175,27 @@ export function createApplicationLaneAcceptanceCollector(): ApplicationLaneAccep
       return Object.freeze(records.slice(0, count));
     },
   });
+}
+
+function mergeQuestionnaireAcceptances(
+  previous: Extract<
+    ApplicationLaneAcceptance,
+    { readonly checkpoint: "questionnaire_verified" }
+  >,
+  current: Extract<
+    ApplicationLaneAcceptance,
+    { readonly checkpoint: "questionnaire_verified" }
+  >,
+): Extract<ApplicationLaneAcceptance, { readonly checkpoint: "questionnaire_verified" }> {
+  const answers = [...previous.answers];
+  for (const answer of current.answers) {
+    const index = answers.findIndex((candidate) =>
+      candidate.fieldId === answer.fieldId && candidate.questionId === answer.questionId
+    );
+    if (index === -1) answers.push(answer);
+    else answers[index] = answer;
+  }
+  return { ...current, answers };
 }
 
 export function createApplicationLaneHandlers(
