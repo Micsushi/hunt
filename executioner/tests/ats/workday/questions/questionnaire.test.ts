@@ -32,6 +32,7 @@ import {
   resolveActiveListbox,
   type ActiveListboxEvidence,
   type ConfiguredNarrativeProvider,
+  type QuestionnairePageHandlerDependencies,
 } from "../../../../src/ats/workday/application/questions/index.ts";
 import { createResumeArtifactFixture } from "../../../../src/testing/contracts/index.ts";
 
@@ -116,6 +117,8 @@ function dependencies(options: {
   readonly verifier?: FieldVerifier;
   readonly observation?: SanitizedStructuralObservationV1;
   readonly narrative?: ConfiguredNarrativeProvider;
+  readonly previouslyVerified?: QuestionnairePageHandlerDependencies["previouslyVerified"];
+  readonly recordVerified?: QuestionnairePageHandlerDependencies["recordVerified"];
 } = {}) {
   const calls = { resolved: 0, driven: 0, verified: 0 };
   let operation = 0;
@@ -186,6 +189,8 @@ function dependencies(options: {
       observationFor(_fieldId, layer: ClassificationLayer) {
         return options.observation?.layer === layer ? options.observation : undefined;
       },
+      previouslyVerified: options.previouslyVerified,
+      recordVerified: options.recordVerified,
     }),
   };
 }
@@ -234,6 +239,32 @@ test("required narrative and fixed choices resolve canonically and independently
     },
   });
   assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
+});
+
+test("a conditional rescan reuses only an exact previously verified field", async () => {
+  const verified = new Set<string>();
+  const { handler, calls } = dependencies({
+    previouslyVerified: ({ pageId, field, intent }) => verified.has(
+      `${pageId}:${field.fieldId}:${intent.kind}:${intent.behavior}`,
+    ),
+    recordVerified: ({ pageId, field, intent }) => {
+      verified.add(`${pageId}:${field.fieldId}:${intent.kind}:${intent.behavior}`);
+    },
+  });
+
+  const first = await handler.complete(
+    request([narrativeField]),
+    new AbortController().signal,
+  );
+  const rescanned = await handler.complete(
+    request([narrativeField, authorizationField]),
+    new AbortController().signal,
+  );
+
+  assert.equal(first.ok && first.value.kind, "verified");
+  assert.equal(rescanned.ok && rescanned.value.kind, "verified");
+  assert.deepEqual(calls, { resolved: 0, driven: 2, verified: 2 });
+  assert.equal(verified.size, 2);
 });
 
 test("protected non-owner answers fail closed before mutation", async () => {

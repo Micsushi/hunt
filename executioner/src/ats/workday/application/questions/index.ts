@@ -158,6 +158,16 @@ export interface QuestionnairePageHandlerDependencies {
     fieldId: FieldId,
     layer: ClassificationLayer,
   ): SanitizedStructuralObservationV1 | undefined;
+  readonly previouslyVerified?: (input: {
+    readonly pageId: BrowserPageId;
+    readonly field: FieldObservation;
+    readonly intent: FieldIntent;
+  }) => boolean;
+  readonly recordVerified?: (input: {
+    readonly pageId: BrowserPageId;
+    readonly field: FieldObservation;
+    readonly intent: FieldIntent;
+  }) => void;
   readonly recordAnswer?: (input: {
     readonly operationId: OperationId;
     readonly questionId: QuestionId;
@@ -361,6 +371,25 @@ export function createQuestionnairePageHandler(
           return blocked("narrative_ineligible", field.fieldId, category);
         }
 
+        if (dependencies.previouslyVerified?.({
+          pageId: request.pageId,
+          field,
+          intent: answer.value.intent,
+        }) === true) {
+          if (mode === "live") {
+            answers.push(Object.freeze({
+              fieldId: field.fieldId,
+              questionId: resolvedQuestionId,
+              provenance: answer.value.intent.provenance,
+              lane: answer.value.lane,
+              protectedCategory: category,
+              templateRevision: narrative?.revision ?? null,
+              verification: "independent",
+            }));
+          }
+          continue;
+        }
+
         const operationId = dependencies.nextOperationId();
         const generatedDefault = question.kind !== "resolved" ||
           answer.value.intent.provenance === "reviewed_catalog" ||
@@ -430,6 +459,11 @@ export function createQuestionnairePageHandler(
           lane: answer.value.lane,
           protectedCategory: category,
           generatedDefault,
+        });
+        dependencies.recordVerified?.({
+          pageId: request.pageId,
+          field,
+          intent: answer.value.intent,
         });
 
         if (mode === "live") {

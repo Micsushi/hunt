@@ -24,7 +24,10 @@ function normalizeTextarea(value: string): string {
   return value.normalize("NFC").replace(/\r\n?/gu, "\n");
 }
 
-function matches(intent: FieldIntent, readback: BrowserReadback): boolean {
+export function fieldIntentMatchesReadback(
+  intent: FieldIntent,
+  readback: BrowserReadback,
+): boolean {
   switch (intent.kind) {
     case "text":
       return (
@@ -172,7 +175,7 @@ export function createFieldVerifier(
         if (target.readback.kind === "unavailable") {
           continue;
         }
-        if (matches(request.intent, target.readback)) {
+        if (fieldIntentMatchesReadback(request.intent, target.readback)) {
           return {
             ok: true,
             value: {

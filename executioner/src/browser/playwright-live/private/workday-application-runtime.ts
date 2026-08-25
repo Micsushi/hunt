@@ -42,6 +42,7 @@ import {
   type BrowserSessionId,
   type FieldId,
   type FieldDriver,
+  type FieldIntent,
   type FieldVerifier,
   type OperationId,
 } from "../../../contracts/index.ts";
@@ -63,7 +64,7 @@ import {
   workdayReviewSignatures,
   type WorkdayReviewStructuralObservationV1,
 } from "../../../interaction/review/index.ts";
-import { createFieldVerifier } from
+import { createFieldVerifier, fieldIntentMatchesReadback } from
   "../../../interaction/verification/field-verifier.ts";
 import { createProfileFieldLearningCapture } from
   "../../../live/evidence/profile-field-learning.ts";
@@ -272,6 +273,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #observationMonitorAttempts = new Map<string, number>();
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
+  readonly #verifiedQuestionnaireIntents = new Map<string, string>();
   #profileMutationAttempted = false;
   #profileCleanupState: ProfileCleanupState = "not_started";
   #profilePreservationCandidate = false;
@@ -307,6 +309,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#request = undefined;
     this.#session = undefined;
     this.#reviewExpected.clear();
+    this.#verifiedQuestionnaireIntents.clear();
   }
 
   profilePreservationSnapshot(): {
@@ -1024,6 +1027,9 @@ export class OwnedWorkdayApplicationRuntime {
         taxonomyRequired: taxonomy.requiredFieldCount,
       })}`);
       const facts = structuralObservations(snapshot.fields);
+      const currentReadbacks = new Map(
+        observed.value.targets.map(({ token, readback }) => [token, readback]),
+      );
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
       const monitoredAttempts = new Map<string, number>();
@@ -1114,6 +1120,25 @@ export class OwnedWorkdayApplicationRuntime {
         nextOperationId: this.#nextOperationId,
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
+        previouslyVerified: ({ pageId, field, intent }) => {
+          const reusable = this.#verifiedQuestionnaireIntents.get(
+            questionnaireIntentKey(pageId, field.fieldId),
+          ) === questionnaireIntentFingerprint(intent) &&
+            fieldIntentMatchesReadback(
+              intent,
+              currentReadbacks.get(field.target) ?? { kind: "unavailable" },
+            );
+          if (reusable) this.#trace?.("questionnaire_field_verified_reused", {
+            fieldId: field.fieldId,
+          });
+          return reusable;
+        },
+        recordVerified: ({ pageId, field, intent }) => {
+          this.#verifiedQuestionnaireIntents.set(
+            questionnaireIntentKey(pageId, field.fieldId),
+            questionnaireIntentFingerprint(intent),
+          );
+        },
         recordAttempt: questionLearning?.recordAttempt,
         recordAnswer: questionLearning?.record,
         recordUnset: questionLearning?.recordUnset,
@@ -1362,6 +1387,26 @@ function reviewReadbackValue(readback: BrowserReadback): string | undefined {
   if (readback.kind === "selected") return readback.option ?? undefined;
   if (readback.kind === "checked") return readback.checked ? "Yes" : "No";
   return undefined;
+}
+
+function questionnaireIntentKey(pageId: BrowserPageId, questionFieldId: FieldId): string {
+  return `${pageId}\0${questionFieldId}`;
+}
+
+function questionnaireIntentFingerprint(intent: FieldIntent): string {
+  const desired = intent.kind === "text"
+    ? intent.value
+    : intent.kind === "choice"
+      ? intent.expectedOption
+      : intent.kind === "toggle"
+        ? String(intent.checked)
+        : intent.kind === "date"
+          ? intent.isoDate
+          : `${intent.artifact.resumeId}\0${intent.artifact.sha256}`;
+  return createHash("sha256").update(
+    `${intent.kind}\0${intent.behavior}\0${intent.provenance}\0${desired}`,
+    "utf8",
+  ).digest("hex");
 }
 
 function normalizeReviewValue(value: string): string {
