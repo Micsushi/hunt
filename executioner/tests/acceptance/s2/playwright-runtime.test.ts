@@ -34,12 +34,70 @@ import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
 import {
   bindQuestionnaireTargets,
+  hydrateQuestionnairePopupOptions,
   isReviewExpectedField,
   isWorkdayReviewOmittedProfileField,
   OwnedWorkdayApplicationRuntime,
   reviewAnswerCandidates,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("questionnaire popup hydration ignores a stale unrelated portal across control remount", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField">
+          <label>Have you been referred by an Integer associate? <span data-automation-id="required">*</span></label>
+          <button id="mcvf1" type="button" aria-haspopup="listbox" aria-controls="target-popup">Select One</button>
+        </div>
+      </main>
+      <div id="stale-popup" role="listbox"><div role="option">Unrelated stale option</div></div>
+      <script>
+        const bind = (button) => button.addEventListener('click', () => {
+          const popup = document.createElement('div');
+          popup.id = 'target-popup';
+          popup.setAttribute('role', 'listbox');
+          popup.innerHTML = '<div role="option">Yes</div><div role="option">No</div>';
+          document.body.append(popup);
+          button.setAttribute('aria-expanded', 'true');
+        });
+        bind(document.querySelector('#mcvf1'));
+        document.addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape') return;
+          document.querySelector('#target-popup')?.remove();
+          const button = document.querySelector('[aria-controls="target-popup"]');
+          const replacement = button.cloneNode(true);
+          replacement.id = 'mcvf101';
+          replacement.setAttribute('aria-expanded', 'false');
+          replacement.removeAttribute('data-hunt-target-token');
+          replacement.removeAttribute('data-hunt-popup-options');
+          button.replaceWith(replacement);
+          bind(replacement);
+        });
+      </script>
+    `);
+    const pageId = "questionnaire-stale-portal-fixture" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const token = await page.locator('[aria-controls="target-popup"]')
+      .getAttribute("data-hunt-target-token");
+    assert.match(token ?? "", /^target-workday-[a-f0-9]{8}-1$/u);
+
+    await hydrateQuestionnairePopupOptions(page, pageId, token!, 5_000);
+
+    const rebound = page.locator('[aria-controls="target-popup"]');
+    assert.equal(await rebound.getAttribute("data-hunt-target-token"), token);
+    assert.deepEqual(
+      JSON.parse(await rebound.getAttribute("data-hunt-popup-options") ?? "[]"),
+      ["Yes", "No"],
+    );
+    assert.equal(await page.locator("#stale-popup").isVisible(), true);
+    assert.equal(await page.locator("#target-popup").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("Workday Review admits only its exact omitted composites and canonical LinkedIn display", () => {
   assert.deepEqual([

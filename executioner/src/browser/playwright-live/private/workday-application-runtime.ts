@@ -2501,15 +2501,93 @@ export async function hydrateQuestionnairePopupOptions(
     throw new TypeError("questionnaire popup target unavailable");
   }
   const selectedBefore = await popupSelectedValue(target);
+  await target.evaluate((_control, declaredToken) => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    document.querySelectorAll(`[data-hunt-popup-hydration-preexisting="${declaredToken}"]`)
+      .forEach((element) => element.removeAttribute("data-hunt-popup-hydration-preexisting"));
+    const optionSelector =
+      '[role="option"], [data-automation-id="promptOption"], ' +
+      '[data-automation-id="promptLeafNode"]';
+    const popupSelector =
+      '[role="listbox"], [role="dialog"], [data-automation-id="promptMenu"], ' +
+      '[data-automation-id="promptPopup"]';
+    [...document.querySelectorAll<HTMLElement>(optionSelector)].filter(visible)
+      .map((option) => option.closest<HTMLElement>(popupSelector))
+      .filter((owner): owner is HTMLElement => owner !== null)
+      .forEach((owner) =>
+        owner.setAttribute("data-hunt-popup-hydration-preexisting", declaredToken)
+      );
+  }, targetToken);
   await target.click({ timeout: timeoutMs });
+  await bindQuestionnaireTargets(page, pageId);
+  const reboundOpenTarget = page.locator(`[data-hunt-target-token="${targetToken}"]`);
+  if (await reboundOpenTarget.count() !== 1 || !await reboundOpenTarget.isVisible()) {
+    throw new TypeError("questionnaire popup target unavailable after open");
+  }
+  const popupOwnerBound = await reboundOpenTarget.evaluate((control, declaredToken) => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    document.querySelectorAll(`[data-hunt-popup-hydration-owner="${declaredToken}"]`)
+      .forEach((element) => element.removeAttribute("data-hunt-popup-hydration-owner"));
+    const optionSelector =
+      '[role="option"], [data-automation-id="promptOption"], ' +
+      '[data-automation-id="promptLeafNode"]';
+    const ownsVisibleOptions = (element: Element) =>
+      [...element.querySelectorAll(optionSelector)].some(visible);
+    const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
+      .flatMap((value) => value?.split(/\s+/u) ?? [])
+      .filter((id) => /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id));
+    const directOwners = [...new Set(ownedIds)]
+      .map((id) => document.getElementById(id))
+      .filter((element): element is HTMLElement =>
+        element !== null && visible(element) && ownsVisibleOptions(element)
+      );
+    const field = control.closest(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const fieldOwners = field !== null && ownsVisibleOptions(field) ? [field] : [];
+    const popupSelector =
+      '[role="listbox"], [role="dialog"], [data-automation-id="promptMenu"], ' +
+      '[data-automation-id="promptPopup"]';
+    const newlyVisibleOwners = [...new Set(
+      [...document.querySelectorAll<HTMLElement>(optionSelector)].filter(visible)
+        .map((option) => option.closest<HTMLElement>(popupSelector))
+        .filter((owner): owner is HTMLElement => owner !== null)
+        .filter((owner) =>
+          owner.getAttribute("data-hunt-popup-hydration-preexisting") !== declaredToken
+        ),
+    )];
+    const owners = directOwners.length > 0
+      ? directOwners
+      : fieldOwners.length > 0 ? fieldOwners : newlyVisibleOwners;
+    if (owners.length !== 1) return false;
+    owners[0]!.setAttribute("data-hunt-popup-hydration-owner", declaredToken);
+    return true;
+  }, targetToken);
+  if (!popupOwnerBound) throw new TypeError("questionnaire popup owner unavailable");
   const options = page.locator(
-    '[data-automation-id="promptOption"]:visible, [role="listbox"] [role="option"]:visible',
+    `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
+      '[data-automation-id="promptOption"]:visible, ' +
+      `[data-hunt-popup-hydration-owner="${targetToken}"] [role="option"]:visible, ` +
+      `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
+      '[data-automation-id="promptLeafNode"]:visible',
   );
   await options.first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
   const labels = [...new Set((await options.allInnerTexts())
     .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
     .filter(Boolean))];
-  await target.press("Escape", { timeout: timeoutMs });
+  await reboundOpenTarget.press("Escape", { timeout: timeoutMs });
   await bindQuestionnaireTargets(page, pageId);
   if (labels.length === 0 || labels.length > 128 || labels.some((label) => label.length > 512)) {
     throw new TypeError("questionnaire popup options denied");
@@ -2525,6 +2603,10 @@ export async function hydrateQuestionnairePopupOptions(
   await rebound.evaluate((element, observed) => {
     element.setAttribute("data-hunt-popup-options", JSON.stringify(observed));
   }, labels);
+  await page.locator(`[data-hunt-popup-hydration-preexisting="${targetToken}"]`)
+    .evaluateAll((elements) => elements.forEach((element) =>
+      element.removeAttribute("data-hunt-popup-hydration-preexisting")
+    ));
 }
 
 async function popupSelectedValue(target: import("playwright").Locator): Promise<string> {
