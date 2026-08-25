@@ -254,6 +254,22 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const result = await bounded(action, signal, this.#timeoutMs);
     if (result.kind === "cancelled" || result.kind === "timeout") {
       if (effectStarted) {
+        if (
+          result.kind === "timeout" && mutation.kind === "select" &&
+          target.interaction === "field-popup" &&
+          await reconcileCommittedFieldPopupSelection(
+            active.page,
+            snapshot.effect.sessionId,
+            snapshot.effect.pageId,
+            mutation.target,
+            mutation.option,
+            this.#uploads,
+            signal,
+            this.#timeoutMs,
+          )
+        ) {
+          return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
+        }
         await this.#invalidateOwnedSession();
         return failure("browser_effect_uncertain");
       }
@@ -261,6 +277,21 @@ export class PlaywrightBrowserSession implements BrowserSession {
     }
     if (result.kind === "error") {
       if (effectStarted) {
+        if (
+          mutation.kind === "select" && target.interaction === "field-popup" &&
+          await reconcileCommittedFieldPopupSelection(
+            active.page,
+            snapshot.effect.sessionId,
+            snapshot.effect.pageId,
+            mutation.target,
+            mutation.option,
+            this.#uploads,
+            signal,
+            this.#timeoutMs,
+          )
+        ) {
+          return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
+        }
         await this.#invalidateOwnedSession();
         return failure("browser_effect_uncertain");
       }
@@ -415,6 +446,31 @@ function compatible(target: ResolvedBrowserTarget, mutation: BrowserMutation): b
       (target.control.kind === "choice" && target.control.choice === "radio");
   }
   return target.control.kind === "file";
+}
+
+async function reconcileCommittedFieldPopupSelection(
+  page: Page,
+  sessionId: BrowserSessionResult["sessionId"],
+  pageId: BrowserSessionResult["pageId"],
+  targetToken: Extract<BrowserMutation, { readonly kind: "select" }>["target"],
+  option: Extract<BrowserMutation, { readonly kind: "select" }>["option"],
+  uploads: ReadonlyMap<string, UploadedArtifactReadback>,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!signal.aborted) {
+    const observed = await inspectPage(page, sessionId, pageId, uploads).catch(() => undefined);
+    const matches = observed?.targets.get(targetToken);
+    if (
+      matches?.length === 1 && matches[0]?.readback.kind === "selected" &&
+      matches[0].readback.option === option
+    ) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await page.waitForTimeout(Math.min(50, remaining)).catch(() => undefined);
+  }
+  return false;
 }
 
 type BoundedResult<T> =

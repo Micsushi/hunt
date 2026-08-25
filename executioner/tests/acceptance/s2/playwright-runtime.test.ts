@@ -99,6 +99,171 @@ test("questionnaire popup hydration ignores a stale unrelated portal across cont
   }
 });
 
+test("eight questionnaire hydrations close the exact owned portal before semantic inspection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        ${Array.from({ length: 8 }, (_, index) => `
+          <div data-automation-id="formField-${index + 1}">
+            <label>Integer question ${index + 1} <span data-automation-id="required">*</span></label>
+            <button id="mcvf${index + 1}" type="button" aria-haspopup="listbox"
+              aria-controls="target-popup-${index + 1}" aria-expanded="false">Select One</button>
+          </div>
+        `).join("")}
+      </main>
+      <div id="stale-popup" role="listbox"><div role="option">Unrelated stale option</div></div>
+      <script>
+        let openIndex = 0;
+        let eighthToggleCount = 0;
+        const close = index => {
+          document.querySelector('#target-popup-' + index)?.remove();
+          const button = document.querySelector('#mcvf' + index);
+          button?.setAttribute('aria-expanded', 'false');
+          if (openIndex === index) openIndex = 0;
+        };
+        document.querySelectorAll('button[aria-haspopup="listbox"]').forEach((button, offset) => {
+          const index = offset + 1;
+          button.addEventListener('click', () => {
+            if (openIndex === index) {
+              if (index === 8) eighthToggleCount += 1;
+              close(index);
+              return;
+            }
+            if (openIndex !== 0) close(openIndex);
+            const popup = document.createElement('div');
+            popup.id = 'target-popup-' + index;
+            popup.setAttribute('role', 'listbox');
+            popup.innerHTML = '<div role="option">Yes</div><div role="option">No</div>';
+            document.body.append(popup);
+            button.setAttribute('aria-expanded', 'true');
+            openIndex = index;
+          });
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key !== 'Escape' || openIndex === 8) return;
+          close(openIndex);
+        });
+        window.fixtureState = () => ({ openIndex, eighthToggleCount });
+      </script>
+    `);
+    const pageId = "questionnaire-eight-portal-fixture" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const tokens = await page.locator('main button').evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("data-hunt-target-token"))
+    );
+    assert.equal(tokens.length, 8);
+    for (const token of tokens) {
+      assert.notEqual(token, null);
+      await hydrateQuestionnairePopupOptions(page, pageId, token!, 5_000);
+    }
+
+    assert.deepEqual(await page.evaluate(() =>
+      (window as unknown as { fixtureState(): { openIndex: number; eighthToggleCount: number } })
+        .fixtureState()
+    ), { openIndex: 0, eighthToggleCount: 1 });
+    assert.equal(await page.locator('[id^="target-popup-"]').count(), 0);
+    assert.equal(await page.locator('[data-hunt-popup-hydration-owner]').count(), 0);
+    assert.equal(await page.locator('[data-hunt-popup-hydration-preexisting]').count(), 0);
+    assert.equal(await page.locator('#stale-popup').isVisible(), true);
+    for (const button of await page.locator('main button').all()) {
+      assert.deepEqual(
+        JSON.parse(await button.getAttribute("data-hunt-popup-options") ?? "[]"),
+        ["Yes", "No"],
+      );
+      assert.equal(await button.getAttribute("aria-expanded"), "false");
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("questionnaire mutation selects only from its newly opened portal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-current">
+          <label>Are you currently subject to a company agreement? <span data-automation-id="required">*</span></label>
+          <button id="mcvf1" type="button" aria-haspopup="listbox">Select One</button>
+        </div>
+      </main>
+      <div id="stale-popup" data-automation-id="promptMenu">
+        <div data-automation-id="promptOption" data-stale="true">No</div>
+      </div>
+      <script>
+        let staleClicks = 0;
+        document.querySelector('[data-stale="true"]').addEventListener('click', () => { staleClicks += 1; });
+        const field = document.querySelector('[data-automation-id="formField-current"]');
+        const bind = (button) => button.addEventListener('click', () => {
+          if (document.querySelector('#target-popup') !== null) return;
+          const popup = document.createElement('div');
+          popup.id = 'target-popup';
+          popup.dataset.automationId = 'promptMenu';
+          popup.innerHTML = '<div data-automation-id="promptOption">Yes</div><div data-automation-id="promptOption">No</div>';
+          popup.addEventListener('click', (event) => {
+            const option = event.target.closest('[data-automation-id="promptOption"]');
+            if (option === null) return;
+            const replacement = button.cloneNode(true);
+            replacement.id = 'mcvf101';
+            replacement.textContent = option.textContent.trim();
+            replacement.removeAttribute('data-hunt-target-token');
+            button.replaceWith(replacement);
+            bind(replacement);
+          });
+          document.body.append(popup);
+        });
+        bind(document.querySelector('#mcvf1'));
+        window.fixtureState = () => ({ staleClicks });
+      </script>
+    `);
+    const pageId = "questionnaire-target-portal-fixture" as never;
+    const sessionId = "browser_session_target_portal_fixture" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const inspected = await inspectPage(page, sessionId, pageId, new Map());
+    const target = inspected.observation.targets.find(({ name }) =>
+      name === "Are you currently subject to a company agreement? *"
+    );
+    assert.notEqual(target, undefined);
+    const resolved = inspected.targets.get(target!.token)?.[0];
+    assert.notEqual(resolved, undefined);
+
+    const mutationResult = await applyMutation(
+      page,
+      resolved!,
+      { kind: "select", target: target!.token, option: "No" as never },
+      undefined,
+      5_000,
+    );
+    const mutationDiagnostics = await page.locator("body").evaluate((body) => ({
+      interaction: body.querySelector('[data-hunt-target-token]')?.getAttribute("data-hunt-target-token"),
+      owners: [...body.querySelectorAll('[data-hunt-field-popup-owner]')].map((owner) => owner.id),
+      preexisting: [...body.querySelectorAll('[data-hunt-field-popup-preexisting]')].map((owner) => owner.id),
+      popups: [...body.querySelectorAll('[data-automation-id="promptMenu"]')].map((popup) => ({
+        id: popup.id,
+        text: popup.textContent?.trim(),
+      })),
+      buttonText: body.querySelector('[data-automation-id="formField-current"] button')?.textContent?.trim(),
+    }));
+    assert.equal(mutationResult, "applied", JSON.stringify({
+      interaction: resolved!.interaction,
+      mutationDiagnostics,
+    }));
+
+    assert.equal(await page.locator('[data-automation-id="formField-current"] button').innerText(), "No");
+    assert.equal(await page.locator('[data-automation-id="formField-current"] button')
+      .getAttribute("data-hunt-target-token"), target!.token);
+    assert.deepEqual(await page.evaluate(() =>
+      (window as unknown as { fixtureState(): { staleClicks: number } }).fixtureState()
+    ), { staleClicks: 0 });
+    assert.equal(await page.locator("#stale-popup").isVisible(), true);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Workday Review admits only its exact omitted composites and canonical LinkedIn display", () => {
   assert.deepEqual([
     "identity.middle_name",

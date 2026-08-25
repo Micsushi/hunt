@@ -1034,6 +1034,130 @@ test("ignores stale and unrelated Workday portals after the exact control remoun
   }
 });
 
+test("reconciles a committed Workday prompt after a transient post-click readback exception", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed14") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-agreement">
+        <label>Are you subject to an agreement?</label>
+        <button id="agreement" type="button" aria-haspopup="listbox"
+          data-hunt-target-token="target-agreement">Select One</button>
+        <div id="options" role="listbox" hidden>
+          <div role="option" data-automation-id="promptOption">
+            <div data-automation-id="promptLeafNode">No</div>
+          </div>
+        </div>
+      </div>
+      <script>
+        const nativeGetComputedStyle = window.getComputedStyle.bind(window);
+        let rejectOneReadback = false;
+        window.getComputedStyle = element => {
+          if (rejectOneReadback && element.id === 'agreement') {
+            rejectOneReadback = false;
+            throw new Error('transient remount readback');
+          }
+          return nativeGetComputedStyle(element);
+        };
+        let button = document.querySelector('#agreement');
+        const options = document.querySelector('#options');
+        button.addEventListener('click', () => { options.hidden = false; });
+        options.addEventListener('click', event => {
+          if (event.target.closest('[data-automation-id="promptOption"]') === null) return;
+          const replacement = button.cloneNode(true);
+          replacement.textContent = 'No';
+          replacement.dataset.commitCount = '1';
+          replacement.removeAttribute('data-hunt-target-token');
+          button.replaceWith(replacement);
+          button = replacement;
+          rejectOneReadback = true;
+        });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "No" as never },
+      "ededededededed15",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    const page = context.pages()[0]!;
+    assert.equal(await page.locator("#agreement").innerText(), "No");
+    assert.equal(await page.locator("#agreement").getAttribute("data-commit-count"), "1");
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("reconciles one committed remounted prompt after the adapter deadline without clicking again", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("ededededededed16"),
+    timeoutMs: 500,
+  });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-agreement">
+        <label>Are you subject to an agreement?</label>
+        <button id="agreement" type="button" aria-haspopup="listbox"
+          data-hunt-target-token="target-agreement">Select One</button>
+        <div id="options" role="listbox" hidden>
+          <div role="option" data-automation-id="promptOption">
+            <div data-automation-id="promptLeafNode">No</div>
+          </div>
+        </div>
+      </div>
+      <script>
+        let button = document.querySelector('#agreement');
+        const options = document.querySelector('#options');
+        button.addEventListener('click', () => { options.hidden = false; });
+        options.addEventListener('click', event => {
+          if (event.target.closest('[data-automation-id="promptOption"]') === null) return;
+          const replacement = button.cloneNode(true);
+          replacement.textContent = 'No';
+          replacement.dataset.commitCount = '1';
+          replacement.removeAttribute('data-hunt-target-token');
+          replacement.blur = () => {
+            replacement.textContent = 'Select One';
+            setTimeout(() => { replacement.textContent = 'No'; }, 550);
+          };
+          button.replaceWith(replacement);
+          button = replacement;
+        });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "No" as never },
+      "ededededededed17",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    const page = context.pages()[0]!;
+    assert.equal(await page.locator("#agreement").innerText(), "No");
+    assert.equal(await page.locator("#agreement").getAttribute("data-commit-count"), "1");
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("accepts a detached Workday prompt option only after exact field readback", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();

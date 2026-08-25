@@ -1144,24 +1144,41 @@ export class OwnedWorkdayApplicationRuntime {
         recordUnset: questionLearning?.recordUnset,
         recordFailure: questionLearning?.recordFailure,
       });
-      const completed = await questionnaire.complete({
-        mode: request.ownerSources.profilePlan?.mode ?? "live",
-        journeyId: session.journeyId,
-        sessionId: semanticSessionId,
-        pageId: input.pageId,
-        guardRevision: runtimeRevision,
-        profileId: request.ownerSources.profileId,
-        profileRevision: request.ownerSources.profileRevision,
-        resume: {
-          resumeId: request.ownerSources.resumeIntent.artifact.resumeId,
-          sha256: request.ownerSources.resumeIntent.artifact.sha256,
-        },
-        resumeArtifact: request.ownerSources.resumeIntent.artifact,
-        page: snapshot,
-      }, signal);
+      let completed: Awaited<ReturnType<typeof questionnaire.complete>>;
+      try {
+        completed = await questionnaire.complete({
+          mode: request.ownerSources.profilePlan?.mode ?? "live",
+          journeyId: session.journeyId,
+          sessionId: semanticSessionId,
+          pageId: input.pageId,
+          guardRevision: runtimeRevision,
+          profileId: request.ownerSources.profileId,
+          profileRevision: request.ownerSources.profileRevision,
+          resume: {
+            resumeId: request.ownerSources.resumeIntent.artifact.resumeId,
+            sha256: request.ownerSources.resumeIntent.artifact.sha256,
+          },
+          resumeArtifact: request.ownerSources.resumeIntent.artifact,
+          page: snapshot,
+        }, signal);
+      } catch (error) {
+        const learningSha256 = questionLearning?.write() ?? null;
+        this.#trace?.("questionnaire_reconciliation_exception", {
+          learningPresent: learningSha256 !== null,
+          errorType: error instanceof Error ? error.name : "unknown",
+        });
+        throw error;
+      }
       if (!completed.ok && new Set([
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
-      ]).has(completed.error.code)) throw new TypeError("questionnaire browser effect uncertain");
+      ]).has(completed.error.code)) {
+        const learningSha256 = questionLearning?.write() ?? null;
+        this.#trace?.("questionnaire_reconciliation_uncertain", {
+          code: completed.error.code,
+          learningPresent: learningSha256 !== null,
+        });
+        throw new TypeError("questionnaire browser effect uncertain");
+      }
       if (!completed.ok) {
         questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
@@ -2587,8 +2604,19 @@ export async function hydrateQuestionnairePopupOptions(
   const labels = [...new Set((await options.allInnerTexts())
     .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
     .filter(Boolean))];
-  await reboundOpenTarget.press("Escape", { timeout: timeoutMs });
+  await page.keyboard.press("Escape");
   await bindQuestionnaireTargets(page, pageId);
+  if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 500))) {
+    const reboundToggle = page.locator(`[data-hunt-target-token="${targetToken}"]`);
+    if (await reboundToggle.count() !== 1 || !await reboundToggle.isVisible()) {
+      throw new TypeError("questionnaire popup target unavailable during close");
+    }
+    await reboundToggle.click({ timeout: timeoutMs });
+    await bindQuestionnaireTargets(page, pageId);
+  }
+  if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 5_000))) {
+    throw new TypeError("questionnaire popup remained open after exact-owner close");
+  }
   if (labels.length === 0 || labels.length > 128 || labels.some((label) => label.length > 512)) {
     throw new TypeError("questionnaire popup options denied");
   }
@@ -2607,6 +2635,45 @@ export async function hydrateQuestionnairePopupOptions(
     .evaluateAll((elements) => elements.forEach((element) =>
       element.removeAttribute("data-hunt-popup-hydration-preexisting")
     ));
+  await page.locator(`[data-hunt-popup-hydration-owner="${targetToken}"]`)
+    .evaluateAll((elements) => elements.forEach((element) =>
+      element.removeAttribute("data-hunt-popup-hydration-owner")
+    ));
+}
+
+async function ownedHydrationPopupOpen(page: Page, targetToken: string): Promise<boolean> {
+  return await page.locator(`[data-hunt-popup-hydration-owner="${targetToken}"]`)
+    .evaluateAll((owners) => owners.some((owner) => {
+      if (!(owner instanceof HTMLElement) || owner.hidden ||
+          owner.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(owner);
+      if (style.display === "none" || style.visibility === "hidden" ||
+          style.visibility === "collapse" || owner.getClientRects().length === 0) return false;
+      return [...owner.querySelectorAll(
+        '[role="option"], [data-automation-id="promptOption"], ' +
+          '[data-automation-id="promptLeafNode"]',
+      )].some((option) => {
+        if (!(option instanceof HTMLElement) || option.hidden ||
+            option.getAttribute("aria-hidden") === "true") return false;
+        const optionStyle = getComputedStyle(option);
+        return optionStyle.display !== "none" && optionStyle.visibility !== "hidden" &&
+          optionStyle.visibility !== "collapse" && option.getClientRects().length > 0;
+      });
+    }));
+}
+
+async function waitForOwnedHydrationPopupClose(
+  page: Page,
+  targetToken: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (await ownedHydrationPopupOpen(page, targetToken)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await page.waitForTimeout(Math.min(50, remaining));
+  }
+  return true;
 }
 
 async function popupSelectedValue(target: import("playwright").Locator): Promise<string> {

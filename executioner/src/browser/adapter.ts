@@ -1656,8 +1656,14 @@ export async function applyMutation(
         return hit !== null && (hit === element || element.contains(hit));
       });
       if (!hitOwned) return "invalid";
+      await markPreexistingFieldPopupOwners(page, target);
       await locator.click({ timeout: timeoutMs });
-      const exact = await waitForExactFieldPopupOption(page, mutation.option, timeoutMs);
+      const exact = await waitForExactFieldPopupOption(
+        page,
+        target,
+        mutation.option,
+        timeoutMs,
+      );
       if (exact.count !== 1 || exact.locator === undefined) {
         await locator.press("Escape", { timeout: timeoutMs }).catch(() => undefined);
         return exact.count === 0 ? "invalid" : "ambiguous";
@@ -1667,6 +1673,9 @@ export async function applyMutation(
       );
       const ownedOption = await optionOwner.count() === 1 && await optionOwner.isVisible();
       await bindExactFieldPopupOwner(page, target, exact.locator);
+      const reconcileCommittedSelection = async (): Promise<boolean> =>
+        await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs) &&
+        await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs);
       try {
         await (ownedOption ? optionOwner : exact.locator).click({
           timeout: timeoutMs,
@@ -1679,18 +1688,26 @@ export async function applyMutation(
         // that independently readable, target-local result; otherwise retain
         // the original uncertainty and let the session fail closed.
         if (
-          await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs) &&
-          await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs)
+          await reconcileCommittedSelection()
         ) {
           return "applied";
         }
         throw error;
       }
-      if (!await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
-        throw new TypeError("Workday prompt option did not commit");
-      }
-      if (!await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs)) {
-        throw new TypeError("Workday prompt owner did not rebind");
+      try {
+        if (!await waitForExactFieldPopupSelection(page, target, mutation.option, timeoutMs)) {
+          throw new TypeError("Workday prompt option did not commit");
+        }
+        if (!await settleExactFieldPopupCommit(page, target, mutation.option, timeoutMs)) {
+          throw new TypeError("Workday prompt owner did not rebind");
+        }
+      } catch (error) {
+        // The option click can commit and then synchronously remount the field
+        // while the first post-click readback is running. Do not click again.
+        // Reconcile only the same target's stable exact value; any absent,
+        // ambiguous, or mismatched readback keeps the original uncertainty.
+        if (await reconcileCommittedSelection()) return "applied";
+        throw error;
       }
       return "applied";
     }
@@ -2357,18 +2374,41 @@ async function exactOwnedOption(
   owner: Locator,
   option: string,
 ): Promise<{ readonly count: number; readonly locator?: Locator }> {
-  const exact = owner.getByRole("option", { name: option, exact: true });
-  const candidates = await exact.evaluateAll((elements) =>
-    elements.map((element, index) => ({
-      index,
-      leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
-    })),
+  const candidates = owner.locator(
+    '[role="option"], [data-automation-id="promptOption"], ' +
+    '[data-automation-id="promptLeafNode"]',
   );
-  const leaves = candidates.filter(({ leaf }) => leaf);
-  const owned = leaves.length > 0 ? leaves : candidates;
+  const matching = await candidates.evaluateAll((elements, expected) => {
+    const normalize = (value: string | null | undefined): string =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    return elements.map((element, index) => ({
+      index,
+      exact: normalize(element.textContent) === expected,
+      leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
+      visible: element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        getComputedStyle(element).display !== "none" &&
+        getComputedStyle(element).visibility !== "hidden",
+    })).filter(({ exact, visible }) => exact && visible);
+  }, option);
+  const leaves = matching.filter(({ leaf }) => leaf);
+  const owned = leaves.length > 0 ? leaves : matching;
+  if (owned.length === 0) {
+    const ownerMatch = await owner.evaluate((element, expected) => {
+      const normalize = (value: string | null | undefined): string =>
+        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+      const style = getComputedStyle(element);
+      return element.matches(
+        '[role="option"], [data-automation-id="promptOption"], ' +
+        '[data-automation-id="promptLeafNode"]',
+      ) && normalize(element.textContent) === expected &&
+        element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        style.display !== "none" && style.visibility !== "hidden";
+    }, option);
+    if (ownerMatch) return { count: 1, locator: owner };
+  }
   return {
     count: owned.length,
-    ...(owned.length === 1 ? { locator: exact.nth(owned[0]!.index) } : {}),
+    ...(owned.length === 1 ? { locator: candidates.nth(owned[0]!.index) } : {}),
   };
 }
 
@@ -2389,36 +2429,141 @@ async function waitForExactOwnedOption(
 
 async function waitForExactFieldPopupOption(
   page: Page,
+  target: ResolvedBrowserTarget,
   option: string,
   timeoutMs: number,
 ): Promise<{ readonly count: number; readonly locator?: Locator }> {
-  const candidates = page.locator(
-    '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
-  );
   const deadline = Date.now() + timeoutMs;
   while (true) {
-    const exact = await candidates.evaluateAll((elements, expected) => {
-      const normalize = (value: string | null | undefined): string =>
-        (value ?? "").replace(/\s+/gu, " ").trim();
-      return elements.map((element, index) => ({
-        index,
-        exact: normalize(element.textContent) === expected,
-        leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
-        visible: element instanceof HTMLElement && element.getClientRects().length > 0 &&
-          getComputedStyle(element).display !== "none" &&
-          getComputedStyle(element).visibility !== "hidden",
-      })).filter(({ exact, visible }) => exact && visible);
-    }, option);
-    const leaves = exact.filter(({ leaf }) => leaf);
-    const matches = leaves.length > 0 ? leaves : exact;
-    if (matches.length > 0 || Date.now() >= deadline) {
-      return {
-        count: matches.length,
-        ...(matches.length === 1 ? { locator: candidates.nth(matches[0]!.index) } : {}),
-      };
+    const ownerBound = await bindOpenedFieldPopupOwner(page, target);
+    if (ownerBound) {
+      const owner = page.locator(
+        `[data-hunt-field-popup-owner="${target.declaredToken}"]`,
+      );
+      if (await owner.count() !== 1) return { count: await owner.count() };
+      const exact = await exactOwnedOption(owner, option);
+      if (exact.count > 0) return exact;
     }
+    if (Date.now() >= deadline) return { count: 0 };
     await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
   }
+}
+
+async function markPreexistingFieldPopupOwners(
+  page: Page,
+  target: ResolvedBrowserTarget,
+): Promise<void> {
+  await page.evaluate((declaredToken) => {
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    document.querySelectorAll(
+      `[data-hunt-field-popup-preexisting="${declaredToken}"]`,
+    ).forEach((element) =>
+      element.removeAttribute("data-hunt-field-popup-preexisting")
+    );
+    const optionSelector =
+      '[role="option"], [data-automation-id="promptOption"], ' +
+      '[data-automation-id="promptLeafNode"]';
+    const popupSelector =
+      '[role="listbox"], [role="dialog"], [data-automation-id="promptMenu"], ' +
+      '[data-automation-id="promptPopup"]';
+    [...document.querySelectorAll<HTMLElement>(optionSelector)].filter(visible)
+      .map((candidate) => candidate.closest<HTMLElement>(popupSelector) ?? candidate)
+      .forEach((owner) =>
+        owner.setAttribute("data-hunt-field-popup-preexisting", declaredToken)
+      );
+  }, target.declaredToken);
+}
+
+async function bindOpenedFieldPopupOwner(
+  page: Page,
+  target: ResolvedBrowserTarget,
+): Promise<boolean> {
+  return await page.evaluate(({ declaredToken, expectedName }) => {
+    const normalize = (value: string | null | undefined): string =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    const optionSelector =
+      '[role="option"], [data-automation-id="promptOption"], ' +
+      '[data-automation-id="promptLeafNode"]';
+    const ownsVisibleOptions = (element: Element): boolean =>
+      [...element.querySelectorAll(optionSelector)].some(visible);
+    document.querySelectorAll(
+      `[data-hunt-field-popup-owner="${declaredToken}"]`,
+    ).forEach((element) => element.removeAttribute("data-hunt-field-popup-owner"));
+    const markedControls = [...document.querySelectorAll<HTMLElement>(
+      `[data-hunt-target-token="${declaredToken}"]`,
+    )].filter(visible);
+    const namedControls = [...document.querySelectorAll<HTMLElement>(
+      '[role="combobox"], [aria-haspopup="listbox"]',
+    )].filter(visible).filter((control) => {
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      return normalize(field?.querySelector("label, legend")?.textContent) === expectedName;
+    });
+    const controls = markedControls.length === 1 ? markedControls : namedControls;
+    if (controls.length !== 1) return false;
+    const control = controls[0]!;
+    const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
+      .flatMap((value) => value?.split(/\s+/u) ?? [])
+      .filter((id) => /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id));
+    const directOwners = [...new Set(ownedIds)]
+      .map((id) => document.getElementById(id))
+      .filter((element): element is HTMLElement =>
+        element !== null && visible(element) && ownsVisibleOptions(element)
+      );
+    const field = control.closest<HTMLElement>(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const fieldOwners = field !== null && ownsVisibleOptions(field) ? [field] : [];
+    const popupSelector =
+      '[role="listbox"], [role="dialog"], [data-automation-id="promptMenu"], ' +
+      '[data-automation-id="promptPopup"]';
+    const newlyVisibleCandidates = [
+      ...document.querySelectorAll<HTMLElement>(optionSelector),
+    ].filter(visible).filter((candidate) => {
+      const owner = candidate.closest<HTMLElement>(popupSelector) ?? candidate;
+      return owner.getAttribute("data-hunt-field-popup-preexisting") !== declaredToken;
+    });
+    const explicitOwners = [...new Set(newlyVisibleCandidates.flatMap((candidate) => {
+      const owner = candidate.closest<HTMLElement>(popupSelector);
+      return owner === null ? [] : [owner];
+    }))];
+    const topLevelUnwrapped = newlyVisibleCandidates.filter((candidate) =>
+      candidate.closest(popupSelector) === null &&
+      !newlyVisibleCandidates.some((possibleAncestor) =>
+        possibleAncestor !== candidate && possibleAncestor.contains(candidate)
+      )
+    );
+    const unwrappedParents = [...new Set(
+      topLevelUnwrapped.map((candidate) => candidate.parentElement).filter(
+        (parent): parent is HTMLElement => parent !== null,
+      ),
+    )];
+    const unwrappedOwners = unwrappedParents.length === 1 &&
+        ![document.body, document.documentElement].includes(unwrappedParents[0]!)
+      ? unwrappedParents
+      : topLevelUnwrapped;
+    const newlyVisibleOwners = [...new Set([...explicitOwners, ...unwrappedOwners])];
+    const owners = directOwners.length > 0
+      ? directOwners
+      : fieldOwners.length > 0 ? fieldOwners : newlyVisibleOwners;
+    if (owners.length !== 1) return false;
+    owners[0]!.setAttribute("data-hunt-field-popup-owner", declaredToken);
+    return true;
+  }, { declaredToken: target.declaredToken, expectedName: target.name });
 }
 
 async function waitForExactFieldPopupSelection(
