@@ -796,6 +796,54 @@ test("opens a Workday prompt button before requiring its lazily mounted option",
   }
 });
 
+test("accepts a detached Workday prompt option only after exact field readback", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("ededededededed06"),
+  });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <div data-automation-id="formField-essential-functions">
+        <label>Can you perform the essential functions?</label>
+        <button id="essential" type="button" aria-label="Select One Required"
+          aria-haspopup="listbox" data-hunt-target-token="target-essential">Select One</button>
+      </div>
+      <script>
+        const button = document.querySelector('#essential');
+        button.addEventListener('click', () => {
+          const option = document.createElement('div');
+          option.dataset.automationId = 'promptOption';
+          option.textContent = 'Yes';
+          option.addEventListener('mousedown', () => {
+            button.textContent = 'Yes';
+            option.remove();
+          });
+          document.body.append(option);
+        }, { once: true });
+      </script>
+    `, "page-questionnaire") }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets[0]?.token;
+    if (target === undefined) throw new Error("target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "select", target, option: "Yes" as never },
+      "ededededededed07",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true);
+    assert.equal(await context.pages()[0]!.locator("#essential").innerText(), "Yes");
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("upload observation transfers only digest and size metadata from the page", () => {
   const source = readFileSync(
     new URL("../../../src/browser/adapter.ts", import.meta.url),

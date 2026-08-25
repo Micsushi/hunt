@@ -1662,7 +1662,19 @@ export async function applyMutation(
         await locator.press("Escape", { timeout: timeoutMs }).catch(() => undefined);
         return exact.count === 0 ? "invalid" : "ambiguous";
       }
-      await exact.locator.click({ timeout: timeoutMs });
+      try {
+        await exact.locator.click({ timeout: timeoutMs });
+      } catch (error) {
+        // Workday can commit a prompt option and immediately replace the
+        // clicked option node. Playwright then reports a detached click even
+        // though the owning field has the exact committed value. Accept only
+        // that independently readable, target-local result; otherwise retain
+        // the original uncertainty and let the session fail closed.
+        if (await fieldPopupSelection(page, target) === mutation.option) {
+          return "applied";
+        }
+        throw error;
+      }
       return "applied";
     }
     let optionOwner = target.interaction === "owned-popup"
@@ -1706,6 +1718,50 @@ export async function applyMutation(
     { timeout: timeoutMs },
   );
   return "applied";
+}
+
+async function fieldPopupSelection(
+  page: Page,
+  target: ResolvedBrowserTarget,
+): Promise<string | undefined> {
+  return await page.evaluate(({ declaredToken, expectedName }) => {
+    const normalize = (value: string | null | undefined): string =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        element.getClientRects().length > 0;
+    };
+    const selected = (control: Element): string | undefined => {
+      const declared = normalize(control.getAttribute("aria-valuetext"));
+      if (declared !== "") return declared;
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const items = field === null ? [] : [...field.querySelectorAll(
+        '[data-automation-id="selectedItem"]',
+      )].filter(visible).map((item) => normalize(item.textContent)).filter(Boolean);
+      if (items.length === 1) return items[0];
+      const text = normalize(control.textContent);
+      return /^(?:select|select one|choose|choose one)$/iu.test(text) || text === ""
+        ? undefined
+        : text;
+    };
+    const marked = [...document.querySelectorAll(
+      `[data-hunt-target-token="${declaredToken}"]`,
+    )].filter(visible);
+    if (marked.length === 1) return selected(marked[0]!);
+    const named = [...document.querySelectorAll<HTMLElement>(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    )].filter(visible).filter((field) =>
+      normalize(field.querySelector("label, legend")?.textContent) === expectedName
+    ).flatMap((field) => [...field.querySelectorAll<HTMLElement>(
+      '[role="combobox"], [aria-haspopup="listbox"]',
+    )].filter(visible));
+    return named.length === 1 ? selected(named[0]!) : undefined;
+  }, { declaredToken: target.declaredToken, expectedName: target.name });
 }
 
 export async function clickNext(
