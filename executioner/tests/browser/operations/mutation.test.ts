@@ -873,6 +873,7 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("ededededededed10") });
   try {
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <h2 id="page-heading">Application Questions</h2>
       <div data-automation-id="formField-agreement">
         <label>Are you subject to an agreement?</label>
         <button id="agreement" type="button" aria-haspopup="listbox"
@@ -886,6 +887,9 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
       <script>
         let button = document.querySelector('#agreement');
         const options = document.querySelector('#options');
+        document.querySelector('#page-heading').addEventListener('click', () => {
+          options.hidden = true;
+        });
         document.addEventListener('click', event => {
           if (event.target === button) options.hidden = false;
         });
@@ -905,7 +909,7 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
         });
         document.querySelector('#option').addEventListener('click', () => {
           commit();
-          options.hidden = true;
+          button.dataset.optionOwnerActivated = 'true';
         });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
@@ -924,6 +928,10 @@ test("rebinds a Workday prompt button remounted by blur before popup settlement"
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
     assert.equal(await context.pages()[0]!.locator("#options").isHidden(), true);
+    assert.equal(
+      await context.pages()[0]!.locator("#agreement").getAttribute("data-option-owner-activated"),
+      "true",
+    );
     assert.equal(
       await context.pages()[0]!.locator("#agreement").getAttribute("data-hunt-target-token"),
       "target-agreement",
