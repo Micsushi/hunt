@@ -311,7 +311,9 @@ export class PlaywrightPersistentBrowserSession
               )
             : failure("browser_effect_uncertain");
         }
-        this.#page = owned[0];
+        const ownedPage = owned[0]!;
+        this.#page = ownedPage;
+        await this.#options.inspectionPreparePage?.(ownedPage);
         this.#session = sessionFromMarker(persisted, request);
         this.#resetTerminalCleanup();
         this.#marker = persisted;
@@ -342,6 +344,7 @@ export class PlaywrightPersistentBrowserSession
           : failure("browser_profile_cleanup_failed");
       }
       this.#page = pageResult.value;
+      await this.#options.inspectionPreparePage?.(this.#page);
       const navigation = await bounded(
         this.#page.goto(runtime.targetUrl, { waitUntil: "domcontentloaded" }),
         signal,
@@ -458,6 +461,7 @@ export class PlaywrightPersistentBrowserSession
         return { ok: true, value: reconciled.value };
       }
       this.#page = reconciled.value.page;
+      await this.#options.inspectionPreparePage?.(this.#page);
       this.#session = { ...this.#session, target: request.expectedTarget };
       return {
         ok: true,
@@ -1000,6 +1004,7 @@ export class PlaywrightPersistentBrowserSession
         return this.#stopAfterTargetFact(reconciled.value);
       }
       this.#page = reconciled.value.page;
+      await this.#options.inspectionPreparePage?.(this.#page);
       const transitioned = await inspectPinnedTarget(
         this.#page,
         this.#options.probe,
@@ -1148,6 +1153,7 @@ export class PlaywrightPersistentBrowserSession
       return this.#stopAfterTargetFact(reconciled.value);
     }
     this.#page = reconciled.value.page;
+    await this.#options.inspectionPreparePage?.(this.#page);
     const inspected = await inspectPinnedTarget(
       this.#page,
       this.#options.probe,

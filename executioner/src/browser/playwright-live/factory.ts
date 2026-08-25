@@ -33,6 +33,7 @@ export interface PlaywrightPersistentBrowserFactoryOptions {
   readonly binding: PersistentBrowserRuntimeBinding;
   readonly timeoutMs?: number;
   readonly inspectionHold?: () => Promise<void>;
+  readonly inspectionPrepare?: (page: PersistentPage) => Promise<void>;
   readonly inspectionCapture?: (page: PersistentPage) => Promise<void>;
   readonly accountTrace?: (
     event: PlaywrightAccountPageTraceEvent | PlaywrightPostingNavigationTraceEvent |
@@ -96,6 +97,7 @@ export function createPlaywrightPersistentBrowserSession(
     applicationRuntime: options.applicationRuntime,
     externalMonitor: options.externalMonitor,
     ids: nextSessionId,
+    inspectionPreparePage: options.inspectionPrepare,
     inspectionHoldBeforeCleanup: inspectionHold,
     inspectionCaptureBeforeCleanup: options.inspectionCapture,
     timeoutMs: inspection.timeoutMs,

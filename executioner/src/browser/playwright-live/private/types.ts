@@ -127,6 +127,7 @@ export interface PlaywrightPersistentBrowserSessionOptions {
   readonly logoutOnCloseForTesting?: boolean;
   readonly applicationRuntime?: import("./workday-application-runtime.ts").OwnedWorkdayApplicationRuntimeOptions;
   readonly externalMonitor?: import("./external-monitor-port.ts").ExternalMonitorPort;
+  readonly inspectionPreparePage?: (page: PersistentPage) => Promise<void>;
   readonly inspectionCaptureBeforeCleanup?: (page: PersistentPage) => Promise<void>;
   readonly inspectionHoldBeforeCleanup?: () => Promise<void>;
   readonly ids: () => LiveSessionId;

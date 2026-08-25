@@ -521,6 +521,19 @@ function readApplicationSnapshot(
   };
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+  const validDateValue = (rawValue: string): boolean => {
+    const value = rawValue.replace(
+      /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+      "",
+    );
+    const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(value);
+    const isoDate = match === null
+      ? /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : ""
+      : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+    const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+    return /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
+      !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+  };
   const roots = [
     ["profile", selectors.myInformation],
     ["experience", selectors.experience],
@@ -751,11 +764,21 @@ function readApplicationSnapshot(
           `[data-automation-id="${automationId}"], [data-automation-id="${automationId}-input"]`,
         )],
       );
-      const values = parts.map((matches) => matches.length === 1 ? matches[0]!.value.trim() : "");
-      const isoDate = `${values[2]}-${values[0]}-${values[1]}`;
-      const parsed = new Date(`${isoDate}T00:00:00.000Z`);
-      verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
-        !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+      const formattedInputs = [...control.querySelectorAll<HTMLInputElement>(
+        'input:not([type="hidden"])',
+      )].filter((candidate) =>
+        visible(candidate) && (candidate.type === "text" || candidate.type === "tel")
+      );
+      const segmented = parts.every((matches) => matches.length === 1);
+      if (segmented) {
+        const values = parts.map((matches) => matches[0]!.value.trim());
+        verified = verified && validDateValue(
+          `${values[2]}-${values[0]!.padStart(2, "0")}-${values[1]!.padStart(2, "0")}`,
+        );
+      } else {
+        verified = verified && formattedInputs.length === 1 &&
+          validDateValue(formattedInputs[0]!.value);
+      }
     } else if (
       input !== undefined && (input.type === "text" || input.type === "tel") &&
       (
@@ -771,17 +794,7 @@ function readApplicationSnapshot(
           ).length === 1
       )
     ) {
-      const value = input.value.replace(
-        /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-        "",
-      );
-      const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(value);
-      const isoDate = match === null
-        ? /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : ""
-        : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
-      const parsed = new Date(`${isoDate}T00:00:00.000Z`);
-      verified = verified && /^\d{4}-\d{2}-\d{2}$/u.test(isoDate) &&
-        !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === isoDate;
+      verified = verified && validDateValue(input.value);
       if (!verified) {
         const layers = new Map<string, NonNullable<typeof dateReactHandlerLayers>[number]>();
         const functionIds = new Map<unknown, number>();

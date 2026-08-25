@@ -96,6 +96,8 @@ import {
 import { readStablePrivateFile } from "../composition/private/s2-stable-private-file.ts";
 import { createOperatorMonitorInspectionHold } from
   "../live/evidence/operator-monitor-ack.ts";
+import { createPageLocalInspection } from
+  "../live/evidence/page-local-inspection.ts";
 import { writeAccountVerifiedEvidence } from
   "../live/evidence/account-verified-evidence.ts";
 import type {
@@ -203,8 +205,10 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         trace: valueFreeTrace,
       });
       let liveRequest: Stage2ApplicationWalkRuntimeBindingRequest | undefined = request;
-      const inspectionHold = externalMonitor === undefined &&
-          process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+      const pageLocalInspection = process.env.HUNT_C3_LIVE_INSPECTION_HOLD === "1"
+        ? createPageLocalInspection(request.owner.roots.evidence.path)
+        : undefined;
+      const inspectionHold = pageLocalInspection !== undefined
         ? createOperatorMonitorInspectionHold({
           runtimeRoot: request.owner.roots.runtime.path,
           evidenceRoot: request.owner.roots.evidence.path,
@@ -228,6 +232,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             accountTrace: valueFreeTrace,
             valueFreeTrace,
             inspectionHold,
+            inspectionPrepare: pageLocalInspection?.prepare,
+            inspectionCapture: pageLocalInspection?.capture,
             now,
             retentionAuthority: (activeSignal) =>
               retentionDecision(liveRequest, activeSignal, now),

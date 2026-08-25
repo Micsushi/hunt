@@ -221,7 +221,12 @@ export async function applyMutation(
       // Structural diagnostics never change mutation admission.
     }
   }
-  const locator = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  const targetLocator = page.locator(
+    `[data-hunt-target-token="${target.declaredToken}"]`,
+  );
+  const locator = target.interaction === "formatted-date"
+    ? targetLocator.locator('input:not([type="hidden"])')
+    : targetLocator;
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
   if (await locator.count() !== 1 && !mayRebindExclusiveChoice) return "invalid";
@@ -2120,6 +2125,17 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         ? { kind: "text", value: isoDate as never }
         : { kind: "unavailable" };
     };
+    const formattedDateInput = (element: Element): HTMLInputElement | undefined => {
+      const inputs = [...element.querySelectorAll<HTMLInputElement>(
+        'input:not([type="hidden"])',
+      )].filter((input) => {
+        const style = getComputedStyle(input);
+        return (input.type === "text" || input.type === "tel") &&
+          style.display !== "none" && style.visibility !== "hidden" &&
+          input.getClientRects().length > 0;
+      });
+      return inputs.length === 1 ? inputs[0] : undefined;
+    };
     return elements.flatMap((element, index) => {
       const compositeOwner = element.closest(
         '[data-automation-id="dateSection"][data-hunt-target-token], ' +
@@ -2148,8 +2164,11 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         element.getAttribute("data-automation-id") ?? "",
       )) {
         control = { kind: "date", element: "input" };
-        readback = compositeDateReadback(element);
-        interaction = "composite-date";
+        const formattedInput = formattedDateInput(element);
+        readback = formattedInput === undefined
+          ? compositeDateReadback(element)
+          : formattedDateReadback(formattedInput);
+        interaction = formattedInput === undefined ? "composite-date" : "formatted-date";
       } else if (
         element instanceof HTMLInputElement &&
         (element.type === "text" || element.type === "tel") &&
