@@ -1878,9 +1878,6 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           .map((item) => normalize(item.textContent))
           .filter(Boolean);
       if (selected.length === 1) return selected[0]!;
-      const popupSelected = [...(ownedListbox(element)?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])]
-        .map((item) => normalize(item.textContent)).filter(Boolean);
-      if (popupSelected.length === 1) return popupSelected[0]!;
       const buttonText = element instanceof HTMLButtonElement || element.getAttribute("role") === "button"
         ? normalize(element.textContent)
         : "";

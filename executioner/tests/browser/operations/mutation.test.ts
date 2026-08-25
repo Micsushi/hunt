@@ -807,7 +807,12 @@ test("waits for a delayed Workday prompt-button commit", async () => {
         <button id="agreement" type="button" aria-haspopup="listbox"
           data-hunt-target-token="target-agreement">Select One</button>
         <div id="options" hidden>
-          <div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div>
+          <div role="option" aria-selected="true" data-automation-id="promptOption">
+            <div data-automation-id="promptLeafNode">Yes</div>
+          </div>
+          <div role="option" data-automation-id="promptOption">
+            <div data-automation-id="promptLeafNode">No</div>
+          </div>
         </div>
       </div>
       <script>
@@ -816,7 +821,6 @@ test("waits for a delayed Workday prompt-button commit", async () => {
         button.addEventListener('click', () => { options.hidden = false; });
         options.addEventListener('click', () => setTimeout(() => {
           button.textContent = 'No';
-          options.hidden = true;
         }, 250), { once: true });
       </script>
     `, "page-questionnaire") }, new AbortController().signal);
@@ -834,6 +838,11 @@ test("waits for a delayed Workday prompt-button commit", async () => {
     ), new AbortController().signal);
     assert.equal(result.ok, true);
     assert.equal(await context.pages()[0]!.locator("#agreement").innerText(), "No");
+    const readback = await provider.observe(started.value, new AbortController().signal);
+    assert.deepEqual(readback.ok ? readback.value.targets[0]?.readback : undefined, {
+      kind: "selected",
+      option: "No",
+    });
   } finally {
     await context.close();
     await browser.close();
