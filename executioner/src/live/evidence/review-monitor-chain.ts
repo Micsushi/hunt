@@ -259,6 +259,7 @@ function readMonitorChain(
 
 function compatibleObservedStructure(requestPage: string, observedPage: unknown): boolean {
   if (requestPage === observedPage) return true;
+  if (requestPage === "resume" && observedPage === "profile") return true;
   return requestPage === "application_ready" && typeof observedPage === "string" &&
     ["resume", "profile", "questionnaire", "review"].includes(observedPage);
 }

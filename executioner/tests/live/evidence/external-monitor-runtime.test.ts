@@ -1689,6 +1689,28 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   });
   assert.equal(reconciled.title, authenticatedTitle);
   assert.equal(waits, 1);
+
+  const experienceSurface = await waitForReconciledMonitorSurface({
+    page: "resume",
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from("My Experience", "utf8")),
+    },
+  }, () => ({
+    title: "My Experience",
+    page: "profile",
+    submitPresent: false,
+  }));
+  assert.equal(experienceSurface.page, "profile");
+  await assert.rejects(() => waitForReconciledMonitorSurface({
+    page: "profile",
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from("My Experience", "utf8")),
+    },
+  }, () => ({
+    title: "My Experience",
+    page: "resume",
+    submitPresent: false,
+  })), /structure_classification/u);
 });
 
 test("production-bound monitor creates and consumes an independently signed ACK", async () => {

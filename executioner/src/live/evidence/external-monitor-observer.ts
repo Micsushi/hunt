@@ -613,6 +613,7 @@ export function observedActiveStageTitles(counts: ObservedStageCounts): readonly
 
 function compatibleObservedPage(requestPage: string, observedPage: string): boolean {
   if (requestPage === observedPage) return true;
+  if (requestPage === "resume" && observedPage === "profile") return true;
   return requestPage === "application_ready" &&
     ["resume", "profile", "questionnaire", "review"].includes(observedPage);
 }
