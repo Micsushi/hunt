@@ -1128,10 +1128,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             : undefined;
           if (selected === undefined) {
             // Multi-select free entry was already attempted on the owning input
-            // before the prompt was opened. Once its exact prompt catalog is
-            // empty, retrying delimiters against the prompt search is redundant
-            // and can wait through a Workday close/remount of that search input.
-            if (behavior === "multi_select") {
+            // before the exact retained Skills prompt was opened. When that
+            // prompt has no options, retrying delimiters against its search
+            // input is redundant and can wait through a Workday remount.
+            const emptySkillsPrompt = behavior === "multi_select" &&
+              await control.getAttribute("id") === "skills--skills" &&
+              await field.getAttribute("data-automation-id") === "formField-skills" &&
+              promptOptions.length === 0;
+            if (emptySkillsPrompt) {
               throw new TypeError("Workday prompt multi-select option is unavailable");
             }
             const delimiters = ["Enter", "Tab", ","] as const;

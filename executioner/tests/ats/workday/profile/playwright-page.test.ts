@@ -2612,7 +2612,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-test("My Experience traverses the Workday field-of-study catalog and commits its radio", async () => {
+test("My Experience traverses its owned Workday field-of-study catalog and commits its radio", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2624,9 +2624,9 @@ test("My Experience traverses the Workday field-of-study catalog and commits its
               <input id="education-1--fieldOfStudy" placeholder="Search">
               <div id="selected"></div>
             </div>
+            <div id="catalog" role="listbox"></div>
           </div>
         </main>
-        <div id="catalog" role="listbox"></div>
         <script>
           const input = document.querySelector('#education-1--fieldOfStudy');
           const catalog = document.querySelector('#catalog');
@@ -2668,6 +2668,11 @@ test("My Experience traverses the Workday field-of-study catalog and commits its
             catalog.append(option);
           };
           input.addEventListener('click', () => scopeSelected ? renderCatalog() : renderScope());
+          input.addEventListener('input', () => {
+            if (!scopeSelected) return;
+            activeIndex = input.value === 'Computer Science' ? 2 : 0;
+            renderCatalog();
+          });
           input.addEventListener('keydown', event => {
             if (!scopeSelected || event.key !== 'ArrowDown') return;
             event.preventDefault();

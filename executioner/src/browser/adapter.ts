@@ -72,7 +72,7 @@ export async function inspectPage(
     if (item.declaredToken.length === 0) continue;
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
     const control = normalizeControl(item.control);
-    const name = boundedControlName(item.name);
+    const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token);
     const readback = item.control.kind === "file"
@@ -2611,11 +2611,13 @@ function bounded(value: string) {
   return boundedText(value);
 }
 
-function boundedControlName(value: string) {
+function boundedControlName(value: string, declaredToken: string) {
   // Workday tenants can use a complete policy acknowledgement as a field
-  // label. The semantic name is descriptive metadata, so retain its stable
-  // prefix within the contract instead of rejecting the whole page.
-  return boundedText([...value].slice(0, 512).join(""));
+  // label. Only Workday-bound controls retain a stable prefix; every other
+  // browser target keeps the shared fail-closed structural-string contract.
+  return declaredToken.startsWith("target-workday-")
+    ? boundedText([...value].slice(0, 512).join(""))
+    : boundedText(value);
 }
 
 async function checkboxOwnerStructure(group: Locator) {
