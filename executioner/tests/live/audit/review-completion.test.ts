@@ -138,6 +138,53 @@ test("Review completion rejects a required control retained as explicit unset", 
   }
 });
 
+test("Review completion admits an observed unknown optional control left unset", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-optional-unset-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260810_optionalunsetxxx",
+    }, noProtection);
+    const configSha256 = writeOwnerConfig(layout);
+    await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    const learningPath = join(layout.evidenceRoot, "profile-field-learning.json");
+    const learning = JSON.parse(readFileSync(learningPath, "utf8"));
+    learning.executionMode = "synthetic_test_non_submittable";
+    learning.testOnly = true;
+    learning.liveAcceptanceEligible = false;
+    learning.fields[0].lane = "synthetic_test_default";
+    learning.fields[1] = {
+      ...learning.fields[1],
+      fieldIdentity: "profile.unknown.optional.2",
+      uiType: "checkbox",
+      uiVariant: "workday_unknown_required_v1",
+      questionCategory: "unknown",
+      answerCategory: "unknown",
+      binderStrategy: "opaque_machine_key",
+      sanitizedLabelSha256: null,
+      metadataReconciliation: "unresolved",
+      backingState: "set",
+      optionCatalogState: "unknown",
+      optionMapping: "unresolved",
+    };
+    const learningBytes = Buffer.from(`${JSON.stringify(learning)}\n`, "utf8");
+    writeFileSync(learningPath, learningBytes);
+    const applicationPath = join(layout.evidenceRoot, "application-walk-acceptance.json");
+    const application = JSON.parse(readFileSync(applicationPath, "utf8"));
+    application.laneAcceptances[0].verifiedFields[0].provenance = "generated_default";
+    application.laneAcceptances[0].verifiedFields[0].lane = "synthetic_test_default";
+    application.laneAcceptances[0].profileFieldLearningSha256 = digest(learningBytes);
+    writeFileSync(applicationPath, `${JSON.stringify(application)}\n`);
+
+    assert.equal(
+      (await auditStage2Completion(layout.evidenceRoot) as { readonly status: string }).status,
+      "pass",
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("Review completion admits one exact value-free application trace and rejects drift", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-trace-audit-"));
   try {

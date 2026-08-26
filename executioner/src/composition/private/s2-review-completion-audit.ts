@@ -385,8 +385,32 @@ function profileLearningDigest(
           field.answerState === "answered" &&
           field.lane === verified.lane
         ).length !== 1
-      ) || learning.fields.some(({ observationBinding, metadataReconciliation }) =>
-        observationBinding === null || metadataReconciliation !== "matched"
+      ) || learning.fields.some((field) =>
+        field.observationBinding === null ||
+        (field.metadataReconciliation !== "matched" && !(
+          field.fieldIdentity.startsWith("profile.unknown.optional.") &&
+          field.uiVariant === "workday_unknown_required_v1" &&
+          field.questionCategory === "unknown" &&
+          field.answerCategory === "unknown" &&
+          !field.required && field.answerState === "unset" && field.lane === null &&
+          field.binderStrategy === "opaque_machine_key" &&
+          field.sanitizedLabelSha256 === null &&
+          field.metadataReconciliation === "unresolved" &&
+          field.backingState === "set" && field.validationState === "clear" &&
+          field.optionCatalogState === "unknown" && field.visibleOptionIds.length === 0 &&
+          field.selectedOptionId === null &&
+          field.optionMapping === "unresolved" &&
+          field.prefillDisposition === "needs_owner_input" &&
+          field.driverAttempt === "none" && field.monitorBinding === null &&
+          field.terminalDisposition === "optional_unset" &&
+          field.mechanics.popupBound === "not_applicable" &&
+          field.mechanics.optionFocused === "not_applicable" &&
+          field.mechanics.optionActivated === "not_applicable" &&
+          field.mechanics.popupClosed === "not_applicable" &&
+          field.mechanics.backingValueCommitted === "not_observed" &&
+          field.mechanics.validationCleared === "not_observed" &&
+          field.mechanics.persistentReadback === "not_attempted"
+        ))
       )
     ) denied();
     const monitorPage = monitoredState.page;
