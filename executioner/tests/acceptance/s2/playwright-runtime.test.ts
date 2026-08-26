@@ -405,6 +405,95 @@ test("questionnaire mutation selects only from its newly opened portal", async (
   }
 });
 
+test("questionnaire mutation follows the visible Workday control across a retained hidden remount", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-relocation">
+          <label>Will you require relocation to accept this position?<span data-automation-id="required">*</span></label>
+          <button id="mcvf1" type="button" aria-haspopup="listbox">Select One</button>
+        </div>
+      </main>
+    `);
+    const pageId = "questionnaire-retained-hidden-remount" as never;
+    const sessionId = "browser_session_retained_hidden_remount" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    await page.locator('button[aria-haspopup="listbox"]').evaluate((button) =>
+      button.setAttribute("data-hunt-popup-options", JSON.stringify(["Yes", "No"]))
+    );
+    const admitted = await inspectPage(page, sessionId, pageId, new Map());
+    const target = admitted.observation.targets.find(({ name }) =>
+      name === "Will you require relocation to accept this position?*"
+    );
+    assert.notEqual(target, undefined);
+    const resolved = admitted.targets.get(target!.token)?.[0];
+    assert.notEqual(resolved, undefined);
+
+    await page.evaluate(() => {
+      const retained = document.querySelector("main")! as HTMLElement;
+      retained.hidden = true;
+      const replacement = document.createElement("main");
+      replacement.dataset.automationId = "applyFlowApplicationQuestionsPage";
+      replacement.innerHTML = `
+        <div data-automation-id="formField-relocation">
+          <label>Will you require relocation to accept this position?<span data-automation-id="required">*</span></label>
+          <button id="mcvf101" type="button" aria-haspopup="listbox"
+            data-hunt-popup-options='["Yes","No"]'>Select One</button>
+        </div>`;
+      const button = replacement.querySelector("button")!;
+      button.addEventListener("click", () => {
+        const popup = document.createElement("div");
+        popup.dataset.automationId = "promptMenu";
+        popup.innerHTML = '<div data-automation-id="promptOption">Yes</div>' +
+          '<div data-automation-id="promptOption">No</div>';
+        popup.addEventListener("click", (event) => {
+          const option = (event.target as Element).closest('[data-automation-id="promptOption"]');
+          if (option === null) return;
+          button.textContent = option.textContent;
+          popup.remove();
+        });
+        document.body.append(popup);
+      });
+      document.body.append(replacement);
+    });
+    await bindQuestionnaireTargets(page, pageId);
+
+    const mutation = await applyMutation(
+      page,
+      resolved!,
+      { kind: "select", target: target!.token, option: "No" as never },
+      undefined,
+      5_000,
+    );
+    assert.equal(mutation, "applied");
+
+    const semantic = await inspectPage(page, sessionId, pageId, new Map());
+    const monitor = await monitorQuestionnaireCoverage(page);
+    const application = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+    const matching = semantic.observation.targets.filter(({ token }) => token === target!.token);
+    assert.equal(matching.length, 1);
+    assert.deepEqual(matching[0]!.state, {
+      visibility: "visible",
+      enabled: true,
+      actionable: true,
+    });
+    assert.deepEqual(matching[0]!.readback, { kind: "selected", option: "No" });
+    assert.deepEqual(monitor, {
+      fieldCount: 1,
+      requiredFieldCount: 1,
+      typeCounts: { select: 1 },
+    });
+    assert.equal(application.ok, true);
+    assert.equal(application.ok && application.value.requiredFields[0]?.verification, "verified");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Workday Review admits only its exact omitted composites and canonical LinkedIn display", () => {
   assert.deepEqual([
     "identity.middle_name",

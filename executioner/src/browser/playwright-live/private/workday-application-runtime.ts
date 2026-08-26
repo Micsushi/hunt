@@ -2365,14 +2365,19 @@ export async function bindQuestionnaireTargets(
       return style.display !== "none" && style.visibility !== "hidden" &&
         style.visibility !== "collapse" && element.getClientRects().length > 0;
     };
-    const roots = [
+    const candidateRoots = [
       selectors.primaryQuestions,
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
-    ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
-      .filter(visible);
+    ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)]);
+    const roots = candidateRoots.filter(visible);
     if (roots.length !== 1) return false;
+    candidateRoots.forEach((root) =>
+      root.querySelectorAll("[data-hunt-target-token]").forEach((control) =>
+        control.removeAttribute("data-hunt-target-token")
+      )
+    );
     document.documentElement.setAttribute("data-hunt-page-id", declaredPageId);
     const questionnaireRoot = roots[0]!;
     const controls = questionnaireRoot.querySelectorAll<HTMLElement>(
@@ -2393,6 +2398,7 @@ export async function bindQuestionnaireTargets(
     };
     let index = 0;
     for (const control of controls) {
+      if (!visible(control)) continue;
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
