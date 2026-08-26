@@ -1074,6 +1074,64 @@ test("search select clicks the exact active descendant established by typeahead"
   }
 });
 
+test("search select commits a roleless active descendant with Enter after click does not commit", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?*</label>
+            <button id="source--source" type="button" role="combobox" aria-haspopup="listbox"
+              aria-controls="source-options" aria-expanded="false" aria-required="true">Select One</button>
+          </div>
+          <div id="source-options" role="listbox" hidden>
+            <div><span>Virtualized choices</span></div>
+          </div>
+        </main>
+        <script>
+          const control = document.querySelector('#source--source');
+          const popup = document.querySelector('#source-options');
+          let other;
+          control.addEventListener('click', () => {
+            control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+          });
+          control.addEventListener('keydown', (event) => {
+            const { key } = event;
+            if (key.length === 1 && key.toLowerCase() === 'o') {
+              other ??= document.createElement('div');
+              other.id = 'active-other'; other.setAttribute('aria-label', 'Other');
+              other.textContent = 'Other Selected'; popup.append(other);
+              control.setAttribute('aria-activedescendant', other.id);
+            }
+            if (key === 'Enter' && control.getAttribute('aria-activedescendant') === other.id) {
+              event.preventDefault();
+              control.textContent = 'Other'; control.setAttribute('aria-valuetext', 'Other');
+              control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+            }
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 250 });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Other",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Other");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("search select activates the option-row ancestor of an exact active descendant", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

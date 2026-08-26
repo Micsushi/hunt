@@ -1316,6 +1316,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.optionActivated = true;
       await this.#page.waitForTimeout(100);
       if (
+        active !== undefined &&
+        !await selectionReadbackIncludes(control, behavior, value)
+      ) {
+        await control.focus({ timeout: this.#timeoutMs });
+        await control.press("Enter", { timeout: this.#timeoutMs });
+        await this.#page.waitForTimeout(100);
+      }
+      if (
         !await selectionReadbackIncludes(control, behavior, value) &&
         await selectionPopupVisible(listbox, fallbackScope)
       ) {
