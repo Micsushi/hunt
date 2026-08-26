@@ -1656,11 +1656,12 @@ test("Intermountain source binds its retained nested catalog and ignores unrelat
           catalog.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
             if (target.textContent === 'Direct Source') {
-              catalog.innerHTML = '<div role="option">LinkedIn</div>';
+              catalog.innerHTML = '<div role="option">I know someone at the company</div>' +
+                '<div role="option">Recruiter</div>';
               catalog.focus();
               return;
             }
-            if (target.textContent !== 'LinkedIn') return;
+            if (target.textContent !== 'Recruiter') return;
             const pill = document.createElement('div');
             pill.setAttribute('data-automation-id', 'selectedItem');
             pill.textContent = target.textContent;
@@ -1682,8 +1683,8 @@ test("Intermountain source binds its retained nested catalog and ignores unrelat
         "source.how_did_you_hear",
         "application_source",
         "option",
-        "linkedin",
-        "LinkedIn",
+        "recruiter",
+        "Recruiter",
       )],
       repeatables: [],
     }, adapter, AbortSignal.any([]));
@@ -1693,7 +1694,7 @@ test("Intermountain source binds its retained nested catalog and ignores unrelat
       (await adapter.inspect(AbortSignal.any([]))).controls.find(
         ({ fieldId }) => fieldId === "source.how_did_you_hear",
       )?.readback,
-      "LinkedIn",
+      "Recruiter",
     );
     assert.equal(await page.locator('#phone-options [role="option"]').innerText(), "Canada (+1)");
   } finally {

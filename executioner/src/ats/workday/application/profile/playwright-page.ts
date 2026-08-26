@@ -2489,7 +2489,7 @@ async function preferredPromptOption(
 }
 
 function sourcePromptCategory(value: string): string | undefined {
-  return equivalentOptionLabels(value).has("linkedin") ? "Direct Source" : undefined;
+  return equivalentOptionLabels(value).has("recruiter") ? "Direct Source" : undefined;
 }
 
 async function selectionPopupVisible(
