@@ -1642,9 +1642,17 @@ test("Intermountain source binds its retained nested catalog and ignores unrelat
               '<div role="option">Direct Source</div>';
             catalog.hidden = false;
           };
-          input.addEventListener('input', () => {
-            if (input.value === 'LinkedIn') setTimeout(renderCategories, 150);
-          });
+          const promptButton = document.querySelector('[data-automation-id="promptSearchButton"]');
+          promptButton.__reactFiber$retained = {
+            memoizedProps: { onClick: () => {} },
+            return: {
+              memoizedProps: {
+                onPromptIconClick: () => {},
+                onSelectInputClick: () => setTimeout(renderCategories, 150),
+              },
+              return: null,
+            },
+          };
           catalog.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
             if (target.textContent === 'Direct Source') {

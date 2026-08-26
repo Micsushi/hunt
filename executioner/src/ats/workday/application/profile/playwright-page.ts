@@ -1012,7 +1012,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const activator = searchButtons[0] ?? promptWrappers[0];
         if (activator !== undefined) {
           if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
-            const componentOwnerActivated = await activator.evaluate((element) => {
+            const sourcePrompt = await control.getAttribute("id") === "source--source";
+            const componentOwnerActivated = await activator.evaluate((element, source) => {
               if (!(element instanceof HTMLElement)) {
                 throw new TypeError("Workday prompt search owner is unavailable");
               }
@@ -1029,8 +1030,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               for (let depth = 0; fiber !== undefined && fiber !== null && depth < 32; depth += 1) {
                 const props = fiber.memoizedProps ?? fiber.pendingProps;
                 if (typeof props === "object" && props !== null) {
-                  const handler = (props as { readonly onPromptIconClick?: unknown })
-                    .onPromptIconClick;
+                  const handler = source
+                    ? (props as { readonly onSelectInputClick?: unknown }).onSelectInputClick
+                    : (props as { readonly onPromptIconClick?: unknown }).onPromptIconClick;
                   if (typeof handler === "function") handlers.add(handler as () => unknown);
                 }
                 fiber = fiber.return as typeof fiber;
@@ -1042,7 +1044,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               if (handler === undefined) return false;
               handler();
               return true;
-            });
+            }, sourcePrompt);
             if (!componentOwnerActivated) {
               await activator.click({ timeout: this.#timeoutMs });
             }
@@ -1088,6 +1090,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#page.waitForTimeout(500);
             await this.#captureSelectionDiagnostic("prompt-typed", behavior);
           }
+          if (await this.#selectPromptCatalogOption(control, value, interaction, behavior)) return;
           const promptOptions = await visibleLocators(this.#page.locator([
             '[role="option"]',
             '[data-automation-id="promptOption"]',
