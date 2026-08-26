@@ -24,6 +24,15 @@ import {
 const DESKTOP_BINDING_FILE = "isolated-desktop.json";
 const OWNER_LIVE_FILE = "external-monitor-live.json";
 const STOP_FILE = "external-monitor-observer-stop";
+const observedFlagCatalog = [
+  "Apply", "Apply Now", "Apply Manually", "Sign in with email", "Create Account", "Sign In",
+  "Email Address", "Password", "Forgot Password", "Forgot your password?", "Reset Password",
+  "Send Verification Email", "My Information", "My Experience", "Application Questions",
+  "Voluntary Disclosures", "Self Identify", "Review", "Submit", "Submit application", "Next",
+  "Save and Continue", "Upload a resume", "Upload Resume", "Resume, Cover Letter and References",
+  "Upload a file (5MB max)",
+] as const;
+const observedFlagSet = new Set<string>(observedFlagCatalog);
 
 interface DesktopBinding {
   readonly schemaVersion: 1;
@@ -241,9 +250,12 @@ const OBSERVER_FAILURE_CODES = [
 type ObserverFailureCode = typeof OBSERVER_FAILURE_CODES[number];
 
 export interface ExternalMonitorObserverFailureDiagnostic {
-  readonly expectedTitleSha256: string;
-  readonly observedTitleSha256: string;
+  readonly expectedTitleSha256?: string;
+  readonly observedTitleSha256?: string;
   readonly observedTitleCandidateSha256s?: readonly string[];
+  readonly observedStructureFlags?: readonly string[];
+  readonly observedStageCounts?: ObservedStageCounts;
+  readonly activeStageTitles?: readonly string[];
 }
 
 const observerFailureDiagnostics = new WeakMap<Error, ExternalMonitorObserverFailureDiagnostic>();
@@ -488,7 +500,16 @@ try {
   try { page = observedStructurePage(flags, activeStageTitles); }
   catch {
     try { page = observedStructurePageFromIdentityTitle(title); }
-    catch { return observerFailure("structure_classification"); }
+    catch {
+      return observerFailure("structure_classification", structureFailureDiagnostic(
+        expectedTitleSha256,
+        observed.title,
+        identityTitles,
+        flags,
+        stageCounts,
+        activeStageTitles,
+      ));
+    }
   }
   identityTitles = [
     ...identityTitles,
@@ -526,15 +547,28 @@ export function normalizeObservedAddressHost(address: string): string {
 }
 
 function canonicalObservedFlag(value: string): string {
-  const canonical = [
-    "Apply", "Apply Now", "Apply Manually", "Sign in with email", "Create Account", "Sign In",
-    "Email Address", "Password", "Forgot Password", "Forgot your password?", "Reset Password", "Send Verification Email",
-    "My Information", "My Experience", "Application Questions", "Voluntary Disclosures",
-    "Self Identify", "Review", "Submit", "Submit application", "Next", "Save and Continue",
-    "Upload a resume", "Upload Resume", "Resume, Cover Letter and References",
-    "Upload a file (5MB max)",
-  ].find((candidate) => candidate.toLowerCase() === value.toLowerCase());
+  const canonical = observedFlagCatalog.find((candidate) =>
+    candidate.toLowerCase() === value.toLowerCase());
   return canonical ?? value;
+}
+
+function structureFailureDiagnostic(
+  expectedTitleSha256: string | undefined,
+  windowTitle: string,
+  identityTitles: readonly string[],
+  flags: ReadonlySet<string>,
+  stageCounts: ObservedStageCounts,
+  activeStageTitles: readonly string[],
+): ExternalMonitorObserverFailureDiagnostic {
+  const titleHashes = observedChromeIdentityTitleSha256s(windowTitle, identityTitles);
+  return Object.freeze({
+    ...(/^[0-9a-f]{64}$/u.test(expectedTitleSha256 ?? "") ? { expectedTitleSha256 } : {}),
+    observedTitleSha256: titleHashes[0],
+    observedTitleCandidateSha256s: titleHashes,
+    observedStructureFlags: [...flags].filter((value) => observedFlagSet.has(value)).sort(),
+    observedStageCounts: Object.freeze({ ...stageCounts }),
+    activeStageTitles: Object.freeze([...activeStageTitles]),
+  });
 }
 
 export function observedStructurePage(

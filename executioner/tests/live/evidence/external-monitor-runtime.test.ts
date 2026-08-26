@@ -1613,6 +1613,9 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.match(observerSource, /\[void\]\$selectedTabTitles\.Add\(\$name\)/u);
   assert.match(observerSource, /ControlType\.Id -eq 50030/u);
   assert.match(observerSource, /\[void\]\$documentTitles\.Add\(\$name\)/u);
+  assert.match(observerSource, /observedStructureFlags/u);
+  assert.match(observerSource, /observedStageCounts/u);
+  assert.match(observerSource, /observedTitleCandidateSha256s/u);
   assert.match(observerSource, /s2-external-monitor-observer-failure-v1/u);
   assert.match(observerSource, /submitActivated: false/u);
   assert.equal(
