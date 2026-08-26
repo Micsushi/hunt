@@ -5,7 +5,7 @@ import type { ConsoleMessage, Page, Request } from "playwright";
 
 import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 
-const evidenceRevision = "s2-page-local-inspection-v1";
+const evidenceRevision = "s2-page-local-inspection-v2";
 const recordLimit = 128;
 
 interface EventRecord {
@@ -54,11 +54,13 @@ export function createPageLocalInspection(evidenceRoot: string): {
     const pageRecord = records.get(page)!;
     const live = await page.evaluate(readPageLocalSnapshot);
     const ariaSnapshots: string[] = [];
-    const dateOwners = page.locator(
-      '[data-automation-id="dateInputWrapper"]',
+    const ariaOwners = page.locator(
+      '[data-automation-id="dateInputWrapper"], ' +
+        '[data-automation-id$="-CheckboxGroup"], ' +
+        '[data-hunt-exclusive-checkbox-group="true"]',
     );
-    for (let index = 0; index < await dateOwners.count(); index += 1) {
-      ariaSnapshots.push(await dateOwners.nth(index).ariaSnapshot({ timeout: 5_000 }));
+    for (let index = 0; index < await ariaOwners.count(); index += 1) {
+      ariaSnapshots.push(await ariaOwners.nth(index).ariaSnapshot({ timeout: 5_000 }));
     }
     await mkdir(evidenceRoot, { recursive: true });
     await page.screenshot({
@@ -276,12 +278,87 @@ function readPageLocalSnapshot(): object {
       }),
     };
   });
+  const checkboxGroups = [...new Set(document.querySelectorAll<HTMLElement>(
+    '[data-automation-id$="-CheckboxGroup"], ' +
+      '[data-hunt-exclusive-checkbox-group="true"]',
+  ))].filter(visible).slice(0, 128).map((group) => {
+    const owner = group.closest<HTMLElement>(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const ownedIds = [group.getAttribute("aria-controls"), group.getAttribute("aria-owns")]
+      .flatMap((value) => value?.split(/\s+/u) ?? []).filter(Boolean);
+    const inputs = [...group.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    const optionLabel = (input: HTMLInputElement): string => {
+      const aria = (input.getAttribute("aria-label") ?? "")
+        .normalize("NFC").replace(/\s+/gu, " ").trim();
+      if (aria !== "") return aria.slice(0, 512);
+      return (input.labels?.[0]?.textContent ?? input.value)
+        .normalize("NFC").replace(/\s+/gu, " ").trim().slice(0, 512);
+    };
+    return {
+      ownerAutomationId: owner?.getAttribute("data-automation-id") ?? null,
+      label: (owner?.querySelector("label, legend")?.textContent ?? "")
+        .normalize("NFC").replace(/\s+/gu, " ").trim().slice(0, 512),
+      group: {
+        automationId: group.getAttribute("data-automation-id"),
+        role: group.getAttribute("role"),
+        requiredMarker: owner?.querySelector(
+          '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+        ) !== null || group.getAttribute("aria-required") === "true",
+        aria: {
+          label: group.getAttribute("aria-label"),
+          labelledby: group.getAttribute("aria-labelledby"),
+          describedby: group.getAttribute("aria-describedby"),
+          controls: group.getAttribute("aria-controls"),
+          owns: group.getAttribute("aria-owns"),
+          invalid: group.getAttribute("aria-invalid"),
+          required: group.getAttribute("aria-required"),
+        },
+        visible: visible(group),
+        bounds: bounds(group),
+        inputCount: inputs.length,
+        checkedCount: inputs.filter((input) => input.checked).length,
+        reactLayers: reactLayers(group, owner),
+      },
+      inputs: inputs.map((input) => ({
+        type: input.type,
+        optionLabel: optionLabel(input),
+        checked: input.checked,
+        disabled: input.disabled,
+        aria: {
+          label: input.getAttribute("aria-label"),
+          labelledby: input.getAttribute("aria-labelledby"),
+          describedby: input.getAttribute("aria-describedby"),
+          checked: input.getAttribute("aria-checked"),
+          disabled: input.getAttribute("aria-disabled"),
+        },
+        visible: visible(input),
+        bounds: bounds(input),
+        active: document.activeElement === input,
+        reactLayers: reactLayers(input, group),
+      })),
+      ownedPortals: ownedIds.map((id) => {
+        const portal = document.getElementById(id);
+        return portal === null ? { id, present: false } : {
+          id,
+          present: true,
+          tag: portal.tagName.toLowerCase(),
+          role: portal.getAttribute("role"),
+          automationId: portal.getAttribute("data-automation-id"),
+          visible: visible(portal),
+          bounds: bounds(portal),
+          descendantCount: portal.querySelectorAll("*").length,
+        };
+      }),
+    };
+  });
   const active = document.activeElement;
   const root = document.documentElement as unknown as Record<string, unknown>;
   const mutationProbe = root.__huntPageLocalMutationProbe as
     { readonly mutations?: readonly object[] } | undefined;
   return {
     dateControls: wrappers,
+    checkboxGroups,
     activeElement: active instanceof Element ? {
       tag: active.tagName.toLowerCase(),
       type: active instanceof HTMLInputElement ? active.type : null,

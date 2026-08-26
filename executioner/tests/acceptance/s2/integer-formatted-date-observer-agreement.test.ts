@@ -212,7 +212,7 @@ test("retained Integer formatted dates agree across every completion observer", 
       readonly pageErrorNames?: readonly unknown[];
       readonly requestFailures?: readonly unknown[];
     };
-    assert.equal(inspectionEvidence.evidenceRevision, "s2-page-local-inspection-v1");
+    assert.equal(inspectionEvidence.evidenceRevision, "s2-page-local-inspection-v2");
     assert.equal(inspectionEvidence.dateControls?.length, 2);
     assert.equal(inspectionEvidence.ariaSnapshots?.length, 2);
     assert.ok(Array.isArray(inspectionEvidence.mutations));
