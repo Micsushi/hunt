@@ -1002,7 +1002,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const searchButtons = await visibleLocators(field.locator(
           '[data-automation-id="promptSearchButton"]',
         ));
-        const activators = promptWrappers.length === 1 ? promptWrappers : searchButtons;
+        const activators = searchButtons.length === 1 ? searchButtons : promptWrappers;
         if (activators.length === 1) {
           const activator = activators[0]!;
           const glyphs = await visibleLocators(activator.locator("svg"));

@@ -1599,6 +1599,80 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
+test("Intermountain source search uses the prompt button beside its responsive prompt sibling", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <div data-automation-id="monikerSearchBox">
+                  <input id="source--source" data-automation-id="searchBox"
+                    placeholder="Search" aria-required="true">
+                </div>
+                <div data-automation-id="promptSelectionLabel"></div>
+                <div data-automation-id="promptAriaInstruction"></div>
+                <span data-automation-id="promptSearchButton">
+                  <svg role="presentation" style="display:block;width:20px;height:20px"></svg>
+                </span>
+                <div data-automation-id="responsiveMonikerPrompt">Responsive prompt surface</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <div id="source-prompt" role="listbox" hidden>
+          <div role="option">LinkedIn</div>
+        </div>
+        <script>
+          const input = document.querySelector('#source--source');
+          const prompt = document.querySelector('#source-prompt');
+          let promptMode = false;
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => { promptMode = true; input.value = ''; });
+          input.addEventListener('input', () => {
+            prompt.hidden = !(promptMode && input.value === 'LinkedIn');
+          });
+          prompt.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('[data-automation-id="monikerSearchBox"]').append(pill);
+            input.value = '';
+            prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 500,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "LinkedIn",
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls.find(
+        ({ fieldId }) => fieldId === "source.how_did_you_hear",
+      )?.readback,
+      "LinkedIn",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a highlighted source leaf without backing selection is never a commit", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
