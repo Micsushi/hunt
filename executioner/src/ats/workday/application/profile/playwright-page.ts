@@ -2170,7 +2170,9 @@ async function readback(
     const label = (await locator.innerText()).replace(/\s+/gu, " ").trim();
     if (label !== "" && normalize(label) !== "select one") return label;
   }
-  const field = locator.locator('xpath=ancestor::*[@data-automation-id][1]');
+  const field = locator.locator(
+    'xpath=ancestor::*[@data-automation-id="formField" or starts-with(@data-automation-id,"formField-")][1]',
+  );
   const pills = await visibleLocators(field.locator('[data-automation-id="selectedItem"]'));
   if (pills.length === 0) return null;
   const labels = (await Promise.all(pills.map(async (pill) =>

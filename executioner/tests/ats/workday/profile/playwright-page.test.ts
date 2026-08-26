@@ -2819,7 +2819,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-test("My Experience multi-select types into its field-local Workday prompt search", async () => {
+test("retained nested Workday Skills readback follows its formField owner after prompt selection", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2828,7 +2828,9 @@ test("My Experience multi-select types into its field-local Workday prompt searc
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" placeholder="Search">
+              <div data-automation-id="multiselectInputContainer">
+                <input id="skills--skills" placeholder="Search">
+              </div>
               <div data-automation-id="responsiveMonikerPrompt">
                 <span data-automation-id="promptSearchButton"><svg></svg></span>
                 <input data-automation-id="searchBox" hidden>
