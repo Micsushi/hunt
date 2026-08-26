@@ -1562,8 +1562,8 @@ test("a roleless source search input opens its Workday prompt and commits an exa
           let promptMode = false;
           document.querySelector('[data-automation-id="promptSearchButton"]')
             .addEventListener('click', () => {
-              promptMode = input.value === 'LinkedIn';
-              prompt.hidden = !promptMode;
+              promptMode = true;
+              input.value = '';
             });
           input.addEventListener('input', () => {
             prompt.hidden = !(promptMode && input.value === 'LinkedIn');
@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source search submits the typed query through its retained prompt owner", async () => {
+test("Intermountain source search traverses its retained catalog without the prompt owner", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1647,10 +1647,8 @@ test("Intermountain source search submits the typed query through its retained p
             value: { onClick() {}, value: 'sensitive-source-value' },
           });
           promptButton.addEventListener('click', () => {
-              promptMode = input.value === 'LinkedIn';
-              catalog.hidden = true;
-              prompt.hidden = !promptMode;
-            });
+            throw new Error('prompt owner must not bypass the visible catalog');
+          });
           promptButton.querySelector('rect').addEventListener('click', event => {
             event.stopPropagation();
           });
@@ -1659,6 +1657,19 @@ test("Intermountain source search submits the typed query through its retained p
           });
           input.addEventListener('input', () => {
             if (promptMode) prompt.hidden = input.value !== 'LinkedIn';
+          });
+          catalog.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            if (target.textContent === 'All') {
+              catalog.innerHTML = '<div role="option">LinkedIn</div>';
+              return;
+            }
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('[data-automation-id="monikerSearchBox"]').append(pill);
+            input.value = '';
+            catalog.hidden = true;
           });
           prompt.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
@@ -1711,6 +1722,9 @@ test("Intermountain source search submits the typed query through its retained p
     assert.match(diagnostic, /"automationId":"promptSearchButton"/u);
     assert.match(diagnostic, /"name":"onClick","arity":0/u);
     assert.doesNotMatch(diagnostic, /sensitive-source-value/u);
+    assert.ok(writes.some((line) =>
+      line.includes('profilePromptCatalogVisibleOptions') && line.includes('linkedin')
+    ));
   } finally {
     await browser.close();
   }

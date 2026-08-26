@@ -986,6 +986,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       if (behavior === "multi_select" || behavior === "search_select") {
         if (editable) {
+          await control.fill("", { timeout: this.#timeoutMs });
           await control.click({ timeout: this.#timeoutMs });
           await this.#page.waitForTimeout(100);
         }
@@ -999,7 +1000,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           throw new TypeError("Workday prompt multi-select activator is ambiguous");
         }
         const activator = searchButtons[0] ?? promptWrappers[0];
-        if (activator === undefined && editable) {
+        if (editable) {
           if (await this.#selectPromptCatalogOption(
             control,
             value,
@@ -1008,9 +1009,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           )) return;
         }
         if (activator !== undefined) {
-          // Workday's source prompt icon submits the current search text.  Keep
-          // the query that was entered above so the prompt has something to
-          // resolve; clearing it here turns the icon click into an empty search.
           if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
             await activator.evaluate((element) => {
               if (!(element instanceof HTMLElement)) {
@@ -1051,16 +1049,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             throw new TypeError("Workday prompt search input is ambiguous");
           }
           const promptSearch = promptSearches[0] ?? control;
-          const controlHandle = await control.elementHandle();
-          if (controlHandle === null) {
-            throw new TypeError("Workday prompt source control detached");
-          }
-          const promptUsesOriginalControl = await promptSearch.evaluate(
-            (element, original) => element === original,
-            controlHandle,
-          );
-          await controlHandle.dispose();
-          if (editable && !promptUsesOriginalControl) {
+          if (editable) {
             await promptSearch.fill("", { timeout: this.#timeoutMs });
             await promptSearch.pressSequentially(value, {
               delay: 10,
@@ -1396,57 +1385,54 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     await all.click({ timeout: this.#timeoutMs });
     await this.#page.waitForTimeout(100);
     await control.click({ timeout: this.#timeoutMs });
-    await this.#page.waitForTimeout(100);
+    await control.fill(value, { timeout: this.#timeoutMs });
+    await this.#page.waitForTimeout(500);
 
     const acceptedLabels = equivalentOptionLabels(value);
-    let visibleOptionCount = 0;
-    for (let ordinal = 1; ordinal <= 2048; ordinal += 1) {
-      const candidates: Locator[] = [];
-      for (const option of await visibleLocators(options)) {
-        const label = normalize(await option.innerText());
-        if (!/^(?:partial list \(first 500 entries\)|all)$/u.test(label)) {
-          candidates.push(option);
-        }
+    const candidates: Locator[] = [];
+    const candidateLabels: string[] = [];
+    for (const option of await visibleLocators(options)) {
+      const label = normalize(await option.innerText());
+      if (!/^(?:partial list \(first 500 entries\)|all)$/u.test(label)) {
+        candidates.push(option);
+        candidateLabels.push(label);
       }
-      visibleOptionCount = Math.max(visibleOptionCount, candidates.length);
-      const exact: Locator[] = [];
-      for (const option of candidates) {
-        if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
-      }
-      if (exact.length > 1) {
-        throw new TypeError("Workday prompt catalog option is ambiguous");
-      }
-      if (exact.length === 1) {
-        const option = exact[0]!;
-        interaction.popupBound = false;
-        interaction.visibleOptionCount = visibleOptionCount;
-        interaction.selectedOptionOrdinal = ordinal;
-        interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
-        const radios = await visibleLocators(option.locator(
-          'input[type="radio"], [role="radio"]',
-        ));
-        if (radios.length > 1) {
-          throw new TypeError("Workday prompt catalog radio is ambiguous");
-        }
-        await (radios[0] ?? option).click({ timeout: this.#timeoutMs });
-        interaction.optionActivated = true;
-        await this.#page.waitForTimeout(100);
-        interaction.popupClosed = (await visibleLocators(options)).length === 0;
-        interaction.backingValueCommitted = await selectionReadbackIncludes(
-          control,
-          behavior,
-          value,
-        );
-        interaction.validationCleared = await validationCleared(control);
-        if (!interaction.backingValueCommitted || !interaction.validationCleared) {
-          throw new TypeError("Workday prompt catalog value did not commit");
-        }
-        return true;
-      }
-      await control.press("ArrowDown", { timeout: this.#timeoutMs });
-      if (ordinal % 32 === 0) await this.#page.waitForTimeout(25);
     }
-    throw new TypeError("Workday prompt catalog option is unavailable");
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      process.stderr.write(`${JSON.stringify({
+        profilePromptCatalogVisibleOptions: candidateLabels.slice(0, 64),
+      })}\n`);
+    }
+    const exact = candidates.filter((_, index) => acceptedLabels.has(candidateLabels[index]!));
+    if (exact.length > 1) {
+      throw new TypeError("Workday prompt catalog option is ambiguous");
+    }
+    if (exact.length === 0) throw new TypeError("Workday prompt catalog option is unavailable");
+    const option = exact[0]!;
+    interaction.popupBound = false;
+    interaction.visibleOptionCount = candidates.length;
+    interaction.selectedOptionOrdinal = candidates.indexOf(option) + 1;
+    interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
+    const radios = await visibleLocators(option.locator(
+      'input[type="radio"], [role="radio"]',
+    ));
+    if (radios.length > 1) {
+      throw new TypeError("Workday prompt catalog radio is ambiguous");
+    }
+    await (radios[0] ?? option).click({ timeout: this.#timeoutMs });
+    interaction.optionActivated = true;
+    await this.#page.waitForTimeout(100);
+    interaction.popupClosed = (await visibleLocators(options)).length === 0;
+    interaction.backingValueCommitted = await selectionReadbackIncludes(
+      control,
+      behavior,
+      value,
+    );
+    interaction.validationCleared = await validationCleared(control);
+    if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+      throw new TypeError("Workday prompt catalog value did not commit");
+    }
+    return true;
   }
 
   async #selectNativeOption(
