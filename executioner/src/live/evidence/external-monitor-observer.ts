@@ -179,7 +179,21 @@ export async function waitForReconciledMonitorSurface(
     try {
       const observed = await observe();
       if (typeof request.page !== "string" || !compatibleObservedPage(request.page, observed.page)) {
-        observerFailure("structure_classification");
+        const expectedTitleSha256 = typeof request.capturedIdentityDigests === "object" &&
+            request.capturedIdentityDigests !== null &&
+            "titleSha256" in request.capturedIdentityDigests &&
+            typeof request.capturedIdentityDigests.titleSha256 === "string"
+          ? request.capturedIdentityDigests.titleSha256
+          : undefined;
+        observerFailure("structure_classification", {
+          ...(/^[0-9a-f]{64}$/u.test(expectedTitleSha256 ?? "") ? { expectedTitleSha256 } : {}),
+          observedTitleSha256: createHash("sha256")
+            .update(canonicalMonitorIdentityTitle(observed.title), "utf8").digest("hex"),
+          ...(observed.titleCandidateSha256s === undefined
+            ? {}
+            : { observedTitleCandidateSha256s: observed.titleCandidateSha256s }),
+          observedStructurePage: observed.page,
+        });
       }
       reconcileObservedMonitorSurface(request, observed);
       return observed;
@@ -256,6 +270,7 @@ export interface ExternalMonitorObserverFailureDiagnostic {
   readonly observedStructureFlags?: readonly string[];
   readonly observedStageCounts?: ObservedStageCounts;
   readonly activeStageTitles?: readonly string[];
+  readonly observedStructurePage?: string;
 }
 
 const observerFailureDiagnostics = new WeakMap<Error, ExternalMonitorObserverFailureDiagnostic>();
