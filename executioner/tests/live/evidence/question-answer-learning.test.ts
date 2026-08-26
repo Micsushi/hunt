@@ -465,6 +465,47 @@ test("question learning retains verification failure through a terminal retry", 
   }
 });
 
+test("question learning admits one page monitor batch for independently verified fields", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-batch-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const batchOperationId = operation(40);
+    capture.monitorBatchAck({
+      operationId: batchOperationId,
+      attempt: 1,
+      moment: "before_mutation",
+    });
+    for (const index of [41, 42]) {
+      const value = ownerChoice(index);
+      const fieldOperationId = operation(index);
+      capture.recordAttempt({ operationId: fieldOperationId, ...value });
+      capture.record({ operationId: fieldOperationId, ...value });
+    }
+    capture.monitorBatchAck({
+      operationId: batchOperationId,
+      attempt: 1,
+      moment: "after_readback",
+    });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"),
+      "utf8",
+    )));
+    assert.equal(evidence.liveAcceptanceEligible, true);
+    assert.equal(evidence.questions.length, 2);
+    assert.deepEqual(
+      evidence.questions.map(({ monitorBinding }) => monitorBinding?.operationId),
+      [batchOperationId, batchOperationId],
+    );
+    assert.deepEqual(
+      evidence.questions.map(({ attemptHistory }) => attemptHistory.length),
+      [1, 1],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function recordVerified(
   capture: QuestionAnswerLearningCapture,
   value: Omit<Parameters<QuestionAnswerLearningCapture["record"]>[0], "operationId">,

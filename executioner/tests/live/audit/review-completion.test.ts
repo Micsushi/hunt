@@ -518,7 +518,7 @@ test("Review completion rejects an external monitor ACK crossed from another jou
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0015-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -543,7 +543,7 @@ test("Review completion rejects a reviewed structure bound to the wrong page", a
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0015-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -568,7 +568,7 @@ test("Review completion rejects a monitor ACK that claims Submit activation", as
     const path = join(
       layout.evidenceRoot,
       "monitor",
-      "0015-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({
@@ -863,7 +863,7 @@ test("Review completion rejects an ACK observed after production process close",
     const ackPath = join(
       layout.evidenceRoot,
       "monitor",
-      "0015-review-review_readback.ack.json",
+      "0014-review-review_readback.ack.json",
     );
     const ack = JSON.parse(readFileSync(ackPath, "utf8"));
     writeFileSync(ackPath, JSON.stringify({ ...ack, observedAt: "2026-08-10T12:02:00.000Z" }));
@@ -1001,8 +1001,8 @@ async function writeReviewEvidence(
       validationState: "clear",
       optionCatalogState: "not_applicable",
       observationBinding: {
-        operationId: "operation_profile_observation_02",
-        attempt: 2,
+        operationId: "operation_profile_observation_01",
+        attempt: 1,
         stateObservedAck: true,
       },
       visibleOptionIds: [],
@@ -1402,7 +1402,6 @@ function applicationMoments(
   ];
   if (skipResume) return [
     ["profile", "state_observed", "operation_profile_observation_01", 1],
-    ["profile", "state_observed", "operation_profile_observation_02", 2],
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],
@@ -1415,7 +1414,6 @@ function applicationMoments(
   ];
   const moments: Array<readonly [string, string, string, number]> = [
     ["profile", "state_observed", "operation_profile_observation_01", 1],
-    ["profile", "state_observed", "operation_profile_observation_02", 2],
     ["profile", "before_mutation", "operation_profile_mutation_01", 1],
     ["profile", "after_readback", "operation_profile_mutation_01", 1],
     ["profile", "before_navigation", "operation_profile_navigation_01", 1],

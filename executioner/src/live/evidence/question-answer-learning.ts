@@ -123,6 +123,11 @@ export interface QuestionAnswerLearningCapture {
     readonly attempt: number;
     readonly moment: "before_mutation" | "after_readback";
   }): void;
+  monitorBatchAck(input: {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly moment: "before_mutation" | "after_readback";
+  }): void;
   write(): string | null;
 }
 
@@ -133,6 +138,12 @@ export function createQuestionAnswerLearningCapture(input: {
 }): QuestionAnswerLearningCapture {
   const records = new Map<string, MutableQuestionRecord>();
   const operations = new Map<string, string>();
+  const batchFields = new Set<string>();
+  let pendingBatch: {
+    readonly operationId: string;
+    readonly attempt: number;
+    readonly beforeMutationAck: true;
+  } | null = null;
   let written = false;
   return Object.freeze({
     recordAttempt(value: Parameters<QuestionAnswerLearningCapture["recordAttempt"]>[0]) {
@@ -147,6 +158,7 @@ export function createQuestionAnswerLearningCapture(input: {
       if (prior !== undefined) record.attemptHistory = [...prior.attemptHistory];
       records.set(value.field.fieldId, record);
       operations.set(value.operationId, value.field.fieldId);
+      if (pendingBatch !== null) batchFields.add(value.field.fieldId);
     },
     record(value: {
       readonly operationId: string;
@@ -162,7 +174,7 @@ export function createQuestionAnswerLearningCapture(input: {
       record.failureCode = null;
       record.retryable = false;
       record.terminalDisposition = "verified";
-      retainAttempt(record);
+      if (record.monitorBinding !== null) retainAttempt(record);
     },
     recordUnset(value: { readonly questionId: QuestionId; readonly field: FieldObservation }) {
       const prior = records.get(value.field.fieldId);
@@ -196,7 +208,7 @@ export function createQuestionAnswerLearningCapture(input: {
       record.failureCode = safeFailureCode(value.code);
       record.retryable = value.retryable;
       record.terminalDisposition = record.verificationResult;
-      retainAttempt(record);
+      if (record.monitorBinding !== null) retainAttempt(record);
     },
     monitorAck(value: Parameters<QuestionAnswerLearningCapture["monitorAck"]>[0]) {
       const record = attemptedRecord(records, operations, value.operationId);
@@ -217,6 +229,33 @@ export function createQuestionAnswerLearningCapture(input: {
         afterReadbackAck: true,
       });
       record.pendingMonitor = null;
+    },
+    monitorBatchAck(value: Parameters<QuestionAnswerLearningCapture["monitorBatchAck"]>[0]) {
+      if (value.moment === "before_mutation") {
+        if (pendingBatch !== null || batchFields.size !== 0) denied();
+        pendingBatch = Object.freeze({
+          operationId: value.operationId,
+          attempt: value.attempt,
+          beforeMutationAck: true as const,
+        });
+        return;
+      }
+      if (pendingBatch?.operationId !== value.operationId ||
+          pendingBatch.attempt !== value.attempt) denied();
+      const binding = Object.freeze({
+        ...pendingBatch,
+        afterReadbackAck: true as const,
+      });
+      for (const fieldId of batchFields) {
+        const record = records.get(fieldId);
+        if (record === undefined || record.pendingMonitor !== null ||
+            record.monitorBinding !== null ||
+            record.verificationResult === "not_attempted") denied();
+        record.monitorBinding = binding;
+        retainAttempt(record);
+      }
+      pendingBatch = null;
+      batchFields.clear();
     },
     write() {
       if (written || records.size === 0) return null;
@@ -313,10 +352,6 @@ export function admitQuestionAnswerLearningEvidence(
     ) denied();
     fields.add(record.fieldId);
   }
-  const operations = value.questions.flatMap(({ attemptHistory }) =>
-    attemptHistory.map(({ operationId }) => operationId)
-  );
-  if (new Set(operations).size !== operations.length) denied();
   const eligible = value.executionMode === "live" &&
     value.questions.every(liveEligibleQuestion);
   if (value.liveAcceptanceEligible !== eligible) denied();

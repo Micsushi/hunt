@@ -198,8 +198,23 @@ async function waitForApplicationReadyPage(
 export async function applicationReadyMonitorTaxonomy(
   page: PersistentPage,
 ): Promise<import("./external-monitor-port.ts").ExternalMonitorTaxonomy> {
-  const owned = page as unknown as Page;
   const observed = await waitForApplicationReadyPage(page);
+  return profileMonitorTaxonomyFromSnapshot(page as unknown as Page, observed);
+}
+
+async function settledProfileMonitorTaxonomy(
+  page: Page,
+): Promise<import("./external-monitor-port.ts").ExternalMonitorTaxonomy> {
+  const observed = await new PlaywrightWorkdayProfilePage(page, {
+    pageType: "profile",
+  }).inspect(AbortSignal.any([]));
+  return profileMonitorTaxonomyFromSnapshot(page, observed);
+}
+
+async function profileMonitorTaxonomyFromSnapshot(
+  owned: Page,
+  observed: ProfilePageSnapshot,
+): Promise<import("./external-monitor-port.ts").ExternalMonitorTaxonomy> {
   const controls = [
     ...observed.controls,
     ...observed.rows.flatMap(({ controls: rowControls }) => rowControls),
@@ -543,8 +558,29 @@ export class OwnedWorkdayApplicationRuntime {
         this.#profileMutationAttempted = false;
         this.#profileCleanupState = "not_started";
         this.#profilePreservationCandidate = false;
-        let observationMonitorFailure: unknown;
         let learning: ReturnType<typeof createProfileFieldLearningCapture> | undefined;
+        const observationOperationId = this.#nextOperationId();
+        const observationAttempt = this.#nextObservationMonitorAttempt(
+          monitorPageName,
+          "state_observed",
+        );
+        await this.#monitor(
+          page, monitorPageName, "state_observed",
+          observationOperationId, observationAttempt, signal,
+        );
+        this.#assertAuthorizationTime();
+        const mutationOperationId = this.#nextOperationId();
+        const mutationAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
+        let mutationMonitorStarted = false;
+        const startMutationMonitor = async (innerSignal: AbortSignal) => {
+          if (mutationMonitorStarted) return;
+          await this.#monitor(
+            page, monitorPageName, "before_mutation",
+            mutationOperationId, mutationAttempt, innerSignal,
+          );
+          mutationMonitorStarted = true;
+          this.#assertAuthorized(innerSignal);
+        };
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
           pageType: request.ownerSources.profilePlan.pageType,
           timeoutMs: this.#timeoutMs,
@@ -554,66 +590,25 @@ export class OwnedWorkdayApplicationRuntime {
           inspectionFailure: () => playwrightProfilePage.inspectionFailure(),
           inspectionFacts: () => playwrightProfilePage.inspectionFacts(),
           commit: async (commit, innerSignal) => {
+            await startMutationMonitor(innerSignal);
             mutationAttempted = true;
             this.#profileMutationAttempted = true;
-            const operationId = this.#nextOperationId();
-            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
-            await this.#monitor(
-              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
-            );
-            learning?.monitorAck({
-              controlId: commit.controlId,
-              operationId,
-              attempt,
-              moment: "before_mutation",
-            });
             this.#assertAuthorized(innerSignal);
-            try {
-              return await playwrightProfilePage.commit(commit, innerSignal);
-            } finally {
-              await this.#monitor(
-                page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
-              );
-              learning?.monitorAck({
-                controlId: commit.controlId,
-                operationId,
-                attempt,
-                moment: "after_readback",
-              });
-              this.#assertAuthorized(innerSignal);
-            }
+            return playwrightProfilePage.commit(commit, innerSignal);
           },
           addOwnedRow: async (section, innerSignal) => {
+            await startMutationMonitor(innerSignal);
             mutationAttempted = true;
             this.#profileMutationAttempted = true;
-            const operationId = this.#nextOperationId();
-            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
-            await this.#monitor(
-              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
-            );
             this.#assertAuthorized(innerSignal);
-            const added = await playwrightProfilePage.addOwnedRow(section, innerSignal);
-            await this.#monitor(
-              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
-            );
-            this.#assertAuthorized(innerSignal);
-            return added;
+            return playwrightProfilePage.addOwnedRow(section, innerSignal);
           },
           removeOwnedRow: async (section, rowId, innerSignal) => {
+            await startMutationMonitor(innerSignal);
             mutationAttempted = true;
             this.#profileMutationAttempted = true;
-            const operationId = this.#nextOperationId();
-            const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
-            await this.#monitor(
-              page, monitorPageName, "before_mutation", operationId, attempt, innerSignal,
-            );
             this.#assertAuthorized(innerSignal);
-            const removed = await playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
-            await this.#monitor(
-              page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
-            );
-            this.#assertAuthorized(innerSignal);
-            return removed;
+            return playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
           },
           interaction: (controlId) => playwrightProfilePage.interaction(controlId),
         };
@@ -643,42 +638,46 @@ export class OwnedWorkdayApplicationRuntime {
                 innerSignal,
                 !control.required || interactivelyInspectableFields.has(control.fieldId),
               );
-              const operationId = this.#nextOperationId();
-              const attempt = this.#nextObservationMonitorAttempt(
-                monitorPageName,
-                "state_observed",
-              );
-              try {
-                await this.#monitor(
-                  page,
-                  monitorPageName,
-                  "state_observed",
-                  operationId,
-                  attempt,
-                  innerSignal,
-                );
-                this.#assertAuthorized(innerSignal);
-              } catch (error) {
-                observationMonitorFailure = error;
-                throw error;
-              }
               return Object.freeze({
                 observation,
-                binding: Object.freeze({ operationId, attempt, stateObservedAck: true as const }),
+                binding: Object.freeze({
+                  operationId: observationOperationId,
+                  attempt: observationAttempt,
+                  stateObservedAck: true as const,
+                }),
               });
             },
           }),
         });
         let learningSha256: string | null = null;
         let result;
+        let reconciliationError: unknown;
         try {
           result = await completeWorkdayProfilePage(
             request.ownerSources.profilePlan,
             learning.page,
             signal,
           );
-          if (observationMonitorFailure !== undefined) throw observationMonitorFailure;
+        } catch (error) {
+          reconciliationError = error;
+          throw error;
         } finally {
+          try {
+            if (mutationMonitorStarted) {
+              await this.#monitor(
+                page, monitorPageName, "after_readback",
+                mutationOperationId, mutationAttempt, signal,
+              );
+              if (this.#externalMonitor !== undefined) {
+                learning.bindMutationBatch({
+                  operationId: mutationOperationId,
+                  attempt: mutationAttempt,
+                });
+              }
+            }
+          } catch (error) {
+            if (reconciliationError === undefined) throw error;
+          }
           learningSha256 = learning.write();
         }
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
@@ -973,6 +972,14 @@ export class OwnedWorkdayApplicationRuntime {
     }
   }
 
+  #assertAuthorizationTime(): void {
+    const now = this.#now();
+    if (!/^\d{4}-\d{2}-\d{2}T/u.test(now) || !Number.isFinite(Date.parse(now)) ||
+        Date.parse(now) >= Date.parse(this.#authorizationExpiresAt)) {
+      throw new TypeError("application authorization expired");
+    }
+  }
+
   async #reconcileQuestionnaire(
     page: Page,
     input: Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
@@ -981,19 +988,38 @@ export class OwnedWorkdayApplicationRuntime {
     monitorPageName: "resume" | "profile" | "questionnaire",
     signal: AbortSignal,
   ): Promise<unknown> {
+    const batchOperationId = this.#nextOperationId();
+    const batchAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
+    await this.#monitor(
+      page, monitorPageName, "before_mutation", batchOperationId, batchAttempt, signal,
+    );
+    if (this.#externalMonitor !== undefined) {
+      request.questionLearning?.monitorBatchAck({
+        operationId: batchOperationId,
+        attempt: batchAttempt,
+        moment: "before_mutation",
+      });
+    }
+    let batchClosed = false;
+    const closeBatch = async () => {
+      if (batchClosed) return;
+      await this.#monitor(
+        page, monitorPageName, "after_readback", batchOperationId, batchAttempt, signal,
+      );
+      if (this.#externalMonitor !== undefined) {
+        request.questionLearning?.monitorBatchAck({
+          operationId: batchOperationId,
+          attempt: batchAttempt,
+          moment: "after_readback",
+        });
+      }
+      batchClosed = true;
+      this.#assertAuthorized(signal);
+    };
     await bindQuestionnaireTargets(page, input.pageId);
     for (const targetToken of await questionnairePopupHydrationTargets(page)) {
-      const operationId = this.#nextOperationId();
-      const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
-      await this.#monitor(
-        page, monitorPageName, "before_mutation", operationId, attempt, signal,
-      );
       this.#assertAuthorized(signal);
       await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
-      await this.#monitor(
-        page, monitorPageName, "after_readback", operationId, attempt, signal,
-      );
-      this.#assertAuthorized(signal);
     }
     const semanticSessionId = `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
     const semantic = new PlaywrightBrowserSession({
@@ -1039,7 +1065,6 @@ export class OwnedWorkdayApplicationRuntime {
       );
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
-      const monitoredAttempts = new Map<string, number>();
       const driver: FieldDriver = Object.freeze({
         drive: async (
           driveRequest: Parameters<FieldDriver["drive"]>[0],
@@ -1050,16 +1075,6 @@ export class OwnedWorkdayApplicationRuntime {
             kind: driveRequest.intent.kind,
             uiBehavior: driveRequest.intent.behavior,
           });
-          const attempt = this.#nextMutationMonitorAttempt(monitorPageName);
-          monitoredAttempts.set(driveRequest.operationId, attempt);
-          await this.#monitor(
-            page, monitorPageName, "before_mutation", driveRequest.operationId, attempt, innerSignal,
-          );
-          request.questionLearning?.monitorAck({
-            operationId: driveRequest.operationId,
-            attempt,
-            moment: "before_mutation",
-          });
           this.#assertAuthorized(innerSignal);
           const driven = await semanticDriver.drive(driveRequest, innerSignal);
           this.#trace?.("questionnaire_field_drive_completed", {
@@ -1069,18 +1084,6 @@ export class OwnedWorkdayApplicationRuntime {
             status: driven.ok ? "succeeded" : "failed",
             ...(!driven.ok ? { code: driven.error.code } : {}),
           });
-          if (!driven.ok) {
-            await this.#monitor(
-              page, monitorPageName, "after_readback",
-              driveRequest.operationId, attempt, innerSignal,
-            );
-            request.questionLearning?.monitorAck({
-              operationId: driveRequest.operationId,
-              attempt,
-              moment: "after_readback",
-            });
-            monitoredAttempts.delete(driveRequest.operationId);
-          }
           return driven;
         },
       });
@@ -1102,19 +1105,7 @@ export class OwnedWorkdayApplicationRuntime {
             status: verified.ok && verified.value.kind === "verified" ? "succeeded" : "failed",
             ...(!verified.ok ? { code: verified.error.code } : {}),
           });
-          const operationId = verificationRequest.receipt.operationId;
-          const attempt = monitoredAttempts.get(operationId);
-          if (attempt === undefined) throw new TypeError("questionnaire monitor binding unavailable");
-          await this.#monitor(
-            page, monitorPageName, "after_readback", operationId, attempt, innerSignal,
-          );
-          request.questionLearning?.monitorAck({
-            operationId,
-            attempt,
-            moment: "after_readback",
-          });
           this.#assertAuthorized(innerSignal);
-          monitoredAttempts.delete(operationId);
           return verified;
         },
       });
@@ -1168,7 +1159,9 @@ export class OwnedWorkdayApplicationRuntime {
           resumeArtifact: request.ownerSources.resumeIntent.artifact,
           page: snapshot,
         }, signal);
+        await closeBatch();
       } catch (error) {
+        await closeBatch();
         const learningSha256 = questionLearning?.write() ?? null;
         this.#trace?.("questionnaire_reconciliation_exception", {
           learningPresent: learningSha256 !== null,
@@ -1257,6 +1250,7 @@ export class OwnedWorkdayApplicationRuntime {
       }
       return verified("questionnaire", "questionnaire_verified", input.pageId);
     } finally {
+      await closeBatch();
       await semantic.close({ sessionId: semanticSessionId }, new AbortController().signal);
     }
   }
@@ -1685,7 +1679,7 @@ async function monitorTaxonomy(
 ) {
   if (pageName === "profile" &&
       await page.locator("html[data-hunt-page-id]").count() === 0) {
-    return applicationReadyMonitorTaxonomy(page as unknown as PersistentPage);
+    return settledProfileMonitorTaxonomy(page);
   }
   const selectors = [
     ["text", 'input:not([type]):visible, input[type="text"]:visible, input[type="email"]:visible'],

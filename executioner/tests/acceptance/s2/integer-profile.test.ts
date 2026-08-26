@@ -184,8 +184,8 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
 
     const observations = monitored.filter(({ moment }) => moment === "state_observed");
     assert.deepEqual(new Set(monitored.map(({ moment }) => moment)), new Set(["state_observed"]));
-    assert.equal(observations.length, identities.length);
-    assert.equal(new Set(observations.map(({ operationId }) => operationId)).size, identities.length);
+    assert.equal(observations.length, 1);
+    assert.equal(monitored.length * 2_500 < 60_000, true);
     const learning = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
       join(evidenceRoot, "profile-field-learning.json"), "utf8",
     )));
@@ -195,7 +195,7 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
     assert.equal(learning.fields.length, identities.length);
     assert.equal(new Set(learning.fields.map(({ observationBinding }) =>
       observationBinding?.operationId
-    )).size, identities.length);
+    )).size, 1);
     for (const identity of identities) {
       const field = learning.fields.find(({ fieldIdentity }) =>
         fieldIdentity === `profile.${identity}`

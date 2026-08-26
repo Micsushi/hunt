@@ -178,6 +178,10 @@ export interface ProfileFieldLearningCapture {
     readonly attempt: number;
     readonly moment: "before_mutation" | "after_readback";
   }): void;
+  bindMutationBatch(input: {
+    readonly operationId: string;
+    readonly attempt: number;
+  }): void;
   write(): string | null;
 }
 
@@ -243,9 +247,6 @@ export function createProfileFieldLearningCapture(input: {
         }
         try {
           const observed = await input.observeControl(control, signal);
-          if (operationUsedByAnotherRecord(records, record, observed.binding.operationId)) {
-            throw new TypeError("profile control observation operation crossed");
-          }
           applyControlObservation(record, control, plans.get(control.fieldId), observed);
         } catch (error) {
           record.metadataReconciliation = "mismatch";
@@ -338,6 +339,21 @@ export function createProfileFieldLearningCapture(input: {
         afterReadbackAck: true,
       });
       record.pendingMonitor = null;
+    },
+    bindMutationBatch(binding: { readonly operationId: string; readonly attempt: number }) {
+      const shared = Object.freeze({
+        operationId: binding.operationId,
+        attempt: binding.attempt,
+        beforeMutationAck: true as const,
+        afterReadbackAck: true as const,
+      });
+      for (const record of records.values()) {
+        if (record.driverAttempt === "none") continue;
+        if (record.pendingMonitor !== null || record.monitorBinding !== null) {
+          throw new TypeError("profile monitor batch binding denied");
+        }
+        record.monitorBinding = shared;
+      }
     },
     write() {
       if (written || records.size === 0) return null;
@@ -585,11 +601,13 @@ export function admitProfileFieldLearningEvidence(
         !validConversion(value.learningConversion, value)) {
     denied("learning_conversion");
   }
-  const operations = value.fields.flatMap(({ observationBinding, monitorBinding }) => [
-    ...(observationBinding === null ? [] : [observationBinding.operationId]),
-    ...(monitorBinding === null ? [] : [monitorBinding.operationId]),
-  ]);
-  if (new Set(operations).size !== operations.length) denied();
+  const observationOperations = new Set(value.fields.flatMap(({ observationBinding }) =>
+    observationBinding === null ? [] : [observationBinding.operationId]
+  ));
+  const mutationOperations = new Set(value.fields.flatMap(({ monitorBinding }) =>
+    monitorBinding === null ? [] : [monitorBinding.operationId]
+  ));
+  if ([...observationOperations].some((operationId) => mutationOperations.has(operationId))) denied();
   const eligible = value.executionMode === "live" && value.fields.every(liveEligibleField);
   if (value.liveAcceptanceEligible !== eligible) denied();
   return Object.freeze({

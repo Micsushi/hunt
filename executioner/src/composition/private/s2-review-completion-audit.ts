@@ -418,21 +418,21 @@ function validateProfileMonitorBindings(
   page: "profile" | "resume",
 ): void {
   validateControlMonitorBindings(mutations, operations, page, page === "profile");
-  if (new Set(observations.map(({ operationId }) => operationId)).size !== observations.length) denied();
-  for (const binding of observations) {
+  const uniqueObservations = uniqueMonitorBindings(observations);
+  for (const binding of uniqueObservations) {
     const matches = operations.filter(({ operationId, attempt, page: operationPage, moment }) =>
       operationId === binding.operationId && attempt === binding.attempt &&
       operationPage === page && moment === "state_observed"
     );
     if (matches.length !== 1) denied();
   }
-  const observedKeys = new Set(observations.map(({ operationId, attempt }) =>
+  const observedKeys = new Set(uniqueObservations.map(({ operationId, attempt }) =>
     `${operationId}\u0000${attempt}`
   ));
   const stateOperations = operations.filter(({ page: operationPage, moment }) =>
     operationPage === page && moment === "state_observed"
   );
-  if (stateOperations.length !== observations.length ||
+  if (stateOperations.length !== uniqueObservations.length ||
       stateOperations.some(({ operationId, attempt }) =>
         !observedKeys.has(`${operationId}\u0000${attempt}`)
       )) denied();
@@ -449,8 +449,8 @@ function validateControlMonitorBindings(
   page: "profile" | "resume" | "questionnaire",
   exhaustive = true,
 ): void {
-  if (new Set(bindings.map(({ operationId }) => operationId)).size !== bindings.length) denied();
-  for (const binding of bindings) {
+  const uniqueBindings = uniqueMonitorBindings(bindings);
+  for (const binding of uniqueBindings) {
     const matches = operations.filter(({ operationId, attempt }) =>
       operationId === binding.operationId && attempt === binding.attempt
     );
@@ -465,9 +465,22 @@ function validateControlMonitorBindings(
     operation.page === page &&
     (operation.moment === "before_mutation" || operation.moment === "after_readback")
   );
-  const boundOperations = new Set(bindings.map(({ operationId }) => operationId));
-  if (exhaustive && (attempted.length !== bindings.length * 2 ||
+  const boundOperations = new Set(uniqueBindings.map(({ operationId }) => operationId));
+  if (exhaustive && (attempted.length !== uniqueBindings.length * 2 ||
       attempted.some(({ operationId }) => !boundOperations.has(operationId)))) denied();
+}
+
+function uniqueMonitorBindings<T extends { readonly operationId: string; readonly attempt: number }>(
+  bindings: readonly T[],
+): readonly T[] {
+  const unique = new Map<string, T>();
+  for (const binding of bindings) {
+    const key = `${binding.operationId}\u0000${binding.attempt}`;
+    const prior = unique.get(key);
+    if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(binding)) denied();
+    unique.set(key, binding);
+  }
+  return [...unique.values()];
 }
 
 function validateValueFreeTrace(path: string, application: ApplicationWalkAcceptanceV1): void {

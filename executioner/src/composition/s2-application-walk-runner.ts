@@ -102,6 +102,11 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly attempt: number;
       readonly moment: "before_mutation" | "after_readback";
     }): void;
+    monitorBatchAck(input: {
+      readonly operationId: string;
+      readonly attempt: number;
+      readonly moment: "before_mutation" | "after_readback";
+    }): void;
     write(): string | null;
   };
 }

@@ -979,7 +979,7 @@ fields: [
   }
 });
 
-test("each profile field mutation has its own before and readback monitor pair", async () => {
+test("profile batches external proof once while every field keeps independent readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1094,17 +1094,18 @@ fields: [
       operationId === runOperation
     ), []);
     const observationEvents = monitored.filter(({ moment }) => moment === "state_observed");
-    assert.equal(observationEvents.length, 6);
-    assert.equal(new Set(observationEvents.map(({ operationId }) => operationId)).size, 6);
+    assert.equal(observationEvents.length, 1);
     const mutationEvents = monitored.filter(({ moment }) => moment !== "state_observed");
     const operations = [...new Set(mutationEvents.map(({ operationId }) => operationId))];
-    assert.equal(operations.length, 6);
+    assert.equal(operations.length, 1);
     for (const operationId of operations) {
       assert.deepEqual(
         mutationEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
         ["before_mutation", "after_readback"],
       );
     }
+    assert.equal(monitored.length, 3);
+    assert.equal(monitored.length * 2_500 < 60_000, true);
     assert.equal(await page.locator('#name--legalName--middleName').inputValue(), "Byron");
     assert.equal(await page.locator('#address--addressLine2').inputValue(), "Unit 1");
     assert.equal(await page.locator('#address--postalCode').inputValue(), "T2P 1A1");
@@ -1130,7 +1131,7 @@ fields: [
   }
 });
 
-test("each questionnaire field mutation has its own before and readback monitor pair", async () => {
+test("questionnaire batches external proof once while every field keeps independent readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1322,13 +1323,15 @@ test("each questionnaire field mutation has its own before and readback monitor 
     );
     const fieldEvents = monitored.filter(({ operationId }) => operationId !== runOperation);
     const operations = [...new Set(fieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(operations.length, 4);
+    assert.equal(operations.length, 1);
     for (const operationId of operations) {
       assert.deepEqual(
         fieldEvents.filter((event) => event.operationId === operationId).map(({ moment }) => moment),
         ["before_mutation", "after_readback"],
       );
     }
+    assert.equal(monitored.length, 3);
+    assert.equal(monitored.length * 2_500 < 60_000, true);
     assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-voluntary" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowVoluntaryDisclosuresPage">
@@ -1395,16 +1398,16 @@ test("each questionnaire field mutation has its own before and readback monitor 
       !fieldEvents.some((event) => event.operationId === operationId)
     );
     const voluntaryOperations = [...new Set(voluntaryFieldEvents.map(({ operationId }) => operationId))];
-    assert.equal(voluntaryOperations.length, 8);
+    assert.equal(voluntaryOperations.length, 1);
     assert.deepEqual(
       voluntaryOperations.map((operationId) => voluntaryFieldEvents
         .filter((event) => event.operationId === operationId)
         .map(({ moment }) => moment)),
-      Array.from({ length: 8 }, () => ["before_mutation", "after_readback"]),
+      [["before_mutation", "after_readback"]],
     );
     assert.deepEqual(
       [...new Set(voluntaryFieldEvents.map(({ attempt }) => attempt))],
-      [5, 6, 7, 8, 9, 10, 11, 12],
+      [2],
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }.date-shell { display: flex; align-items: center; }.date-opener { margin-left: 48px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">

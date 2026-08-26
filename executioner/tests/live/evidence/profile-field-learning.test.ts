@@ -1107,10 +1107,6 @@ test("already-correct and optional-unset controls require truthful observation b
       },
       (value) => { mutableObservationBinding(value, 0).operationId = "bad"; },
       (value) => { mutableObservationBinding(value, 0).stateObservedAck = false; },
-      (value) => {
-        mutableObservationBinding(value, 1).operationId =
-          mutableObservationBinding(value, 0).operationId;
-      },
     ];
     for (const mutate of mutations) {
       const tampered = mutableEvidence(evidence);
