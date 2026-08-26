@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { applyMutation, inspectPage } from "../../../../../src/browser/adapter.ts";
+import { PlaywrightWorkdayApplicationPage } from
+  "../../../../../src/ats/workday/application/playwright-page.ts";
 import {
   admitContractSnapshot,
   boundedText,
@@ -1690,6 +1692,136 @@ test("WD-UI-SCALAR-COMPOSITE-V1 passes a virtualized row item through nested sel
     );
     assert.equal(await variant.page.locator("#nested-decline").isChecked(), true);
     assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+  } finally {
+    await variant.close();
+  }
+});
+
+test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option through the retained group owner", async () => {
+  const variant = await openVariantPage(`
+    <style>
+      [data-uxi-widget-type="multiselectlistitem"] { display: flex; width: 620px; height: 36px; }
+    </style>
+    <main data-automation-id="applyFlowSelfIdentifyPage">
+    <div data-automation-id="formField-disabilityStatus">
+      <label>Please check one of the boxes below:<span data-automation-id="required">*</span></label>
+      <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+        data-hunt-target-token="target-intermountain-disability-status"
+        aria-required="true">
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="intermountain-disability-yes" type="checkbox" aria-label="Yes, I have a disability, or have had one in the past"></div><span>Yes, I have a disability, or have had one in the past</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="intermountain-disability-no" type="checkbox" aria-label="No, I do not have a disability and have not had one in the past"></div><span>No, I do not have a disability and have not had one in the past</span></div>
+        <div data-uxi-widget-type="multiselectlistitem"><div data-automation-id="checkboxPanel"><input id="intermountain-disability-decline" type="checkbox" aria-label="I do not want to answer"></div><span>I do not want to answer</span></div>
+      </fieldset>
+    </div>
+    </main>
+    <script>
+      const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+      const inputs = [...group.querySelectorAll('input[type="checkbox"]')];
+      const options = inputs.map(input => ({
+        id: input.id,
+        label: input.getAttribute('aria-label'),
+        required: true,
+      }));
+      const commit = option => {
+        const selectedIndex = options.indexOf(option);
+        if (selectedIndex < 0) return;
+        const replacement = group.cloneNode(true);
+        replacement.dataset.selectedOption = option.id;
+        replacement.querySelectorAll('input[type="checkbox"]').forEach((input, index) => {
+          input.checked = index === selectedIndex;
+        });
+        group.replaceWith(replacement);
+      };
+      Object.defineProperty(group, '__reactProps$retainedIntermountainOwner', {
+        enumerable: true,
+        value: {
+          'data-automation-id': 'disabilityStatus-CheckboxGroup',
+          onRemove: () => {},
+          onSelect: commit,
+          error: null,
+          value: {},
+          options,
+          isMultiSelect: false,
+          id: 'disabilityStatus',
+          'aria-required': true,
+        },
+      });
+      inputs.forEach(input => {
+        const hostProps = { checked: false, onChange: () => {} };
+        Object.defineProperty(input, '__reactProps$retainedIntermountainInput', {
+          enumerable: true,
+          value: hostProps,
+        });
+        Object.defineProperty(input, '__reactFiber$retainedIntermountainInput', {
+          enumerable: true,
+          value: { memoizedProps: hostProps, return: null },
+        });
+        input.addEventListener('click', () => {
+          setTimeout(() => {
+            if (!document.documentElement.contains(group)) return;
+            input.checked = false;
+          }, 25);
+        });
+      });
+    </script>
+  `, "5990000000000000");
+  try {
+    const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
+    const target = before.targets.get(
+      browserTargetToken("target-intermountain-disability-status"),
+    )?.[0];
+    assert.ok(target !== undefined);
+    assert.deepEqual(target.radioOptions, [
+      "Yes, I have a disability, or have had one in the past",
+      "No, I do not have a disability and have not had one in the past",
+      "I do not want to answer",
+    ]);
+    const startedAt = Date.now();
+    assert.equal(await applyMutation(
+      variant.page,
+      target,
+      {
+        kind: "select",
+        target: target.token,
+        option: boundedText("Yes, I have a disability, or have had one in the past"),
+      },
+      undefined,
+      10_000,
+    ), "applied");
+    assert.ok(Date.now() - startedAt < 6_000);
+    assert.equal(
+      await variant.page.locator(
+        '[data-automation-id="disabilityStatus-CheckboxGroup"]',
+      ).getAttribute("data-selected-option"),
+      "intermountain-disability-yes",
+    );
+    assert.equal(await variant.page.locator("#intermountain-disability-yes").isChecked(), true);
+    assert.equal(await variant.page.locator('input[type="checkbox"]:checked').count(), 1);
+    const after = await inspectPage(
+      variant.page,
+      variant.sessionId,
+      variant.pageId,
+      new Map(),
+    );
+    assert.deepEqual(
+      after.targets.get(browserTargetToken("target-intermountain-disability-status"))?.[0]
+        ?.readback,
+      {
+        kind: "selected",
+        option: "Yes, I have a disability, or have had one in the past",
+      },
+    );
+    const application = await new PlaywrightWorkdayApplicationPage(
+      variant.page,
+      { timeoutMs: 1_000 },
+    ).observe(variant.signal);
+    assert.equal(application.ok, true, JSON.stringify(application));
+    assert.deepEqual(
+      application.ok
+        ? application.value.requiredFields.map(({ verification }) => verification)
+        : [],
+      ["verified"],
+    );
   } finally {
     await variant.close();
   }

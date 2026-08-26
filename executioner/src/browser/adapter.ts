@@ -968,6 +968,7 @@ export async function applyMutation(
             // is equally important: its host onClick owns the real Canvas
             // selection contract while the nested checkbox onChange is a
             // deliberate no-op.
+            add(checkboxOwner);
             add(input);
             add(listItem);
             for (
