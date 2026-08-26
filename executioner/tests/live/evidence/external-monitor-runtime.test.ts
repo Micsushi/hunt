@@ -1283,6 +1283,64 @@ test("application monitor admits a directly and independently observed Review", 
   }
 });
 
+test("application monitor reserves full-page capture for the final Review readback", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-capture-scope-"));
+  const screenshotOptions: { readonly type?: "png"; readonly fullPage?: boolean }[] = [];
+  const page = {
+    ...fixturePage(),
+    async screenshot(options?: { readonly type?: "png"; readonly fullPage?: boolean }) {
+      screenshotOptions.push(options ?? {});
+      return png(320, 200);
+    },
+  };
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding,
+      evidenceRoot: root,
+      runtimeRoot: root,
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root,
+        evidenceRoot: root,
+        requestPath: request.path,
+        classification: request.page === "review" && request.moment === "review_readback"
+          ? "review_verified"
+          : "safe_to_continue",
+        observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+      }),
+    });
+    await runtime.application(
+      page, "profile", "state_observed", taxonomy(),
+      { operationId: "operation_capture_scope_profile_01", attempt: 1 },
+      new AbortController().signal,
+    );
+    await runtime.application(
+      page, "profile", "before_navigation", taxonomy(),
+      { operationId: "operation_capture_scope_navigation_01", attempt: 1 },
+      new AbortController().signal,
+    );
+    await runtime.application(
+      page, "review", "transition", { ...taxonomy(), submitPresent: true },
+      { operationId: "operation_capture_scope_navigation_01", attempt: 1 },
+      new AbortController().signal,
+    );
+    await runtime.application(
+      page, "review", "review_readback", { ...taxonomy(), submitPresent: true },
+      { operationId: "operation_capture_scope_review_01", attempt: 1 },
+      new AbortController().signal,
+    );
+    runtime.close();
+    assert.deepEqual(screenshotOptions, [
+      { type: "png" },
+      { type: "png" },
+      { type: "png" },
+      { type: "png", fullPage: true },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("application monitor admits My Experience then rejects a repeated Resume regression", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-regression-"));
   try {

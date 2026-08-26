@@ -271,7 +271,9 @@ export class Stage2ExternalMonitorRuntime {
       failureStage = "screenshot_capture";
       const screenshot = await page.screenshot({
         type: "png",
-        ...(chain === "application" ? { fullPage: true } : {}),
+        ...(chain === "application" && pageName === "review" && moment === "review_readback"
+          ? { fullPage: true }
+          : {}),
       });
       emitMonitorTrace(this.#options.trace, "external_monitor_screenshot_received", traceContext);
       failureStage = "screenshot_validation";
