@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source search commits its retained key-driven typeahead", async () => {
+test("Intermountain source search activates its unique retained component owner", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1643,17 +1643,26 @@ test("Intermountain source search commits its retained key-driven typeahead", as
             enumerable: true,
             value: { onClick() {}, value: 'sensitive-source-value' },
           });
+          Object.defineProperty(promptButton, '__reactFiber$fixture', {
+            enumerable: true,
+            value: {
+              memoizedProps: {},
+              return: {
+                memoizedProps: {
+                  onPromptIconClick() {
+                    promptMode = true;
+                    prompt.hidden = false;
+                  },
+                },
+                return: null,
+              },
+            },
+          });
           promptButton.addEventListener('click', () => {
-            throw new Error('prompt owner must not bypass the visible catalog');
+            throw new Error('DOM click must not replace the retained component owner');
           });
           promptButton.querySelector('rect').addEventListener('click', event => {
             event.stopPropagation();
-          });
-          input.addEventListener('keyup', () => {
-            catalog.innerHTML = input.value === 'LinkedIn'
-              ? '<div role="option">LinkedIn</div>'
-              : '';
-            catalog.hidden = input.value !== 'LinkedIn';
           });
           input.addEventListener('input', () => {
             if (promptMode) prompt.hidden = input.value !== 'LinkedIn';
