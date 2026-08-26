@@ -1617,7 +1617,9 @@ test("Intermountain source search uses the prompt button beside its responsive p
                 <div data-automation-id="promptSelectionLabel"></div>
                 <div data-automation-id="promptAriaInstruction"></div>
                 <span data-automation-id="promptSearchButton">
-                  <svg role="presentation" style="display:block;width:20px;height:20px"></svg>
+                  <svg role="presentation" style="display:block;width:20px;height:20px">
+                    <rect width="20" height="20"></rect>
+                  </svg>
                 </span>
                 <div data-automation-id="responsiveMonikerPrompt">Responsive prompt surface</div>
               </div>
@@ -1644,6 +1646,9 @@ test("Intermountain source search uses the prompt button beside its responsive p
           promptButton.addEventListener('click', () => {
               promptMode = true; input.value = ''; catalog.hidden = true;
             });
+          promptButton.querySelector('rect').addEventListener('click', event => {
+            event.stopPropagation();
+          });
           input.addEventListener('click', () => {
             if (!promptMode) catalog.hidden = false;
           });

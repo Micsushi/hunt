@@ -1009,27 +1009,36 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           )) return;
         }
         if (activator !== undefined) {
-          const glyphs = await visibleLocators(activator.locator("svg"));
-          if (glyphs.length > 1) {
-            throw new TypeError("Workday prompt multi-select glyph is ambiguous");
-          }
-          if (glyphs.length === 1) {
-            const target = await glyphs[0]!.evaluate((glyph) => {
-              const rect = glyph.getBoundingClientRect();
-              const x = rect.left + rect.width / 2;
-              const y = rect.top + rect.height / 2;
-              const hit = document.elementFromPoint(x, y);
-              return rect.width > 0 && rect.height > 0 &&
-                  hit !== null && (hit === glyph || glyph.contains(hit))
-                ? { x, y }
-                : null;
+          if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
+            await activator.evaluate((element) => {
+              if (!(element instanceof HTMLElement)) {
+                throw new TypeError("Workday prompt search owner is unavailable");
+              }
+              element.click();
             });
-            if (target === null) {
-              throw new TypeError("Workday prompt multi-select glyph is not actionable");
-            }
-            await this.#page.mouse.click(target.x, target.y);
           } else {
-            await activator.click({ timeout: this.#timeoutMs });
+            const glyphs = await visibleLocators(activator.locator("svg"));
+            if (glyphs.length > 1) {
+              throw new TypeError("Workday prompt multi-select glyph is ambiguous");
+            }
+            if (glyphs.length === 1) {
+              const target = await glyphs[0]!.evaluate((glyph) => {
+                const rect = glyph.getBoundingClientRect();
+                const x = rect.left + rect.width / 2;
+                const y = rect.top + rect.height / 2;
+                const hit = document.elementFromPoint(x, y);
+                return rect.width > 0 && rect.height > 0 &&
+                    hit !== null && (hit === glyph || glyph.contains(hit))
+                  ? { x, y }
+                  : null;
+              });
+              if (target === null) {
+                throw new TypeError("Workday prompt multi-select glyph is not actionable");
+              }
+              await this.#page.mouse.click(target.x, target.y);
+            } else {
+              await activator.click({ timeout: this.#timeoutMs });
+            }
           }
           await this.#page.waitForTimeout(100);
           await this.#captureSelectionDiagnostic("prompt-requested", behavior);
