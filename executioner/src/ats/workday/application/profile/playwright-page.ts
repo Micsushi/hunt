@@ -902,7 +902,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
       !element.readOnly
     );
-    if (editable) await control.fill(value, { timeout: this.#timeoutMs });
+    if (editable && behavior === "search_select") {
+      await control.fill("", { timeout: this.#timeoutMs });
+      await control.pressSequentially(value, { delay: 10, timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(500);
+    } else if (editable) {
+      await control.fill(value, { timeout: this.#timeoutMs });
+    }
     await this.#captureSelectionDiagnostic("typed", behavior);
     if (editable && behavior === "multi_select") {
       await control.press("Enter", { timeout: this.#timeoutMs });
@@ -957,6 +963,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           })}\n`);
         } catch {}
       }
+      if (
+        editable && (behavior === "multi_select" || behavior === "search_select") &&
+        await this.#selectPromptCatalogOption(control, value, interaction, behavior)
+      ) return;
       if (behavior === "select") {
         const scope = await field.count() === 1 ? field : this.#page.locator("body");
         const selected = await this.#waitForSelectableLeaf(scope, value);
@@ -1000,14 +1010,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           throw new TypeError("Workday prompt multi-select activator is ambiguous");
         }
         const activator = searchButtons[0] ?? promptWrappers[0];
-        if (editable) {
-          if (await this.#selectPromptCatalogOption(
-            control,
-            value,
-            interaction,
-            behavior,
-          )) return;
-        }
         if (activator !== undefined) {
           if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
             await activator.evaluate((element) => {
@@ -1372,8 +1374,50 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "multi_select",
   ): Promise<boolean> {
-    const options = this.#page.locator('[role="option"]:visible');
+    const options = this.#page.locator([
+      '[role="option"]:visible',
+      '[data-automation-id="promptOption"]:visible',
+      '[data-automation-id="promptLeafNode"]:visible',
+    ].join(", "));
     const initial = await visibleLocators(options);
+    const acceptedLabels = equivalentOptionLabels(value);
+    const initialLabels = await Promise.all(initial.map(async (option) =>
+      normalize(await option.innerText())
+    ));
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+      process.stderr.write(`${JSON.stringify({
+        profilePromptTypeaheadVisibleOptions: initialLabels.slice(0, 64),
+      })}\n`);
+    }
+    const initialExact: { readonly option: Locator; readonly rank: number }[] = [];
+    for (const [index, option] of initial.entries()) {
+      const automationId = await option.getAttribute("data-automation-id");
+      if (!acceptedLabels.has(initialLabels[index]!) || automationId === "selectedItem") continue;
+      initialExact.push({
+        option,
+        rank: await option.getAttribute("role") === "option"
+          ? 0
+          : automationId === "promptLeafNode" ? 1 : 2,
+      });
+    }
+    const preferredRank = Math.min(...initialExact.map(({ rank }) => rank));
+    const preferredExact = initialExact.filter(({ rank }) => rank === preferredRank);
+    if (preferredExact.length > 1) {
+      throw new TypeError("Workday prompt typeahead option is ambiguous");
+    }
+    if (preferredExact.length === 1) {
+      const option = preferredExact[0]!.option;
+      return await this.#commitPromptCatalogOption(
+        control,
+        value,
+        interaction,
+        behavior,
+        option,
+        initial.length,
+        initial.indexOf(option) + 1,
+        options,
+      );
+    }
     const scopes: Locator[] = [];
     for (const option of initial) {
       if (/^(?:partial list \(first 500 entries\)|all)$/u.test(normalize(await option.innerText()))) {
@@ -1388,7 +1432,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     await control.fill(value, { timeout: this.#timeoutMs });
     await this.#page.waitForTimeout(500);
 
-    const acceptedLabels = equivalentOptionLabels(value);
     const candidates: Locator[] = [];
     const candidateLabels: string[] = [];
     for (const option of await visibleLocators(options)) {
@@ -1408,10 +1451,31 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       throw new TypeError("Workday prompt catalog option is ambiguous");
     }
     if (exact.length === 0) throw new TypeError("Workday prompt catalog option is unavailable");
-    const option = exact[0]!;
+    return await this.#commitPromptCatalogOption(
+      control,
+      value,
+      interaction,
+      behavior,
+      exact[0]!,
+      candidates.length,
+      candidates.indexOf(exact[0]!) + 1,
+      options,
+    );
+  }
+
+  async #commitPromptCatalogOption(
+    control: Locator,
+    value: string,
+    interaction: MutableInteraction,
+    behavior: "search_select" | "multi_select",
+    option: Locator,
+    visibleOptionCount: number,
+    selectedOptionOrdinal: number,
+    options: Locator,
+  ): Promise<boolean> {
     interaction.popupBound = false;
-    interaction.visibleOptionCount = candidates.length;
-    interaction.selectedOptionOrdinal = candidates.indexOf(option) + 1;
+    interaction.visibleOptionCount = visibleOptionCount;
+    interaction.selectedOptionOrdinal = selectedOptionOrdinal;
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
     const radios = await visibleLocators(option.locator(
       'input[type="radio"], [role="radio"]',

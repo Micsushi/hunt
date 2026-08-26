@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source search traverses its retained catalog without the prompt owner", async () => {
+test("Intermountain source search commits its retained key-driven typeahead", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1629,10 +1629,7 @@ test("Intermountain source search traverses its retained catalog without the pro
             </div>
           </div>
         </main>
-        <div id="source-catalog" role="listbox" hidden>
-          <div role="option">Partial list (first 500 entries)</div>
-          <div role="option">All</div>
-        </div>
+        <div id="source-catalog" role="listbox" hidden></div>
         <div id="source-prompt" role="listbox" hidden>
           <div role="option">LinkedIn</div>
         </div>
@@ -1652,18 +1649,17 @@ test("Intermountain source search traverses its retained catalog without the pro
           promptButton.querySelector('rect').addEventListener('click', event => {
             event.stopPropagation();
           });
-          input.addEventListener('click', () => {
-            if (!promptMode) catalog.hidden = false;
+          input.addEventListener('keyup', () => {
+            catalog.innerHTML = input.value === 'LinkedIn'
+              ? '<div role="option">LinkedIn</div>'
+              : '';
+            catalog.hidden = input.value !== 'LinkedIn';
           });
           input.addEventListener('input', () => {
             if (promptMode) prompt.hidden = input.value !== 'LinkedIn';
           });
           catalog.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
-            if (target.textContent === 'All') {
-              catalog.innerHTML = '<div role="option">LinkedIn</div>';
-              return;
-            }
             const pill = document.createElement('div');
             pill.setAttribute('data-automation-id', 'selectedItem');
             pill.textContent = target.textContent;
@@ -1722,9 +1718,6 @@ test("Intermountain source search traverses its retained catalog without the pro
     assert.match(diagnostic, /"automationId":"promptSearchButton"/u);
     assert.match(diagnostic, /"name":"onClick","arity":0/u);
     assert.doesNotMatch(diagnostic, /sensitive-source-value/u);
-    assert.ok(writes.some((line) =>
-      line.includes('profilePromptCatalogVisibleOptions') && line.includes('linkedin')
-    ));
   } finally {
     await browser.close();
   }
