@@ -167,15 +167,16 @@ export async function waitForReconciledMonitorSurface(
   const attempts = options.attempts ?? 4;
   if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10) denied();
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const observed = await observe();
-    if (typeof request.page !== "string" || !compatibleObservedPage(request.page, observed.page)) {
-      observerFailure("structure_classification");
-    }
     try {
+      const observed = await observe();
+      if (typeof request.page !== "string" || !compatibleObservedPage(request.page, observed.page)) {
+        observerFailure("structure_classification");
+      }
       reconcileObservedMonitorSurface(request, observed);
       return observed;
     } catch (error) {
-      if (externalMonitorObserverFailureCode(error) !== "title_identity_reconciliation" ||
+      const code = externalMonitorObserverFailureCode(error);
+      if ((code !== "title_identity_reconciliation" && code !== "structure_classification") ||
           attempt === attempts) throw error;
       await (options.pause ?? (() => delay(100)))();
     }

@@ -1759,6 +1759,30 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     submitPresent: false,
   }));
   assert.equal(experienceSurface.page, "profile");
+  const transientStructureSurfaces = [
+    new Error("external monitor observer failed: structure_classification"),
+    {
+      title: "My Information",
+      page: "profile",
+      submitPresent: false,
+    },
+  ];
+  let structureWaits = 0;
+  const settledStructure = await waitForReconciledMonitorSurface({
+    page: "resume",
+    capturedIdentityDigests: {
+      titleSha256: digest(Buffer.from("My Information", "utf8")),
+    },
+  }, () => {
+    const surface = transientStructureSurfaces.shift();
+    if (surface instanceof Error) throw surface;
+    return surface!;
+  }, {
+    attempts: 2,
+    pause: async () => { structureWaits += 1; },
+  });
+  assert.equal(settledStructure.page, "profile");
+  assert.equal(structureWaits, 1);
   await assert.rejects(() => waitForReconciledMonitorSurface({
     page: "profile",
     capturedIdentityDigests: {
