@@ -2423,12 +2423,39 @@ async function exactPromptCatalogOwner(
   page: Page,
   control: Locator,
 ): Promise<Locator | undefined> {
-  const focused = page.locator(":focus");
-  if (
-    await focused.count() === 1 && await focused.isVisible() &&
-    await focused.getAttribute("role") === "listbox"
-  ) return focused;
-  return exactObservedOptionOwner(page, control);
+  const source = await control.getAttribute("id") === "source--source";
+  const deadline = Date.now() + (source ? 1_500 : 0);
+  do {
+    const focused = page.locator(":focus");
+    if (
+      await focused.count() === 1 && await focused.isVisible() &&
+      await focused.getAttribute("role") === "listbox"
+    ) return focused;
+    const observed = await exactObservedOptionOwner(page, control);
+    if (observed !== undefined) return observed;
+    if (source) {
+      const candidates = await visibleLocators(page.locator(
+        '[data-automation-id="activeListContainer"][role="listbox"]',
+      ));
+      const sourceOwners: Locator[] = [];
+      for (const candidate of candidates) {
+        const labels = new Set((await candidate.locator([
+          '[role="option"]',
+          '[data-automation-id="promptOption"]',
+          '[data-automation-id="promptLeafNode"]',
+        ].join(", ")).allInnerTexts()).map(normalize));
+        if (labels.has("career event") && labels.has("direct source")) {
+          sourceOwners.push(candidate);
+        }
+      }
+      if (sourceOwners.length > 1) {
+        throw new TypeError("Workday source prompt owner is ambiguous");
+      }
+      if (sourceOwners.length === 1) return sourceOwners[0];
+    }
+    if (Date.now() < deadline) await page.waitForTimeout(50);
+  } while (Date.now() < deadline);
+  return undefined;
 }
 
 async function preferredPromptOption(

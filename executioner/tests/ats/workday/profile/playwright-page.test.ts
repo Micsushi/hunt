@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source binds its focused nested catalog and ignores unrelated options", async () => {
+test("Intermountain source binds its retained nested catalog and ignores unrelated options", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1641,10 +1641,9 @@ test("Intermountain source binds its focused nested catalog and ignores unrelate
             catalog.innerHTML = '<div role="option">Career Event</div>' +
               '<div role="option">Direct Source</div>';
             catalog.hidden = false;
-            catalog.focus();
           };
           input.addEventListener('input', () => {
-            if (input.value === 'LinkedIn') renderCategories();
+            if (input.value === 'LinkedIn') setTimeout(renderCategories, 150);
           });
           catalog.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
