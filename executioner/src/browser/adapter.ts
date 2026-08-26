@@ -72,7 +72,7 @@ export async function inspectPage(
     if (item.declaredToken.length === 0) continue;
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
     const control = normalizeControl(item.control);
-    const name = bounded(item.name);
+    const name = boundedControlName(item.name);
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token);
     const readback = item.control.kind === "file"
@@ -2606,6 +2606,13 @@ async function waitForExactFieldPopupSelection(
 
 function bounded(value: string) {
   return boundedText(value);
+}
+
+function boundedControlName(value: string) {
+  // Workday tenants can use a complete policy acknowledgement as a field
+  // label. The semantic name is descriptive metadata, so retain its stable
+  // prefix within the contract instead of rejecting the whole page.
+  return boundedText([...value].slice(0, 512).join(""));
 }
 
 async function checkboxOwnerStructure(group: Locator) {

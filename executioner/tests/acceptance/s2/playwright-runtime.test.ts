@@ -110,6 +110,79 @@ test("retained Integer questionnaire date marker agrees across all coverage obse
   }
 });
 
+test("retained Intermountain long acknowledgement agrees across questionnaire observers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const acknowledgement =
+      "By applying for a position with Intermountain, I acknowledge that I will comply " +
+      "with all applicable Intermountain policies and expectations. If applying for a " +
+      "remote or hybrid role, this includes remote work expectations related to " +
+      "confidentiality, information security, work schedules, conflicts of interest, and " +
+      "use of company equipment. I further acknowledge that outside employment or " +
+      "activities may not interfere with job responsibilities or create a conflict of " +
+      "interest with Intermountain. Actual or reasonably perceived conflicts may be " +
+      "grounds for disqualification from consideration or, if hired, corrective action " +
+      "up to and including termination of employment.";
+    assert.ok([...acknowledgement].length > 512);
+    const selectLabels = [
+      "Are you currently employed with a company of Intermountain Health?",
+      "Do you meet all minimum qualifications listed in this job posting?",
+      "Can you perform the essential functions of this job?",
+      "Can you meet all immunization requirements?",
+      "Are you at least 18 years of age?",
+      acknowledgement,
+      "Will you now or in the future require visa sponsorship for employment?",
+      "Are you disqualified from working in a federally funded program?",
+      "Do you have relatives employed by an Intermountain Health company?",
+    ];
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      ${selectLabels.map((label, index) => `<div data-automation-id="formField-${index}">
+        <label>${label}<span data-automation-id="required">*</span></label>
+        <button type="button" aria-haspopup="listbox">Select One</button>
+      </div>`).join("")}
+      <div data-automation-id="formField-salary">
+        <label>What is your minimum acceptable salary?<span data-automation-id="required">*</span></label>
+        <textarea required></textarea>
+      </div>
+    </main>`);
+    const pageId = "page-intermountain-long-acknowledgement" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    await page.locator('button[aria-haspopup="listbox"]').evaluateAll((buttons) =>
+      buttons.forEach((button) =>
+        button.setAttribute("data-hunt-popup-options", JSON.stringify(["Yes", "No"]))
+      )
+    );
+
+    const semantic = await inspectPage(
+      page,
+      "live_session_inter_long_ack_01" as never,
+      pageId,
+      new Map(),
+    );
+    const monitor = await monitorQuestionnaireCoverage(page);
+    const application = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+
+    assert.equal(semantic.observation.targets.length, 10);
+    assert.equal(semantic.observation.targets.filter(({ required }) => required).length, 10);
+    assert.ok(semantic.observation.targets.some(({ name }) =>
+      name.startsWith("By applying for a position with Intermountain") &&
+      [...name].length <= 512
+    ));
+    assert.deepEqual(monitor, {
+      fieldCount: 10,
+      requiredFieldCount: 10,
+      typeCounts: { select: 9, textarea: 1 },
+    });
+    assert.equal(application.ok, true);
+    assert.equal(application.ok && application.value.requiredFields.length, 10);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("questionnaire popup hydration ignores a stale unrelated portal across control remount", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
