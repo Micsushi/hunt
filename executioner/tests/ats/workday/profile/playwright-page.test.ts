@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source search activates its unique retained component owner", async () => {
+test("Intermountain source diagnostics compare retained component transitions", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1649,7 +1649,8 @@ test("Intermountain source search activates its unique retained component owner"
               memoizedProps: {},
               return: {
                 memoizedProps: {
-                  onPromptIconClick() {
+                  onPromptIconClick() {},
+                  onSelectInputClick() {
                     promptMode = true;
                     prompt.hidden = false;
                   },
@@ -1727,6 +1728,10 @@ test("Intermountain source search activates its unique retained component owner"
     assert.match(diagnostic, /"automationId":"promptSearchButton"/u);
     assert.match(diagnostic, /"name":"onClick","arity":0/u);
     assert.doesNotMatch(diagnostic, /sensitive-source-value/u);
+    assert.ok(writes.some((line) =>
+      line.includes('profilePromptComponentTransition') &&
+      line.includes('onSelectInputClick') && line.includes('"invoked":true')
+    ));
   } finally {
     await browser.close();
   }
