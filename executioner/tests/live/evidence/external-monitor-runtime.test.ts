@@ -33,6 +33,7 @@ import {
   observedStructureIdentityTitles,
   observedStructurePage,
   observedStructurePageFromIdentityTitle,
+  observedStructurePageWithIdentity,
   reconcileObservedMonitorSurface,
   selectObservedChromeIdentityTitle,
   waitForReconciledMonitorSurface,
@@ -1694,6 +1695,22 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.equal(observedStructurePageFromIdentityTitle("Review"), "review");
   assert.throws(() => observedStructurePageFromIdentityTitle("Environmental Services Technician"),
     /external monitor observer denied/u);
+  const staleAccountStructure = new Set([
+    "Create Account", "Email Address", "Password", "My Information",
+    "My Experience", "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",
+  ]);
+  assert.equal(observedStructurePageWithIdentity(
+    staleAccountStructure,
+    [],
+    "My Information",
+    digest(Buffer.from("My Information", "utf8")),
+  ), "profile");
+  assert.equal(observedStructurePageWithIdentity(
+    staleAccountStructure,
+    [],
+    "My Information",
+    digest(Buffer.from("Create Account", "utf8")),
+  ), "account_entry");
   assert.equal(observedStructurePage(new Set([
     "Create Account", "Email Address", "Password", "My Information", "My Experience",
     "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",

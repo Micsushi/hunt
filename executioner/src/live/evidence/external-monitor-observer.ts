@@ -512,19 +512,23 @@ try {
   }
   catch { return observerFailure("title_identity"); }
   let page: string;
-  try { page = observedStructurePage(flags, activeStageTitles); }
+  try {
+    page = observedStructurePageWithIdentity(
+      flags,
+      activeStageTitles,
+      title,
+      expectedTitleSha256,
+    );
+  }
   catch {
-    try { page = observedStructurePageFromIdentityTitle(title); }
-    catch {
-      return observerFailure("structure_classification", structureFailureDiagnostic(
-        expectedTitleSha256,
-        observed.title,
-        identityTitles,
-        flags,
-        stageCounts,
-        activeStageTitles,
-      ));
-    }
+    return observerFailure("structure_classification", structureFailureDiagnostic(
+      expectedTitleSha256,
+      observed.title,
+      identityTitles,
+      flags,
+      stageCounts,
+      activeStageTitles,
+    ));
   }
   identityTitles = [
     ...identityTitles,
@@ -630,6 +634,22 @@ export function observedStructurePageFromIdentityTitle(title: string): string {
   }
   if (normalized === "Review") return "review";
   denied();
+}
+
+export function observedStructurePageWithIdentity(
+  flags: ReadonlySet<string>,
+  activeStageTitles: readonly string[],
+  title: string,
+  expectedTitleSha256: string | undefined,
+): string {
+  const observedTitleSha256 = createHash("sha256")
+    .update(canonicalMonitorIdentityTitle(title), "utf8").digest("hex");
+  if (/^[0-9a-f]{64}$/u.test(expectedTitleSha256 ?? "") &&
+      observedTitleSha256 === expectedTitleSha256) {
+    try { return observedStructurePageFromIdentityTitle(title); }
+    catch { /* Non-stage titles still require structural classification. */ }
+  }
+  return observedStructurePage(flags, activeStageTitles);
 }
 
 export function observedStructureIdentityTitles(
