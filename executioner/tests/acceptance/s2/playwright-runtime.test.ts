@@ -494,7 +494,7 @@ test("questionnaire mutation follows the visible Workday control across a retain
   }
 });
 
-test("Workday Review admits only its exact omitted composites and canonical LinkedIn display", () => {
+test("Workday Review admits only its exact omitted composites and canonical display aliases", () => {
   assert.deepEqual([
     "identity.middle_name",
     "address.line2",
@@ -513,6 +513,8 @@ test("Workday Review admits only its exact omitted composites and canonical Link
   assert.equal(reviewAnswerCandidates("https://example.com/in/wjshi").has(
     "https://linkedin.com/in/wjshi",
   ), false);
+  assert.equal(reviewAnswerCandidates("Direct Sourcing").has("Recruiter"), true);
+  assert.equal(reviewAnswerCandidates("Direct Mail").has("Recruiter"), false);
 });
 
 test("questionnaire binding owns every admitted visible Workday question root", async () => {
