@@ -375,6 +375,10 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
   ), true);
   assert.equal(retainedProfileLabelSha256Matches(
     "employment.previously_worked_for_organization",
+    "8be0c7b5805ae75479f25c31de6212db43568e1f78924c0908a14d87a3d7936a",
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
+    "employment.previously_worked_for_organization",
     retainedProfileTextSha256("Have you previously worked for an unrelated company?"),
   ), false);
 });
