@@ -1602,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source diagnostics compare retained component transitions", async () => {
+test("Intermountain source binds its focused nested catalog and ignores unrelated options", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1616,6 +1616,7 @@ test("Intermountain source diagnostics compare retained component transitions", 
                 <div data-automation-id="monikerSearchBox">
                   <input id="source--source" data-automation-id="searchBox"
                     placeholder="Search" aria-required="true">
+                  <div id="selected-source"></div>
                 </div>
                 <div data-automation-id="promptSelectionLabel"></div>
                 <div data-automation-id="promptAriaInstruction"></div>
@@ -1624,114 +1625,70 @@ test("Intermountain source diagnostics compare retained component transitions", 
                     <rect width="20" height="20"></rect>
                   </svg>
                 </span>
-                <div data-automation-id="responsiveMonikerPrompt">Responsive prompt surface</div>
               </div>
             </div>
           </div>
         </main>
-        <div id="source-catalog" role="listbox" hidden></div>
-        <div id="source-prompt" role="listbox" hidden>
-          <div role="option">LinkedIn</div>
+        <div id="phone-options" role="listbox">
+          <div role="option">Canada (+1)</div>
         </div>
+        <div id="source-catalog" data-automation-id="activeListContainer"
+          role="listbox" tabindex="-1" hidden></div>
         <script>
           const input = document.querySelector('#source--source');
           const catalog = document.querySelector('#source-catalog');
-          const prompt = document.querySelector('#source-prompt');
-          let promptMode = false;
-          const promptButton = document.querySelector('[data-automation-id="promptSearchButton"]');
-          Object.defineProperty(promptButton, '__reactProps$fixture', {
-            enumerable: true,
-            value: { onClick() {}, value: 'sensitive-source-value' },
-          });
-          Object.defineProperty(promptButton, '__reactFiber$fixture', {
-            enumerable: true,
-            value: {
-              memoizedProps: {},
-              return: {
-                memoizedProps: {
-                  onPromptIconClick() {},
-                  onSelectInputClick() {
-                    promptMode = true;
-                    prompt.hidden = false;
-                  },
-                },
-                return: null,
-              },
-            },
-          });
-          promptButton.addEventListener('click', () => {
-            throw new Error('DOM click must not replace the retained component owner');
-          });
-          promptButton.querySelector('rect').addEventListener('click', event => {
-            event.stopPropagation();
-          });
+          const renderCategories = () => {
+            catalog.innerHTML = '<div role="option">Career Event</div>' +
+              '<div role="option">Direct Source</div>';
+            catalog.hidden = false;
+            catalog.focus();
+          };
           input.addEventListener('input', () => {
-            if (promptMode) prompt.hidden = input.value !== 'LinkedIn';
+            if (input.value === 'LinkedIn') renderCategories();
           });
           catalog.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            if (target.textContent === 'Direct Source') {
+              catalog.innerHTML = '<div role="option">LinkedIn</div>';
+              catalog.focus();
+              return;
+            }
+            if (target.textContent !== 'LinkedIn') return;
             const pill = document.createElement('div');
             pill.setAttribute('data-automation-id', 'selectedItem');
             pill.textContent = target.textContent;
-            document.querySelector('[data-automation-id="monikerSearchBox"]').append(pill);
+            document.querySelector('#selected-source').append(pill);
             input.value = '';
             catalog.hidden = true;
-          });
-          prompt.addEventListener('click', ({ target }) => {
-            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
-            const pill = document.createElement('div');
-            pill.setAttribute('data-automation-id', 'selectedItem');
-            pill.textContent = target.textContent;
-            document.querySelector('[data-automation-id="monikerSearchBox"]').append(pill);
-            input.value = '';
-            prompt.hidden = true;
           });
         </script>
       </body>
     `);
-    const previousTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
-    const previousWrite = process.stderr.write;
-    const writes: string[] = [];
-    process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = "1";
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      const adapter = new PlaywrightWorkdayProfilePage(page, {
-        pageType: "profile",
-        timeoutMs: 500,
-      });
-      const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
-        ({ fieldId }) => fieldId === "source.how_did_you_hear",
-      )!;
-
-      await adapter.commit({
-        controlId: control.controlId,
-        uiBehavior: "search_select",
-        value: "LinkedIn",
-      }, AbortSignal.any([]));
-
-      assert.equal(
-        (await adapter.inspect(AbortSignal.any([]))).controls.find(
-          ({ fieldId }) => fieldId === "source.how_did_you_hear",
-        )?.readback,
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 500,
+    });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "linkedin",
         "LinkedIn",
-      );
-    } finally {
-      process.stderr.write = previousWrite;
-      if (previousTrace === undefined) delete process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
-      else process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = previousTrace;
-    }
-    const diagnostic = writes.find((line) => line.includes("profileSelectionStructure"));
-    assert.ok(diagnostic);
-    assert.match(diagnostic, /"automationId":"promptSearchButton"/u);
-    assert.match(diagnostic, /"name":"onClick","arity":0/u);
-    assert.doesNotMatch(diagnostic, /sensitive-source-value/u);
-    assert.ok(writes.some((line) =>
-      line.includes('profilePromptComponentTransition') &&
-      line.includes('onSelectInputClick') && line.includes('"invoked":true')
-    ));
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls.find(
+        ({ fieldId }) => fieldId === "source.how_did_you_hear",
+      )?.readback,
+      "LinkedIn",
+    );
+    assert.equal(await page.locator('#phone-options [role="option"]').innerText(), "Canada (+1)");
   } finally {
     await browser.close();
   }

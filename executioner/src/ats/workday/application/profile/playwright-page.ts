@@ -1072,9 +1072,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           }
           await this.#page.waitForTimeout(100);
           await this.#captureSelectionDiagnostic("prompt-requested", behavior);
-          if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-            await this.#diagnosePromptComponentTransitions(activator);
-          }
           const promptSearches = await visibleLocators(field.locator(
             'input[data-automation-id="searchBox"], textarea[data-automation-id="searchBox"]',
           ));
@@ -1405,7 +1402,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "multi_select",
   ): Promise<boolean> {
-    const options = this.#page.locator([
+    const owner = await exactPromptCatalogOwner(this.#page, control);
+    if (owner === undefined) return false;
+    let options = owner.locator([
       '[role="option"]:visible',
       '[data-automation-id="promptOption"]:visible',
       '[data-automation-id="promptLeafNode"]:visible',
@@ -1448,6 +1447,46 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         initial.indexOf(option) + 1,
         options,
       );
+    }
+    const sourceCategory = sourcePromptCategory(value);
+    if (behavior === "search_select" && sourceCategory !== undefined) {
+      const category = await preferredPromptOption(initial, new Set([normalize(sourceCategory)]));
+      if (category !== undefined) {
+        await category.click({ timeout: this.#timeoutMs });
+        await this.#page.waitForTimeout(100);
+        const nestedOwner = await exactPromptCatalogOwner(this.#page, control) ??
+          (await owner.isVisible() ? owner : undefined);
+        if (nestedOwner === undefined) {
+          throw new TypeError("Workday source prompt category lost its owner");
+        }
+        options = nestedOwner.locator([
+          '[role="option"]:visible',
+          '[data-automation-id="promptOption"]:visible',
+          '[data-automation-id="promptLeafNode"]:visible',
+        ].join(", "));
+        const nested = await visibleLocators(options);
+        const nestedExact = await preferredPromptOption(nested, acceptedLabels);
+        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+          process.stderr.write(`${JSON.stringify({
+            profilePromptCategoryVisibleOptions: (await Promise.all(nested.map(async (option) =>
+              normalize(await option.innerText())
+            ))).slice(0, 64),
+          })}\n`);
+        }
+        if (nestedExact === undefined) {
+          throw new TypeError("Workday source prompt category option is unavailable");
+        }
+        return await this.#commitPromptCatalogOption(
+          control,
+          value,
+          interaction,
+          behavior,
+          nestedExact,
+          nested.length,
+          nested.indexOf(nestedExact) + 1,
+          options,
+        );
+      }
     }
     const scopes: Locator[] = [];
     for (const option of initial) {
@@ -1528,86 +1567,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       throw new TypeError("Workday prompt catalog value did not commit");
     }
     return true;
-  }
-
-  async #diagnosePromptComponentTransitions(activator: Locator): Promise<void> {
-    for (const name of ["onClick", "onSelectInputClick"] as const) {
-      const result = await activator.evaluate((element, handlerName) => {
-        const record = element as unknown as Record<string, unknown>;
-        const fiberKey = Object.keys(element).find((key) =>
-          key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
-        );
-        let fiber = fiberKey === undefined ? undefined : record[fiberKey] as {
-          readonly memoizedProps?: unknown;
-          readonly pendingProps?: unknown;
-          readonly return?: unknown;
-        } | undefined;
-        const handlers = new Map<(...args: unknown[]) => unknown, object>();
-        for (let depth = 0; fiber !== undefined && fiber !== null && depth < 32; depth += 1) {
-          const props = fiber.memoizedProps ?? fiber.pendingProps;
-          if (typeof props === "object" && props !== null) {
-            const handler = (props as Record<string, unknown>)[handlerName];
-            if (typeof handler === "function") {
-              handlers.set(handler as (...args: unknown[]) => unknown, props);
-            }
-          }
-          fiber = fiber.return as typeof fiber;
-        }
-        const entry = [...handlers.entries()][0];
-        if (handlers.size !== 1 || entry === undefined) {
-          return { handlerCount: handlers.size, invoked: false };
-        }
-        entry[0].call(entry[1]);
-        return { handlerCount: 1, invoked: true };
-      }, name);
-      await this.#page.waitForTimeout(250);
-      const visible = await this.#page.locator([
-        '[role="option"]',
-        '[data-automation-id="promptOption"]',
-        '[data-automation-id="promptLeafNode"]',
-        '[data-automation-id="responsiveMonikerPrompt"]',
-      ].join(", ")).evaluateAll((elements) => elements.flatMap((element) => {
-        const style = getComputedStyle(element);
-        const box = element.getBoundingClientRect();
-        if (
-          style.display === "none" || style.visibility === "hidden" ||
-          element.getClientRects().length === 0 || box.width === 0 || box.height === 0
-        ) return [];
-        return [{
-          automationId: element.getAttribute("data-automation-id") ?? "",
-          role: element.getAttribute("role") ?? "",
-          label: (element.textContent ?? "").normalize("NFC")
-            .replace(/\s+/gu, " ").trim().slice(0, 160),
-        }];
-      }).slice(0, 64));
-      const inputs = await this.#page.locator("input, textarea").evaluateAll((elements) =>
-        elements.flatMap((element) => {
-          const style = getComputedStyle(element);
-          const box = element.getBoundingClientRect();
-          if (
-            style.display === "none" || style.visibility === "hidden" ||
-            element.getClientRects().length === 0 || box.width === 0 || box.height === 0
-          ) return [];
-          const ownerAutomationIds: string[] = [];
-          for (let owner = element.parentElement; owner !== null; owner = owner.parentElement) {
-            const automationId = owner.getAttribute("data-automation-id");
-            if (automationId !== null) ownerAutomationIds.push(automationId);
-            if (ownerAutomationIds.length === 6) break;
-          }
-          return [{
-            automationId: element.getAttribute("data-automation-id") ?? "",
-            role: element.getAttribute("role") ?? "",
-            type: element.getAttribute("type") ?? "",
-            placeholder: element.getAttribute("placeholder") ?? "",
-            active: element.ownerDocument.activeElement === element,
-            ownerAutomationIds,
-          }];
-        }).slice(0, 64)
-      );
-      process.stderr.write(`${JSON.stringify({
-        profilePromptComponentTransition: { name, ...result, visible, inputs },
-      })}\n`);
-    }
   }
 
   async #selectNativeOption(
@@ -2458,6 +2417,49 @@ async function exactObservedOptionOwner(
     ].join(", ")))).length > 0) optionOwners.push(owner);
   }
   return optionOwners.length === 1 ? optionOwners[0] : undefined;
+}
+
+async function exactPromptCatalogOwner(
+  page: Page,
+  control: Locator,
+): Promise<Locator | undefined> {
+  const focused = page.locator(":focus");
+  if (
+    await focused.count() === 1 && await focused.isVisible() &&
+    await focused.getAttribute("role") === "listbox"
+  ) return focused;
+  return exactObservedOptionOwner(page, control);
+}
+
+async function preferredPromptOption(
+  options: readonly Locator[],
+  acceptedLabels: ReadonlySet<string>,
+): Promise<Locator | undefined> {
+  const matches: { readonly option: Locator; readonly rank: number }[] = [];
+  for (const option of options) {
+    const automationId = await option.getAttribute("data-automation-id");
+    if (
+      automationId === "selectedItem" ||
+      !acceptedLabels.has(normalize(await option.innerText()))
+    ) continue;
+    matches.push({
+      option,
+      rank: await option.getAttribute("role") === "option"
+        ? 0
+        : automationId === "promptLeafNode" ? 1 : 2,
+    });
+  }
+  if (matches.length === 0) return undefined;
+  const preferredRank = Math.min(...matches.map(({ rank }) => rank));
+  const preferred = matches.filter(({ rank }) => rank === preferredRank);
+  if (preferred.length !== 1) {
+    throw new TypeError("Workday prompt catalog option is ambiguous");
+  }
+  return preferred[0]!.option;
+}
+
+function sourcePromptCategory(value: string): string | undefined {
+  return equivalentOptionLabels(value).has("linkedin") ? "Direct Source" : undefined;
 }
 
 async function selectionPopupVisible(
