@@ -989,12 +989,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           await control.fill("", { timeout: this.#timeoutMs });
           await control.click({ timeout: this.#timeoutMs });
           await this.#page.waitForTimeout(100);
-          if (await this.#selectPromptCatalogOption(
-            control,
-            value,
-            interaction,
-            behavior,
-          )) return;
         }
         const promptWrappers = await visibleLocators(field.locator(
           '[data-automation-id="responsiveMonikerPrompt"]',
@@ -1002,9 +996,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const searchButtons = await visibleLocators(field.locator(
           '[data-automation-id="promptSearchButton"]',
         ));
-        const activators = searchButtons.length === 1 ? searchButtons : promptWrappers;
-        if (activators.length === 1) {
-          const activator = activators[0]!;
+        if (promptWrappers.length > 1 || searchButtons.length > 1) {
+          throw new TypeError("Workday prompt multi-select activator is ambiguous");
+        }
+        const activator = searchButtons[0] ?? promptWrappers[0];
+        if (activator === undefined && editable) {
+          if (await this.#selectPromptCatalogOption(
+            control,
+            value,
+            interaction,
+            behavior,
+          )) return;
+        }
+        if (activator !== undefined) {
           const glyphs = await visibleLocators(activator.locator("svg"));
           if (glyphs.length > 1) {
             throw new TypeError("Workday prompt multi-select glyph is ambiguous");
@@ -1050,6 +1054,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             '[data-automation-id="promptOption"]',
             '[data-automation-id="promptLeafNode"]',
           ].join(", ")));
+          if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+            try {
+              const options = await Promise.all(promptOptions.slice(0, 64).map(async (option) => ({
+                role: await option.getAttribute("role") ?? "",
+                automationId: await option.getAttribute("data-automation-id") ?? "",
+                label: (await option.innerText()).replace(/\s+/gu, " ").trim().slice(0, 160),
+              })));
+              process.stderr.write(`${JSON.stringify({ profilePromptVisibleOptions: options })}\n`);
+            } catch {}
+          }
           const exactPromptOptions: Locator[] = [];
           for (const option of promptOptions.slice(0, 64)) {
             if (normalize(await option.innerText()) === normalize(value)) {
@@ -1126,9 +1140,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             throw new TypeError("Workday prompt multi-select value did not commit");
           }
           return;
-        }
-        if (activators.length > 1) {
-          throw new TypeError("Workday prompt multi-select activator is ambiguous");
         }
       }
       if (editable) {

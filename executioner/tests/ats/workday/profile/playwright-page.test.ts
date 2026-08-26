@@ -1624,15 +1624,25 @@ test("Intermountain source search uses the prompt button beside its responsive p
             </div>
           </div>
         </main>
+        <div id="source-catalog" role="listbox" hidden>
+          <div role="option">Partial list (first 500 entries)</div>
+          <div role="option">All</div>
+        </div>
         <div id="source-prompt" role="listbox" hidden>
           <div role="option">LinkedIn</div>
         </div>
         <script>
           const input = document.querySelector('#source--source');
+          const catalog = document.querySelector('#source-catalog');
           const prompt = document.querySelector('#source-prompt');
           let promptMode = false;
           document.querySelector('[data-automation-id="promptSearchButton"]')
-            .addEventListener('click', () => { promptMode = true; input.value = ''; });
+            .addEventListener('click', () => {
+              promptMode = true; input.value = ''; catalog.hidden = true;
+            });
+          input.addEventListener('click', () => {
+            if (!promptMode) catalog.hidden = false;
+          });
           input.addEventListener('input', () => {
             prompt.hidden = !(promptMode && input.value === 'LinkedIn');
           });
