@@ -353,7 +353,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           resolved.fieldId !== "phone.country_code" &&
           // An empty Workday skills prompt has no stable option catalog until
           // the applicant enters a query. Opening it is not read-only.
-          resolved.fieldId !== "skills.values",
+          resolved.fieldId !== "skills.values" &&
+          // A selected Intermountain source is rendered over its search input.
+          // Its retained guide has no fixed catalog, so the committed readback
+          // is sufficient and reopening the covered input is not read-only.
+          (resolved.fieldId !== "source.how_did_you_hear" || before === null),
       );
       const after = await resolvedReadback(resolved);
       const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);

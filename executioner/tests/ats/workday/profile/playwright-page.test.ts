@@ -1702,6 +1702,73 @@ test("Intermountain source binds its retained nested catalog and ignores unrelat
   }
 });
 
+test("prefilled Intermountain source observation does not reopen an unowned catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <style>
+          [data-automation-id="monikerSearchBox"] { position: relative; width: 300px; height: 40px; }
+          #source--source { width: 300px; height: 40px; }
+          [data-automation-id="selectedItem"] {
+            position: absolute; inset: 0; z-index: 2; background: white;
+          }
+        </style>
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <div data-automation-id="monikerSearchBox">
+                  <input id="source--source" data-automation-id="searchBox"
+                    placeholder="Search" aria-required="true">
+                  <div data-automation-id="selectedItem">Recruiter</div>
+                </div>
+                <span data-automation-id="promptSearchButton"></span>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => {
+              const first = document.createElement('div');
+              first.setAttribute('role', 'listbox');
+              first.innerHTML = '<div role="option">Career Event</div>';
+              const second = document.createElement('div');
+              second.setAttribute('role', 'listbox');
+              second.innerHTML = '<div role="option">Direct Source</div>';
+              document.body.append(first, second);
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 100,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    );
+    assert.notEqual(control, undefined);
+
+    const observation = await adapter.observeControl(
+      control!.controlId,
+      AbortSignal.any([]),
+      true,
+    );
+
+    assert.equal(observation.backingState, "set");
+    assert.equal(observation.validationState, "clear");
+    assert.equal(observation.optionCatalogState, "unknown");
+    assert.deepEqual(observation.visibleOptionIds, []);
+    assert.equal(await page.locator('[role="listbox"]').count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a highlighted source leaf without backing selection is never a commit", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
