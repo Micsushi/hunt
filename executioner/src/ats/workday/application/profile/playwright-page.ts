@@ -1580,8 +1580,32 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             .replace(/\s+/gu, " ").trim().slice(0, 160),
         }];
       }).slice(0, 64));
+      const inputs = await this.#page.locator("input, textarea").evaluateAll((elements) =>
+        elements.flatMap((element) => {
+          const style = getComputedStyle(element);
+          const box = element.getBoundingClientRect();
+          if (
+            style.display === "none" || style.visibility === "hidden" ||
+            element.getClientRects().length === 0 || box.width === 0 || box.height === 0
+          ) return [];
+          const ownerAutomationIds: string[] = [];
+          for (let owner = element.parentElement; owner !== null; owner = owner.parentElement) {
+            const automationId = owner.getAttribute("data-automation-id");
+            if (automationId !== null) ownerAutomationIds.push(automationId);
+            if (ownerAutomationIds.length === 6) break;
+          }
+          return [{
+            automationId: element.getAttribute("data-automation-id") ?? "",
+            role: element.getAttribute("role") ?? "",
+            type: element.getAttribute("type") ?? "",
+            placeholder: element.getAttribute("placeholder") ?? "",
+            active: element.ownerDocument.activeElement === element,
+            ownerAutomationIds,
+          }];
+        }).slice(0, 64)
+      );
       process.stderr.write(`${JSON.stringify({
-        profilePromptComponentTransition: { name, ...result, visible },
+        profilePromptComponentTransition: { name, ...result, visible, inputs },
       })}\n`);
     }
   }
