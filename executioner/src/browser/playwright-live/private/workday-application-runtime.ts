@@ -1371,16 +1371,34 @@ async function waitForExactApplicationSource(
   return latest;
 }
 
-async function waitThroughApplicationDestinationSettle(
+export async function waitThroughApplicationDestinationSettle(
   page: Page,
   timeoutMs: number,
   signal: AbortSignal,
 ) {
   const settleDeadline = Date.now() + Math.min(60_000, timeoutMs);
   let latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);
+  let stableSignature: string | undefined;
+  let stableSince: number | undefined;
   while (!signal.aborted && Date.now() < settleDeadline) {
     if (!latest.ok) {
       return waitForApplicationObservation(page, timeoutMs, signal);
+    }
+    if (latest.value.page === "pre_review" || latest.value.requiredFields.length > 0) {
+      return latest;
+    }
+    const signature = JSON.stringify({
+      page: latest.value.page,
+      pageId: latest.value.pageId,
+      lanes: latest.value.lanes ?? [latest.value.page],
+      duplicateRows: latest.value.c3OwnedDuplicateRows,
+      submitActivated: latest.value.submitActivated,
+    });
+    if (signature !== stableSignature) {
+      stableSignature = signature;
+      stableSince = Date.now();
+    } else if (stableSince !== undefined && Date.now() - stableSince >= 750) {
+      return latest;
     }
     await page.waitForTimeout(Math.min(100, Math.max(1, settleDeadline - Date.now())));
     latest = await new PlaywrightWorkdayApplicationPage(page, { timeoutMs }).observe(signal);

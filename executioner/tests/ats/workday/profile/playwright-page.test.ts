@@ -2879,6 +2879,57 @@ test("a failed optional Workday multi-select search leaves no blocking draft tex
   }
 });
 
+test("an empty Workday skills prompt fails without retrying a remounted prompt input", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <input id="skills--skills" placeholder="Search">
+              </div>
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('keydown', event => {
+            if (event.key === 'Enter') prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 1_500,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+    const startedAt = Date.now();
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])), /option is unavailable/u);
+
+    assert.ok(Date.now() - startedAt < 2_500);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("captures distinct per-frame owner-control relationships as digests", async () => {
   const frameOne = new StructuralFrame([
     new StructuralElement("formField", "owner-one", [

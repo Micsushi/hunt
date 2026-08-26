@@ -256,13 +256,15 @@ export class PlaywrightBrowserSession implements BrowserSession {
       if (effectStarted) {
         if (
           result.kind === "timeout" && mutation.kind === "select" &&
-          target.interaction === "field-popup" &&
-          await reconcileCommittedFieldPopupSelection(
+          (target.interaction === "field-popup" ||
+            target.interaction === "exclusive-checkbox-group") &&
+          await reconcileCommittedSelection(
             active.page,
             snapshot.effect.sessionId,
             snapshot.effect.pageId,
             mutation.target,
             mutation.option,
+            target.interaction,
             this.#uploads,
             signal,
             this.#timeoutMs,
@@ -278,13 +280,16 @@ export class PlaywrightBrowserSession implements BrowserSession {
     if (result.kind === "error") {
       if (effectStarted) {
         if (
-          mutation.kind === "select" && target.interaction === "field-popup" &&
-          await reconcileCommittedFieldPopupSelection(
+          mutation.kind === "select" &&
+          (target.interaction === "field-popup" ||
+            target.interaction === "exclusive-checkbox-group") &&
+          await reconcileCommittedSelection(
             active.page,
             snapshot.effect.sessionId,
             snapshot.effect.pageId,
             mutation.target,
             mutation.option,
+            target.interaction,
             this.#uploads,
             signal,
             this.#timeoutMs,
@@ -448,12 +453,13 @@ function compatible(target: ResolvedBrowserTarget, mutation: BrowserMutation): b
   return target.control.kind === "file";
 }
 
-async function reconcileCommittedFieldPopupSelection(
+async function reconcileCommittedSelection(
   page: Page,
   sessionId: BrowserSessionResult["sessionId"],
   pageId: BrowserSessionResult["pageId"],
   targetToken: Extract<BrowserMutation, { readonly kind: "select" }>["target"],
   option: Extract<BrowserMutation, { readonly kind: "select" }>["option"],
+  interaction: "field-popup" | "exclusive-checkbox-group",
   uploads: ReadonlyMap<string, UploadedArtifactReadback>,
   signal: AbortSignal,
   timeoutMs: number,
@@ -466,6 +472,15 @@ async function reconcileCommittedFieldPopupSelection(
       matches?.length === 1 && matches[0]?.readback.kind === "selected" &&
       matches[0].readback.option === option
     ) return true;
+    if (observed !== undefined && interaction === "exclusive-checkbox-group") {
+      const rebound = [...observed.targets.values()].flat().filter((target) =>
+        target.interaction === "exclusive-checkbox-group" &&
+        target.readback.kind === "selected" &&
+        target.readback.option === option &&
+        target.radioOptions?.includes(option)
+      );
+      if (rebound.length === 1) return true;
+    }
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     await page.waitForTimeout(Math.min(50, remaining)).catch(() => undefined);

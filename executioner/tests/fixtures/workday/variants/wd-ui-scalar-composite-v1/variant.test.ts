@@ -1725,14 +1725,16 @@ test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option throu
       const commit = option => {
         const selectedIndex = options.indexOf(option);
         if (selectedIndex < 0) return;
-        setTimeout(() => {
-          const replacement = group.cloneNode(true);
-          replacement.dataset.selectedOption = option.id;
-          replacement.querySelectorAll('input[type="checkbox"]').forEach((input, index) => {
-            input.checked = index === selectedIndex;
-          });
-          group.replaceWith(replacement);
-        }, 650);
+        return new Promise(() => {
+          setTimeout(() => {
+            const replacement = group.cloneNode(true);
+            replacement.dataset.selectedOption = option.id;
+            replacement.querySelectorAll('input[type="checkbox"]').forEach((input, index) => {
+              input.checked = index === selectedIndex;
+            });
+            group.replaceWith(replacement);
+          }, 650);
+        });
       };
       Object.defineProperty(group, '__reactProps$retainedIntermountainOwner', {
         enumerable: true,
@@ -1803,7 +1805,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option throu
       intent,
     }, variant.signal);
     assert.equal(receipt.ok, true, JSON.stringify(receipt));
-    assert.ok(Date.now() - startedAt < 3_000);
+    assert.ok(Date.now() - startedAt < 6_000);
     if (!receipt.ok) throw new Error("Intermountain disability driver failed");
     assert.deepEqual(await verifier.verify({
       sessionId: variant.sessionId,
