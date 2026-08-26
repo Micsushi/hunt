@@ -1725,12 +1725,14 @@ test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option throu
       const commit = option => {
         const selectedIndex = options.indexOf(option);
         if (selectedIndex < 0) return;
-        const replacement = group.cloneNode(true);
-        replacement.dataset.selectedOption = option.id;
-        replacement.querySelectorAll('input[type="checkbox"]').forEach((input, index) => {
-          input.checked = index === selectedIndex;
-        });
-        group.replaceWith(replacement);
+        setTimeout(() => {
+          const replacement = group.cloneNode(true);
+          replacement.dataset.selectedOption = option.id;
+          replacement.querySelectorAll('input[type="checkbox"]').forEach((input, index) => {
+            input.checked = index === selectedIndex;
+          });
+          group.replaceWith(replacement);
+        }, 650);
       };
       Object.defineProperty(group, '__reactProps$retainedIntermountainOwner', {
         enumerable: true,
@@ -1766,6 +1768,7 @@ test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option throu
     </script>
   `, "5990000000000000");
   try {
+    await variant.observe();
     const before = await inspectPage(variant.page, variant.sessionId, variant.pageId, new Map());
     const target = before.targets.get(
       browserTargetToken("target-intermountain-disability-status"),
@@ -1776,19 +1779,41 @@ test("WD-UI-SCALAR-COMPOSITE-V1 commits an Intermountain disability option throu
       "No, I do not have a disability and have not had one in the past",
       "I do not want to answer",
     ]);
+    const intent: FieldIntent = {
+      kind: "choice",
+      behavior: "radio",
+      fieldId: fieldId("intermountain-disability-status"),
+      target: target.token,
+      optionId: optionId("intermountain-disability-yes"),
+      expectedOption: boundedText("Yes, I have a disability, or have had one in the past"),
+      provenance: "visible_option",
+    };
+    const safety = createSafetyGuardFake({
+      admit: (request) => admitContractSnapshot(request.input, "safety", request.binding) as never,
+    });
+    const driver = createFieldDriver(variant.browser, safety.port);
+    const verifier = createFieldVerifier(variant.browser, { maxAttempts: 1 });
     const startedAt = Date.now();
-    assert.equal(await applyMutation(
-      variant.page,
-      target,
-      {
-        kind: "select",
-        target: target.token,
-        option: boundedText("Yes, I have a disability, or have had one in the past"),
-      },
-      undefined,
-      10_000,
-    ), "applied");
-    assert.ok(Date.now() - startedAt < 6_000);
+    const receipt = await driver.drive({
+      journeyId: testJourneyId,
+      sessionId: variant.sessionId,
+      pageId: variant.pageId,
+      guardRevision: guardRevision("policy-intermountain-disability"),
+      operationId: generatedOperationId("operation_5990000000000001"),
+      intent,
+    }, variant.signal);
+    assert.equal(receipt.ok, true, JSON.stringify(receipt));
+    assert.ok(Date.now() - startedAt < 3_000);
+    if (!receipt.ok) throw new Error("Intermountain disability driver failed");
+    assert.deepEqual(await verifier.verify({
+      sessionId: variant.sessionId,
+      pageId: variant.pageId,
+      intent,
+      receipt: receipt.value,
+    }, variant.signal), {
+      ok: true,
+      value: { kind: "verified", fieldId: intent.fieldId },
+    });
     assert.equal(
       await variant.page.locator(
         '[data-automation-id="disabilityStatus-CheckboxGroup"]',

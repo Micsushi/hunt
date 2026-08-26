@@ -915,12 +915,13 @@ export async function applyMutation(
         };
         const waitUntilOnlyChecked = async (
           initiallyStableSince?: number,
+          requiredStableMs = 4_300,
         ): Promise<boolean> => {
           const waitWindow = Math.min(timeoutMs, 5_000);
           // The controlled-rollback corpus includes a 4.1-second optimistic
           // checkbox state. Require 4.3 seconds while retaining enough
           // scheduling margin for a final readback on loaded Windows hosts.
-          const stableWindow = Math.max(50, Math.min(waitWindow - 150, 4_300));
+          const stableWindow = Math.max(50, Math.min(waitWindow - 150, requiredStableMs));
           const deadline = Date.now() + waitWindow;
           let stableSince = initiallyStableSince;
           do {
@@ -1506,7 +1507,7 @@ export async function applyMutation(
         // the selected input for the later exact-owner fallback.
         const preferredReact = await invokeReactOptionHandler(true);
         const preferredReactStable = preferredReact === "committed" &&
-          await waitUntilOnlyChecked();
+          await waitUntilOnlyChecked(undefined, 750);
         await recordCheckboxAttempt(
           "exact_react_owner",
           `${preferredReact}:${preferredReactStable}`,
@@ -1617,7 +1618,8 @@ export async function applyMutation(
         // handler never ran. Keep this exact-option fallback behind all trusted
         // surfaces and require the same stable, exclusive readback afterward.
         const reactInvoked = await invokeReactOptionHandler();
-        const reactStable = reactInvoked === "committed" && await waitUntilOnlyChecked();
+        const reactStable = reactInvoked === "committed" &&
+          await waitUntilOnlyChecked(undefined, 750);
         await recordCheckboxAttempt("react_owner", `${reactInvoked}:${reactStable}`);
         if (!reactStable) {
           const structure = await checkboxOwnerStructure(stableGroup());
