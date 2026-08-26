@@ -156,7 +156,16 @@ export async function completeWorkdayProfilePage(
   // repeatable rows from being learned and verified first.
   for (const item of effectivePlan.fields) {
     if (item.answer.kind === "profile_answer_missing") continue;
-    if (!snapshot.controls.some(({ fieldId }) => fieldId === item.fieldId)) continue;
+    const matches = snapshot.controls.filter(({ fieldId }) => fieldId === item.fieldId);
+    if (matches.length === 0) continue;
+    const current = matches.length === 1 ? matches[0] : undefined;
+    if (
+      current?.required === false &&
+      item.answerType === "multi_select" &&
+      current.readback !== null &&
+      normalize(current.readback) !== "" &&
+      !readbackMatches(item, current.readback, visibleValue(item))
+    ) continue;
     const result = await reconcileField(
       item,
       () => page.inspect(signal).then(({ controls }) => controls),

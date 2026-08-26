@@ -643,6 +643,35 @@ test("continues after an optional tenant widget rejects its configured default",
   assert.equal(port.commits.length, 1);
 });
 
+test("preserves an already-populated optional multi-select instead of replacing it", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("skills.values", "multi_select", '["Python"]'),
+      required: false,
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field(
+      "skills.values",
+      "skill",
+      "multi_select",
+      '["TypeScript"]',
+      "resume_verified",
+      '["TypeScript"]',
+    )],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 0);
+});
+
 test("continues a repeatable row after an optional tenant widget rejects its default", async () => {
   const study = field(
     "education.field_of_study",
