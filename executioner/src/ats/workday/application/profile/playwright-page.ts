@@ -1261,17 +1261,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     const expandedCategories = new Set<string>();
     interaction.popupBound = true;
+    const selectionValue = await flatSourceSelectionValue(control, listbox, value);
     if (
       await control.getAttribute("id") === "phoneNumber--phoneType" &&
-      !await hasExactSelectableCandidate(listbox, value)
+      !await hasExactSelectableCandidate(listbox, selectionValue)
     ) {
-      await this.#selectV2PhoneType(control, listbox, value, interaction);
+      await this.#selectV2PhoneType(control, listbox, selectionValue, interaction);
       return;
     }
     try {
       const selected = await this.#waitForSelectableLeaf(
         listbox,
-        value,
+        selectionValue,
         expandedCategories,
         !fallbackScope,
       );
@@ -1287,8 +1288,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       // `fill` has already entered the query for editable Workday comboboxes.
       // Re-typing appended the same query (for example `PythonPython`) and made
       // an otherwise valid typeahead result impossible to match exactly.
-      if (editable) await control.fill(value, { timeout: this.#timeoutMs });
-      else await this.#page.keyboard.type(value);
+      if (editable) await control.fill(selectionValue, { timeout: this.#timeoutMs });
+      else await this.#page.keyboard.type(selectionValue);
       await this.#page.waitForTimeout(100);
       await this.#captureSelectionDiagnostic("fallback-typed", behavior);
       const activeId = await control.getAttribute("aria-activedescendant") ??
@@ -1296,14 +1297,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.optionFocused = activeId !== null;
       const revealed = await this.#waitForSelectableLeaf(
         listbox,
-        value,
+        selectionValue,
         expandedCategories,
         !fallbackScope,
       )
         .catch(() => undefined);
       const active = activeId === null
         ? undefined
-        : await exactActiveOption(this.#page, activeId, value);
+        : await exactActiveOption(this.#page, activeId, selectionValue);
       if (revealed !== undefined) {
         interaction.visibleOptionCount = revealed.visibleOptionCount;
         interaction.selectedOptionOrdinal = revealed.selectedOptionOrdinal;
@@ -1316,20 +1317,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.optionActivated = true;
       await this.#page.waitForTimeout(100);
       if (
-        active !== undefined &&
-        !await selectionReadbackIncludes(control, behavior, value)
-      ) {
-        await control.focus({ timeout: this.#timeoutMs });
-        await control.press("Enter", { timeout: this.#timeoutMs });
-        await this.#page.waitForTimeout(100);
-      }
-      if (
-        !await selectionReadbackIncludes(control, behavior, value) &&
+        !await selectionReadbackIncludes(control, behavior, selectionValue) &&
         await selectionPopupVisible(listbox, fallbackScope)
       ) {
         const nested = await this.#waitForSelectableLeaf(
           listbox,
-          value,
+          selectionValue,
           expandedCategories,
           !fallbackScope,
         )
@@ -1341,7 +1334,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           await this.#page.waitForTimeout(100);
         }
       }
-      if (!await selectionReadbackIncludes(control, behavior, value)) {
+      if (!await selectionReadbackIncludes(control, behavior, selectionValue)) {
         selectionDiagnostic("selection_uncommitted", behavior, {
           listboxVisible: await selectionPopupVisible(listbox, fallbackScope),
           activeDescendantPresent: activeId !== null,
@@ -1364,7 +1357,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     interaction.popupClosed = !await selectionPopupVisible(listbox, fallbackScope) &&
       await control.getAttribute("aria-expanded") !== "true";
-    interaction.backingValueCommitted = await selectionReadbackIncludes(control, behavior, value);
+    interaction.backingValueCommitted = await selectionReadbackIncludes(
+      control,
+      behavior,
+      selectionValue,
+    );
     interaction.validationCleared = await validationCleared(control);
     if (!interaction.popupClosed) {
       throw new TypeError("Workday selection popup remained open");
@@ -2072,6 +2069,21 @@ async function hasExactSelectableCandidate(listbox: Locator, value: string): Pro
     labels.some((label) => equivalentOption(label, value))
   )) return true;
   return (await exactVisibleTextLeaves(listbox, value)).length === 1;
+}
+
+async function flatSourceSelectionValue(
+  control: Locator,
+  listbox: Locator,
+  requested: string,
+): Promise<string> {
+  if (
+    await control.getAttribute("id") !== "source--source" ||
+    normalize(requested) !== "recruiter" ||
+    await hasExactSelectableCandidate(listbox, requested)
+  ) return requested;
+  return await hasExactSelectableCandidate(listbox, "Direct Sourcing")
+    ? "Direct Sourcing"
+    : requested;
 }
 
 async function exactActiveOption(

@@ -759,6 +759,9 @@ function readbackMatches(
   if (field.fieldId === "phone.device_type" && field.answerType === "option") {
     return phoneDeviceTypeEquivalent(actual, expected);
   }
+  if (field.fieldId === "source.how_did_you_hear" && field.answerType === "option") {
+    return sourceOptionEquivalent(actual, expected);
+  }
   if (field.answerType === "phone") {
     return actual.replace(/\D/gu, "") === expected.replace(/\D/gu, "");
   }
@@ -777,6 +780,16 @@ function readbackMatches(
     return equivalentOption(actual, expected);
   }
   return normalize(actual) === normalize(expected);
+}
+
+function sourceOptionEquivalent(actual: string, expected: string): boolean {
+  const pair = new Set([
+    normalize(actual).toLocaleLowerCase("en-US"),
+    normalize(expected).toLocaleLowerCase("en-US"),
+  ]);
+  return equivalentOption(actual, expected) || (
+    pair.size === 2 && pair.has("recruiter") && pair.has("direct sourcing")
+  );
 }
 
 function phoneDeviceTypeEquivalent(actual: string, expected: string): boolean {
