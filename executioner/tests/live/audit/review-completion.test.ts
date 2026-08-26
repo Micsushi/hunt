@@ -47,6 +47,7 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
     }, noProtection);
     const configSha256 = writeOwnerConfig(layout);
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
+    writeReviewDiagnostics(layout.evidenceRoot);
 
     const audit = await auditStage2Completion(layout.evidenceRoot);
     assert.deepEqual(audit, {
@@ -103,6 +104,12 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
         "real-evidence/manifest.json",
         "real-evidence/summary.json",
       ],
+    );
+    assert.deepEqual(
+      storageManifest.retainedFiles.map(({ file }) => file).filter((file) =>
+        ["monitor-ack.json", "monitor-visible.png", "page-local-inspection.json"].includes(file)
+      ),
+      ["monitor-ack.json", "monitor-visible.png", "page-local-inspection.json"],
     );
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
@@ -1680,6 +1687,36 @@ function pngChunk(type: string, data: Buffer): Buffer {
   data.copy(chunk, 8);
   chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
   return chunk;
+}
+
+function writeReviewDiagnostics(root: string): void {
+  const screenshot = pngBytes(99);
+  writeFileSync(join(root, "monitor-visible.png"), screenshot);
+  writeFileSync(join(root, "monitor-ack.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    evidenceRevision: "s2-operator-monitor-ack-v2",
+    status: "acknowledged",
+    journeyId,
+    targetHandleId,
+    monitorRequestSha256: "0".repeat(64),
+    classification: "application_ready",
+    screenshotFile: "monitor-visible.png",
+    screenshotSha256: digest(screenshot),
+    observedAt: "2026-08-10T12:20:00.000Z",
+  })}\n`);
+  writeFileSync(join(root, "page-local-inspection.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    evidenceRevision: "s2-page-local-inspection-v2",
+    capturedAt: "2026-08-10T12:20:00.000Z",
+    consoleTypes: [],
+    pageErrorNames: [],
+    requestFailures: [],
+    ariaSnapshots: [],
+    dateControls: [],
+    checkboxGroups: [],
+    activeElement: null,
+    mutations: [],
+  })}\n`);
 }
 
 function crc32(value: Uint8Array): number {
