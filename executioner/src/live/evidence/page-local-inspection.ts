@@ -3,8 +3,6 @@ import { join } from "node:path";
 
 import type { ConsoleMessage, Page, Request } from "playwright";
 
-import type { PersistentPage } from
-  "../../browser/playwright-live/private/types.ts";
 import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 
 const evidenceRevision = "s2-page-local-inspection-v1";
@@ -17,12 +15,12 @@ interface EventRecord {
 }
 
 export function createPageLocalInspection(evidenceRoot: string): {
-  readonly prepare: (page: PersistentPage) => Promise<void>;
-  readonly capture: (page: PersistentPage) => Promise<void>;
+  readonly prepare: (page: unknown) => Promise<void>;
+  readonly capture: (page: unknown) => Promise<void>;
 } {
   const records = new WeakMap<Page, EventRecord>();
 
-  const prepare = async (input: PersistentPage): Promise<void> => {
+  const prepare = async (input: unknown): Promise<void> => {
     const page = input as Page;
     if (records.has(page)) return;
     const record: EventRecord = {
@@ -50,7 +48,7 @@ export function createPageLocalInspection(evidenceRoot: string): {
     await page.evaluate(installMutationProbe);
   };
 
-  const capture = async (input: PersistentPage): Promise<void> => {
+  const capture = async (input: unknown): Promise<void> => {
     const page = input as Page;
     await prepare(page);
     const pageRecord = records.get(page)!;

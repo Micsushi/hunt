@@ -224,9 +224,14 @@ export async function applyMutation(
   const targetLocator = page.locator(
     `[data-hunt-target-token="${target.declaredToken}"]`,
   );
-  const locator = target.interaction === "formatted-date"
-    ? targetLocator.locator('input:not([type="hidden"])')
-    : targetLocator;
+  let locator = targetLocator;
+  if (
+    target.interaction === "formatted-date" &&
+    await targetLocator.count() === 1 &&
+    await targetLocator.evaluate((element) => !(element instanceof HTMLInputElement))
+  ) {
+    locator = targetLocator.locator('input:not([type="hidden"])');
+  }
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
   if (await locator.count() !== 1 && !mayRebindExclusiveChoice) return "invalid";
