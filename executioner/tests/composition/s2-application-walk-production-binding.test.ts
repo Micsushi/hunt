@@ -161,6 +161,69 @@ test("production binding resolves opaque owner sources without value leakage", a
   }
 });
 
+test("application slice preserves a posting-unavailable account fact", async () => {
+  const fixture = liveFixture();
+  let cleanupCalls = 0;
+  try {
+    const collector = createApplicationLaneAcceptanceCollector();
+    const binding = createStage2ApplicationWalkProductionBinding({
+      runtime: {
+        async bind() {
+          return {
+            walk: {
+              observer: { async observe() { throw new Error("must not walk"); } },
+              handlers: {
+                resume: verifiedHandler("resume", "resume_verified"),
+                profile: neverHandler("profile", "profile_verified"),
+                questionnaire: neverHandler("questionnaire", "questionnaire_verified"),
+              },
+              navigation: { async next() { throw new Error("must not navigate"); } },
+              progress: { async record() { throw new Error("must not record"); } },
+            },
+            laneAcceptances: collector,
+            account: {
+              async verify() {
+                return {
+                  ok: false as const,
+                  code: "posting_unavailable",
+                  fact: { kind: "posting_unavailable" as const, reason: "not_found" as const },
+                };
+              },
+            },
+            cleanup: {
+              async close() {
+                cleanupCalls += 1;
+                return true;
+              },
+            },
+          };
+        },
+      },
+      inspectSource: () => ({
+        repositoryRoot: resolve(".."),
+        sourceRevision: "1111111111111111111111111111111111111111",
+      }),
+      now: () => fixture.now,
+      aclAdmission: { admit: () => ({ ok: true as const }) },
+    });
+
+    const result = await runStage2ApplicationWalkFromOwnerConfig({
+      configPath: fixture.configPath,
+      evidenceRoot: fixture.evidenceRoot,
+      checkpoint: "resume_verified",
+    }, AbortSignal.any([]), binding);
+
+    assert.deepEqual(result, {
+      ok: false,
+      code: "posting_unavailable",
+      fact: { kind: "posting_unavailable", reason: "not_found" },
+    });
+    assert.equal(cleanupCalls, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("production owner source admits catalog-bound resume fields outside flat profile facts", async () => {
   const fixture = liveFixture();
   try {

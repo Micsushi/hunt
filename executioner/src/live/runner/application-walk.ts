@@ -16,6 +16,7 @@ import type { S2StableErrorCode } from "../../contracts/s2-common-wire.ts";
 import type {
   ApplicationWalkAcceptanceV1,
 } from "../evidence/application-walk-evidence.ts";
+import type { AccountVerifiedFact } from "./account-verified.ts";
 
 export interface Stage2ApplicationWalkInput {
   readonly sourceRevision: string;
@@ -174,7 +175,8 @@ export type Stage2ApplicationWalkResult =
   | { readonly ok: true; readonly acceptance: ApplicationWalkAcceptanceV1 }
   | {
       readonly ok: false;
-      readonly code: S2StableErrorCode;
+      readonly code: S2StableErrorCode | AccountVerifiedFact["kind"];
+      readonly fact?: AccountVerifiedFact;
       readonly failure?: ApplicationWalkFailurePacket;
       readonly cleanupErrorCode?: "browser_profile_cleanup_failed";
     };

@@ -311,7 +311,9 @@ export async function runStage2ApplicationWalkFromOwnerConfig(
       const account = await resolved.account.verify(signal);
       if (!account.ok) {
         await resolved.dependencies.cleanup.close(new AbortController().signal);
-        return { ok: false, code: stableAccountCode(account.code) };
+        return account.fact === undefined
+          ? { ok: false, code: stableAccountCode(account.code) }
+          : { ok: false, code: account.fact.kind, fact: account.fact };
       }
     }
     return await runStage2ApplicationWalk(
