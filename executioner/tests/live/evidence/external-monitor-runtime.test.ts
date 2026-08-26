@@ -32,6 +32,7 @@ import {
   observedChromeIdentityTitleSha256s,
   observedStructureIdentityTitles,
   observedStructurePage,
+  observedStructurePageFromIdentityTitle,
   reconcileObservedMonitorSurface,
   selectObservedChromeIdentityTitle,
   waitForReconciledMonitorSurface,
@@ -1682,6 +1683,14 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   );
   assert.equal(observedStructurePage(new Set(["Review", "Submit application"])), "review");
   assert.equal(observedStructurePage(new Set(["My Information", "Next"])), "profile");
+  assert.equal(observedStructurePageFromIdentityTitle("My Information"), "profile");
+  assert.equal(observedStructurePageFromIdentityTitle("My Experience"), "profile");
+  assert.equal(observedStructurePageFromIdentityTitle("Application Questions"), "questionnaire");
+  assert.equal(observedStructurePageFromIdentityTitle("Voluntary Disclosures"), "questionnaire");
+  assert.equal(observedStructurePageFromIdentityTitle("Self Identify"), "questionnaire");
+  assert.equal(observedStructurePageFromIdentityTitle("Review"), "review");
+  assert.throws(() => observedStructurePageFromIdentityTitle("Environmental Services Technician"),
+    /external monitor observer denied/u);
   assert.equal(observedStructurePage(new Set([
     "Create Account", "Email Address", "Password", "My Information", "My Experience",
     "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",

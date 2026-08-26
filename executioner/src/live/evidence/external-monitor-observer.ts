@@ -470,13 +470,28 @@ try {
   }
   const flags = new Set(observed.flags.map(canonicalObservedFlag));
   const activeStageTitles = observedActiveStageTitles(stageCounts);
-  let page: string;
-  try { page = observedStructurePage(flags, activeStageTitles); }
-  catch { return observerFailure("structure_classification"); }
   let title: string;
-  const identityTitles = [
+  let identityTitles = [
     ...(observed.selectedTabTitles as string[]),
     ...(observed.documentTitles as string[]),
+    ...activeStageTitles,
+  ];
+  try {
+    title = selectObservedChromeIdentityTitle(
+      expectedTitleSha256,
+      observed.title,
+      identityTitles,
+    );
+  }
+  catch { return observerFailure("title_identity"); }
+  let page: string;
+  try { page = observedStructurePage(flags, activeStageTitles); }
+  catch {
+    try { page = observedStructurePageFromIdentityTitle(title); }
+    catch { return observerFailure("structure_classification"); }
+  }
+  identityTitles = [
+    ...identityTitles,
     ...observedStructureIdentityTitles(page, flags, activeStageTitles),
   ];
   try {
@@ -555,6 +570,16 @@ export function observedStructurePage(
   if (flags.has("Apply Manually")) return "apply_choice";
   if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";
   if (flags.has("Sign In")) return "account_entry";
+  denied();
+}
+
+export function observedStructurePageFromIdentityTitle(title: string): string {
+  const normalized = normalizeObservedChromeTitle(title);
+  if (normalized === "My Information" || normalized === "My Experience") return "profile";
+  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(normalized)) {
+    return "questionnaire";
+  }
+  if (normalized === "Review") return "review";
   denied();
 }
 
