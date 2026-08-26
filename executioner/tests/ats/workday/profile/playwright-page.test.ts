@@ -1560,8 +1560,11 @@ test("a roleless source search input opens its Workday prompt and commits an exa
           const input = document.querySelector('#source--source');
           const prompt = document.querySelector('#source-prompt');
           let promptMode = false;
-          document.querySelector('[data-automation-id="responsiveMonikerPrompt"] svg')
-            .addEventListener('click', () => { promptMode = true; input.value = ''; });
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => {
+              promptMode = input.value === 'LinkedIn';
+              prompt.hidden = !promptMode;
+            });
           input.addEventListener('input', () => {
             prompt.hidden = !(promptMode && input.value === 'LinkedIn');
           });
@@ -1599,7 +1602,7 @@ test("a roleless source search input opens its Workday prompt and commits an exa
   }
 });
 
-test("Intermountain source search uses the prompt button beside its responsive prompt sibling", async () => {
+test("Intermountain source search submits the typed query through its retained prompt owner", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1644,7 +1647,9 @@ test("Intermountain source search uses the prompt button beside its responsive p
             value: { onClick() {}, value: 'sensitive-source-value' },
           });
           promptButton.addEventListener('click', () => {
-              promptMode = true; input.value = ''; catalog.hidden = true;
+              promptMode = input.value === 'LinkedIn';
+              catalog.hidden = true;
+              prompt.hidden = !promptMode;
             });
           promptButton.querySelector('rect').addEventListener('click', event => {
             event.stopPropagation();
@@ -1653,7 +1658,7 @@ test("Intermountain source search uses the prompt button beside its responsive p
             if (!promptMode) catalog.hidden = false;
           });
           input.addEventListener('input', () => {
-            prompt.hidden = !(promptMode && input.value === 'LinkedIn');
+            if (promptMode) prompt.hidden = input.value !== 'LinkedIn';
           });
           prompt.addEventListener('click', ({ target }) => {
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;

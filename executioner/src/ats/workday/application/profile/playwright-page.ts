@@ -986,7 +986,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       if (behavior === "multi_select" || behavior === "search_select") {
         if (editable) {
-          await control.fill("", { timeout: this.#timeoutMs });
           await control.click({ timeout: this.#timeoutMs });
           await this.#page.waitForTimeout(100);
         }
@@ -1009,6 +1008,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           )) return;
         }
         if (activator !== undefined) {
+          // Workday's source prompt icon submits the current search text.  Keep
+          // the query that was entered above so the prompt has something to
+          // resolve; clearing it here turns the icon click into an empty search.
           if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
             await activator.evaluate((element) => {
               if (!(element instanceof HTMLElement)) {
@@ -1049,7 +1051,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             throw new TypeError("Workday prompt search input is ambiguous");
           }
           const promptSearch = promptSearches[0] ?? control;
-          if (editable) {
+          const controlHandle = await control.elementHandle();
+          if (controlHandle === null) {
+            throw new TypeError("Workday prompt source control detached");
+          }
+          const promptUsesOriginalControl = await promptSearch.evaluate(
+            (element, original) => element === original,
+            controlHandle,
+          );
+          await controlHandle.dispose();
+          if (editable && !promptUsesOriginalControl) {
             await promptSearch.fill("", { timeout: this.#timeoutMs });
             await promptSearch.pressSequentially(value, {
               delay: 10,
