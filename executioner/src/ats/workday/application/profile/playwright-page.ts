@@ -1471,6 +1471,121 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   ): Promise<void> {
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
     selectionDiagnostic(stage, behavior, {});
+    try {
+      const structure = await this.#page.evaluate(() => {
+        type Fiber = {
+          readonly memoizedProps?: unknown;
+          readonly pendingProps?: unknown;
+          readonly return?: Fiber | null;
+          readonly type?: unknown;
+          readonly elementType?: unknown;
+        };
+        type DiagnosticState = {
+          readonly nodes: WeakMap<Element, number>;
+          nextNodeId: number;
+        };
+        const root = globalThis as typeof globalThis & {
+          __huntProfileSelectionDiagnosticState?: DiagnosticState;
+        };
+        const state = root.__huntProfileSelectionDiagnosticState ??= {
+          nodes: new WeakMap<Element, number>(),
+          nextNodeId: 1,
+        };
+        const nodeId = (element: Element): number => {
+          const existing = state.nodes.get(element);
+          if (existing !== undefined) return existing;
+          const next = state.nextNodeId;
+          state.nextNodeId += 1;
+          state.nodes.set(element, next);
+          return next;
+        };
+        const componentName = (value: unknown): string => {
+          if (typeof value === "string") return value.slice(0, 80);
+          if (typeof value === "function") return (value.name || "anonymous").slice(0, 80);
+          if (typeof value === "object" && value !== null) {
+            const named = value as { readonly displayName?: unknown; readonly name?: unknown };
+            if (typeof named.displayName === "string") return named.displayName.slice(0, 80);
+            if (typeof named.name === "string") return named.name.slice(0, 80);
+          }
+          return "unknown";
+        };
+        const handlers = (props: unknown) => typeof props === "object" && props !== null
+          ? Object.entries(props).filter(([name, value]) =>
+            /^on[A-Z]/u.test(name) && typeof value === "function"
+          ).map(([name, value]) => ({
+            name,
+            arity: (value as (...args: unknown[]) => unknown).length,
+          })).slice(0, 24)
+          : [];
+        const field = document.querySelector(
+          '[data-automation-id="formField-source"], [data-automation-id^="formField-source--"]',
+        );
+        const selectors = [
+          'input[data-automation-id="searchBox"]',
+          '[data-automation-id="monikerSearchBox"]',
+          '[data-automation-id="promptSearchButton"]',
+          '[data-automation-id="promptSearchButton"] svg',
+          '[data-automation-id="responsiveMonikerPrompt"]',
+        ];
+        return selectors.flatMap((selector) => {
+          const elements = field === null ? [] : [...field.querySelectorAll(selector)];
+          return elements.slice(0, 4).map((element) => {
+            const record = element as unknown as Record<string, unknown>;
+            const propsKeys = Object.keys(element).filter((key) => key.startsWith("__reactProps$"));
+            const ownProps = propsKeys.flatMap((key) => {
+              const props = record[key];
+              return typeof props === "object" && props !== null
+                ? [{ keys: Object.keys(props).slice(0, 40), handlers: handlers(props) }]
+                : [];
+            });
+            const fiberKey = Object.keys(element).find((key) =>
+              key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+            );
+            let fiber = fiberKey === undefined ? undefined : record[fiberKey] as Fiber | undefined;
+            const fiberLayers: { component: string; handlers: ReturnType<typeof handlers> }[] = [];
+            for (let depth = 0; fiber !== undefined && fiber !== null && depth < 16; depth += 1) {
+              const props = fiber.memoizedProps ?? fiber.pendingProps;
+              const layerHandlers = handlers(props);
+              const component = componentName(fiber.elementType ?? fiber.type);
+              if (component !== "unknown" || layerHandlers.length > 0) {
+                fiberLayers.push({ component, handlers: layerHandlers });
+              }
+              fiber = fiber.return ?? undefined;
+            }
+            const rect = element.getBoundingClientRect();
+            const x = rect.left + rect.width / 2;
+            const y = rect.top + rect.height / 2;
+            const hit = rect.width > 0 && rect.height > 0 ? document.elementFromPoint(x, y) : null;
+            return {
+              selector,
+              nodeId: nodeId(element),
+              tag: element.tagName.toLocaleLowerCase("en-US"),
+              automationId: element.getAttribute("data-automation-id") ?? "",
+              role: element.getAttribute("role") ?? "",
+              ariaExpanded: element.getAttribute("aria-expanded"),
+              ariaControlsCount: element.getAttribute("aria-controls")?.trim()
+                .split(/\s+/u).filter(Boolean).length ?? 0,
+              visible: getComputedStyle(element).display !== "none" &&
+                getComputedStyle(element).visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+              bounds: {
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              },
+              hit: hit === null ? null : {
+                tag: hit.tagName.toLocaleLowerCase("en-US"),
+                automationId: hit.getAttribute("data-automation-id") ?? "",
+                nodeId: nodeId(hit),
+              },
+              ownProps,
+              fiberLayers,
+            };
+          });
+        });
+      });
+      process.stderr.write(`${JSON.stringify({ profileSelectionStructure: structure })}\n`);
+    } catch {}
     const root = process.env.HUNT_C3_TRANSIENT_DIAGNOSTIC_ROOT;
     if (root === undefined || root === "") return;
     this.#selectionDiagnosticOrdinal += 1;

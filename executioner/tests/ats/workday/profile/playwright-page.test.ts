@@ -1636,8 +1636,12 @@ test("Intermountain source search uses the prompt button beside its responsive p
           const catalog = document.querySelector('#source-catalog');
           const prompt = document.querySelector('#source-prompt');
           let promptMode = false;
-          document.querySelector('[data-automation-id="promptSearchButton"]')
-            .addEventListener('click', () => {
+          const promptButton = document.querySelector('[data-automation-id="promptSearchButton"]');
+          Object.defineProperty(promptButton, '__reactProps$fixture', {
+            enumerable: true,
+            value: { onClick() {}, value: 'sensitive-source-value' },
+          });
+          promptButton.addEventListener('click', () => {
               promptMode = true; input.value = ''; catalog.hidden = true;
             });
           input.addEventListener('click', () => {
@@ -1658,26 +1662,45 @@ test("Intermountain source search uses the prompt button beside its responsive p
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, {
-      pageType: "profile",
-      timeoutMs: 500,
-    });
-    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
-      ({ fieldId }) => fieldId === "source.how_did_you_hear",
-    )!;
-
-    await adapter.commit({
-      controlId: control.controlId,
-      uiBehavior: "search_select",
-      value: "LinkedIn",
-    }, AbortSignal.any([]));
-
-    assert.equal(
-      (await adapter.inspect(AbortSignal.any([]))).controls.find(
+    const previousTrace = process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+    const previousWrite = process.stderr.write;
+    const writes: string[] = [];
+    process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = "1";
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const adapter = new PlaywrightWorkdayProfilePage(page, {
+        pageType: "profile",
+        timeoutMs: 500,
+      });
+      const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
         ({ fieldId }) => fieldId === "source.how_did_you_hear",
-      )?.readback,
-      "LinkedIn",
-    );
+      )!;
+
+      await adapter.commit({
+        controlId: control.controlId,
+        uiBehavior: "search_select",
+        value: "LinkedIn",
+      }, AbortSignal.any([]));
+
+      assert.equal(
+        (await adapter.inspect(AbortSignal.any([]))).controls.find(
+          ({ fieldId }) => fieldId === "source.how_did_you_hear",
+        )?.readback,
+        "LinkedIn",
+      );
+    } finally {
+      process.stderr.write = previousWrite;
+      if (previousTrace === undefined) delete process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE;
+      else process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE = previousTrace;
+    }
+    const diagnostic = writes.find((line) => line.includes("profileSelectionStructure"));
+    assert.ok(diagnostic);
+    assert.match(diagnostic, /"automationId":"promptSearchButton"/u);
+    assert.match(diagnostic, /"name":"onClick","arity":0/u);
+    assert.doesNotMatch(diagnostic, /sensitive-source-value/u);
   } finally {
     await browser.close();
   }
