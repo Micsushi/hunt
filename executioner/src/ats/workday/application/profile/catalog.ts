@@ -179,7 +179,7 @@ const v2Text = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
 
 const v2Search = (fieldId: string, id: string): ProfileControlCatalogEntry => ({
   fieldId,
-  selector: `button[id="${id}"]`,
+  selector: `button[id="${id}"], button[data-automation-id="${id}"]`,
   uiBehavior: "search_select",
   uiVariant: "workday_search_select_v2",
 });

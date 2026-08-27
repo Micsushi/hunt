@@ -626,6 +626,9 @@ function readApplicationSnapshot(
     'button[id="country--country"]',
     'button[id="address--countryRegion"]',
     'button[id="phoneNumber--phoneType"]',
+    'button[data-automation-id="country--country"]',
+    'button[data-automation-id="address--countryRegion"]',
+    'button[data-automation-id="phoneNumber--phoneType"]',
     '[aria-required="true"]',
   ].join(", ");
   const candidates = [...new Set(root.querySelectorAll<HTMLElement>(candidateSelector))]
@@ -1013,7 +1016,11 @@ function readApplicationSnapshot(
       'button[id="country--country"]',
       'button[id="address--countryRegion"]',
       'button[id="phoneNumber--phoneType"]',
-    ].join(", "))) {
+    ].join(", ")) || control instanceof HTMLButtonElement && [
+      "country--country",
+      "address--countryRegion",
+      "phoneNumber--phoneType",
+    ].includes(safeId)) {
       const declared = text(control.getAttribute("aria-valuetext"));
       const declaredPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
         declared.toLocaleLowerCase("en-US"),

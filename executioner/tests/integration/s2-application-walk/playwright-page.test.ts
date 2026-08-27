@@ -64,7 +64,8 @@ test("Intermountain retained Profile button selects agree with the completion ga
           <label>City<input id="addresss--city" name="city" value="Edmonton"></label>
           <div data-automation-id="formField-phoneNumber--phoneType">
             <label>Phone Device Type<span data-automation-id="required">*</span></label>
-            <button id="phoneNumber--phoneType" type="button" aria-required="true">Mobile</button>
+            <button data-automation-id="phoneNumber--phoneType" type="button"
+              aria-required="true">Mobile</button>
             <input style="display:none">
           </div>
           <button id="continue" type="button">Save and Continue</button>

@@ -773,10 +773,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           "input:not([type]):not([id]):not([name]):not([data-automation-id])",
           ":not([role]):not([placeholder]):not([aria-label])",
         ].join(""))) {
-          const country = element.closest('[data-automation-id="formField-country"]');
-          if (country !== null && country.querySelector(
-            'button[id="country--country"]',
-          ) !== null) return true;
+          const owner = element.closest(
+            '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+          );
+          if (owner !== null && reviewed.scalarSelectors.some((selector) =>
+            owner.querySelector(selector) !== null
+          )) return true;
         }
         if (
           element.getAttribute("role") === "radiogroup" &&
