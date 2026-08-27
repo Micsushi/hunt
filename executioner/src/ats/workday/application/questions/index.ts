@@ -231,11 +231,10 @@ export function createQuestionnairePageHandler(
   if (Object.is(dependencies.driver, dependencies.verifier)) {
     throw new TypeError("driver and verifier must be independent ports");
   }
-  const configuredNarrative = dependencies.narrative.resolve(narrativeQuestionId);
-  const resolver = dependencies.answerResolver ?? createApplicationAnswerResolver(
-    dependencies.profileQuery,
-    configuredNarrative?.text,
-  );
+  const resolver = dependencies.answerResolver ?? createQuestionnaireAnswerResolver({
+    profileQuery: dependencies.profileQuery,
+    narrative: dependencies.narrative,
+  });
 
   return Object.freeze({
     async complete(
@@ -519,6 +518,16 @@ export function createQuestionnairePageHandler(
       };
     },
   });
+}
+
+export function createQuestionnaireAnswerResolver(input: {
+  readonly profileQuery: ProfileQuery | ApplicationProfileQuery;
+  readonly narrative: ConfiguredNarrativeProvider;
+}): ApplicationAnswerResolver {
+  return createApplicationAnswerResolver(
+    input.profileQuery,
+    input.narrative.resolve(narrativeQuestionId)?.text,
+  );
 }
 
 function observedQuestionId(label: string): QuestionId {

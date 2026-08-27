@@ -15,6 +15,7 @@ import {
   type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
 import {
+  createQuestionnaireAnswerResolver,
   createQuestionnairePageHandler,
   isCanonicalBinaryQuestionnaireLabel,
 } from
@@ -62,7 +63,6 @@ import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
 import type { ApplicationAnswerResolver } from
   "../../../form/answers/application-types.ts";
-import { createApplicationAnswerResolver } from "../../../form/answers/resolver.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
@@ -1041,10 +1041,10 @@ export class OwnedWorkdayApplicationRuntime {
         operationId: batchOperationId,
         attempt: batchAttempt,
         pass: 1,
-        answerResolver: createApplicationAnswerResolver(
-          request.ownerSources.profileQuery,
-          request.ownerSources.narrative.resolve("s1-question-configured-narrative")?.text,
-        ),
+        answerResolver: createQuestionnaireAnswerResolver({
+          profileQuery: request.ownerSources.profileQuery,
+          narrative: request.ownerSources.narrative,
+        }),
         close,
       };
     }
