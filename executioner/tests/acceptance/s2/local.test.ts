@@ -112,7 +112,7 @@ test("local ports bind quality, isolated Review, manifest, and exact finalizatio
   if (process.platform === "win32") {
     assert.equal(typeof npmExecPath, "string");
     assert.equal(isAbsolute(npmExecPath ?? ""), true);
-    assert.equal(admittedNpmCliPath(), npmExecPath);
+    assert.equal(admittedNpmCliPath(npmExecPath, process.execPath), npmExecPath);
   }
   const ports = createLocalStage2AcceptancePorts(executionerRoot, {
     sourceCapture: () => ({
