@@ -2588,9 +2588,20 @@ export async function questionnairePopupHydrationTargets(
           control.getAttribute("aria-disabled") === "true" ||
           control.hasAttribute("data-hunt-popup-options") ||
           control.hasAttribute("data-hunt-deferred-options")) return false;
+      const normalize = (value: string | null | undefined) =>
+        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+      const placeholder = /^(?:select|select one|choose|choose one)$/iu;
+      const declared = normalize(control.getAttribute("aria-valuetext"));
+      const buttonText = normalize(control.textContent);
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
+      const selectedItems = field === null ? [] : [...field.querySelectorAll(
+        '[data-automation-id="selectedItem"]',
+      )].filter(visible).map((item) => normalize(item.textContent)).filter(Boolean);
+      if ((declared !== "" && !placeholder.test(declared)) ||
+          (buttonText !== "" && !placeholder.test(buttonText)) ||
+          selectedItems.length === 1) return false;
       const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
         .flatMap((value) => value?.split(/\s+/u) ?? []);
       const ownedOptions = ownedIds.flatMap((id) =>

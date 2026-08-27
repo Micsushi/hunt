@@ -106,6 +106,37 @@ test("conditional visa-status choice is not seeded as a binary sponsorship quest
   }
 });
 
+test("answered conditional choice skips redundant popup hydration on rescan", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-visa-status">
+        <label>If you will require sponsorship, do you currently hold either of the following: <span data-automation-id="required">*</span></label>
+        <button type="button" aria-haspopup="listbox">H-1B</button>
+      </div>
+    </main>`);
+    const pageId = "page-answered-conditional-visa-status" as never;
+    await bindQuestionnaireTargets(page, pageId);
+
+    assert.deepEqual(await questionnairePopupHydrationTargets(page), []);
+    const semantic = await inspectPage(
+      page,
+      "live_session_answered_conditional_01" as never,
+      pageId,
+      new Map(),
+    );
+    const target = semantic.observation.targets[0];
+    assert.equal(target?.readback.kind, "selected");
+    assert.deepEqual(
+      target?.control.kind === "select" ? target.control.options : [],
+      ["H-1B"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("retained Integer questionnaire date marker agrees across all coverage observers", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
