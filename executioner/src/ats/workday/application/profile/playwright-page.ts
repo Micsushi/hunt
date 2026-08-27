@@ -1227,8 +1227,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       return;
     }
+    const selectionTimeoutMs = behavior === "multi_select"
+      ? Math.min(this.#timeoutMs, 5_000)
+      : this.#timeoutMs;
+    const selectionDeadline = Date.now() + selectionTimeoutMs;
+    const remainingSelectionTime = () => Math.max(1, selectionDeadline - Date.now());
     const listbox = await this.#waitForExactVisible(
       this.#page.locator(`#${cssIdentifier(relationshipIds[0]!)}`),
+      selectionTimeoutMs,
     );
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
       try {
@@ -1276,6 +1282,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         selectionValue,
         expandedCategories,
         !fallbackScope,
+        remainingSelectionTime(),
       );
       await this.#captureSelectionDiagnostic("option-found", behavior);
       interaction.visibleOptionCount = selected.visibleOptionCount;
@@ -1301,6 +1308,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         selectionValue,
         expandedCategories,
         !fallbackScope,
+        remainingSelectionTime(),
       )
         .catch(() => undefined);
       const active = activeId === null
@@ -1326,6 +1334,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           selectionValue,
           expandedCategories,
           !fallbackScope,
+          remainingSelectionTime(),
         )
           .catch(() => undefined);
         if (nested !== undefined) {
@@ -1829,8 +1838,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     ) throw new TypeError("Workday selection did not commit");
   }
 
-  async #waitForExactVisible(locator: Locator): Promise<Locator> {
-    const deadline = Date.now() + this.#timeoutMs;
+  async #waitForExactVisible(
+    locator: Locator,
+    timeoutMs = this.#timeoutMs,
+  ): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const matches = await visibleLocators(locator);
       if (matches.length === 1) return matches[0]!;
@@ -1847,12 +1859,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     value: string,
     expandedCategories = new Set<string>(),
     allowTextLeaves = true,
+    timeoutMs = this.#timeoutMs,
   ): Promise<{
     readonly option: Locator;
     readonly visibleOptionCount: number;
     readonly selectedOptionOrdinal: number;
   }> {
-    const deadline = Date.now() + this.#timeoutMs;
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const pool = listbox.locator([
         '[role="option"]:visible',

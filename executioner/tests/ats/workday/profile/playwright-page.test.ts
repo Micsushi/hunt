@@ -2986,6 +2986,45 @@ test("a failed optional Workday multi-select search leaves no blocking draft tex
   }
 });
 
+test("a missing Skills result uses one bounded search budget instead of three operation timeouts", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search"
+                aria-controls="skills-listbox" aria-expanded="true">
+            </div>
+            <div id="skills-listbox" role="listbox"></div>
+          </div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 20_000,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+    const startedAt = Date.now();
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])), /missing or ambiguous/u);
+
+    assert.ok(Date.now() - startedAt < 8_000);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("an empty Workday skills prompt fails without retrying a remounted prompt input", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
