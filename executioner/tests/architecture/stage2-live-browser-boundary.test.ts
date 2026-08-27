@@ -8,6 +8,7 @@ import {
   privateTestBrowserMode,
   resolveExternalMonitorOperationTimeoutMs,
   resolveLiveInspectionHoldPolicy,
+  resolvePersistentContextLaunchTimeoutMs,
 } from "../../src/browser/playwright-live/factory.ts";
 
 test("private test browser mode is an exact opt-in", () => {
@@ -125,6 +126,12 @@ test("external monitoring gets a separate bounded application-operation budget",
   assert.equal(resolveExternalMonitorOperationTimeoutMs(true, 2_000_000), 2_000_000);
 });
 
+test("persistent context launch settles before its enclosing browser operation", () => {
+  assert.equal(resolvePersistentContextLaunchTimeoutMs(90_000), 30_000);
+  assert.equal(resolvePersistentContextLaunchTimeoutMs(30_000), 29_000);
+  assert.equal(resolvePersistentContextLaunchTimeoutMs(1), 1);
+});
+
 test("factory wires the private hold without widening the public browser facade", async () => {
   const factory = await source("factory.ts");
   const session = await source("session.ts");
@@ -141,6 +148,7 @@ test("factory wires the private hold without widening the public browser facade"
   );
   assert.match(factory, /inspectionHoldBeforeCleanup: inspectionHold/u);
   assert.match(factory, /applicationOperationTimeoutMs: resolveExternalMonitorOperationTimeoutMs/u);
+  assert.match(factory, /timeoutMs: resolvePersistentContextLaunchTimeoutMs/u);
   assert.match(factory, /applicationRuntime\?\.externalMonitor !== undefined/u);
   assert.match(session, /applicationOperationTimeoutMs \?\? this\.#options\.timeoutMs/u);
   assert.equal(publicFacade.includes("resolveLiveInspectionHoldPolicy"), false);

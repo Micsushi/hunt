@@ -70,7 +70,9 @@ export function createPlaywrightPersistentBrowserSession(
     : undefined;
   return new PlaywrightPersistentBrowserSession({
     binding: options.binding,
-    launcher: new PlaywrightPersistentContextLauncher({ timeoutMs: inspection.timeoutMs }),
+    launcher: new PlaywrightPersistentContextLauncher({
+      timeoutMs: resolvePersistentContextLaunchTimeoutMs(inspection.timeoutMs),
+    }),
     probe: new WorkdayOwnedTargetProbe(),
     profiles: new FileProfileStore(),
     accountPage: new PlaywrightAccountPageAdapter({
@@ -124,6 +126,12 @@ export function resolveExternalMonitorOperationTimeoutMs(
   requestedTimeoutMs: number,
 ): number | undefined {
   return monitored ? Math.max(requestedTimeoutMs, 1_800_000) : undefined;
+}
+
+export function resolvePersistentContextLaunchTimeoutMs(
+  operationTimeoutMs: number,
+): number {
+  return Math.min(30_000, Math.max(1, operationTimeoutMs - 1_000));
 }
 
 export function resolveLiveInspectionHoldPolicy(
