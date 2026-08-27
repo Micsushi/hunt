@@ -595,6 +595,9 @@ export function observedStructurePage(
   activeStageTitles: readonly string[] = [],
 ): string {
   if (flags.has("Review") && (flags.has("Submit") || flags.has("Submit application"))) return "review";
+  const activeApplicationPage = observedActiveApplicationPage(flags, activeStageTitles);
+  if (activeApplicationPage !== undefined &&
+      (flags.has("Next") || flags.has("Save and Continue"))) return activeApplicationPage;
   if (flags.has("Sign In") && flags.has("Forgot your password?")) return "sign_in";
   if (flags.has("Create Account") ||
       (flags.has("Sign In") && flags.has("Email Address") && flags.has("Password"))) {
@@ -604,17 +607,7 @@ export function observedStructurePage(
   if (flags.has("Send Verification Email")) return "verification_required";
   if (flags.has("Forgot Password")) return "password_reset_request";
   if (flags.has("Sign in with email")) return "email_sign_in_choice";
-  if (activeStageTitles.length === 1) {
-    const active = activeStageTitles[0]!;
-    if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(active)) {
-      return "questionnaire";
-    }
-    if (active === "My Experience" &&
-        (flags.has("Upload a resume") || flags.has("Upload Resume") ||
-          flags.has("Resume, Cover Letter and References") ||
-          flags.has("Upload a file (5MB max)"))) return "resume";
-    if (active === "My Information" || active === "My Experience") return "profile";
-  }
+  if (activeApplicationPage !== undefined) return activeApplicationPage;
   if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
   if (flags.has("Upload a resume") || flags.has("Upload Resume") ||
       flags.has("Resume, Cover Letter and References") ||
@@ -624,6 +617,23 @@ export function observedStructurePage(
   if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";
   if (flags.has("Sign In")) return "account_entry";
   denied();
+}
+
+function observedActiveApplicationPage(
+  flags: ReadonlySet<string>,
+  activeStageTitles: readonly string[],
+): string | undefined {
+  if (activeStageTitles.length !== 1) return undefined;
+  const active = activeStageTitles[0]!;
+  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(active)) {
+    return "questionnaire";
+  }
+  if (active === "My Experience" &&
+      (flags.has("Upload a resume") || flags.has("Upload Resume") ||
+        flags.has("Resume, Cover Letter and References") ||
+        flags.has("Upload a file (5MB max)"))) return "resume";
+  if (active === "My Information" || active === "My Experience") return "profile";
+  return undefined;
 }
 
 export function observedStructurePageFromIdentityTitle(title: string): string {

@@ -1711,6 +1711,14 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "My Information",
     digest(Buffer.from("Create Account", "utf8")),
   ), "account_entry");
+  assert.equal(observedStructurePage(
+    new Set([
+      "Create Account", "Email Address", "Password", "My Information", "My Experience",
+      "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",
+      "Save and Continue",
+    ]),
+    ["My Experience"],
+  ), "profile");
   assert.equal(observedStructurePage(new Set([
     "Create Account", "Email Address", "Password", "My Information", "My Experience",
     "Application Questions", "Voluntary Disclosures", "Self Identify", "Review",
