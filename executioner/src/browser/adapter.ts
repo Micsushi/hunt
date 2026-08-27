@@ -1859,7 +1859,11 @@ async function stabilizeExactFieldPopupTarget(
   option: string,
   timeoutMs: number,
 ): Promise<boolean> {
-  const stableWindowMs = Math.min(750, timeoutMs);
+  // Workday's React replacement is synchronous with the selection commit in
+  // the retained controls. Six exact samples across 250 ms still cross that
+  // remount boundary, while leaving room inside the smallest admitted 500 ms
+  // mutation budget for the click, blur, and independent verifier.
+  const stableWindowMs = Math.min(250, timeoutMs);
   const deadline = Date.now() + Math.min(3_000, timeoutMs);
   let stableSince: number | undefined;
   while (true) {

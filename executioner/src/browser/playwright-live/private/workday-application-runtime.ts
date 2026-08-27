@@ -1044,7 +1044,12 @@ export class OwnedWorkdayApplicationRuntime {
     await seedCanonicalBinaryQuestionnaireOptions(page);
     for (const targetToken of await questionnairePopupHydrationTargets(page)) {
       this.#assertAuthorized(signal);
+      const hydrationStartedAt = Date.now();
       await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
+      this.#trace?.("questionnaire_popup_hydration_completed", {
+        targetToken,
+        durationMs: Date.now() - hydrationStartedAt,
+      });
     }
     const semanticSessionId = `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
     const semantic = new PlaywrightBrowserSession({
@@ -1053,7 +1058,12 @@ export class OwnedWorkdayApplicationRuntime {
       timeoutMs: this.#timeoutMs,
     });
     try {
+      const semanticObservationStartedAt = Date.now();
       const observed = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
+      this.#trace?.("questionnaire_semantic_observation_completed", {
+        durationMs: Date.now() - semanticObservationStartedAt,
+        status: observed.ok ? "succeeded" : "failed",
+      });
       if (!observed.ok) return applicationFailure(observed.error.code, "question_control", "ui_behavior");
       const snapshot = createSemanticSnapshot(
         { kind: "workday", page: "questionnaire" }, discoverFields(observed.value.targets),
@@ -1095,6 +1105,7 @@ export class OwnedWorkdayApplicationRuntime {
           driveRequest: Parameters<FieldDriver["drive"]>[0],
           innerSignal: AbortSignal,
         ) => {
+          const driveStartedAt = Date.now();
           this.#trace?.("questionnaire_field_drive_started", {
             fieldId: driveRequest.intent.fieldId,
             kind: driveRequest.intent.kind,
@@ -1107,6 +1118,7 @@ export class OwnedWorkdayApplicationRuntime {
             kind: driveRequest.intent.kind,
             uiBehavior: driveRequest.intent.behavior,
             status: driven.ok ? "succeeded" : "failed",
+            durationMs: Date.now() - driveStartedAt,
             ...(!driven.ok ? { code: driven.error.code } : {}),
           });
           return driven;
@@ -1117,6 +1129,7 @@ export class OwnedWorkdayApplicationRuntime {
           verificationRequest: Parameters<FieldVerifier["verify"]>[0],
           innerSignal: AbortSignal,
         ) => {
+          const verificationStartedAt = Date.now();
           // Workday may replace a control (or the entire questionnaire root)
           // after blur/selection. Restore the deterministic semantic bindings
           // before the independent readback so the original intent can still
@@ -1128,6 +1141,7 @@ export class OwnedWorkdayApplicationRuntime {
             kind: verified.ok ? verified.value.kind : "failed",
             uiBehavior: verificationRequest.intent.behavior,
             status: verified.ok && verified.value.kind === "verified" ? "succeeded" : "failed",
+            durationMs: Date.now() - verificationStartedAt,
             ...(!verified.ok ? { code: verified.error.code } : {}),
           });
           this.#assertAuthorized(innerSignal);
@@ -1249,10 +1263,15 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       await bindQuestionnaireTargets(page, input.pageId);
+      const completionObservationStartedAt = Date.now();
       const completion = await new PlaywrightWorkdayApplicationPage(
         page,
         { timeoutMs: this.#timeoutMs },
       ).observe(signal);
+      this.#trace?.("questionnaire_completion_observation_completed", {
+        durationMs: Date.now() - completionObservationStartedAt,
+        status: completion.ok ? "succeeded" : "failed",
+      });
       if (!completion.ok || completion.value.page !== "questionnaire" ||
           completion.value.submitActivated) {
         await closeBatch();
