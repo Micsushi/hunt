@@ -1142,6 +1142,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             const delimiters = ["Enter", "Tab", ","] as const;
             for (const [index, delimiter] of delimiters.entries()) {
               if (index > 0) {
+                if (!await promptSearch.isVisible()) break;
                 await promptSearch.click({ timeout: this.#timeoutMs });
                 await promptSearch.fill("", { timeout: this.#timeoutMs });
                 await promptSearch.pressSequentially(value, {
