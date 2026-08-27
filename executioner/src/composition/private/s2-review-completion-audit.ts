@@ -28,8 +28,14 @@ import {
   type ProfileFieldLearningEvidenceV2,
 } from
   "../../live/evidence/profile-field-learning.ts";
-import { admitQuestionAnswerLearningEvidence } from
+import {
+  admitPendingProfileQuestionsEvidence,
+  admitQuestionAnswerLearningEvidence,
+  type PendingProfileQuestionsEvidenceV1,
+  type QuestionAnswerLearningEvidenceV2,
+} from
   "../../live/evidence/question-answer-learning.ts";
+import { testingQuestionSemanticType } from "../../form/answers/testing-policy.ts";
 import { readValueFreeRunTrace } from
   "../../live/evidence/value-free-run-trace.ts";
 import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json-evidence.ts";
@@ -64,6 +70,7 @@ export interface Stage2ReviewCompletionAuditV1 {
   readonly terminalArtifactSha256: string;
   readonly profileFieldLearningSha256: string | null;
   readonly questionAnswerLearningSha256: string | null;
+  readonly pendingProfileQuestionsSha256: string | null;
   readonly authMonitor: "external_chain_acknowledged";
   readonly monitor: "external_chain_acknowledged";
   readonly monitorClassification: "review_verified";
@@ -150,7 +157,7 @@ export function inspectStage2ReviewCompletion(
       root,
       monitor.operations,
     );
-    const questionAnswerLearningSha256 = questionLearningDigest(
+    const questionLearning = questionLearningDigest(
       application,
       root,
       monitor.operations,
@@ -203,7 +210,8 @@ export function inspectStage2ReviewCompletion(
       processAuditSha256: digest(processBytes),
       terminalArtifactSha256: digest(terminalArtifactBytes),
       profileFieldLearningSha256,
-      questionAnswerLearningSha256,
+      questionAnswerLearningSha256: questionLearning.answerLearningSha256,
+      pendingProfileQuestionsSha256: questionLearning.pendingProfileSha256,
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -226,18 +234,27 @@ function questionLearningDigest(
   application: ApplicationWalkAcceptanceV1,
   root: string,
   monitorOperations: readonly Stage2MonitorOperationV1[],
-): string | null {
+): {
+  readonly answerLearningSha256: string | null;
+  readonly pendingProfileSha256: string | null;
+} {
   const questionnaires = application.laneAcceptances.filter(
     (value) => value.checkpoint === "questionnaire_verified",
   );
   const path = join(root, "question-answer-learning.json");
+  const pendingPath = join(root, "pending-profile-questions.json");
   const expectedAnswers = questionnaires.flatMap(({ answers }) => answers);
   if (questionnaires.length === 0) {
-    if (existsSync(path)) denied();
-    return null;
+    if (existsSync(path) || existsSync(pendingPath)) denied();
+    return Object.freeze({ answerLearningSha256: null, pendingProfileSha256: null });
   }
   const bytes = readStableFile(path, 128 * 1024);
   const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
+  const pendingBytes = readStableFile(pendingPath, 128 * 1024);
+  const pending = admitPendingProfileQuestionsEvidence(
+    JSON.parse(pendingBytes.toString("utf8")),
+  );
+  validatePendingProfileQuestions(learning, pending);
   if (expectedAnswers.length === 0) {
     const questionnaireChecks = application.pageChecks.filter(({ page }) =>
       page === "questionnaire"
@@ -267,7 +284,10 @@ function questionLearningDigest(
       "questionnaire",
       false,
     );
-    return digest(bytes);
+    return Object.freeze({
+      answerLearningSha256: digest(bytes),
+      pendingProfileSha256: digest(pendingBytes),
+    });
   }
   const synthetic = expectedAnswers.some(({ lane }) => lane === "synthetic_test_default");
   if (
@@ -294,7 +314,47 @@ function questionLearningDigest(
     monitorOperations,
     "questionnaire",
   );
-  return digest(bytes);
+  return Object.freeze({
+    answerLearningSha256: digest(bytes),
+    pendingProfileSha256: digest(pendingBytes),
+  });
+}
+
+function validatePendingProfileQuestions(
+  learning: QuestionAnswerLearningEvidenceV2,
+  pending: PendingProfileQuestionsEvidenceV1,
+): void {
+  const expected = learning.questions.filter(({ replaceWithOwnerAnswer, provenance }) =>
+    replaceWithOwnerAnswer && provenance !== "resume_verified"
+  );
+  if (
+    pending.pendingProfileQuestions.length !== expected.length ||
+    expected.some((question) => {
+      const matches = pending.pendingProfileQuestions.filter((candidate) =>
+        candidate.questionId === question.questionId &&
+        candidate.fieldId === question.fieldId &&
+        candidate.exactQuestion === question.label &&
+        candidate.required === question.required &&
+        candidate.semanticQuestionType === testingQuestionSemanticType(question.label) &&
+        candidate.answerType === question.answerType &&
+        candidate.controlType === question.uiType &&
+        candidate.options.length === question.possibleAnswers.length &&
+        candidate.options.every((option, index) => option === question.possibleAnswers[index])
+      );
+      if (matches.length !== 1) return true;
+      const candidate = matches[0]!;
+      const testDefault = question.answerState === "answered" ? question.chosenAnswer : null;
+      return candidate.testDefault !== testDefault ||
+        candidate.actualOwnerValue !== null || !candidate.needsUserValue ||
+        candidate.provenance !== question.provenance ||
+        candidate.validation !== question.verificationResult ||
+        candidate.committedReadback !==
+          (question.verificationResult === "verified" ? testDefault : null) ||
+        (question.answerType === "date"
+          ? candidate.constraints?.displayFormat !== "YYYY-MM-DD"
+          : candidate.constraints !== null);
+    })
+  ) denied();
 }
 
 function profileLearningDigest(

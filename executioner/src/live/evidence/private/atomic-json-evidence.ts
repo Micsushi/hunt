@@ -46,6 +46,7 @@ export interface AtomicJsonEvidenceRequest {
     | "profile-field-learning.json"
     | "profile-field-learning-02.json"
     | "question-answer-learning.json"
+    | "pending-profile-questions.json"
     | "terminal-artifact.json"
     | "retained-fixture-control-learning.json";
 }
@@ -82,6 +83,7 @@ export function writeAtomicJsonEvidence(request: AtomicJsonEvidenceRequest): str
     : request.fileName === "profile-field-learning.json" ||
       request.fileName === "profile-field-learning-02.json" ||
       request.fileName === "question-answer-learning.json" ||
+      request.fileName === "pending-profile-questions.json" ||
       request.fileName === "retained-fixture-control-learning.json"
     ? MAX_PROFILE_FIELD_LEARNING_BYTES
     : request.fileName === "diagnostics.json"

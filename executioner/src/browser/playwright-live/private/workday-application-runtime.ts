@@ -1198,6 +1198,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           resumeArtifact: request.ownerSources.resumeIntent.artifact,
           page: snapshot,
+          conditionalReveal: sharedBatch.pass > 1,
         }, signal);
       } catch (error) {
         await closeBatch();

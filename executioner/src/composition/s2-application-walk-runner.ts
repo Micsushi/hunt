@@ -77,6 +77,7 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly lane: AnswerProvenanceLane;
       readonly protectedCategory: string | null;
       readonly generatedDefault: boolean;
+      readonly conditionalReveal?: boolean;
     }): void;
     recordAttempt(input: {
       readonly operationId: string;
@@ -86,10 +87,12 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly lane: AnswerProvenanceLane;
       readonly protectedCategory: string | null;
       readonly generatedDefault: boolean;
+      readonly conditionalReveal?: boolean;
     }): void;
     recordUnset(input: {
       readonly questionId: QuestionId;
       readonly field: FieldObservation;
+      readonly conditionalReveal?: boolean;
     }): void;
     recordFailure(input: {
       readonly operationId: string;

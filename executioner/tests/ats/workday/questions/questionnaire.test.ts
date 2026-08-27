@@ -119,6 +119,7 @@ function dependencies(options: {
   readonly narrative?: ConfiguredNarrativeProvider;
   readonly previouslyVerified?: QuestionnairePageHandlerDependencies["previouslyVerified"];
   readonly recordVerified?: QuestionnairePageHandlerDependencies["recordVerified"];
+  readonly recordAttempt?: QuestionnairePageHandlerDependencies["recordAttempt"];
 } = {}) {
   const calls = { resolved: 0, driven: 0, verified: 0 };
   let operation = 0;
@@ -191,6 +192,7 @@ function dependencies(options: {
       },
       previouslyVerified: options.previouslyVerified,
       recordVerified: options.recordVerified,
+      recordAttempt: options.recordAttempt,
     }),
   };
 }
@@ -243,12 +245,16 @@ test("required narrative and fixed choices resolve canonically and independently
 
 test("a conditional rescan reuses only an exact previously verified field", async () => {
   const verified = new Set<string>();
+  const conditionalReveals: boolean[] = [];
   const { handler, calls } = dependencies({
     previouslyVerified: ({ pageId, field, intent }) => verified.has(
       `${pageId}:${field.fieldId}:${intent.kind}:${intent.behavior}`,
     ),
     recordVerified: ({ pageId, field, intent }) => {
       verified.add(`${pageId}:${field.fieldId}:${intent.kind}:${intent.behavior}`);
+    },
+    recordAttempt: ({ conditionalReveal }) => {
+      conditionalReveals.push(conditionalReveal ?? false);
     },
   });
 
@@ -257,7 +263,7 @@ test("a conditional rescan reuses only an exact previously verified field", asyn
     new AbortController().signal,
   );
   const rescanned = await handler.complete(
-    request([narrativeField, authorizationField]),
+    { ...request([narrativeField, authorizationField]), conditionalReveal: true },
     new AbortController().signal,
   );
 
@@ -265,6 +271,7 @@ test("a conditional rescan reuses only an exact previously verified field", asyn
   assert.equal(rescanned.ok && rescanned.value.kind, "verified");
   assert.deepEqual(calls, { resolved: 0, driven: 2, verified: 2 });
   assert.equal(verified.size, 2);
+  assert.deepEqual(conditionalReveals, [false, true]);
 });
 
 test("protected non-owner answers fail closed before mutation", async () => {

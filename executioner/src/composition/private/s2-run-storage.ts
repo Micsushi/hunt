@@ -29,7 +29,10 @@ import { writeAtomicJsonEvidence } from "../../live/evidence/private/atomic-json
 import { readStage2TerminalArtifact } from "../../acceptance/s2-terminal-artifact.ts";
 import { admitProfileFieldLearningEvidence } from
   "../../live/evidence/profile-field-learning.ts";
-import { admitQuestionAnswerLearningEvidence } from
+import {
+  admitPendingProfileQuestionsEvidence,
+  admitQuestionAnswerLearningEvidence,
+} from
   "../../live/evidence/question-answer-learning.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
@@ -61,6 +64,7 @@ const REVIEW_RETAINED_FILES = new Set([
   "monitor-ack.json",
   "monitor-visible.png",
   "page-local-inspection.json",
+  "pending-profile-questions.json",
   "profile-field-learning-02.json",
   "profile-field-learning.json",
   "question-answer-learning.json",
@@ -884,6 +888,13 @@ function retainedFileDigests(
       if (file === "question-answer-learning.json") {
         try {
           admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
+        } catch {
+          denied("storage finalization denied");
+        }
+      }
+      if (file === "pending-profile-questions.json") {
+        try {
+          admitPendingProfileQuestionsEvidence(JSON.parse(bytes.toString("utf8")));
         } catch {
           denied("storage finalization denied");
         }

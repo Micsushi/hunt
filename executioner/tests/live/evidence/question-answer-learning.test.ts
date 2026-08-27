@@ -52,6 +52,7 @@ test("question learning stores observed choices, fallback, provenance, and repla
       lane: "synthetic_test_default",
       protectedCategory: "legal",
       generatedDefault: false,
+      conditionalReveal: true,
     }, 1);
 
     const sha256 = capture.write();
@@ -69,8 +70,8 @@ test("question learning stores observed choices, fallback, provenance, and repla
       possibleAnswers: ["Select One", "Woman", "Other"],
       answerState: "answered",
       lane: "synthetic_test_default",
-      chosenAnswer: "synthetic_choice_applied",
-      strategy: "first_visible_option",
+      chosenAnswer: "Woman",
+      strategy: "random_visible_option",
       provenance: "visible_option",
       replaceWithOwnerAnswer: true,
       interactionState: "attempted",
@@ -85,6 +86,28 @@ test("question learning stores observed choices, fallback, provenance, and repla
         failureCode: null,
         retryable: false,
       }],
+    }]);
+    const pending = JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"),
+      "utf8",
+    ));
+    assert.deepEqual(pending.pendingProfileQuestions, [{
+      questionId: "observed-question-0123456789abcdef01234567",
+      fieldId: "question-gender",
+      exactQuestion: "Gender",
+      required: false,
+      semanticQuestionType: "demographic",
+      answerType: "single_select",
+      controlType: "select",
+      options: ["Select One", "Woman", "Other"],
+      constraints: null,
+      conditionalReveal: true,
+      testDefault: "Woman",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "visible_option",
+      validation: "verified",
+      committedReadback: "Woman",
     }]);
     assert.equal(capture.write(), null);
   } finally {

@@ -97,6 +97,7 @@ export interface QuestionnairePageRequest {
   readonly resumeArtifact: ResolvedResumeArtifact;
   readonly page: SemanticPageSnapshot;
   readonly activeListboxes?: Readonly<Record<string, ActiveListboxEvidence>>;
+  readonly conditionalReveal?: boolean;
 }
 
 export interface VerifiedQuestionnaireAnswer {
@@ -192,6 +193,7 @@ export interface QuestionnairePageHandlerDependencies {
     readonly lane: "live_owner_fact" | "synthetic_test_default";
     readonly protectedCategory: ProtectedQuestionCategory | null;
     readonly generatedDefault: boolean;
+    readonly conditionalReveal?: boolean;
   }) => void;
   readonly recordAttempt?: (input: {
     readonly operationId: OperationId;
@@ -201,10 +203,12 @@ export interface QuestionnairePageHandlerDependencies {
     readonly lane: "live_owner_fact" | "synthetic_test_default";
     readonly protectedCategory: ProtectedQuestionCategory | null;
     readonly generatedDefault: boolean;
+    readonly conditionalReveal?: boolean;
   }) => void;
   readonly recordUnset?: (input: {
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
+    readonly conditionalReveal?: boolean;
   }) => void;
   readonly recordFailure?: (input: {
     readonly operationId: OperationId;
@@ -260,6 +264,7 @@ export function createQuestionnairePageHandler(
         const recordUnset = () => dependencies.recordUnset?.({
           questionId: resolvedQuestionId,
           field,
+          conditionalReveal: request.conditionalReveal ?? false,
         });
         const answer = await resolver.resolve({
           mode,
@@ -418,6 +423,7 @@ export function createQuestionnairePageHandler(
           lane: answer.value.lane,
           protectedCategory: category,
           generatedDefault,
+          conditionalReveal: request.conditionalReveal ?? false,
         });
         const driven = await dependencies.driver.drive({
           journeyId: request.journeyId,

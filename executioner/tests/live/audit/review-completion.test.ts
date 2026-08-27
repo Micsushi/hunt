@@ -73,6 +73,9 @@ test("Review completion reconciles the exact gate, walk, browser truth, process 
       questionAnswerLearningSha256: digest(readFileSync(
         join(layout.evidenceRoot, "question-answer-learning.json"),
       )),
+      pendingProfileQuestionsSha256: digest(readFileSync(
+        join(layout.evidenceRoot, "pending-profile-questions.json"),
+      )),
       authMonitor: "external_chain_acknowledged",
       monitor: "external_chain_acknowledged",
       monitorClassification: "review_verified",
@@ -359,6 +362,44 @@ test("Review completion admits bound non-submittable synthetic questionnaire lea
     assert.match(audit.questionAnswerLearningSha256 ?? "", /^[0-9a-f]{64}$/u);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Review completion requires exact pending profile questions for synthetic answers", async () => {
+  for (const mutation of ["missing", "mismatched"] as const) {
+    const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-review-pending-${mutation}-`));
+    try {
+      const layout = await prepareStage2RunStorage({
+        storageRoot,
+        runKey: mutation === "missing"
+          ? "run_20260810_pendingmissingxx"
+          : "run_20260810_pendingmismatchx",
+      }, noProtection);
+      const configSha256 = writeOwnerConfig(layout);
+      await writeReviewEvidence(
+        layout.evidenceRoot,
+        configSha256,
+        journeyId,
+        false,
+        false,
+        true,
+        false,
+        1,
+        true,
+      );
+      const path = join(layout.evidenceRoot, "pending-profile-questions.json");
+      if (mutation === "missing") {
+        rmSync(path, { force: true });
+      } else {
+        const pending = JSON.parse(readFileSync(path, "utf8"));
+        pending.pendingProfileQuestions[0].testDefault = "No";
+        pending.pendingProfileQuestions[0].committedReadback = "No";
+        writeFileSync(path, `${JSON.stringify(pending)}\n`);
+      }
+      await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+    } finally {
+      rmSync(storageRoot, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1192,8 +1233,8 @@ async function writeReviewEvidence(
         possibleAnswers: ["Yes", "No"],
         answerState: "answered",
         lane: syntheticQuestionnaire ? "synthetic_test_default" : "live_owner_fact",
-        chosenAnswer: syntheticQuestionnaire ? "synthetic_choice_applied" : "owner_answer_applied",
-        strategy: syntheticQuestionnaire ? "first_visible_option" : "owner_answer",
+        chosenAnswer: syntheticQuestionnaire ? "Yes" : "owner_answer_applied",
+        strategy: syntheticQuestionnaire ? "random_visible_option" : "owner_answer",
         provenance: syntheticQuestionnaire ? "reviewed_catalog" : "owner_provided",
         replaceWithOwnerAnswer: syntheticQuestionnaire,
         interactionState: "attempted",
@@ -1251,6 +1292,28 @@ async function writeReviewEvidence(
           retryable: false,
         }],
       }] : [])],
+    }, null, 2)}\n`);
+    writeFileSync(join(root, "pending-profile-questions.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-pending-profile-questions-v1",
+      pendingProfileQuestions: syntheticQuestionnaire ? [{
+        questionId: "s1-question-work-authorization",
+        fieldId: "authorization-answer",
+        exactQuestion: "Are you authorized to work in this location?",
+        required: true,
+        semanticQuestionType: "authorization",
+        answerType: "single_select",
+        controlType: "radio",
+        options: ["Yes", "No"],
+        constraints: null,
+        conditionalReveal: false,
+        testDefault: "Yes",
+        actualOwnerValue: null,
+        needsUserValue: true,
+        provenance: "reviewed_catalog",
+        validation: "verified",
+        committedReadback: "Yes",
+      }] : [],
     }, null, 2)}\n`);
   }
   await writeAccountVerifiedEvidence({

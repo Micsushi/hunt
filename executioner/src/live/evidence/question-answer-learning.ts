@@ -8,6 +8,10 @@ import type {
   AnswerExecutionMode,
   AnswerProvenanceLane,
 } from "../../form/answers/application-types.ts";
+import {
+  testingQuestionSemanticType,
+  type TestingQuestionSemanticType,
+} from "../../form/answers/testing-policy.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 const uiTypes = new Set([
@@ -15,9 +19,14 @@ const uiTypes = new Set([
   "file_upload",
 ]);
 const answerTypes = new Set(["text", "boolean", "single_select", "date", "file"]);
+const testingQuestionTypes = new Set<TestingQuestionSemanticType>([
+  "qualification_requirement", "employee_referral", "prior_employment",
+  "sponsorship_requirement", "demographic", "compensation", "authorization",
+  "consent", "availability", "identity", "employment", "unknown",
+]);
 const strategies = new Set([
   "owner_answer", "configured_template", "catalog_default", "privacy_match",
-  "first_visible_option", "generated_text", "generated_toggle", "generated_date",
+  "first_visible_option", "random_visible_option", "generated_text", "generated_toggle", "generated_date",
   "resume",
   "needs_owner_input",
 ]);
@@ -32,6 +41,7 @@ export type QuestionAnswerLearningStrategy =
   | "catalog_default"
   | "privacy_match"
   | "first_visible_option"
+  | "random_visible_option"
   | "generated_text"
   | "generated_toggle"
   | "generated_date"
@@ -89,6 +99,32 @@ export interface QuestionAnswerLearningEvidenceV2 {
   readonly questions: readonly QuestionAnswerLearningRecordV2[];
 }
 
+export interface PendingProfileQuestionV1 {
+  readonly questionId: string;
+  readonly fieldId: string;
+  readonly exactQuestion: string;
+  readonly required: boolean;
+  readonly semanticQuestionType: TestingQuestionSemanticType;
+  readonly answerType: string;
+  readonly controlType: string;
+  readonly options: readonly string[];
+  readonly constraints: { readonly displayFormat: "YYYY-MM-DD" } | null;
+  readonly conditionalReveal: boolean;
+  readonly testDefault: string | null;
+  readonly actualOwnerValue: null;
+  readonly needsUserValue: true;
+  readonly provenance: AnswerProvenance | null;
+  readonly validation:
+    | "not_attempted" | "verified" | "driver_failed" | "verification_failed";
+  readonly committedReadback: string | null;
+}
+
+export interface PendingProfileQuestionsEvidenceV1 {
+  readonly schemaVersion: 1;
+  readonly evidenceRevision: "s2-pending-profile-questions-v1";
+  readonly pendingProfileQuestions: readonly PendingProfileQuestionV1[];
+}
+
 export interface QuestionAnswerLearningCapture {
   recordAttempt(input: {
     readonly operationId: string;
@@ -98,6 +134,7 @@ export interface QuestionAnswerLearningCapture {
     readonly lane: AnswerProvenanceLane;
     readonly protectedCategory: string | null;
     readonly generatedDefault: boolean;
+    readonly conditionalReveal?: boolean;
   }): void;
   record(input: {
     readonly operationId: string;
@@ -107,10 +144,12 @@ export interface QuestionAnswerLearningCapture {
     readonly lane: AnswerProvenanceLane;
     readonly protectedCategory: string | null;
     readonly generatedDefault: boolean;
+    readonly conditionalReveal?: boolean;
   }): void;
   recordUnset(input: {
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
+    readonly conditionalReveal?: boolean;
   }): void;
   recordFailure(input: {
     readonly operationId: string;
@@ -176,7 +215,7 @@ export function createQuestionAnswerLearningCapture(input: {
       record.terminalDisposition = "verified";
       if (record.monitorBinding !== null) retainAttempt(record);
     },
-    recordUnset(value: { readonly questionId: QuestionId; readonly field: FieldObservation }) {
+    recordUnset(value: Parameters<QuestionAnswerLearningCapture["recordUnset"]>[0]) {
       const prior = records.get(value.field.fieldId);
       records.set(value.field.fieldId, {
         questionId: value.questionId,
@@ -200,6 +239,7 @@ export function createQuestionAnswerLearningCapture(input: {
         retryable: false,
         terminalDisposition: "needs_owner_input",
         attemptHistory: prior === undefined ? [] : [...prior.attemptHistory],
+        conditionalReveal: value.conditionalReveal ?? false,
       });
     },
     recordFailure(value: Parameters<QuestionAnswerLearningCapture["recordFailure"]>[0]) {
@@ -281,12 +321,28 @@ export function createQuestionAnswerLearningCapture(input: {
             ? [question.chosenAnswer]
             : []),
         ]);
+        const pending = admitPendingProfileQuestionsEvidence({
+          schemaVersion: 1,
+          evidenceRevision: "s2-pending-profile-questions-v1",
+          pendingProfileQuestions: [...records.values()]
+            .filter(needsPendingProfileQuestion)
+            .map(pendingProfileQuestion),
+        });
+        const sensitiveValues = (input.sensitiveValues ?? []).filter((sensitive) =>
+          !publicUiStrings.some((value) => value.includes(sensitive))
+        );
+        writeAtomicJsonEvidence({
+          root: input.root,
+          value: pending,
+          sensitiveValues,
+          reviewedOpaqueIdKeys: [],
+          label: "pending profile questions",
+          fileName: "pending-profile-questions.json",
+        });
         return writeAtomicJsonEvidence({
           root: input.root,
           value: evidence,
-          sensitiveValues: (input.sensitiveValues ?? []).filter((sensitive) =>
-            !publicUiStrings.some((value) => value.includes(sensitive))
-          ),
+          sensitiveValues,
           reviewedOpaqueIdKeys: ["operationId"],
           label: "question answer learning",
           fileName: "question-answer-learning.json",
@@ -298,6 +354,56 @@ export function createQuestionAnswerLearningCapture(input: {
         return null;
       }
     },
+  });
+}
+
+export function admitPendingProfileQuestionsEvidence(
+  value: PendingProfileQuestionsEvidenceV1,
+): PendingProfileQuestionsEvidenceV1 {
+  if (
+    !exactKeys(value, ["schemaVersion", "evidenceRevision", "pendingProfileQuestions"]) ||
+    value.schemaVersion !== 1 ||
+    value.evidenceRevision !== "s2-pending-profile-questions-v1" ||
+    !Array.isArray(value.pendingProfileQuestions) ||
+    value.pendingProfileQuestions.length > 128
+  ) denied();
+  const fields = new Set<string>();
+  for (const question of value.pendingProfileQuestions) {
+    if (
+      !exactKeys(question, [
+        "questionId", "fieldId", "exactQuestion", "required", "semanticQuestionType",
+        "answerType", "controlType", "options", "constraints", "conditionalReveal",
+        "testDefault", "actualOwnerValue", "needsUserValue", "provenance", "validation",
+        "committedReadback",
+      ]) ||
+      !identifier(question.questionId) || !identifier(question.fieldId) ||
+      fields.has(question.fieldId) || !bounded(question.exactQuestion, 512) ||
+      typeof question.required !== "boolean" ||
+      !testingQuestionTypes.has(question.semanticQuestionType) ||
+      !answerTypes.has(question.answerType) || !uiTypes.has(question.controlType) ||
+      !Array.isArray(question.options) || question.options.length > 128 ||
+      question.options.some((option: string) => !bounded(option, 512)) ||
+      !(question.constraints === null ||
+        exactKeys(question.constraints, ["displayFormat"]) &&
+        question.constraints.displayFormat === "YYYY-MM-DD") ||
+      typeof question.conditionalReveal !== "boolean" ||
+      !(question.testDefault === null || bounded(question.testDefault, 512)) ||
+      question.actualOwnerValue !== null || question.needsUserValue !== true ||
+      (question.provenance !== null && !provenances.has(question.provenance)) ||
+      !["not_attempted", "verified", "driver_failed", "verification_failed"]
+        .includes(question.validation) ||
+      !(question.committedReadback === null || bounded(question.committedReadback, 512)) ||
+      (question.validation === "verified"
+        ? question.testDefault === null || question.committedReadback !== question.testDefault
+        : question.committedReadback !== null)
+    ) denied();
+    fields.add(question.fieldId);
+  }
+  return Object.freeze({
+    ...value,
+    pendingProfileQuestions: Object.freeze(value.pendingProfileQuestions.map((question) =>
+      Object.freeze({ ...question, options: Object.freeze([...question.options]) })
+    )),
   });
 }
 
@@ -369,13 +475,16 @@ function answerType(intent: FieldIntent): string {
   return "text";
 }
 
-function chosenAnswer(intent: FieldIntent): string {
+function chosenAnswer(intent: FieldIntent, lane: AnswerProvenanceLane): string {
   if (intent.provenance === "owner_provided") return "owner_answer_applied";
   if (intent.provenance === "configured_template") return "configured_template_applied";
   if (intent.provenance === "resume_verified") return "resume_artifact_applied";
-  if (intent.kind === "choice") return "synthetic_choice_applied";
-  if (intent.kind === "toggle") return "synthetic_toggle_applied";
-  if (intent.kind === "date") return "synthetic_date_applied";
+  if (lane === "synthetic_test_default") {
+    if (intent.kind === "choice") return intent.expectedOption;
+    if (intent.kind === "toggle") return intent.checked ? "Yes" : "No";
+    if (intent.kind === "date") return intent.isoDate;
+    if (intent.kind === "text") return intent.value;
+  }
   if (intent.kind === "resume_upload") return "resume_artifact_applied";
   return "synthetic_text_applied";
 }
@@ -392,18 +501,23 @@ function observedAnswerType(field: FieldObservation): string {
 
 function strategy(
   intent: FieldIntent,
+  lane: AnswerProvenanceLane,
   protectedCategory: string | null,
   generatedDefault: boolean,
 ): QuestionAnswerLearningStrategy {
   if (generatedDefault) {
     if (intent.kind === "toggle") return "generated_toggle";
     if (intent.kind === "date") return "generated_date";
-    return intent.kind === "choice" ? "first_visible_option" : "generated_text";
+    return intent.kind === "choice" ? "random_visible_option" : "generated_text";
   }
   if (intent.provenance === "owner_provided") return "owner_answer";
   if (intent.provenance === "configured_template") return "configured_template";
   if (intent.provenance === "resume_verified") return "resume";
-  if (intent.provenance === "visible_option") return "first_visible_option";
+  if (intent.provenance === "visible_option") {
+    return lane === "synthetic_test_default"
+      ? "random_visible_option"
+      : "first_visible_option";
+  }
   if (intent.provenance === "reviewed_catalog") {
     return protectedCategory === "demographic" || protectedCategory === "disclosure"
       ? "privacy_match"
@@ -413,7 +527,11 @@ function strategy(
 }
 
 function freezeRecord(value: QuestionAnswerLearningRecordV2 | MutableQuestionRecord): QuestionAnswerLearningRecordV2 {
-  const { pendingMonitor: _pendingMonitor, ...record } = value as MutableQuestionRecord;
+  const {
+    pendingMonitor: _pendingMonitor,
+    conditionalReveal: _conditionalReveal,
+    ...record
+  } = value as MutableQuestionRecord;
   return Object.freeze({
     ...record,
     possibleAnswers: Object.freeze([...record.possibleAnswers]),
@@ -444,6 +562,7 @@ interface MutableQuestionRecord extends Omit<{
     beforeMutationAck: true;
   } | null;
   attemptHistory: QuestionAnswerAttemptV1[];
+  conditionalReveal: boolean;
 }
 
 function answerRecord(value: {
@@ -454,6 +573,7 @@ function answerRecord(value: {
   readonly lane: AnswerProvenanceLane;
   readonly protectedCategory: string | null;
   readonly generatedDefault: boolean;
+  readonly conditionalReveal?: boolean;
 }, disposition: "pending"): MutableQuestionRecord {
   return {
     questionId: value.questionId,
@@ -465,8 +585,13 @@ function answerRecord(value: {
     possibleAnswers: value.field.options.map(({ label }) => String(label)),
     answerState: "answered",
     lane: value.lane,
-    chosenAnswer: chosenAnswer(value.intent),
-    strategy: strategy(value.intent, value.protectedCategory, value.generatedDefault),
+    chosenAnswer: chosenAnswer(value.intent, value.lane),
+    strategy: strategy(
+      value.intent,
+      value.lane,
+      value.protectedCategory,
+      value.generatedDefault,
+    ),
     provenance: value.intent.provenance,
     replaceWithOwnerAnswer: value.generatedDefault ||
       value.intent.provenance !== "owner_provided" &&
@@ -479,7 +604,36 @@ function answerRecord(value: {
     retryable: false,
     terminalDisposition: disposition,
     attemptHistory: [],
+    conditionalReveal: value.conditionalReveal ?? false,
   };
+}
+
+function needsPendingProfileQuestion(record: MutableQuestionRecord): boolean {
+  return record.replaceWithOwnerAnswer && record.provenance !== "resume_verified";
+}
+
+function pendingProfileQuestion(record: MutableQuestionRecord): PendingProfileQuestionV1 {
+  const testDefault = record.answerState === "answered" ? record.chosenAnswer : null;
+  return Object.freeze({
+    questionId: record.questionId,
+    fieldId: record.fieldId,
+    exactQuestion: record.label,
+    required: record.required,
+    semanticQuestionType: testingQuestionSemanticType(record.label),
+    answerType: record.answerType,
+    controlType: record.uiType,
+    options: Object.freeze([...record.possibleAnswers]),
+    constraints: record.answerType === "date"
+      ? Object.freeze({ displayFormat: "YYYY-MM-DD" as const })
+      : null,
+    conditionalReveal: record.conditionalReveal,
+    testDefault,
+    actualOwnerValue: null,
+    needsUserValue: true,
+    provenance: record.provenance,
+    validation: record.verificationResult,
+    committedReadback: record.verificationResult === "verified" ? testDefault : null,
+  });
 }
 
 function retainAttempt(record: MutableQuestionRecord): void {

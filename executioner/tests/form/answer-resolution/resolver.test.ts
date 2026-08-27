@@ -531,8 +531,16 @@ test("unknown and invalid fields generate only in synthetic mode while other sta
   assert.equal(profile.calls.length, callsBeforeAbort);
 });
 
-test("unknown choices select the first visible non-placeholder option only in synthetic mode", async () => {
-  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+test("unknown choices randomly select a visible non-placeholder option only in synthetic mode", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    (length) => length - 1,
+  );
   const result = await resolver.resolve(syntheticRequest(field(
     "Unreviewed choice",
     "select",
@@ -553,12 +561,81 @@ test("unknown choices select the first visible non-placeholder option only in sy
         behavior: "select",
         fieldId: "s1-field-given-name",
         target: "target-1",
-        optionId: "option-first",
-        expectedOption: "First available",
+        optionId: "option-second",
+        expectedOption: "Second available",
         provenance: "visible_option",
       },
     },
   });
+});
+
+test("semantic testing defaults distinguish qualifications from sponsorship", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => 0,
+  );
+  const yesNo = Object.freeze([
+    { id: optionId("answer-no"), label: boundedText("No") },
+    { id: optionId("answer-yes"), label: boundedText("Yes") },
+  ]);
+  for (const label of [
+    "Do you meet all minimum qualifications listed in this job posting?",
+    "Can you perform the essential functions of this job with or without accommodation?",
+  ]) {
+    const result = await resolver.resolve(
+      syntheticRequest(field(label, "listbox", yesNo)),
+      new AbortController().signal,
+    );
+    assert.equal(result.ok && result.value.kind, "resolved");
+    if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice") {
+      assert.equal(result.value.intent.expectedOption, "Yes");
+    }
+  }
+
+  const sponsorship = await resolver.resolve(syntheticRequest(field(
+    "Will you now or in the future require visa sponsorship for employment?",
+    "listbox",
+    yesNo,
+  )), new AbortController().signal);
+  assert.equal(sponsorship.ok && sponsorship.value.kind, "resolved");
+  if (sponsorship.ok && sponsorship.value.kind === "resolved" &&
+      sponsorship.value.intent.kind === "choice") {
+    assert.equal(sponsorship.value.intent.expectedOption, "No");
+  }
+});
+
+test("missing prior-employment and employee-referral facts use semantic No defaults", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => 0,
+  );
+  const yesNo = Object.freeze([
+    { id: optionId("answer-yes"), label: boundedText("Yes") },
+    { id: optionId("answer-no"), label: boundedText("No") },
+  ]);
+  for (const label of [
+    "Have you previously worked for this organization?",
+    "Have you been referred by an employee of Integer?",
+  ]) {
+    const result = await resolver.resolve(
+      syntheticRequest(field(label, "listbox", yesNo)),
+      new AbortController().signal,
+    );
+    assert.equal(result.ok && result.value.kind, "resolved");
+    if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice") {
+      assert.equal(result.value.intent.expectedOption, "No");
+    }
+  }
 });
 
 test("protected choices never fall back to a visible learning option", async () => {
