@@ -83,6 +83,29 @@ test("known binary questionnaire choices defer discovery to the exact selection 
   }
 });
 
+test("conditional visa-status choice is not seeded as a binary sponsorship question", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-visa-status">
+        <label>If you will require sponsorship, do you currently hold either of the following: <span data-automation-id="required">*</span></label>
+        <button type="button" aria-haspopup="listbox">Select One</button>
+      </div>
+    </main>`);
+    const pageId = "page-conditional-visa-status" as never;
+    await bindQuestionnaireTargets(page, pageId);
+
+    await seedCanonicalBinaryQuestionnaireOptions(page);
+
+    const button = page.locator('button[aria-haspopup="listbox"]');
+    assert.equal(await button.getAttribute("data-hunt-deferred-options"), null);
+    assert.equal((await questionnairePopupHydrationTargets(page)).length, 1);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("retained Integer questionnaire date marker agrees across all coverage observers", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -60,6 +60,7 @@ import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
 import { questionForField } from "../../../form/questions/catalog.ts";
+import { normalizeCatalogText } from "../../../form/questions/normalize.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
 import {
   workdayReviewSignatures,
@@ -2629,7 +2630,10 @@ export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promi
   for (const candidate of candidates) {
     const definition = questionForField(candidate.label, "listbox");
     if (definition?.source.kind !== "profile" ||
-        !binaryFacts.has(definition.source.factId)) {
+        !binaryFacts.has(definition.source.factId) ||
+        !definition.labels.some((label) =>
+          normalizeCatalogText(label) === normalizeCatalogText(candidate.label)
+        )) {
       continue;
     }
     const target = page.locator(`[data-hunt-target-token="${candidate.token}"]`);
