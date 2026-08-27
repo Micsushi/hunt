@@ -879,6 +879,7 @@ export class OwnedWorkdayApplicationRuntime {
             application.value.submitActivated) throw new TypeError("Review page is unavailable");
         const beforeReview = await captureIndependentReviewFields(page, this.#reviewExpected);
         const beforeStructure = await captureReviewStructure(page);
+        assertAcceptedReviewStructure(beforeStructure);
         await this.#monitor(
           page,
           "review",
@@ -896,8 +897,12 @@ export class OwnedWorkdayApplicationRuntime {
             freshApplication.value.submitActivated) throw new TypeError("Review page drift denied");
         const review = await captureIndependentReviewFields(page, this.#reviewExpected);
         const structure = await captureReviewStructure(page);
-        if (JSON.stringify(beforeReview) !== JSON.stringify(review) ||
-            JSON.stringify(beforeStructure) !== JSON.stringify(structure)) {
+        const structureChanges = reviewStructureChanges(beforeStructure, structure);
+        if (structureChanges.length !== 0) {
+          this.#trace?.("review_structural_drift_warning", { changes: structureChanges });
+        }
+        assertAcceptedReviewStructure(structure);
+        if (JSON.stringify(beforeReview) !== JSON.stringify(review)) {
           throw new TypeError("Review readback drift denied");
         }
         return Object.freeze({
@@ -2408,6 +2413,44 @@ async function captureReviewStructure(page: Page): Promise<WorkdayReviewStructur
       enabled: submitCount === 1 && await submit.isEnabled(),
     }),
   });
+}
+
+function assertAcceptedReviewStructure(
+  structure: WorkdayReviewStructuralObservationV1,
+): void {
+  if (
+    structure.reviewRoot.count !== 1 || !structure.reviewRoot.visible ||
+    structure.activeStep.count !== 1 || !structure.activeStep.visible ||
+    structure.validationErrorCount !== 0 ||
+    structure.finalSubmit.count !== 1 || !structure.finalSubmit.visible
+  ) throw new TypeError("Review structure denied");
+}
+
+function reviewStructureChanges(
+  before: WorkdayReviewStructuralObservationV1,
+  after: WorkdayReviewStructuralObservationV1,
+): readonly {
+  readonly member: string;
+  readonly before: number | boolean;
+  readonly after: number | boolean;
+}[] {
+  const members = [
+    ["reviewRoot.count", before.reviewRoot.count, after.reviewRoot.count],
+    ["reviewRoot.visible", before.reviewRoot.visible, after.reviewRoot.visible],
+    ["activeStep.count", before.activeStep.count, after.activeStep.count],
+    ["activeStep.visible", before.activeStep.visible, after.activeStep.visible],
+    ["validationErrorCount", before.validationErrorCount, after.validationErrorCount],
+    ["finalSubmit.count", before.finalSubmit.count, after.finalSubmit.count],
+    ["finalSubmit.visible", before.finalSubmit.visible, after.finalSubmit.visible],
+    ["finalSubmit.enabled", before.finalSubmit.enabled, after.finalSubmit.enabled],
+  ] as const;
+  return Object.freeze(members
+    .filter(([, previous, current]) => previous !== current)
+    .map(([member, previous, current]) => Object.freeze({
+      member,
+      before: previous,
+      after: current,
+    })));
 }
 
 function verified<

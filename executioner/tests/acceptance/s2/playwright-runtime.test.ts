@@ -2188,7 +2188,7 @@ fields: [{
   }
 });
 
-test("Review monitor ACK is followed by a fresh exact visible field and structure readback", async () => {
+test("Review monitor ACK is followed by a fresh semantic field and invariant structure readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -2238,6 +2238,121 @@ test("Review monitor ACK is followed by a fresh exact visible field and structur
       /Review field hidden|Review field mismatch|Review readback drift denied/u,
     );
     assert.equal(monitorCalls, 1);
+    assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("Review accepts transient Submit enabled drift when semantic invariants remain stable", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-review" data-hunt-submit-activated="false"><body data-hunt-application-page="pre_review"><div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button id="final-submit">Submit application</button></main></body></html>`);
+  const trace: { event: string; details?: object }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_review_benign_drift_next_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [{
+      fieldId: "s1-field-resume",
+      provenance: "resume_verified",
+      rowIdentity: "formField-s1-field-resume",
+      valueSha256: createHash("sha256").update("resume.pdf").digest("hex"),
+    }],
+    externalMonitor: {
+      async auth() {},
+      async application() {
+        await page.locator("#final-submit").evaluate((element) => {
+          (element as HTMLButtonElement).disabled = true;
+        });
+      },
+    },
+    trace: (event, details) => trace.push({ event, details }),
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_review_benign_drift_0001"),
+    sessionId: "live_session_review_benign_drift_0001" as LiveSessionId,
+    profileLeaseId: "profile_lease_review_benign_drift_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_review_benign_drift_0001"),
+      operationId: generatedOperationId("operation_review_benign_drift_0001"),
+      sessionId: "live_session_review_benign_drift_0001" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "capture_review" }, new AbortController().signal);
+
+    assert.equal(
+      (result as { structure: { finalSubmit: { enabled: boolean } } }).structure.finalSubmit.enabled,
+      false,
+    );
+    assert.deepEqual(trace.filter(({ event }) => event === "review_structural_drift_warning"), [{
+      event: "review_structural_drift_warning",
+      details: {
+        changes: [{ member: "finalSubmit.enabled", before: true, after: false }],
+      },
+    }]);
+    assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
+  } finally {
+    runtime.dispose();
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("Review still rejects Submit disappearance after monitor readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-review" data-hunt-submit-activated="false"><body data-hunt-application-page="pre_review"><div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section><button id="final-submit">Submit application</button></main></body></html>`);
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_review_submit_loss_next_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [{
+      fieldId: "s1-field-resume",
+      provenance: "resume_verified",
+      rowIdentity: "formField-s1-field-resume",
+      valueSha256: createHash("sha256").update("resume.pdf").digest("hex"),
+    }],
+    externalMonitor: {
+      async auth() {},
+      async application() {
+        await page.locator("#final-submit").evaluate((element) => element.remove());
+      },
+    },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_review_submit_loss_0001"),
+    sessionId: "live_session_review_submit_loss_0001" as LiveSessionId,
+    profileLeaseId: "profile_lease_review_submit_loss_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  });
+  try {
+    await assert.rejects(() => runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_review_submit_loss_0001"),
+      operationId: generatedOperationId("operation_review_submit_loss_0001"),
+      sessionId: "live_session_review_submit_loss_0001" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "capture_review" }, new AbortController().signal), /Review structure denied/u);
     assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
   } finally {
     runtime.dispose();
