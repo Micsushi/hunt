@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   admittedNpmCliPath,
@@ -106,12 +107,14 @@ test("gate manifest writer is one-shot, bounded, and excludes config secrets and
 test("local ports bind quality, isolated Review, manifest, and exact finalization in order", async () => {
   const calls: unknown[] = [];
   const paths = layoutPaths(resolve("protected-storage"));
+  const executionerRoot = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
   const npmExecPath = process.env.npm_execpath;
   if (process.platform === "win32") {
     assert.equal(typeof npmExecPath, "string");
     assert.equal(isAbsolute(npmExecPath ?? ""), true);
+    assert.equal(admittedNpmCliPath(), npmExecPath);
   }
-  const ports = createLocalStage2AcceptancePorts(resolve("executioner"), {
+  const ports = createLocalStage2AcceptancePorts(executionerRoot, {
     sourceCapture: () => ({
       repositoryRoot: resolve("repository"),
       sourceRevision: "0123456789abcdef0123456789abcdef01234567",
@@ -147,8 +150,8 @@ test("local ports bind quality, isolated Review, manifest, and exact finalizatio
   await ports.cleanup.finalize(paths, gateManifest());
   assert.deepEqual(calls, [
     process.platform === "win32"
-      ? ["quality", process.execPath, [npmExecPath, "run", "quality"], resolve("executioner")]
-      : ["quality", "npm", ["run", "quality"], resolve("executioner")],
+      ? ["quality", process.execPath, [npmExecPath, "run", "quality"], executionerRoot]
+      : ["quality", "npm", ["run", "quality"], executionerRoot],
     ["live", [
       "--config", paths.configPath,
       "--stop-after", "review",
