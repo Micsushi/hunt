@@ -2587,9 +2587,23 @@ async function bindOpenedFieldPopupOwner(
       ? unwrappedParents
       : topLevelUnwrapped;
     const newlyVisibleOwners = [...new Set([...explicitOwners, ...unwrappedOwners])];
+    const global = window as unknown as Record<string, unknown>;
+    const retainedOwners = document.activeElement !== null &&
+        (document.activeElement === control || control.contains(document.activeElement)) &&
+        global.__huntFieldPopupOwners instanceof Map
+      ? [...new Set([...(global.__huntFieldPopupOwners as Map<
+          string,
+          { popupRoot: Element }
+        >).values()].map(({ popupRoot }) => popupRoot).filter((owner) =>
+          visible(owner) && ownsVisibleOptions(owner) &&
+          owner.getAttribute("data-hunt-field-popup-preexisting") === declaredToken
+        ))]
+      : [];
     const owners = directOwners.length > 0
       ? directOwners
-      : fieldOwners.length > 0 ? fieldOwners : newlyVisibleOwners;
+      : fieldOwners.length > 0
+      ? fieldOwners
+      : newlyVisibleOwners.length > 0 ? newlyVisibleOwners : retainedOwners;
     if (owners.length !== 1) return false;
     owners[0]!.setAttribute("data-hunt-field-popup-owner", declaredToken);
     return true;

@@ -466,6 +466,80 @@ test("questionnaire mutation selects only from its newly opened portal", async (
   }
 });
 
+test("questionnaire mutation reclaims one retained portal for the next exact field", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField-relative">
+          <label>Do you have any relatives currently employed by Integer? <span data-automation-id="required">*</span></label>
+          <button id="relative" type="button" aria-haspopup="listbox">Select One</button>
+        </div>
+        <div data-automation-id="formField-essential">
+          <label>Based on your understanding of this role, do you believe you are physically able to perform the essential functions of the job? <span data-automation-id="required">*</span></label>
+          <button id="essential" type="button" aria-haspopup="listbox">Select One</button>
+        </div>
+      </main>
+      <div id="retained-prompt" data-automation-id="promptMenu" hidden>
+        <div data-automation-id="promptOption">Yes</div>
+        <div data-automation-id="promptOption">No</div>
+      </div>
+      <script>
+        let activeButton;
+        const popup = document.querySelector('#retained-prompt');
+        document.querySelectorAll('button[aria-haspopup="listbox"]').forEach(button => {
+          button.addEventListener('click', () => {
+            activeButton = button;
+            popup.hidden = false;
+          });
+        });
+        popup.addEventListener('click', event => {
+          const option = event.target.closest('[data-automation-id="promptOption"]');
+          if (option === null || activeButton === undefined) return;
+          activeButton.textContent = option.textContent.trim();
+          // Workday can retain and retarget the same portal for the next field.
+        });
+      </script>
+    `);
+    const pageId = "questionnaire-retained-portal-fixture" as never;
+    const sessionId = "browser_session_retained_portal_fixture" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const inspected = await inspectPage(page, sessionId, pageId, new Map());
+    const relative = inspected.observation.targets.find(({ name }) =>
+      name.startsWith("Do you have any relatives")
+    );
+    const essential = inspected.observation.targets.find(({ name }) =>
+      name.startsWith("Based on your understanding")
+    );
+    assert.notEqual(relative, undefined);
+    assert.notEqual(essential, undefined);
+    const relativeTarget = inspected.targets.get(relative!.token)?.[0];
+    const essentialTarget = inspected.targets.get(essential!.token)?.[0];
+    assert.notEqual(relativeTarget, undefined);
+    assert.notEqual(essentialTarget, undefined);
+
+    assert.equal(await applyMutation(
+      page,
+      relativeTarget!,
+      { kind: "select", target: relative!.token, option: "No" as never },
+      undefined,
+      500,
+    ), "applied");
+    assert.equal(await page.locator('#retained-prompt').isVisible(), true);
+    assert.equal(await applyMutation(
+      page,
+      essentialTarget!,
+      { kind: "select", target: essential!.token, option: "Yes" as never },
+      undefined,
+      500,
+    ), "applied");
+    assert.equal(await page.locator('#essential').innerText(), "Yes");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("questionnaire mutation follows the visible Workday control across a retained hidden remount", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
