@@ -14,7 +14,10 @@ import {
   type ProfilePageSnapshot,
   type WorkdayProfilePagePort,
 } from "../../../ats/workday/application/profile/index.ts";
-import { createQuestionnairePageHandler } from
+import {
+  createQuestionnairePageHandler,
+  isCanonicalBinaryQuestionnaireLabel,
+} from
   "../../../ats/workday/application/questions/index.ts";
 import {
   createPlaywrightWorkdayResumePage,
@@ -59,8 +62,6 @@ import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
-import { questionForField } from "../../../form/questions/catalog.ts";
-import { normalizeCatalogText } from "../../../form/questions/normalize.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
 import {
   workdayReviewSignatures,
@@ -2651,21 +2652,8 @@ export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promi
       )?.querySelector("label, legend")?.textContent),
     })).filter(({ token, label }) => token !== "" && label !== "");
   });
-  const binaryFacts = new Set<string>([
-    "work_authorization", "sponsorship_required", "age_requirement_met",
-    "previously_worked_for_organization", "associate_referral", "current_associate",
-    "previously_applied", "relatives_employed", "essential_functions_ability",
-    "employment_agreement_prevents_employment", "terms_consent",
-  ]);
   for (const candidate of candidates) {
-    const definition = questionForField(candidate.label, "listbox");
-    if (definition?.source.kind !== "profile" ||
-        !binaryFacts.has(definition.source.factId) ||
-        !definition.labels.some((label) =>
-          normalizeCatalogText(label) === normalizeCatalogText(candidate.label)
-        )) {
-      continue;
-    }
+    if (!isCanonicalBinaryQuestionnaireLabel(candidate.label)) continue;
     const target = page.locator(`[data-hunt-target-token="${candidate.token}"]`);
     if (await target.count() !== 1 || !await target.isVisible()) continue;
     await target.evaluate((control) => {

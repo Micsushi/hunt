@@ -112,6 +112,7 @@ const NUMBER_KEYS = new Set([
   "reboundDateLabelSvgOwnerCount", "reboundDateDistinctInputCount",
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
   "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
+  "durationMs",
   "profileInspectionAttemptCount", "profileInspectionFrameCount", "profileMetadataMismatchCount",
   "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
   "profileInspectionDomOwnerCandidateCount", "profileInspectionControlCandidateCount",

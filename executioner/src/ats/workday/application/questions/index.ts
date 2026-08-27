@@ -69,6 +69,22 @@ export type { ProtectedQuestionCategory } from "./protected.ts";
 
 const narrativeQuestionId = "s1-question-configured-narrative" as const;
 
+const canonicalBinaryProfileFacts = new Set([
+  "work_authorization", "sponsorship_required", "age_requirement_met",
+  "previously_worked_for_organization", "associate_referral", "current_associate",
+  "previously_applied", "relatives_employed", "essential_functions_ability",
+  "employment_agreement_prevents_employment", "terms_consent",
+]);
+
+export function isCanonicalBinaryQuestionnaireLabel(label: string): boolean {
+  const definition = questionForField(label, "listbox");
+  return definition?.source.kind === "profile" &&
+    canonicalBinaryProfileFacts.has(definition.source.factId) &&
+    definition.labels.some((candidate) =>
+      normalizeCatalogText(candidate) === normalizeCatalogText(label)
+    );
+}
+
 export interface QuestionnairePageRequest {
   readonly mode: AnswerExecutionMode;
   readonly journeyId: JourneyId;
