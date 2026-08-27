@@ -120,13 +120,23 @@ test("the private admission rejects a Windows browser profile path too long for 
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-binding-length-"));
   try {
     const forbidden = join(root, "repository");
-    const runtime = join(root, "r".repeat(140));
+    const profileSuffix = join(
+      "browser-profiles",
+      "journey_abcdefghijklmnop",
+      "target_ref_abcdefghijklmnop",
+    );
+    const runtimeLength = 232 - join(root, profileSuffix).length - 1;
+    const runtime = join(root, "r".repeat(runtimeLength));
     const secrets = join(root, "secrets");
     const evidence = join(root, "evidence");
     for (const path of [forbidden, runtime, secrets, evidence]) mkdirSync(path);
     const input = ownerInputs(runtime, secrets, evidence);
     const ownerConfigPath = join(root, "owner-inputs.json");
     writeFileSync(ownerConfigPath, "{}");
+    const profilePath = join(runtime, profileSuffix);
+    assert.equal(profilePath.length, 232);
+    assert.ok(join(profilePath, "SingletonLock").length < 260);
+    assert.ok(join(profilePath, "Default", ".hunt-preferences.tmp").length >= 260);
 
     const admitted = createPrivateRealRunAdmission(input, {
       now: "2026-08-01T12:00:00.000Z",

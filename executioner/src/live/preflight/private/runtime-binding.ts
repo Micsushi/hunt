@@ -86,7 +86,7 @@ export function createPrivateRealRunAdmission(
   const profilePath = browserProfilePath(input);
   if (
     process.platform === "win32" &&
-    join(profilePath, "SingletonLock").length >= 260
+    join(profilePath, "Default", ".hunt-preferences.tmp").length >= 260
   ) {
     return Object.freeze({
       ok: false,
