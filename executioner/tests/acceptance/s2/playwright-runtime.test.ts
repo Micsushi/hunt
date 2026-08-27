@@ -3835,6 +3835,7 @@ async function assertCollected(reference: WeakRef<object>): Promise<void> {
 }
 
 function owner(root: string, url: string) {
+  mkdirSync(join(root, "evidence"), { recursive: true });
   return {
     journeyId: "journey_runtime_fixture_01",
     revisionId: "revision_0123456789abcdef",
