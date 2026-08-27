@@ -8,10 +8,6 @@ import type {
   AnswerExecutionMode,
   AnswerProvenanceLane,
 } from "../../form/answers/application-types.ts";
-import {
-  testingQuestionSemanticType,
-  type TestingQuestionSemanticType,
-} from "../../form/answers/testing-policy.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 const uiTypes = new Set([
@@ -34,6 +30,20 @@ const provenances = new Set<AnswerProvenance>([
   "owner_provided", "resume_verified", "configured_template", "reviewed_catalog",
   "visible_option",
 ]);
+
+export type TestingQuestionSemanticType =
+  | "qualification_requirement"
+  | "employee_referral"
+  | "prior_employment"
+  | "sponsorship_requirement"
+  | "demographic"
+  | "compensation"
+  | "authorization"
+  | "consent"
+  | "availability"
+  | "identity"
+  | "employment"
+  | "unknown";
 
 export type QuestionAnswerLearningStrategy =
   | "owner_answer"
@@ -135,6 +145,7 @@ export interface QuestionAnswerLearningCapture {
     readonly protectedCategory: string | null;
     readonly generatedDefault: boolean;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }): void;
   record(input: {
     readonly operationId: string;
@@ -145,11 +156,13 @@ export interface QuestionAnswerLearningCapture {
     readonly protectedCategory: string | null;
     readonly generatedDefault: boolean;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }): void;
   recordUnset(input: {
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }): void;
   recordFailure(input: {
     readonly operationId: string;
@@ -240,6 +253,7 @@ export function createQuestionAnswerLearningCapture(input: {
         terminalDisposition: "needs_owner_input",
         attemptHistory: prior === undefined ? [] : [...prior.attemptHistory],
         conditionalReveal: value.conditionalReveal ?? false,
+        semanticQuestionType: value.semanticQuestionType ?? "unknown",
       });
     },
     recordFailure(value: Parameters<QuestionAnswerLearningCapture["recordFailure"]>[0]) {
@@ -530,6 +544,7 @@ function freezeRecord(value: QuestionAnswerLearningRecordV2 | MutableQuestionRec
   const {
     pendingMonitor: _pendingMonitor,
     conditionalReveal: _conditionalReveal,
+    semanticQuestionType: _semanticQuestionType,
     ...record
   } = value as MutableQuestionRecord;
   return Object.freeze({
@@ -563,6 +578,7 @@ interface MutableQuestionRecord extends Omit<{
   } | null;
   attemptHistory: QuestionAnswerAttemptV1[];
   conditionalReveal: boolean;
+  semanticQuestionType: TestingQuestionSemanticType;
 }
 
 function answerRecord(value: {
@@ -574,6 +590,7 @@ function answerRecord(value: {
   readonly protectedCategory: string | null;
   readonly generatedDefault: boolean;
   readonly conditionalReveal?: boolean;
+  readonly semanticQuestionType?: TestingQuestionSemanticType;
 }, disposition: "pending"): MutableQuestionRecord {
   return {
     questionId: value.questionId,
@@ -605,6 +622,7 @@ function answerRecord(value: {
     terminalDisposition: disposition,
     attemptHistory: [],
     conditionalReveal: value.conditionalReveal ?? false,
+    semanticQuestionType: value.semanticQuestionType ?? "unknown",
   };
 }
 
@@ -619,7 +637,7 @@ function pendingProfileQuestion(record: MutableQuestionRecord): PendingProfileQu
     fieldId: record.fieldId,
     exactQuestion: record.label,
     required: record.required,
-    semanticQuestionType: testingQuestionSemanticType(record.label),
+    semanticQuestionType: record.semanticQuestionType,
     answerType: record.answerType,
     controlType: record.uiType,
     options: Object.freeze([...record.possibleAnswers]),

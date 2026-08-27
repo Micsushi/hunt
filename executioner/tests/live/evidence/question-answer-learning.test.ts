@@ -53,6 +53,7 @@ test("question learning stores observed choices, fallback, provenance, and repla
       protectedCategory: "legal",
       generatedDefault: false,
       conditionalReveal: true,
+      semanticQuestionType: "demographic",
     }, 1);
 
     const sha256 = capture.write();

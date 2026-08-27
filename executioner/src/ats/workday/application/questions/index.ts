@@ -43,6 +43,10 @@ import {
 import { createApplicationAnswerResolver } from
   "../../../../form/answers/resolver.ts";
 import {
+  testingQuestionSemanticType,
+  type TestingQuestionSemanticType,
+} from "../../../../form/answers/testing-policy.ts";
+import {
   questionForField,
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
@@ -194,6 +198,7 @@ export interface QuestionnairePageHandlerDependencies {
     readonly protectedCategory: ProtectedQuestionCategory | null;
     readonly generatedDefault: boolean;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }) => void;
   readonly recordAttempt?: (input: {
     readonly operationId: OperationId;
@@ -204,11 +209,13 @@ export interface QuestionnairePageHandlerDependencies {
     readonly protectedCategory: ProtectedQuestionCategory | null;
     readonly generatedDefault: boolean;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }) => void;
   readonly recordUnset?: (input: {
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
     readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }) => void;
   readonly recordFailure?: (input: {
     readonly operationId: OperationId;
@@ -265,6 +272,7 @@ export function createQuestionnairePageHandler(
           questionId: resolvedQuestionId,
           field,
           conditionalReveal: request.conditionalReveal ?? false,
+          semanticQuestionType: testingQuestionSemanticType(field.label),
         });
         const answer = await resolver.resolve({
           mode,
@@ -424,6 +432,7 @@ export function createQuestionnairePageHandler(
           protectedCategory: category,
           generatedDefault,
           conditionalReveal: request.conditionalReveal ?? false,
+          semanticQuestionType: testingQuestionSemanticType(field.label),
         });
         const driven = await dependencies.driver.drive({
           journeyId: request.journeyId,

@@ -16,7 +16,10 @@ import {
 } from "../contracts/s2-common-wire.ts";
 import type { Stage2UnsealedAccountProofResult } from
   "./s2-account-verified-runner.ts";
-import { createQuestionAnswerLearningCapture } from
+import {
+  createQuestionAnswerLearningCapture,
+  type TestingQuestionSemanticType,
+} from
   "../live/evidence/question-answer-learning.ts";
 import type { RealRunRuntimeBinding } from "../live/preflight/private/runtime-binding.ts";
 import {
@@ -78,6 +81,7 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly protectedCategory: string | null;
       readonly generatedDefault: boolean;
       readonly conditionalReveal?: boolean;
+      readonly semanticQuestionType?: TestingQuestionSemanticType;
     }): void;
     recordAttempt(input: {
       readonly operationId: string;
@@ -88,11 +92,13 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly protectedCategory: string | null;
       readonly generatedDefault: boolean;
       readonly conditionalReveal?: boolean;
+      readonly semanticQuestionType?: TestingQuestionSemanticType;
     }): void;
     recordUnset(input: {
       readonly questionId: QuestionId;
       readonly field: FieldObservation;
       readonly conditionalReveal?: boolean;
+      readonly semanticQuestionType?: TestingQuestionSemanticType;
     }): void;
     recordFailure(input: {
       readonly operationId: string;
