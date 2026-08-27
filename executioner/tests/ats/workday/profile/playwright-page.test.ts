@@ -1124,6 +1124,56 @@ test("Adient flat source list maps recruiter to its unique Direct Sourcing leaf"
   }
 });
 
+test("Integer flat source list maps recruiter to its retained Recruiter Outreach leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" id="source--source" aria-required="true"
+              aria-haspopup="listbox" aria-controls="source-options" aria-expanded="false">Select One</button>
+          </div>
+        </main>
+        <div id="source-options" role="listbox" hidden>
+          <div>Open House</div><div>Recruiter Outreach</div><div>Walk In</div>
+        </div>
+        <script>
+          const source = document.querySelector('#source--source');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true'); listbox.hidden = false;
+          });
+          listbox.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.textContent !== 'Recruiter Outreach') return;
+            source.textContent = target.textContent; source.setAttribute('aria-valuetext', target.textContent);
+            source.setAttribute('aria-expanded', 'false'); listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 250 });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "recruiter",
+        "recruiter",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator("#source--source").innerText(), "Recruiter Outreach");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("search select activates the option-row ancestor of an exact active descendant", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

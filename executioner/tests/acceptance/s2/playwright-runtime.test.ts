@@ -514,6 +514,7 @@ test("Workday Review admits only its exact omitted composites and canonical disp
     "https://linkedin.com/in/wjshi",
   ), false);
   assert.equal(reviewAnswerCandidates("Direct Sourcing").has("Recruiter"), true);
+  assert.equal(reviewAnswerCandidates("Recruiter Outreach").has("Recruiter"), true);
   assert.equal(reviewAnswerCandidates("Direct Mail").has("Recruiter"), false);
 });
 

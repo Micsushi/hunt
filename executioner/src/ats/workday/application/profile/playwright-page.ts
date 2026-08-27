@@ -2319,6 +2319,8 @@ function equivalentOptionLabels(value: string): ReadonlySet<string> {
   const normalized = normalize(value);
   return new Set(new Set(["linkedin", "linkedin corporate page"]).has(normalized)
     ? ["linkedin", "linkedin corporate page"]
+    : new Set(["recruiter", "recruiter outreach"]).has(normalized)
+    ? ["recruiter", "recruiter outreach"]
     : normalized === "computer science"
     ? [normalized, "computer and information science"]
     : normalized === "computer and information science"

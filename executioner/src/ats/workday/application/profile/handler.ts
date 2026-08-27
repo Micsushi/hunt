@@ -797,7 +797,8 @@ function sourceOptionEquivalent(actual: string, expected: string): boolean {
     normalize(expected).toLocaleLowerCase("en-US"),
   ]);
   return equivalentOption(actual, expected) || (
-    pair.size === 2 && pair.has("recruiter") && pair.has("direct sourcing")
+    pair.size === 2 && pair.has("recruiter") &&
+    (pair.has("direct sourcing") || pair.has("recruiter outreach"))
   );
 }
 

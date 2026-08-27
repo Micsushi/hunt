@@ -2235,6 +2235,7 @@ export function reviewAnswerCandidates(value: string): ReadonlySet<string> {
   }
   if (/\bCELL\b/u.test(normalized)) candidates.add("Mobile");
   if (/^Direct Sourcing$/iu.test(normalized)) candidates.add("Recruiter");
+  if (/^Recruiter Outreach$/iu.test(normalized)) candidates.add("Recruiter");
   return candidates;
 }
 
