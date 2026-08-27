@@ -33,6 +33,12 @@ interface BrowserApplicationSnapshot {
       readonly fieldOwnerSelectedItemCount: number;
       readonly inputNonEmpty: boolean;
       readonly ariaValueNonEmpty: boolean;
+      readonly textNonEmpty: boolean;
+      readonly ariaDescribedByPresent: boolean;
+      readonly referencedValidation: boolean;
+      readonly ownedValidation: boolean;
+      readonly unownedValidation: boolean;
+      readonly fieldOwnerInputNonEmptyCount: number;
       readonly dateReactHandlerLayers?: readonly {
         readonly hostTag: string;
         readonly domDepth: number;
@@ -708,13 +714,19 @@ function readApplicationSnapshot(
       control instanceof HTMLTextAreaElement ||
       control instanceof HTMLSelectElement
     ) && !control.validity.valid;
-    const referencedValidation = [
+    const referencedMessages = [
       control.getAttribute("aria-errormessage"),
       control.getAttribute("aria-describedby"),
     ].filter((ids): ids is string => ids !== null)
       .flatMap((ids) => ids.split(/\s+/u))
-      .map((id) => document.getElementById(id))
-      .some((element) => element !== null && visible(element) && text(element.textContent) !== "");
+      .map((id) => document.getElementById(id));
+    const referencedValidation = referencedMessages.some((element) =>
+      element !== null && visible(element) && text(element.textContent) !== "" &&
+      element.matches(
+        '[role="alert"], [data-automation-id="inputAlert"], ' +
+        '[data-automation-id*="error" i], [id*="error" i]',
+      )
+    );
     const ownedValidation = fieldOwner !== null && [...fieldOwner.querySelectorAll<HTMLElement>(
       '[role="alert"], [data-automation-id="inputAlert"], [data-automation-id*="error" i]',
     )].some((element) => visible(element) && text(element.textContent) !== "");
@@ -1065,6 +1077,15 @@ function readApplicationSnapshot(
           control instanceof HTMLTextAreaElement
         ) && control.value.trim() !== "",
         ariaValueNonEmpty: text(control.getAttribute("aria-valuetext")) !== "",
+        textNonEmpty: text(control.textContent) !== "",
+        ariaDescribedByPresent: text(control.getAttribute("aria-describedby")) !== "",
+        referencedValidation,
+        ownedValidation,
+        unownedValidation,
+        fieldOwnerInputNonEmptyCount: fieldOwner === null ? 0 :
+          [...fieldOwner.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+            "input, textarea",
+          )].filter((candidate) => candidate.value.trim() !== "").length,
         ...(dateReactHandlerLayers === undefined ? {} : { dateReactHandlerLayers }),
         ...(checkboxReactHandlerLayers === undefined ? {} : { checkboxReactHandlerLayers }),
       },

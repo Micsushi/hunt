@@ -56,9 +56,12 @@ test("Intermountain retained Profile button selects agree with the completion ga
         <main data-automation-id="applyFlowMyInfoPage">
           <div data-automation-id="formField-country">
             <label>Country<span data-automation-id="required">*</span></label>
-            <button id="country--country" type="button" aria-required="true">Canada</button>
+            <button id="country--country" type="button" aria-required="true"
+              aria-describedby="country-description">Canada</button>
+            <span id="country-description">Select your country of residence.</span>
             <input style="display:none">
           </div>
+          <label>City<input id="addresss--city" name="city" value="Edmonton"></label>
           <div data-automation-id="formField-phoneNumber--phoneType">
             <label>Phone Device Type<span data-automation-id="required">*</span></label>
             <button id="phoneNumber--phoneType" type="button" aria-required="true">Mobile</button>
@@ -81,6 +84,7 @@ test("Intermountain retained Profile button selects agree with the completion ga
     }).inspect(new AbortController().signal);
     const readbacks = new Map(profile.controls.map(({ fieldId, readback }) => [fieldId, readback]));
     assert.equal(readbacks.get("address.country"), "Canada");
+    assert.equal(readbacks.get("address.city"), "Edmonton");
     assert.equal(readbacks.get("phone.device_type"), "Mobile");
 
     const application = new PlaywrightWorkdayApplicationPage(page);

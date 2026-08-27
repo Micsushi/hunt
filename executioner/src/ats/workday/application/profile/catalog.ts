@@ -244,7 +244,12 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
     },
     v2Text("address.line1", "address--addressLine1"),
     v2Text("address.line2", "address--addressLine2"),
-    v2Text("address.city", "address--city"),
+    {
+      fieldId: "address.city",
+      selector: '[id="address--city"], [id="addresss--city"]',
+      uiBehavior: "text",
+      uiVariant: "workday_text_v2",
+    },
     v2Search("address.country", "country--country"),
     v2Search("address.region", "address--countryRegion"),
     v2Text("address.postal_code", "address--postalCode"),
