@@ -41,9 +41,47 @@ import {
   isWorkdayReviewOmittedProfileField,
   monitorQuestionnaireCoverage,
   OwnedWorkdayApplicationRuntime,
+  questionnairePopupHydrationTargets,
   reviewAnswerCandidates,
+  seedCanonicalBinaryQuestionnaireOptions,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("known binary questionnaire choices defer discovery to the exact selection popup", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-referral">
+        <label>Have you been referred by an Integer associate? <span data-automation-id="required">*</span></label>
+        <button type="button" aria-haspopup="listbox">Select One</button>
+      </div>
+    </main>`);
+    const pageId = "page-deferred-binary-question" as never;
+    await bindQuestionnaireTargets(page, pageId);
+
+    await seedCanonicalBinaryQuestionnaireOptions(page);
+
+    const button = page.locator('button[aria-haspopup="listbox"]');
+    assert.equal(await button.getAttribute("data-hunt-popup-options"), null);
+    assert.equal(await button.getAttribute("data-hunt-deferred-options"), '["Yes","No"]');
+    assert.deepEqual(await questionnairePopupHydrationTargets(page), []);
+    const semantic = await inspectPage(
+      page,
+      "live_session_deferred_binary_01" as never,
+      pageId,
+      new Map(),
+    );
+    const target = semantic.observation.targets[0];
+    assert.equal(target?.control.kind, "select");
+    assert.deepEqual(
+      target?.control.kind === "select" ? target.control.options : [],
+      ["Yes", "No"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
 
 test("retained Integer questionnaire date marker agrees across all coverage observers", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -1305,6 +1343,7 @@ test("questionnaire batches external proof once while every field keeps independ
     <div data-automation-id="formField-sponsorship"><label>Will you now or in the future require sponsorship? <span aria-hidden="true">*</span></label><button id="mcvf2" type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <label>Brief interest statement<textarea id="mcvf3" required aria-label="Brief interest statement"></textarea></label>
     <div data-automation-id="formField-source"><label>How Did You Hear About Us? <span aria-hidden="true">*</span></label><button id="mcvf4" type="button" aria-label="Select One Required" aria-haspopup="listbox">Select One</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">LinkedIn</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Indeed</div></div></div></div>
+    <div id="conditional-age" data-automation-id="formField-age" hidden><label>Are you at least 18 years of age? <span aria-hidden="true">*</span></label><button id="mcvf5" type="button" aria-label="Select One Required" aria-haspopup="listbox">Select One</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <script>
       const originalScrollIntoView = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = function(options) {
@@ -1323,6 +1362,7 @@ test("questionnaire batches external proof once while every field keeps independ
           button.textContent = option.textContent.trim();
           button.dataset.committed = 'true';
           options.hidden = true;
+          if (button.id === 'mcvf2') document.querySelector('#conditional-age').hidden = false;
         });
       });
     </script>
@@ -1355,6 +1395,7 @@ test("questionnaire batches external proof once while every field keeps independ
             const facts = {
               work_authorization: { value: true, provenance: "owner_provided" },
               sponsorship_required: { value: false, provenance: "owner_provided" },
+              age_requirement_met: { value: true, provenance: "owner_provided" },
               application_source: { value: "LinkedIn", provenance: "owner_provided" },
               configured_narrative: {
                 value: "Exact configured interest statement.",
@@ -1397,7 +1438,7 @@ test("questionnaire batches external proof once while every field keeps independ
         monitored.push({ moment, operationId: event.operationId, attempt: event.attempt });
         if (
           !finalQuestionnaireRemounted && moment === "after_readback" &&
-          await page.locator('button[data-committed="true"]').count() === 3 &&
+          await page.locator('button[data-committed="true"]').count() === 4 &&
           await page.locator("textarea").inputValue() === "Exact configured interest statement."
         ) {
           finalQuestionnaireRemounted = true;
@@ -1423,6 +1464,9 @@ test("questionnaire batches external proof once while every field keeps independ
         if (taxonomy.fieldCount === 4 && taxonomy.questionTypes.includes("authorization")) {
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
+        } else if (taxonomy.fieldCount === 5 && taxonomy.questionTypes.includes("authorization")) {
+          assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
+          assert.equal(taxonomy.requiredFieldCount, 5);
         } else if (taxonomy.fieldCount === 4 && taxonomy.requiredFieldCount === 0) {
           assert.deepEqual(taxonomy.questionTypes, ["demographic"]);
           assert.equal(taxonomy.requiredFieldCount, 0);
@@ -1472,15 +1516,19 @@ test("questionnaire batches external proof once while every field keeps independ
       input: { attempt: 1, pageId: "page-questionnaire" } as never,
     }, new AbortController().signal);
 
-    assert.equal((result as { ok: boolean }).ok, true);
+    assert.equal(
+      (result as { ok: boolean }).ok,
+      true,
+      JSON.stringify(result),
+    );
     assert.equal(finalQuestionnaireRemounted, true);
     assert.equal(await page.locator("textarea").inputValue(), "Exact configured interest statement.");
-    assert.equal(await page.locator('button[data-committed="true"]').count(), 3);
+    assert.equal(await page.locator('button[data-committed="true"]').count(), 4);
     assert.deepEqual(
       await page.locator('button[data-committed="true"]').evaluateAll((buttons) =>
         buttons.map((button) => button.dataset.scrollBlock)
       ),
-      ["center", "center", "center"],
+      ["center", "center", "center", "center"],
     );
     assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === runOperation).map(({ moment }) => moment),

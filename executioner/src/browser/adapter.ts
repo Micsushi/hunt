@@ -2071,11 +2071,14 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
     const fieldPopupOptions = (element: Element): string[] => {
       const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
       const observed = (() => {
-        const encoded = element.getAttribute("data-hunt-popup-options");
+        const encoded = element.getAttribute("data-hunt-popup-options") ??
+          element.getAttribute("data-hunt-deferred-options");
         if (encoded === null) return [];
         try {
           const parsed: unknown = JSON.parse(encoded);
-          return Array.isArray(parsed) && parsed.every((option) => typeof option === "string")
+          const deferred = element.hasAttribute("data-hunt-deferred-options");
+          return Array.isArray(parsed) && parsed.every((option) => typeof option === "string") &&
+              (!deferred || parsed.length === 2 && parsed[0] === "Yes" && parsed[1] === "No")
             ? parsed.map((option) => normalize(option)).filter(Boolean)
             : [];
         } catch {

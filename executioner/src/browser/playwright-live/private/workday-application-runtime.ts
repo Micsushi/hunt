@@ -59,6 +59,7 @@ import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
+import { questionForField } from "../../../form/questions/catalog.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
 import {
   workdayReviewSignatures,
@@ -76,6 +77,17 @@ import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page
 import type { PersistentPage } from "./types.ts";
 
 const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
+
+interface QuestionnaireReconciliationBatch {
+  readonly operationId: OperationId;
+  readonly attempt: number;
+  pass: number;
+  lastIncomplete?: {
+    readonly requiredFields: number;
+    readonly verifiedFields: number;
+  };
+  close(): Promise<void>;
+}
 
 export function applicationReadyMonitorPage(
   page: PersistentPage,
@@ -987,36 +999,48 @@ export class OwnedWorkdayApplicationRuntime {
     session: LiveBrowserSessionV1,
     monitorPageName: "resume" | "profile" | "questionnaire",
     signal: AbortSignal,
+    batch?: QuestionnaireReconciliationBatch,
   ): Promise<unknown> {
-    const batchOperationId = this.#nextOperationId();
-    const batchAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
-    await this.#monitor(
-      page, monitorPageName, "before_mutation", batchOperationId, batchAttempt, signal,
-    );
-    if (this.#externalMonitor !== undefined) {
-      request.questionLearning?.monitorBatchAck({
-        operationId: batchOperationId,
-        attempt: batchAttempt,
-        moment: "before_mutation",
-      });
-    }
-    let batchClosed = false;
-    const closeBatch = async () => {
-      if (batchClosed) return;
+    let sharedBatch = batch;
+    if (sharedBatch === undefined) {
+      const batchOperationId = this.#nextOperationId();
+      const batchAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
       await this.#monitor(
-        page, monitorPageName, "after_readback", batchOperationId, batchAttempt, signal,
+        page, monitorPageName, "before_mutation", batchOperationId, batchAttempt, signal,
       );
       if (this.#externalMonitor !== undefined) {
         request.questionLearning?.monitorBatchAck({
           operationId: batchOperationId,
           attempt: batchAttempt,
-          moment: "after_readback",
+          moment: "before_mutation",
         });
       }
-      batchClosed = true;
-      this.#assertAuthorized(signal);
-    };
+      let batchClosed = false;
+      const close = async () => {
+        if (batchClosed) return;
+        await this.#monitor(
+          page, monitorPageName, "after_readback", batchOperationId, batchAttempt, signal,
+        );
+        if (this.#externalMonitor !== undefined) {
+          request.questionLearning?.monitorBatchAck({
+            operationId: batchOperationId,
+            attempt: batchAttempt,
+            moment: "after_readback",
+          });
+        }
+        batchClosed = true;
+        this.#assertAuthorized(signal);
+      };
+      sharedBatch = {
+        operationId: batchOperationId,
+        attempt: batchAttempt,
+        pass: 1,
+        close,
+      };
+    }
+    const closeBatch = sharedBatch.close;
     await bindQuestionnaireTargets(page, input.pageId);
+    await seedCanonicalBinaryQuestionnaireOptions(page);
     for (const targetToken of await questionnairePopupHydrationTargets(page)) {
       this.#assertAuthorized(signal);
       await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
@@ -1159,7 +1183,6 @@ export class OwnedWorkdayApplicationRuntime {
           resumeArtifact: request.ownerSources.resumeIntent.artifact,
           page: snapshot,
         }, signal);
-        await closeBatch();
       } catch (error) {
         await closeBatch();
         const learningSha256 = questionLearning?.write() ?? null;
@@ -1180,6 +1203,7 @@ export class OwnedWorkdayApplicationRuntime {
         throw new TypeError("questionnaire browser effect uncertain");
       }
       if (!completed.ok) {
+        await closeBatch();
         questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
@@ -1189,6 +1213,7 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
+        await closeBatch();
         questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
@@ -1219,8 +1244,50 @@ export class OwnedWorkdayApplicationRuntime {
         );
       }
       if (completed.value.protectedPlaceholderCount !== 0) {
+        await closeBatch();
         return applicationFailure("page_incomplete", "question_control", "question");
       }
+      await bindQuestionnaireTargets(page, input.pageId);
+      const completion = await new PlaywrightWorkdayApplicationPage(
+        page,
+        { timeoutMs: this.#timeoutMs },
+      ).observe(signal);
+      if (!completion.ok || completion.value.page !== "questionnaire" ||
+          completion.value.submitActivated) {
+        await closeBatch();
+        throw new TypeError("questionnaire completion truth unavailable");
+      }
+      const requiredFields = completion.value.requiredFields.length;
+      const verifiedFields = completion.value.requiredFields.filter(
+        ({ verification }) => verification === "verified",
+      ).length;
+      if (completion.value.c3OwnedDuplicateRows !== 0 || verifiedFields !== requiredFields) {
+        const previous = sharedBatch.lastIncomplete;
+        const progressed = previous === undefined ||
+          requiredFields > previous.requiredFields || verifiedFields > previous.verifiedFields;
+        if (!progressed || sharedBatch.pass >= 16 ||
+            completion.value.c3OwnedDuplicateRows !== 0) {
+          await closeBatch();
+          return applicationFailure("page_incomplete", "question_control", "required_field");
+        }
+        sharedBatch.lastIncomplete = { requiredFields, verifiedFields };
+        sharedBatch.pass += 1;
+        this.#trace?.("questionnaire_conditional_rescan_started", {
+          pass: sharedBatch.pass,
+          requiredFields,
+          verifiedFields,
+        });
+        return await this.#reconcileQuestionnaire(
+          page,
+          input,
+          request,
+          session,
+          monitorPageName,
+          signal,
+          sharedBatch,
+        );
+      }
+      await closeBatch();
       this.#acceptances.record(Object.freeze({
         schemaVersion: 1,
         checkpoint: "questionnaire_verified",
@@ -2518,7 +2585,8 @@ export async function questionnairePopupHydrationTargets(
     )].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true" ||
-          control.hasAttribute("data-hunt-popup-options")) return false;
+          control.hasAttribute("data-hunt-popup-options") ||
+          control.hasAttribute("data-hunt-deferred-options")) return false;
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
@@ -2536,6 +2604,40 @@ export async function questionnairePopupHydrationTargets(
     }).map((control) => control.getAttribute("data-hunt-target-token") ?? "")
       .filter(Boolean);
   }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS }));
+}
+
+export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promise<void> {
+  const candidates = await page.evaluate(() => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    return [...document.querySelectorAll<HTMLElement>(
+      'button[aria-haspopup="listbox"][data-hunt-target-token]:not([data-hunt-popup-options])' +
+        ':not([data-hunt-deferred-options])',
+    )].map((control) => ({
+      token: control.getAttribute("data-hunt-target-token") ?? "",
+      label: normalize(control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      )?.querySelector("label, legend")?.textContent),
+    })).filter(({ token, label }) => token !== "" && label !== "");
+  });
+  const binaryFacts = new Set<string>([
+    "work_authorization", "sponsorship_required", "age_requirement_met",
+    "previously_worked_for_organization", "associate_referral", "current_associate",
+    "previously_applied", "relatives_employed", "essential_functions_ability",
+    "employment_agreement_prevents_employment", "terms_consent",
+  ]);
+  for (const candidate of candidates) {
+    const definition = questionForField(candidate.label, "listbox");
+    if (definition?.source.kind !== "profile" ||
+        !binaryFacts.has(definition.source.factId)) {
+      continue;
+    }
+    const target = page.locator(`[data-hunt-target-token="${candidate.token}"]`);
+    if (await target.count() !== 1 || !await target.isVisible()) continue;
+    await target.evaluate((control) => {
+      control.setAttribute("data-hunt-deferred-options", '["Yes","No"]');
+    });
+  }
 }
 
 export async function hydrateQuestionnairePopupOptions(
