@@ -775,8 +775,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ].join(""))) {
           const country = element.closest('[data-automation-id="formField-country"]');
           if (country !== null && country.querySelector(
-            'button[id="country--country"][role="combobox"], ' +
-            'button[id="country--country"][aria-haspopup="listbox"]',
+            'button[id="country--country"]',
           ) !== null) return true;
         }
         if (

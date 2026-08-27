@@ -47,6 +47,61 @@ import {
 import type { UnknownCandidateId } from "../../../src/contracts/live/index.ts";
 import { walkFixture } from "./fixtures.ts";
 
+test("Intermountain retained Profile button selects agree with the completion gate", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-application-page="profile" data-hunt-page-id="intermountain-profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-country">
+            <label>Country<span data-automation-id="required">*</span></label>
+            <button id="country--country" type="button" aria-required="true">Canada</button>
+            <input style="display:none">
+          </div>
+          <div data-automation-id="formField-phoneNumber--phoneType">
+            <label>Phone Device Type<span data-automation-id="required">*</span></label>
+            <button id="phoneNumber--phoneType" type="button" aria-required="true">Mobile</button>
+            <input style="display:none">
+          </div>
+          <button id="continue" type="button">Save and Continue</button>
+        </main>
+        <script>
+          document.querySelector('#continue').addEventListener('click', () => {
+            document.body.dataset.huntApplicationPage = 'questionnaire';
+            document.body.dataset.huntPageId = 'intermountain-questionnaire';
+            document.body.innerHTML = '<main data-automation-id="applyFlowApplicationQuestionsPage"><label><input type="radio" name="answer" required checked>Yes</label><button type="button">Save and Continue</button></main>';
+          });
+        </script>
+      </body>
+    `);
+
+    const profile = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(new AbortController().signal);
+    const readbacks = new Map(profile.controls.map(({ fieldId, readback }) => [fieldId, readback]));
+    assert.equal(readbacks.get("address.country"), "Canada");
+    assert.equal(readbacks.get("phone.device_type"), "Mobile");
+
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    const observed = await application.observe(new AbortController().signal);
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    if (!observed.ok) return;
+    assert.deepEqual(observed.value.requiredFields, [
+      { fieldId: "country--country", page: "profile", verification: "verified" },
+      { fieldId: "phoneNumber--phoneType", page: "profile", verification: "verified" },
+    ]);
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "profile",
+      fromPageId: observed.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("walks a real combined Resume/Profile page through both verified lanes", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

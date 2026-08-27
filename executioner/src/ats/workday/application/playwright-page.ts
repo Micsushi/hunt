@@ -617,6 +617,9 @@ function readApplicationSnapshot(
     '[tabindex]:not([tabindex="-1"])',
     'button[data-automation-id="sourcePrompt"]',
     'button[aria-haspopup="listbox"]',
+    'button[id="country--country"]',
+    'button[id="address--countryRegion"]',
+    'button[id="phoneNumber--phoneType"]',
     '[aria-required="true"]',
   ].join(", ");
   const candidates = [...new Set(root.querySelectorAll<HTMLElement>(candidateSelector))]
@@ -992,7 +995,13 @@ function readApplicationSnapshot(
       verified = verified && control.getAttribute("aria-checked") === "true";
     } else if (control instanceof HTMLSelectElement) {
       verified = verified && control.value.trim() !== "";
-    } else if (role === "combobox" || control.matches('button[aria-haspopup="listbox"]')) {
+    } else if (role === "combobox" || control.matches([
+      'button[aria-haspopup="listbox"]',
+      'button[data-automation-id="sourcePrompt"]',
+      'button[id="country--country"]',
+      'button[id="address--countryRegion"]',
+      'button[id="phoneNumber--phoneType"]',
+    ].join(", "))) {
       const declared = text(control.getAttribute("aria-valuetext"));
       const declaredPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
         declared.toLocaleLowerCase("en-US"),
