@@ -569,6 +569,32 @@ test("unknown choices randomly select a visible non-placeholder option only in s
   });
 });
 
+test("one resolver keeps a random synthetic choice stable across conditional rescans", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let selection = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => selection++,
+  );
+  const observed = field("Unreviewed conditional choice", "select", [
+    { id: optionId("option-yes"), label: boundedText("Yes") },
+    { id: optionId("option-no"), label: boundedText("No") },
+  ]);
+
+  const first = await resolver.resolve(syntheticRequest(observed), new AbortController().signal);
+  const rescanned = await resolver.resolve(
+    syntheticRequest(observed),
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(rescanned, first);
+  assert.equal(selection, 1);
+});
+
 test("semantic testing defaults distinguish qualifications from sponsorship", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
@@ -586,6 +612,7 @@ test("semantic testing defaults distinguish qualifications from sponsorship", as
   for (const label of [
     "Do you meet all minimum qualifications listed in this job posting?",
     "Can you perform the essential functions of this job with or without accommodation?",
+    "Do you certify that you are 18 years of age or older?",
   ]) {
     const result = await resolver.resolve(
       syntheticRequest(field(label, "listbox", yesNo)),

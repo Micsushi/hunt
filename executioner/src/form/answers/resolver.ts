@@ -309,6 +309,23 @@ export function createApplicationAnswerResolver(
   }
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
+  const syntheticChoiceIndexes = new Map<string, number>();
+  const stableRandomIndexFor = (field: FieldObservation) => (length: number): number => {
+    const key = JSON.stringify([
+      field.fieldId,
+      field.target,
+      field.behavior,
+      field.options.map(({ id, label }) => [id, label]),
+    ]);
+    const existing = syntheticChoiceIndexes.get(key);
+    if (existing !== undefined) return existing;
+    const selected = selectRandomIndex(length);
+    if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
+      syntheticChoiceIndexes.set(key, selected);
+    }
+    return selected;
+  };
+
   const query = profileQuery.query as ApplicationProfileQuery["query"];
   return Object.freeze({
     async resolve(request: ApplicationAnswerResolutionRequest, signal: AbortSignal) {
@@ -334,7 +351,9 @@ export function createApplicationAnswerResolver(
           return failure(protectedCategory === null ? "question_unknown" : "protected_answer_denied");
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
-          generatedLearningIntent(field, request.resumeArtifact, generatedDate, selectRandomIndex);
+          generatedLearningIntent(
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+          );
         return generated === undefined
           ? failure("question_unknown")
           : success(generated);
@@ -344,7 +363,9 @@ export function createApplicationAnswerResolver(
           return failure(protectedCategory === null ? "question_ambiguous" : "protected_answer_denied");
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
-          generatedLearningIntent(field, request.resumeArtifact, generatedDate, selectRandomIndex);
+          generatedLearningIntent(
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+          );
         return generated === undefined
           ? failure("question_ambiguous")
           : success(generated);
@@ -359,7 +380,9 @@ export function createApplicationAnswerResolver(
             : failure("protected_answer_denied");
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
-          generatedLearningIntent(field, request.resumeArtifact, generatedDate, selectRandomIndex);
+          generatedLearningIntent(
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+          );
         return generated === undefined ? unsupported(field) : success(generated);
       }
 
@@ -434,7 +457,7 @@ export function createApplicationAnswerResolver(
               field,
               request.resumeArtifact,
               generatedDate,
-              selectRandomIndex,
+              stableRandomIndexFor(field),
             ) ?? intended);
       }
 
@@ -474,7 +497,7 @@ export function createApplicationAnswerResolver(
                   field,
                   request.resumeArtifact,
                   generatedDate,
-                  selectRandomIndex,
+                  stableRandomIndexFor(field),
                 ) ?? intended,
           );
         }
@@ -482,7 +505,7 @@ export function createApplicationAnswerResolver(
           field,
           request.resumeArtifact,
           generatedDate,
-          selectRandomIndex,
+          stableRandomIndexFor(field),
         );
         return generated === undefined
           ? success({
@@ -514,7 +537,7 @@ export function createApplicationAnswerResolver(
             field,
             request.resumeArtifact,
             generatedDate,
-            selectRandomIndex,
+            stableRandomIndexFor(field),
           ) ?? intent)
         : success(intent);
     },

@@ -31,6 +31,7 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
     /\b(?:meet|satisfy)\b.*\b(?:qualification|qualifications|requirement|requirements)\b/u.test(value) ||
     /\b(?:can|able|ability|physically)\b.*\bperform\b.*\bessential functions?\b/u.test(value) ||
     /\bat least 18 years?\b/u.test(value) ||
+    /\b18 years? of age\b.*\b(?:older|minimum|requirement)\b/u.test(value) ||
     /\b(?:have|possess)\b.*\b(?:required|minimum)\b.*\b(?:experience|education|license|licenses|certification|certifications|skill|skills)\b/u.test(value)
   ) return "qualification_requirement";
   if (/\b(?:gender|sex|race|ethnicity|hispanic|latino|veteran|military|disability|disabled)\b/u.test(value)) {

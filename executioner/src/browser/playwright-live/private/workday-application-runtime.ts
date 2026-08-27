@@ -60,6 +60,9 @@ import type { SanitizedStructuralObservationV1 } from
   "../../../contracts/live/index.ts";
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
+import type { ApplicationAnswerResolver } from
+  "../../../form/answers/application-types.ts";
+import { createApplicationAnswerResolver } from "../../../form/answers/resolver.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
@@ -88,6 +91,7 @@ interface QuestionnaireReconciliationBatch {
     readonly requiredFields: number;
     readonly verifiedFields: number;
   };
+  readonly answerResolver: ApplicationAnswerResolver;
   close(): Promise<void>;
 }
 
@@ -1037,6 +1041,10 @@ export class OwnedWorkdayApplicationRuntime {
         operationId: batchOperationId,
         attempt: batchAttempt,
         pass: 1,
+        answerResolver: createApplicationAnswerResolver(
+          request.ownerSources.profileQuery,
+          request.ownerSources.narrative.resolve("s1-question-configured-narrative")?.text,
+        ),
         close,
       };
     }
@@ -1152,6 +1160,7 @@ export class OwnedWorkdayApplicationRuntime {
       const questionLearning = request.questionLearning;
       const questionnaire = createQuestionnairePageHandler({
         profileQuery: request.ownerSources.profileQuery,
+        answerResolver: sharedBatch.answerResolver,
         driver,
         verifier,
         narrative: request.ownerSources.narrative,
