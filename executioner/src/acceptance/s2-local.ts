@@ -132,6 +132,14 @@ export function createLocalStage2AcceptancePorts(
           evidenceRoot: args.evidenceRoot,
         });
       },
+      sealFailure: async (args) => {
+        await completionAudit(args.evidenceRoot);
+        await finalize({
+          storageRoot: dirname(dirname(dirname(args.configPath))),
+          ownerConfigPath: args.configPath,
+          evidenceRoot: args.evidenceRoot,
+        });
+      },
     },
   };
 }

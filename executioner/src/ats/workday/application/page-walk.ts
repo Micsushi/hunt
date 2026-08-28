@@ -169,7 +169,7 @@ export async function runApplicationPageWalk(
       );
       const handler = dependencies.handlers[lane];
       let check: ApplicationPageCheck | undefined;
-      let previousIncompleteCheck: ApplicationPageCheck | undefined;
+      let previousIncompleteSignature: string | undefined;
       let verifiedPageId: ApplicationPageTruth["pageId"] | undefined;
       const expectedCheckpoint = checkpointForApplicationPage(lane);
       const attemptLimit = lane === "questionnaire"
@@ -216,16 +216,16 @@ export async function runApplicationPageWalk(
         );
         check = pageCheck(lane, expectedCheckpoint, truth);
         if (check.requiredFields === check.verifiedFields && check.duplicateRows === 0) break;
+        const incompleteSignature = pageFixedPointSignature(lane, truth);
         const questionnaireProgressed = lane === "questionnaire" &&
-          previousIncompleteCheck !== undefined &&
-          (check.requiredFields > previousIncompleteCheck.requiredFields ||
-            check.verifiedFields > previousIncompleteCheck.verifiedFields);
+          previousIncompleteSignature !== undefined &&
+          incompleteSignature !== previousIncompleteSignature;
         if (
           lane === "questionnaire" && check.duplicateRows === 0 &&
           (attempt <= retryLimit ||
             (questionnaireProgressed && attempt < attemptLimit))
         ) {
-          previousIncompleteCheck = check;
+          previousIncompleteSignature = incompleteSignature;
           verifiedPageId = undefined;
           continue;
         }
@@ -559,6 +559,19 @@ function pageCheck(
       ? 0
       : truth.c3OwnedDuplicateRows,
   };
+}
+
+function pageFixedPointSignature(
+  page: ApplicationHandlerPage,
+  truth: ApplicationPageTruth,
+): string {
+  return JSON.stringify({
+    duplicateRows: truth.c3OwnedDuplicateRows,
+    required: truth.requiredFields.filter((field) =>
+      (field.page ?? truth.page) === page
+    ).map(({ fieldId: id, verification }) => ({ identity: id, verification }))
+      .sort((left, right) => left.identity.localeCompare(right.identity)),
+  });
 }
 
 function observedLanes(

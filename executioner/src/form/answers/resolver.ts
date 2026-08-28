@@ -9,12 +9,12 @@ import {
   type AnswerResolver,
   type AnswerProvenance,
   type FieldIntent,
-  type FieldObservation,
   type ProfileQuery,
   type ProfileQueryRequest,
 } from "../../contracts/index.ts";
 import type {
   AnswerProvenanceLane,
+  ApplicationFieldObservation,
   ApplicationProfileQuery,
 } from "./application-types.ts";
 import type {
@@ -55,7 +55,7 @@ function failure(
   });
 }
 
-function unsupported(field: FieldObservation) {
+function unsupported(field: ApplicationFieldObservation) {
   return success({ kind: "unsupported", fieldId: field.fieldId });
 }
 
@@ -77,7 +77,7 @@ function localIsoDate(date: Date): string {
 }
 
 function intentFor(
-  field: FieldObservation,
+  field: ApplicationFieldObservation,
   canonicalQuestionId: CanonicalQuestionId | undefined,
   value: string | number | boolean,
   provenance: AnswerProvenance,
@@ -181,7 +181,7 @@ function intentFor(
 }
 
 function matchedChoiceIntent(
-  field: FieldObservation,
+  field: ApplicationFieldObservation,
   value: string,
 ): ApplicationAnswerResolutionResult | undefined {
   if (
@@ -208,12 +208,14 @@ function matchedChoiceIntent(
 const placeholderOption = /^(?:select|choose|please select|select one|choose one|none selected)$/u;
 
 function generatedLearningIntent(
-  field: FieldObservation,
+  field: ApplicationFieldObservation,
   resumeArtifact: ApplicationAnswerResolutionRequest["resumeArtifact"],
   generatedDate: string,
   selectRandomIndex: (length: number) => number,
 ): ApplicationAnswerResolutionResult | undefined {
   if (field.behavior === "text" || field.behavior === "textarea") {
+    const value = generatedTextValue(field);
+    if (value === undefined) return undefined;
     return {
       kind: "resolved",
       lane: "synthetic_test_default",
@@ -222,7 +224,7 @@ function generatedLearningIntent(
         behavior: field.behavior,
         fieldId: field.fieldId,
         target: field.target,
-        value: "Test response pending owner review.",
+        value,
         provenance: "reviewed_catalog",
       },
     };
@@ -299,6 +301,36 @@ function generatedLearningIntent(
   return undefined;
 }
 
+function generatedTextValue(field: ApplicationFieldObservation): string | undefined {
+  const constraints = field.constraints;
+  let value = constraints?.inputType === "email"
+    ? "test@example.invalid"
+    : constraints?.inputType === "url"
+      ? "https://example.invalid/test"
+      : constraints?.inputType === "number"
+        ? String(Math.min(constraints.max ?? 0, Math.max(constraints.min ?? 0, 0)))
+        : "Test response pending owner review.";
+  if (constraints?.maxLength !== null && constraints?.maxLength !== undefined) {
+    value = [...value].slice(0, constraints.maxLength).join("");
+  }
+  if (value === "") return undefined;
+  if (constraints?.pattern !== null && constraints?.pattern !== undefined) {
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(`^(?:${constraints.pattern})$`, "u");
+    } catch {
+      return undefined;
+    }
+    const maximum = constraints.maxLength ?? 512;
+    const candidates = [value, "Test1", "Test", "1", "0", "A", "a"]
+      .map((candidate) => [...candidate].slice(0, maximum).join(""))
+      .filter(Boolean);
+    value = candidates.find((candidate) => pattern.test(candidate)) ?? "";
+    if (value === "") return undefined;
+  }
+  return value;
+}
+
 export function createApplicationAnswerResolver(
   profileQuery: ProfileQuery | ApplicationProfileQuery,
   narrativeTemplate: string | undefined,
@@ -311,11 +343,19 @@ export function createApplicationAnswerResolver(
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
   const syntheticChoiceLabels = new Map<string, string>();
-  const stableRandomIndexFor = (field: FieldObservation) => (length: number): number => {
-    const resolution = resolveQuestion(field.label);
-    const key = resolution.kind === "resolved"
-      ? `catalog:${resolution.id}`
-      : `observed:${normalizeCatalogText(field.label)}`;
+  const syntheticReplacementReasons = new Map<
+    string,
+    "committed_value_adopted" | "cached_option_unavailable"
+  >();
+  const stableRandomIndexFor = (
+    request: ApplicationAnswerResolutionRequest,
+  ) => (length: number): number => {
+    const { field } = request;
+    // The resolver instance is page-batch scoped, so the deterministic field ID
+    // is the stable page-local slot. Semantic question classes and labels are
+    // deliberately not identities: two controls may ask the same kind of
+    // question while exposing disjoint option catalogs.
+    const key = String(field.fieldId);
     const options = field.options.filter(({ label }) =>
       !placeholderOption.test(String(label).trim().toLowerCase())
     );
@@ -323,14 +363,44 @@ export function createApplicationAnswerResolver(
     const existing = syntheticChoiceLabels.get(key);
     if (existing !== undefined) {
       const rebound = options.findIndex(({ label }) => normalizeCatalogText(label) === existing);
-      if (rebound < 0) throw new TypeError("persisted synthetic option unavailable");
-      return rebound;
+      if (rebound >= 0) return rebound;
+      const committed = request.committedReadback?.kind === "selected"
+        ? request.committedReadback.option
+        : null;
+      const adopted = committed === null || committed === undefined
+        ? -1
+        : options.findIndex(({ label }) =>
+          normalizeCatalogText(label) === normalizeCatalogText(committed)
+        );
+      if (adopted >= 0) {
+        syntheticChoiceLabels.set(key, normalizeCatalogText(options[adopted]!.label));
+        syntheticReplacementReasons.set(key, "committed_value_adopted");
+        return adopted;
+      }
+      const selected = selectRandomIndex(length);
+      if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
+        syntheticChoiceLabels.set(key, normalizeCatalogText(options[selected]!.label));
+        syntheticReplacementReasons.set(key, "cached_option_unavailable");
+      }
+      return selected;
     }
     const selected = selectRandomIndex(length);
     if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
       syntheticChoiceLabels.set(key, normalizeCatalogText(options[selected]!.label));
     }
     return selected;
+  };
+  const generatedSuccess = (
+    field: ApplicationFieldObservation,
+    value: ApplicationAnswerResolutionResult,
+  ) => {
+    const replacementReason = syntheticReplacementReasons.get(String(field.fieldId));
+    syntheticReplacementReasons.delete(String(field.fieldId));
+    return success(
+      replacementReason === undefined || value.kind !== "resolved"
+        ? value
+        : { ...value, syntheticReplacementReason: replacementReason },
+    );
   };
 
   const query = profileQuery.query as ApplicationProfileQuery["query"];
@@ -340,6 +410,11 @@ export function createApplicationAnswerResolver(
 
       const { field } = request;
       const synthetic = request.mode === "synthetic_test_non_submittable";
+      if (field.readOnly === true) {
+        return field.state === "populated"
+          ? success({ kind: "readback_only", fieldId: field.fieldId })
+          : unsupported(field);
+      }
       if (
         field.behavior === "unsupported" ||
         field.state === "hidden" ||
@@ -359,11 +434,11 @@ export function createApplicationAnswerResolver(
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
           generatedLearningIntent(
-            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
         return generated === undefined
           ? failure("question_unknown")
-          : success(generated);
+          : generatedSuccess(field, generated);
       }
       if (questionResolution.kind === "ambiguous") {
         if (!synthetic) {
@@ -371,11 +446,11 @@ export function createApplicationAnswerResolver(
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
           generatedLearningIntent(
-            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
         return generated === undefined
           ? failure("question_ambiguous")
-          : success(generated);
+          : generatedSuccess(field, generated);
       }
 
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
@@ -388,9 +463,9 @@ export function createApplicationAnswerResolver(
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
           generatedLearningIntent(
-            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(field),
+            field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
-        return generated === undefined ? unsupported(field) : success(generated);
+        return generated === undefined ? unsupported(field) : generatedSuccess(field, generated);
       }
 
       if (question.source.kind === "resume") {
@@ -460,11 +535,11 @@ export function createApplicationAnswerResolver(
         );
         return intended.kind === "resolved"
           ? success(intended)
-          : success(generatedLearningIntent(
+          : generatedSuccess(field, generatedLearningIntent(
               field,
               request.resumeArtifact,
               generatedDate,
-              stableRandomIndexFor(field),
+              stableRandomIndexFor(request),
             ) ?? intended);
       }
 
@@ -497,14 +572,15 @@ export function createApplicationAnswerResolver(
             "reviewed_catalog",
             "synthetic_test_default",
           );
-          return success(
+          return generatedSuccess(
+            field,
             intended.kind === "resolved"
               ? intended
               : generatedLearningIntent(
                   field,
                   request.resumeArtifact,
                   generatedDate,
-                  stableRandomIndexFor(field),
+                  stableRandomIndexFor(request),
                 ) ?? intended,
           );
         }
@@ -512,14 +588,14 @@ export function createApplicationAnswerResolver(
           field,
           request.resumeArtifact,
           generatedDate,
-          stableRandomIndexFor(field),
+          stableRandomIndexFor(request),
         );
         return generated === undefined
           ? success({
               kind: "profile_answer_missing",
               questionId: questionId(canonicalQuestionId),
             })
-          : success(generated);
+          : generatedSuccess(field, generated);
       }
       if (
         question.source.ownerProvidedOnly === true &&
@@ -540,11 +616,11 @@ export function createApplicationAnswerResolver(
         return failure("protected_answer_denied");
       }
       return synthetic
-        ? success(generatedLearningIntent(
+        ? generatedSuccess(field, generatedLearningIntent(
             field,
             request.resumeArtifact,
             generatedDate,
-            stableRandomIndexFor(field),
+            stableRandomIndexFor(request),
           ) ?? intent)
         : success(intent);
     },
@@ -552,7 +628,7 @@ export function createApplicationAnswerResolver(
 }
 
 function semanticLearningIntent(
-  field: FieldObservation,
+  field: ApplicationFieldObservation,
   resumeArtifact: ApplicationAnswerResolutionRequest["resumeArtifact"],
   generatedDate: string,
 ): ApplicationAnswerResolutionResult | undefined {

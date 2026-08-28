@@ -16,6 +16,8 @@ import {
   createQuestionAnswerLearningCapture,
   type QuestionAnswerLearningCapture,
 } from "../../../src/live/evidence/question-answer-learning.ts";
+import type { ApplicationFieldObservation } from
+  "../../../src/form/answers/application-types.ts";
 
 test("question learning stores observed choices, fallback, provenance, and replacement intent", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-"));
@@ -452,6 +454,63 @@ test("question learning retains bounded retry history without accepting a recove
   }
 });
 
+test("pending owner questions retain native synthetic text constraints", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-constraints-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const field = {
+      fieldId: fieldId("question-constrained-email"),
+      target: browserTargetToken("target-constrained-email"),
+      label: boundedText("Contact address"),
+      required: true,
+      behavior: "text",
+      options: [],
+      state: "empty",
+      constraints: {
+        inputType: "email",
+        min: null,
+        max: null,
+        maxLength: 32,
+        pattern: "[^@]+@[^@]+",
+        readOnly: false,
+      },
+    } satisfies ApplicationFieldObservation;
+    recordVerified(capture, {
+      questionId: questionId("question-constrained-email"),
+      field,
+      intent: {
+        kind: "text",
+        behavior: "text",
+        fieldId: field.fieldId,
+        target: field.target,
+        value: "a@b",
+        provenance: "reviewed_catalog",
+      },
+      lane: "synthetic_test_default",
+      protectedCategory: null,
+      generatedDefault: true,
+    }, 19);
+
+    capture.write();
+    const pending = JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"),
+      "utf8",
+    ));
+    assert.deepEqual(pending.pendingProfileQuestions[0]?.constraints, {
+      inputType: "email",
+      min: null,
+      max: null,
+      maxLength: 32,
+      pattern: "[^@]+@[^@]+",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("question learning records an idempotent remount restore of a verified answer", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-remount-"));
   try {
@@ -507,6 +566,123 @@ test("question learning records an idempotent remount restore of a verified answ
       evidence.questions[0]?.attemptHistory.map(({ outcome }) => outcome),
       ["verified", "verified"],
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning promotes a pre-resolution observation into the first attempt", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-observed-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const value = {
+      ...ownerChoice(19),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(19).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    capture.recordObserved({
+      questionId: value.questionId,
+      field: value.field,
+      semanticQuestionType: "unknown",
+    });
+    const operationId = operation(19);
+    capture.recordAttempt({ operationId, ...value });
+    capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId, ...value });
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.questions[0]?.terminalDisposition, "verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning permits only an unavailable verified synthetic choice replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-replacement-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const initial = {
+      ...ownerChoice(20),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(20).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(20);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...initial });
+
+    const replacement = {
+      ...initial,
+      field: {
+        ...initial.field,
+        options: Object.freeze([
+          { id: optionId("replacement-alpha"), label: boundedText("Alpha") },
+          { id: optionId("replacement-beta"), label: boundedText("Beta") },
+        ]),
+      },
+      intent: {
+        ...initial.intent,
+        optionId: optionId("replacement-alpha"),
+        expectedOption: boundedText("Alpha"),
+      },
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable" as const,
+    };
+    const second = operation(21);
+    capture.recordAttempt({ operationId: second, ...replacement });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "before_mutation" });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "after_readback" });
+    capture.record({ operationId: second, ...replacement });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(
+      evidence.questions[0]?.attemptHistory.map(({ outcome }) => outcome),
+      ["verified", "verified"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning denies replacement while the prior synthetic option remains available", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-replacement-denied-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const initial = {
+      ...ownerChoice(22),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(22).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(22);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...initial });
+    assert.throws(() => capture.recordAttempt({
+      operationId: operation(23),
+      ...initial,
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable",
+    }), /question answer learning evidence denied/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

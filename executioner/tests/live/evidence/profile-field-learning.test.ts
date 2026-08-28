@@ -123,6 +123,60 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("retains a generated pending-owner answer for a supported unknown control", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-unknown-learning-"));
+  const port = new FakeProfilePort(snapshot(null));
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+    root,
+    sensitiveValues: ["Test response pending owner review."],
+    observeControl: observer(),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.page.registerSyntheticField?.({
+      fieldId: "unknown.required.1",
+      questionType: "unknown",
+      answerType: "text",
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: "Test response pending owner review.",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+    });
+    await capture.page.commit({
+      controlId: "unknown-required:1",
+      uiBehavior: "text",
+      value: "Test response pending owner review.",
+    }, AbortSignal.any([]));
+    port.current = {
+      ...snapshot(null),
+      controls: snapshot(null).controls.map((control) => control.fieldId === "unknown.required.1"
+        ? { ...control, readback: "Test response pending owner review." }
+        : control),
+    };
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.bindMutationBatch({ operationId: operation(77), attempt: 77 });
+
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(
+      readFileSync(join(root, "profile-field-learning.json"), "utf8"),
+    ));
+    const unknown = evidence.fields.find(({ fieldIdentity }) =>
+      fieldIdentity === "profile.unknown.required.1"
+    );
+    assert.equal(unknown?.answerState, "answered");
+    assert.equal(unknown?.lane, "synthetic_test_default");
+    assert.equal(unknown?.prefillDisposition, "needs_owner_input");
+    assert.equal(unknown?.terminalDisposition, "verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("admits dynamic search catalogs when selection reveals more options", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-dynamic-options-"));
   const sourceControl = (readback: string | null): ProfilePageSnapshot => ({
@@ -1147,6 +1201,18 @@ class FakeProfilePort implements WorkdayProfilePagePort {
   }
 
   interaction(controlId: string) {
+    if (controlId === "unknown-required:1" && this.commitFailure === undefined) {
+      return {
+        popupBound: null,
+        optionFocused: null,
+        optionActivated: null,
+        popupClosed: null,
+        backingValueCommitted: true,
+        validationCleared: true,
+        visibleOptionCount: null,
+        selectedOptionOrdinal: null,
+      };
+    }
     if (controlId === "source-control" && this.commitFailure === undefined) {
       return {
         popupBound: true,

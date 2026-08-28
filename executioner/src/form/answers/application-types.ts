@@ -1,6 +1,7 @@
 import type {
   AnswerProvenance,
   AnswerResolutionError,
+  BrowserReadback,
   CancellationError,
   FieldId,
   FieldIntent,
@@ -148,13 +149,30 @@ export interface ApplicationProfileQuery {
   >>;
 }
 
+export interface ApplicationTextConstraints {
+  readonly inputType: "text" | "email" | "url" | "number";
+  readonly min: number | null;
+  readonly max: number | null;
+  readonly maxLength: number | null;
+  readonly pattern: string | null;
+  readonly readOnly: boolean;
+}
+
+export type ApplicationFieldObservation = FieldObservation & {
+  readonly constraints?: ApplicationTextConstraints;
+  readonly readOnly?: boolean;
+  readonly selectionMode?: "single" | "multiple";
+};
+
 export interface ApplicationAnswerResolutionRequest {
   readonly mode: AnswerExecutionMode;
-  readonly field: FieldObservation;
+  readonly field: ApplicationFieldObservation;
   readonly profileId: ProfileId;
   readonly profileRevision: number;
   readonly resume: ResumeSelection;
   readonly resumeArtifact: ResolvedResumeArtifact;
+  /** Current backing-state readback for the same stable field slot, when available. */
+  readonly committedReadback?: BrowserReadback;
 }
 
 export type ApplicationAnswerResolutionResult =
@@ -162,11 +180,15 @@ export type ApplicationAnswerResolutionResult =
       readonly kind: "resolved";
       readonly intent: FieldIntent;
       readonly lane: AnswerProvenanceLane;
+      readonly syntheticReplacementReason?:
+        | "committed_value_adopted"
+        | "cached_option_unavailable";
     }
   | { readonly kind: "profile_answer_missing"; readonly questionId: QuestionId }
   | { readonly kind: "option_no_match"; readonly questionId: QuestionId }
   | { readonly kind: "option_ambiguous"; readonly questionId: QuestionId }
-  | { readonly kind: "unsupported"; readonly fieldId: FieldId };
+  | { readonly kind: "unsupported"; readonly fieldId: FieldId }
+  | { readonly kind: "readback_only"; readonly fieldId: FieldId };
 
 export interface ApplicationAnswerResolver {
   resolve(

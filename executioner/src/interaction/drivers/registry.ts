@@ -11,18 +11,10 @@ import {
   type FieldIntent,
   type SafetyAdmissionRequest,
   type SafetyGuard,
+  type UiBehaviorId,
+  uiBehaviorIds,
 } from "../../contracts/index.ts";
 
-const behaviors = new Set([
-  "text",
-  "textarea",
-  "radio",
-  "checkbox",
-  "select",
-  "listbox",
-  "date",
-  "file_upload",
-]);
 const provenances = new Set([
   "owner_provided",
   "resume_verified",
@@ -39,6 +31,10 @@ const cancelled = {
   ok: false,
   error: { code: "operation_cancelled", retryable: false },
 } as const;
+
+function isSupportedUiBehavior(value: unknown): value is UiBehaviorId {
+  return typeof value === "string" && (uiBehaviorIds as readonly string[]).includes(value);
+}
 
 export function createFieldDriver(
   browser: BrowserSession,
@@ -231,7 +227,7 @@ function validate(
   }
 
   const value = intent as Record<string, unknown>;
-  if (typeof value.behavior !== "string" || !behaviors.has(value.behavior)) {
+  if (!isSupportedUiBehavior(value.behavior)) {
     return "driver_behavior_unsupported";
   }
   if (

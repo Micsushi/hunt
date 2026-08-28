@@ -1,3 +1,5 @@
+import { randomInt } from "node:crypto";
+
 import {
   profileOwnerInputCatalog,
   profileRepeatableCatalog,
@@ -39,6 +41,7 @@ const reviewedVariants = new Set([
   "workday_search_select_v2",
   "workday_source_select_v1",
   "workday_previous_worker_radio_v1",
+  "workday_unknown_required_v1",
 ]);
 const answerProvenances = new Set([
   "owner_provided",
@@ -61,6 +64,7 @@ const questionTypes = new Set([
   "language",
   "website",
   "social_network",
+  "unknown",
 ]);
 const answerTypes = new Set([
   "text", "phone", "date", "month", "year", "number", "url", "boolean",
@@ -117,10 +121,15 @@ export async function completeWorkdayProfilePage(
       profileInspectionDiagnostic: observed.profileInspectionDiagnostic,
     });
   }
-  const preflight = validatePlan(plan) ?? preflightSnapshot(plan, observed.snapshot);
+  const syntheticFallbacks = new Map<string, ProfileFieldPlan>();
+  const preparedPlan = plan.mode === "synthetic_test_non_submittable"
+    ? withSupportedSyntheticUnknowns(plan, observed.snapshot, syntheticFallbacks)
+    : plan;
+  registerGeneratedFields(plan, preparedPlan, page);
+  const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, observed.snapshot);
   if (preflight !== undefined) return preflight;
   let snapshot = observed.snapshot;
-  const effectivePlan = routeSiteAnswers(plan, snapshot);
+  const effectivePlan = routeSiteAnswers(preparedPlan, snapshot);
   const routedPreflight = validatePlan(effectivePlan) ??
     preflightSnapshot(effectivePlan, snapshot);
   if (routedPreflight !== undefined) return routedPreflight;
@@ -154,11 +163,12 @@ export async function completeWorkdayProfilePage(
   // page-level controls such as Skills and LinkedIn. A tenant-specific
   // optional widget can then fail closed without preventing the required
   // repeatable rows from being learned and verified first.
-  for (const item of effectivePlan.fields) {
-    if (item.answer.kind === "profile_answer_missing") continue;
-    const matches = snapshot.controls.filter(({ fieldId }) => fieldId === item.fieldId);
+  for (const plannedItem of effectivePlan.fields) {
+    if (plannedItem.answer.kind === "profile_answer_missing") continue;
+    const matches = snapshot.controls.filter(({ fieldId }) => fieldId === plannedItem.fieldId);
     if (matches.length === 0) continue;
     const current = matches.length === 1 ? matches[0] : undefined;
+    const item = plannedItem;
     if (
       current?.required === false &&
       item.answerType === "multi_select" &&
@@ -169,9 +179,20 @@ export async function completeWorkdayProfilePage(
     const result = await reconcileField(
       item,
       () => page.inspect(signal).then(({ controls }) => controls),
-      snapshot.controls,
       page,
       signal,
+      effectivePlan.mode === "synthetic_test_non_submittable" &&
+          plannedItem.fieldId.startsWith("unknown.required.")
+        ? (control) => {
+            const rebound = syntheticProfileField(
+              control,
+              syntheticFallbacks,
+              `scalar\u0000${plannedItem.fieldId}`,
+            );
+            if (rebound !== undefined) page.registerSyntheticField?.(rebound);
+            return rebound;
+          }
+        : undefined,
     );
     if (result.kind === "blocked") {
       const control = snapshot.controls.find(({ fieldId }) => fieldId === item.fieldId);
@@ -191,6 +212,19 @@ export async function completeWorkdayProfilePage(
     const refreshed = await inspectAndPreflight(effectivePlan, page, signal);
     if (refreshed.kind === "blocked") return refreshed;
     snapshot = refreshed.snapshot;
+  }
+
+  if (effectivePlan.mode === "synthetic_test_non_submittable") {
+    const synthetic = await reconcileSupportedSyntheticUnknowns(
+      effectivePlan,
+      snapshot,
+      verified,
+      page,
+      signal,
+      syntheticFallbacks,
+    );
+    if (synthetic.kind === "blocked") return synthetic;
+    snapshot = synthetic.snapshot;
   }
 
   const final = await inspectAndPreflight(effectivePlan, page, signal);
@@ -225,8 +259,14 @@ function preflightRequiredControls(
       fields.map(({ fieldId }) => fieldId)
     ),
   ]);
+  const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
   const unknownScalar = snapshot.controls.find(({ fieldId, required }) =>
-    required && !admittedScalarIds.has(fieldId)
+    required && !admittedScalarIds.has(fieldId) && !(
+      plan.mode === "synthetic_test_non_submittable" && (
+        plannedScalar.has(fieldId) ||
+        syntheticProfileField(snapshot.controls.find((item) => item.fieldId === fieldId)!) !== undefined
+      )
+    )
   );
   if (unknownScalar !== undefined) {
     return blocked("answer_type_unknown", {
@@ -236,7 +276,6 @@ function preflightRequiredControls(
     });
   }
 
-  const plannedScalar = new Map(plan.fields.map((field) => [field.fieldId, field]));
   const unsafeProtectedScalar = plan.mode === "live"
     ? snapshot.controls.find(({ fieldId }) => {
     const field = plannedScalar.get(fieldId);
@@ -249,7 +288,10 @@ function preflightRequiredControls(
     return blocked("profile_answer_missing", { fieldId: unsafeProtectedScalar.fieldId });
   }
   const unplannedScalar = snapshot.controls.find(({ fieldId, required }) =>
-    required && !plannedScalar.has(fieldId)
+    required && !plannedScalar.has(fieldId) && !(
+      plan.mode === "synthetic_test_non_submittable" &&
+      syntheticProfileField(snapshot.controls.find((item) => item.fieldId === fieldId)!) !== undefined
+    )
   );
   if (unplannedScalar !== undefined) {
     return blocked("profile_answer_missing", { fieldId: unplannedScalar.fieldId });
@@ -268,7 +310,10 @@ function preflightRequiredControls(
     const admittedIds = new Set(catalog.fields.map(({ fieldId }) => fieldId));
     const unknownRepeatable = visibleRows
       .flatMap(({ controls }) => controls)
-      .find(({ fieldId, required }) => required && !admittedIds.has(fieldId));
+      .find((control) => control.required && !admittedIds.has(control.fieldId) && !(
+        plan.mode === "synthetic_test_non_submittable" &&
+        syntheticProfileField(control) !== undefined
+      ));
     if (unknownRepeatable !== undefined) {
       return blocked("answer_type_unknown", {
         fieldId: unknownRepeatable.fieldId,
@@ -295,7 +340,10 @@ function preflightRequiredControls(
       used.add(current.rowId);
       const planned = new Set(desired.fields.map(({ fieldId }) => fieldId));
       const missing = current.controls.find(({ fieldId, required }) =>
-        required && !planned.has(fieldId)
+        required && !planned.has(fieldId) && !(
+          plan.mode === "synthetic_test_non_submittable" &&
+          syntheticProfileField(current.controls.find((item) => item.fieldId === fieldId)!) !== undefined
+        )
       );
       if (missing !== undefined) {
         return blocked("profile_answer_missing", { fieldId: missing.fieldId });
@@ -303,6 +351,290 @@ function preflightRequiredControls(
     }
   }
   return undefined;
+}
+
+function withSupportedSyntheticUnknowns(
+  plan: ProfilePagePlan,
+  snapshot: ProfilePageSnapshot,
+  fallbacks: Map<string, ProfileFieldPlan>,
+): ProfilePagePlan {
+  const planned = new Set(plan.fields.map(({ fieldId }) => fieldId));
+  const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
+    if (!control.required || planned.has(control.fieldId) ||
+        !control.fieldId.startsWith("unknown.required.")) return [];
+    const field = syntheticProfileField(control, fallbacks, `scalar\u0000${control.fieldId}`);
+    return field === undefined ? [] : [field];
+  });
+  return generated.length === 0 ? plan : {
+    ...plan,
+    fields: Object.freeze([...plan.fields, ...generated]),
+  };
+}
+
+function syntheticProfileField(
+  control: ProfileControlSnapshot,
+  fallbacks: Map<string, ProfileFieldPlan> = new Map(),
+  slot = control.fieldId,
+): ProfileFieldPlan | undefined {
+  if (!control.required || !control.fieldId.startsWith("unknown.required.")) return undefined;
+  const options = [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "");
+  const prior = fallbacks.get(slot);
+  if (prior?.answer.kind === "answered") {
+    const selected = syntheticProfileSelectedValues(prior.answer.value);
+    if (selected.length === 0 || selected.every((value) =>
+      options.some((option) => normalize(option) === normalize(value))
+    )) return prior;
+  }
+  const committed = control.readback === null
+    ? undefined
+    : syntheticProfileSelectedValues(control.readback).find((value) =>
+      options.some((option) => normalize(option) === normalize(value))
+    );
+  const choice = committed ?? (options.length === 0 ? undefined : options[randomInt(options.length)]);
+  const answer = syntheticProfileValue(control, choice);
+  const answerType = syntheticProfileAnswerType(control.uiBehavior);
+  if (answer === undefined || answerType === undefined) return undefined;
+  const field = Object.freeze({
+    fieldId: control.fieldId,
+    questionType: "unknown" as const,
+    answerType,
+    allowedOptions: Object.freeze(options),
+    answer: Object.freeze({
+      kind: "answered" as const,
+      value: control.uiBehavior === "multi_select" ? JSON.stringify([answer]) : answer,
+      provenance: "generated_default" as const,
+      lane: "synthetic_test_default" as const,
+    }),
+    ...(choice === undefined ? {} : {
+      optionMapping: Object.freeze({
+        canonicalValue: answerType === "multi_select" ? JSON.stringify([choice]) : choice,
+        visibleOption: choice,
+        provenance: "visible_option" as const,
+      }),
+    }),
+  });
+  fallbacks.set(slot, field);
+  return field;
+}
+
+function registerGeneratedFields(
+  original: ProfilePagePlan,
+  prepared: ProfilePagePlan,
+  page: WorkdayProfilePagePort,
+): void {
+  const originalIds = new Set([
+    ...original.fields,
+    ...original.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
+  ].map(({ fieldId }) => fieldId));
+  for (const field of prepared.fields) {
+    if (!originalIds.has(field.fieldId)) page.registerSyntheticField?.(field);
+  }
+}
+
+async function reconcileSupportedSyntheticUnknowns(
+  plan: ProfilePagePlan,
+  initial: ProfilePageSnapshot,
+  verified: VerifiedProfileField[],
+  page: WorkdayProfilePagePort,
+  signal: AbortSignal,
+  fallbacks: Map<string, ProfileFieldPlan>,
+): Promise<
+  | { readonly kind: "verified"; readonly snapshot: ProfilePageSnapshot }
+  | BlockedResult
+> {
+  let snapshot = initial;
+  const completed = new Set(verified.map(({ fieldId, rowKey }) => `${rowKey ?? "scalar"}\u0000${fieldId}`));
+  for (let pass = 0; pass < 16; pass += 1) {
+    const rowKeys = repeatableRowKeys(plan, snapshot.rows);
+    const candidates = [
+      ...snapshot.controls.map((control) => ({
+        control,
+        rowId: undefined as string | undefined,
+        rowKey: undefined as string | undefined,
+      })),
+      ...snapshot.rows.flatMap((row) => row.controls.map((control) => ({
+        control,
+        rowId: row.rowId,
+        rowKey: rowKeys.get(row.rowId),
+      }))),
+    ].filter(({ control, rowId, rowKey }) =>
+      control.required && control.fieldId.startsWith("unknown.required.") &&
+      (rowId === undefined || rowKey !== undefined)
+    );
+    const pending = candidates.find(({ control, rowKey }) =>
+      !completed.has(`${rowKey ?? "scalar"}\u0000${control.fieldId}`)
+    );
+    if (pending === undefined) return { kind: "verified", snapshot };
+    const fallbackKey = `${pending.rowKey ?? "scalar"}\u0000${pending.control.fieldId}`;
+    const field = syntheticProfileField(pending.control, fallbacks, fallbackKey);
+    if (field === undefined) {
+      return blocked("answer_type_unknown", {
+        fieldId: pending.control.fieldId,
+        uiBehavior: pending.control.uiBehavior,
+        uiVariant: pending.control.uiVariant,
+      });
+    }
+    page.registerSyntheticField?.(field);
+    const readControls = pending.rowId === undefined
+      ? () => page.inspect(signal).then(({ controls }) => controls)
+      : () => page.inspect(signal).then(({ rows }) =>
+        rows.find(({ rowId }) => rowId === pending.rowId)?.controls ?? []
+      );
+    const result = await reconcileField(
+      field,
+      readControls,
+      page,
+      signal,
+      (control) => {
+        const rebound = syntheticProfileField(control, fallbacks, fallbackKey);
+        if (rebound !== undefined) page.registerSyntheticField?.(rebound);
+        return rebound;
+      },
+    );
+    if (result.kind === "blocked") return result;
+    verified.push(pending.rowKey === undefined
+      ? result.field
+      : { ...result.field, rowKey: pending.rowKey });
+    completed.add(`${pending.rowKey ?? "scalar"}\u0000${pending.control.fieldId}`);
+    const refreshed = await inspect(page, signal);
+    if (refreshed.snapshot === undefined) return portFailure(signal, {
+      profileInspectionDiagnostic: refreshed.profileInspectionDiagnostic,
+    });
+    snapshot = refreshed.snapshot;
+  }
+  return blocked("profile_commit_unverified");
+}
+
+function repeatableRowKeys(
+  plan: ProfilePagePlan,
+  rows: readonly ProfileRowSnapshot[],
+): ReadonlyMap<string, string> {
+  const result = new Map<string, string>();
+  for (const repeatable of plan.repeatables) {
+    const used = new Set<string>();
+    for (const desired of repeatable.rows) {
+      const current = selectRepeatableRow(rows, repeatable.section, used, desired.fields);
+      if (current === undefined) continue;
+      used.add(current.rowId);
+      result.set(current.rowId, desired.rowKey);
+    }
+  }
+  return result;
+}
+
+function syntheticProfileAnswerType(
+  behavior: ProfileControlSnapshot["uiBehavior"],
+): ProfileFieldPlan["answerType"] | undefined {
+  if (behavior === "text" || behavior === "textarea") return "text";
+  if (behavior === "phone") return "phone";
+  if (behavior === "date") return "date";
+  if (behavior === "month") return "month";
+  if (behavior === "year") return "year";
+  if (behavior === "number") return "number";
+  if (behavior === "url") return "url";
+  if (behavior === "checkbox") return "boolean";
+  if (behavior === "multi_select") return "multi_select";
+  if (behavior === "select") return "single_select";
+  if (behavior === "search_select" || behavior === "radio_group") return "option";
+  return undefined;
+}
+
+function syntheticProfileValue(
+  control: ProfileControlSnapshot,
+  choice: string | undefined,
+): string | undefined {
+  if (control.uiBehavior === "checkbox") return "true";
+  if (control.uiBehavior === "date") return control.readback ?? new Date().toISOString().slice(0, 10);
+  if (control.uiBehavior === "month") return control.readback ?? "1";
+  if (control.uiBehavior === "year") return control.readback ?? String(new Date().getFullYear());
+  if (["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior)) {
+    return choice;
+  }
+  if (control.readback !== null) return control.readback;
+  const unconstrained = control.uiBehavior === "url"
+    ? "https://x"
+    : control.uiBehavior === "number"
+      ? syntheticNumber(control)
+      : control.constraints?.inputType === "email"
+        ? "a@b"
+        : control.constraints?.inputType === "url"
+          ? "https://x"
+          : control.uiBehavior === "phone"
+            ? "5550100"
+            : control.uiBehavior === "text" || control.uiBehavior === "textarea"
+              ? "Test response pending owner review."
+              : undefined;
+  return unconstrained === undefined ? undefined : constrainSyntheticProfileValue(
+    unconstrained,
+    control,
+  );
+}
+
+function syntheticNumber(control: ProfileControlSnapshot): string | undefined {
+  const minimum = control.constraints?.min;
+  const maximum = control.constraints?.max;
+  if (minimum !== null && minimum !== undefined &&
+      maximum !== null && maximum !== undefined && minimum > maximum) return undefined;
+  return String(Math.min(maximum ?? 0, Math.max(minimum ?? 0, 0)));
+}
+
+function constrainSyntheticProfileValue(
+  initial: string,
+  control: ProfileControlSnapshot,
+): string | undefined {
+  const maximum = control.constraints?.maxLength ?? 512;
+  if (maximum < 1) return undefined;
+  const candidates = [initial, "a@b", "https://x", "Test1", "Test", "1", "0", "A", "a"]
+    .map((value) => [...value].slice(0, maximum).join(""))
+    .filter((value) => value !== "");
+  const pattern = control.constraints?.pattern;
+  let compiled: RegExp | undefined;
+  if (pattern !== null && pattern !== undefined) {
+    try {
+      compiled = new RegExp(`^(?:${pattern})$`, "u");
+    } catch {
+      return undefined;
+    }
+  }
+  return candidates.find((value) =>
+    validSyntheticProfileType(value, control) && (compiled?.test(value) ?? true)
+  );
+}
+
+function validSyntheticProfileType(
+  value: string,
+  control: ProfileControlSnapshot,
+): boolean {
+  const inputType = control.constraints?.inputType ??
+    (control.uiBehavior === "number" ? "number" : control.uiBehavior === "url" ? "url" : "text");
+  if (inputType === "email" && !/^[^@\s]+@[^@\s]+$/u.test(value)) return false;
+  if (inputType === "url") {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    } catch {
+      return false;
+    }
+  }
+  if (inputType === "number") {
+    const number = Number(value);
+    if (!Number.isFinite(number) ||
+        control.constraints?.min !== null && control.constraints?.min !== undefined &&
+          number < control.constraints.min ||
+        control.constraints?.max !== null && control.constraints?.max !== undefined &&
+          number > control.constraints.max) return false;
+  }
+  return true;
+}
+
+function syntheticProfileSelectedValues(value: string): readonly string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed as string[];
+    }
+  } catch {}
+  return normalize(value) === "" ? [] : [value];
 }
 
 function preflightSnapshot(
@@ -589,8 +921,11 @@ async function reconcileSection(
       if (current === undefined) return blocked("profile_row_unverified");
     }
     const planned = new Set(desired.fields.map(({ fieldId }) => fieldId));
-    const unplannedRequired = current.controls.find(({ fieldId, required }) =>
-      required && !planned.has(fieldId)
+    const unplannedRequired = current.controls.find((control) =>
+      control.required && !planned.has(control.fieldId) && !(
+        plan.mode === "synthetic_test_non_submittable" &&
+        syntheticProfileField(control) !== undefined
+      )
     );
     if (unplannedRequired !== undefined) {
       return blocked("profile_answer_missing", {
@@ -610,7 +945,6 @@ async function reconcileSection(
           const fresh = await page.inspect(signal);
           return fresh.rows.find((row) => row.rowId === rowId)?.controls ?? [];
         },
-        current.controls,
         page,
         signal,
       );
@@ -670,14 +1004,25 @@ function selectRepeatableRow(
 async function reconcileField(
   field: ProfileFieldPlan,
   readControls: () => Promise<readonly ProfileControlSnapshot[]>,
-  currentControls: readonly ProfileControlSnapshot[],
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
+  replanSynthetic?: (control: ProfileControlSnapshot) => ProfileFieldPlan | undefined,
 ): Promise<
   | { readonly kind: "verified"; readonly field: VerifiedProfileField }
   | Extract<ProfilePageCompletionResult, { readonly kind: "blocked" }>
 > {
-  const matches = currentControls.filter(({ fieldId }) => fieldId === field.fieldId);
+  let reboundControls: readonly ProfileControlSnapshot[];
+  try {
+    reboundControls = await readControls();
+  } catch {
+    if (signal.aborted) return portFailure(signal, { fieldId: field.fieldId });
+    try {
+      reboundControls = await readControls();
+    } catch {
+      return portFailure(signal, { fieldId: field.fieldId });
+    }
+  }
+  const matches = reboundControls.filter(({ fieldId }) => fieldId === field.fieldId);
   if (matches.length !== 1) {
     return blocked(
       matches.length === 0 ? "profile_control_missing" : "profile_control_ambiguous",
@@ -685,17 +1030,26 @@ async function reconcileField(
     );
   }
   const control = matches[0]!;
+  const replanned = replanSynthetic?.(control);
+  if (replanSynthetic !== undefined && replanned === undefined) {
+    return blocked("answer_type_unknown", {
+      fieldId: control.fieldId,
+      uiBehavior: control.uiBehavior,
+      uiVariant: control.uiVariant,
+    });
+  }
+  const effectiveField = replanned ?? field;
   if (!reviewedVariants.has(control.uiVariant)) {
     return blocked("profile_ui_variant_unreviewed", {
       fieldId: field.fieldId,
       uiVariant: control.uiVariant,
     });
   }
-  if (!compatible(field, control)) {
+  if (!compatible(effectiveField, control)) {
     return blocked("profile_ui_behavior_mismatch", { fieldId: field.fieldId });
   }
-  const expected = visibleValue(field);
-  if (!readbackMatches(field, control.readback, expected)) {
+  const expected = visibleValue(effectiveField);
+  if (!readbackMatches(effectiveField, control.readback, expected)) {
     const request: ProfileCommitRequest = {
       controlId: control.controlId,
       uiBehavior: control.uiBehavior,
@@ -703,12 +1057,19 @@ async function reconcileField(
     };
     try {
       await page.commit(request, signal);
-      const fresh = (await readControls()).filter(({ controlId }) =>
-        controlId === control.controlId
+      let observed: readonly ProfileControlSnapshot[];
+      try {
+        observed = await readControls();
+      } catch {
+        if (signal.aborted) return portFailure(signal, { fieldId: field.fieldId });
+        observed = await readControls();
+      }
+      const fresh = observed.filter(({ fieldId }) =>
+        fieldId === effectiveField.fieldId
       );
       if (
         fresh.length !== 1 ||
-        !readbackMatches(field, fresh[0]!.readback, expected)
+        !readbackMatches(effectiveField, fresh[0]!.readback, expected)
       ) return blocked("profile_commit_unverified", { fieldId: field.fieldId });
     } catch {
       return portFailure(signal, { fieldId: field.fieldId });
@@ -717,20 +1078,20 @@ async function reconcileField(
   return {
     kind: "verified",
     field: {
-      fieldId: field.fieldId,
-      questionType: field.questionType,
-      answerType: field.answerType,
+      fieldId: effectiveField.fieldId,
+      questionType: effectiveField.questionType,
+      answerType: effectiveField.answerType,
       uiBehavior: control.uiBehavior,
       uiVariant: control.uiVariant,
-      provenance: field.answer.kind === "answered"
-        ? field.answer.provenance
+      provenance: effectiveField.answer.kind === "answered"
+        ? effectiveField.answer.provenance
         : "owner_provided",
-      lane: field.answer.kind === "answered"
-        ? field.answer.lane
+      lane: effectiveField.answer.kind === "answered"
+        ? effectiveField.answer.lane
         : "synthetic_test_default",
-      ...(field.optionMapping === undefined
+      ...(effectiveField.optionMapping === undefined
         ? {}
-        : { optionMappingProvenance: field.optionMapping.provenance }),
+        : { optionMappingProvenance: effectiveField.optionMapping.provenance }),
     },
   };
 }
@@ -756,6 +1117,7 @@ function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): b
 
 function visibleValue(field: ProfileFieldPlan): string {
   if (field.answer.kind !== "answered") return "";
+  if (field.answerType === "multi_select") return field.answer.value;
   return field.optionMapping?.visibleOption ?? field.answer.value;
 }
 

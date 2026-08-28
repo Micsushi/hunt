@@ -156,6 +156,7 @@ test("source or config drift stops before the real journey", async () => {
     });
     assert.equal(calls.includes("journey"), false);
     assert.equal(calls.includes("finalize"), false);
+    assert.equal(calls.includes("seal-failure"), false);
   }
 });
 
@@ -216,7 +217,7 @@ test("exact finalizer failure cannot produce a passing gate", async () => {
   assert.equal(calls.some((call) => call === "discard"), false);
 });
 
-test("journey failure, cancellation, and Review mismatch never finalize or discard", async () => {
+test("journey failure, cancellation, and Review mismatch seal retained evidence without success finalization", async () => {
   for (const scenario of ["journey", "cancelled", "mismatch"] as const) {
     const calls: string[] = [];
     const dependencies = ports(calls);
@@ -247,6 +248,7 @@ test("journey failure, cancellation, and Review mismatch never finalize or disca
       assert.equal(result.cleanup, "retained_for_exact_reconciliation");
     }
     assert.equal(calls.includes("finalize"), false);
+    assert.equal(calls.includes("seal-failure"), true);
     assert.equal(calls.some((call) => call === "discard"), false);
   }
 });
@@ -287,6 +289,9 @@ function ports(calls: string[]): Stage2AcceptanceGatePorts {
       finalize: async (_args, manifest: Stage2AcceptanceManifest) => {
         calls.push("finalize");
         assert.equal(manifest.cleanup, "pending_exact_finalization");
+      },
+      sealFailure: async () => {
+        calls.push("seal-failure");
       },
     },
   };

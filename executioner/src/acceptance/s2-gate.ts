@@ -62,6 +62,10 @@ export interface Stage2AcceptanceGatePorts {
       args: Stage2RealAcceptanceArgs,
       manifest: Stage2AcceptanceManifest,
     ): Promise<void>;
+    sealFailure?(
+      args: Stage2RealAcceptanceArgs,
+      code: Stage2AcceptanceFailureCode,
+    ): Promise<void>;
   };
 }
 
@@ -138,24 +142,26 @@ export async function runStage2RealAcceptance(
   if (drift !== undefined) return failed(drift);
 
   const journey = await runBounded(() => ports.journey.run(args, signal));
-  if (signal?.aborted || journey === 130) return failed("operation_cancelled");
-  if (journey !== 0) return failed("real_journey_failed");
+  if (signal?.aborted || journey === 130) {
+    return await failedAfterJourney(args, ports, "operation_cancelled");
+  }
+  if (journey !== 0) return await failedAfterJourney(args, ports, "real_journey_failed");
 
   const afterJourney = await recapture(args, ports);
-  if (afterJourney === undefined) return failed("preflight_failed");
+  if (afterJourney === undefined) return await failedAfterJourney(args, ports, "preflight_failed");
   const finalDrift = changed(initialSource, initialConfig, afterJourney);
-  if (finalDrift !== undefined) return failed(finalDrift);
+  if (finalDrift !== undefined) return await failedAfterJourney(args, ports, finalDrift);
 
   let acceptance: Stage2ReviewAcceptance;
   try {
     acceptance = await ports.result.read(args.evidenceRoot);
     if (!matches(acceptance, initialSource, initialConfig)) {
-      return failed("result_reconciliation_failed");
+      return await failedAfterJourney(args, ports, "result_reconciliation_failed");
     }
   } catch {
-    return failed("result_reconciliation_failed");
+    return await failedAfterJourney(args, ports, "result_reconciliation_failed");
   }
-  if (signal?.aborted) return failed("operation_cancelled");
+  if (signal?.aborted) return await failedAfterJourney(args, ports, "operation_cancelled");
   const manifest = acceptanceManifest(acceptance);
   try {
     await ports.cleanup.finalize(args, manifest);
@@ -163,6 +169,20 @@ export async function runStage2RealAcceptance(
     return failed("cleanup_finalize_failed");
   }
   return Object.freeze({ ok: true, manifest });
+}
+
+async function failedAfterJourney(
+  args: Stage2RealAcceptanceArgs,
+  ports: Stage2AcceptanceGatePorts,
+  code: Stage2AcceptanceFailureCode,
+): Promise<Stage2AcceptanceGateResult> {
+  if (ports.cleanup.sealFailure === undefined) return failed(code);
+  try {
+    await ports.cleanup.sealFailure(args, code);
+    return failed(code);
+  } catch {
+    return failed("cleanup_finalize_failed");
+  }
 }
 
 function outsideRoot(candidate: string, root: string): boolean {

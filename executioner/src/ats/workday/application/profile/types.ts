@@ -32,7 +32,8 @@ export type ProfileQuestionType =
   | "skill"
   | "language"
   | "website"
-  | "social_network";
+  | "social_network"
+  | "unknown";
 export type ProfileCanonicalAnswerType =
   | "text"
   | "phone"
@@ -109,6 +110,14 @@ export interface ProfileControlSnapshot {
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
   readonly readback: string | null;
+  readonly allowedOptions?: readonly string[];
+  readonly constraints?: {
+    readonly inputType: "text" | "email" | "url" | "number";
+    readonly min: number | null;
+    readonly max: number | null;
+    readonly maxLength: number | null;
+    readonly pattern: string | null;
+  };
 }
 
 export interface ProfileControlObservation {
@@ -288,6 +297,7 @@ export interface ProfileInspectionDiagnostic extends ProfileInspectionFailure {
 
 export interface WorkdayProfilePagePort {
   inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
+  registerSyntheticField?(field: ProfileFieldPlan): void;
   inspectionFailure?(): ProfileInspectionFailure | undefined;
   inspectionFacts?(): ProfileInspectionFacts | undefined;
   metadataReconciliationFailure?(): ProfileMetadataReconciliationFailure | undefined;

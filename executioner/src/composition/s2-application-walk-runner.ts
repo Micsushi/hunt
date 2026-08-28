@@ -93,6 +93,15 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
       readonly generatedDefault: boolean;
       readonly conditionalReveal?: boolean;
       readonly semanticQuestionType?: TestingQuestionSemanticType;
+      readonly syntheticReplacementReason?:
+        | "committed_value_adopted"
+        | "cached_option_unavailable";
+    }): void;
+    recordObserved(input: {
+      readonly questionId: QuestionId;
+      readonly field: FieldObservation;
+      readonly conditionalReveal?: boolean;
+      readonly semanticQuestionType?: TestingQuestionSemanticType;
     }): void;
     recordUnset(input: {
       readonly questionId: QuestionId;

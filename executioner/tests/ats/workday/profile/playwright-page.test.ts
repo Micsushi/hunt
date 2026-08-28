@@ -2079,9 +2079,9 @@ test("inventories unknown active form controls by structural UI type without ret
       required,
       readback,
     })), [
-      { fieldId: "unknown.required.1", uiBehavior: "date", required: true, readback: null },
-      { fieldId: "unknown.optional.2", uiBehavior: "phone", required: false, readback: null },
-      { fieldId: "unknown.optional.3", uiBehavior: "checkbox", required: false, readback: null },
+      { fieldId: "unknown.required.1", uiBehavior: "date", required: true, readback: "2026-08-11" },
+      { fieldId: "unknown.optional.2", uiBehavior: "phone", required: false, readback: "555-0100" },
+      { fieldId: "unknown.optional.3", uiBehavior: "checkbox", required: false, readback: "true" },
       { fieldId: "unknown.required.4", uiBehavior: "file", required: true, readback: null },
       { fieldId: "unknown.required.5", uiBehavior: "search_select", required: true, readback: null },
     ]);
@@ -2120,6 +2120,79 @@ test("inventories optional custom ARIA and contenteditable controls", async () =
       { fieldId: "unknown.optional.3", uiBehavior: "radio_group", required: false },
       { fieldId: "unknown.optional.4", uiBehavior: "text", required: false },
     ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("synthetic traversal commits required ARIA, contenteditable, plural, and constrained controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div role="checkbox" aria-required="true" aria-checked="false"
+            data-automation-id="tenantConsent">Agree</div>
+          <div role="radiogroup" aria-required="true" aria-label="Status"
+            data-automation-id="tenantStatus">
+            <div role="radio" aria-label="Alpha" aria-checked="false">Alpha</div>
+            <div role="radio" aria-label="Beta" aria-checked="false">Beta</div>
+          </div>
+          <div contenteditable="true" aria-required="true"
+            data-automation-id="tenantNarrative"></div>
+          <select required multiple data-automation-id="tenantNativeMultiple">
+            <option>One</option><option>Two</option>
+          </select>
+          <div role="listbox" aria-required="true" aria-multiselectable="true"
+            data-automation-id="tenantAriaMultiple">
+            <div role="option" aria-selected="false">Red</div>
+            <div role="option" aria-selected="false">Blue</div>
+          </div>
+          <input required type="email" maxlength="8" pattern="[^@]+@[^@]+"
+            data-automation-id="tenantEmail">
+          <input required type="number" min="5" max="8"
+            data-automation-id="tenantNumber">
+          <input required maxlength="4" pattern="[A-Z][a-z]+"
+            data-automation-id="tenantPattern">
+        </main>
+        <script>
+          document.querySelector('[role="checkbox"]').addEventListener('click', (event) => {
+            event.currentTarget.setAttribute('aria-checked', 'true');
+          });
+          document.querySelectorAll('[role="radio"]').forEach((radio) => {
+            radio.addEventListener('click', (event) => {
+              document.querySelectorAll('[role="radio"]').forEach((item) =>
+                item.setAttribute('aria-checked', String(item === event.currentTarget))
+              );
+            });
+          });
+          document.querySelectorAll('[role="listbox"] [role="option"]').forEach((option) => {
+            option.addEventListener('click', (event) => {
+              event.currentTarget.setAttribute('aria-selected', 'true');
+            });
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[role="checkbox"]').getAttribute("aria-checked"), "true");
+    assert.equal(await page.locator('[role="radio"][aria-checked="true"]').count(), 1);
+    assert.notEqual((await page.locator('[contenteditable="true"]').textContent())?.trim(), "");
+    assert.equal(await page.locator("select option:checked").count(), 1);
+    assert.equal(await page.locator('[role="listbox"] [role="option"][aria-selected="true"]').count(), 1);
+    assert.match(await page.locator('[type="email"]').inputValue(), /^[^@\s]+@[^@\s]+$/u);
+    assert.equal(await page.locator('[type="number"]').inputValue(), "5");
+    assert.match(await page.locator('[data-automation-id="tenantPattern"]').inputValue(), /^[A-Z][a-z]+$/u);
   } finally {
     await browser.close();
   }

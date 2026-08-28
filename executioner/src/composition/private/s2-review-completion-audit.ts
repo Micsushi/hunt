@@ -351,8 +351,12 @@ function validatePendingProfileQuestions(
         candidate.committedReadback !==
           (question.verificationResult === "verified" ? testDefault : null) ||
         (question.answerType === "date"
-          ? candidate.constraints?.displayFormat !== "YYYY-MM-DD"
-          : candidate.constraints !== null);
+          ? candidate.constraints === null || !("displayFormat" in candidate.constraints) ||
+            candidate.constraints.displayFormat !== "YYYY-MM-DD"
+          : candidate.constraints !== null &&
+            !(question.answerType === "text" &&
+              (question.uiType === "text" || question.uiType === "textarea") &&
+              "inputType" in candidate.constraints));
     })
   ) denied();
 }

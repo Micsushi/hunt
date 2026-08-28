@@ -62,7 +62,7 @@ import type { SanitizedStructuralObservationV1 } from
   "../../../contracts/live/index.ts";
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import { answerLaneAdmitted } from "../../../form/answers/application-types.ts";
-import type { ApplicationAnswerResolver } from
+import type { ApplicationAnswerResolver, ApplicationFieldObservation } from
   "../../../form/answers/application-types.ts";
 import { discoverFields } from "../../../form/discovery/discover-fields.ts";
 import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
@@ -89,9 +89,11 @@ interface QuestionnaireReconciliationBatch {
   readonly attempt: number;
   pass: number;
   lastIncomplete?: {
+    readonly signature: string;
     readonly requiredFields: number;
     readonly verifiedFields: number;
   };
+  lastObservedRequiredIdentities?: readonly string[];
   readonly answerResolver: ApplicationAnswerResolver;
   close(): Promise<void>;
 }
@@ -1082,8 +1084,10 @@ export class OwnedWorkdayApplicationRuntime {
         status: observed.ok ? "succeeded" : "failed",
       });
       if (!observed.ok) return applicationFailure(observed.error.code, "question_control", "ui_behavior");
+      const discovered = discoverFields(observed.value.targets);
+      const applicationFields = await enrichQuestionnaireFields(page, discovered);
       const snapshot = createSemanticSnapshot(
-        { kind: "workday", page: "questionnaire" }, discoverFields(observed.value.targets),
+        { kind: "workday", page: "questionnaire" }, applicationFields,
       );
       const [application, taxonomy] = await Promise.all([
         new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal),
@@ -1110,11 +1114,22 @@ export class OwnedWorkdayApplicationRuntime {
         applicationFields: application.ok ? application.value.requiredFields.length : -1,
         taxonomyFields: taxonomy.fieldCount,
         taxonomyRequired: taxonomy.requiredFieldCount,
+        semanticIdentities: visibleFields.map(({ fieldId: id, behavior, required }) => ({
+          fieldId: id,
+          behavior,
+          required,
+        })),
       })}`);
       const facts = structuralObservations(snapshot.fields);
       const currentReadbacks = new Map(
         observed.value.targets.map(({ token, readback }) => [token, readback]),
       );
+      const requiredIdentities = visibleFields.filter(({ required }) => required)
+        .map(({ fieldId: id }) => String(id)).sort();
+      const priorRequiredIdentities = sharedBatch.lastObservedRequiredIdentities ?? [];
+      const conditionalAdded = requiredIdentities.filter((id) => !priorRequiredIdentities.includes(id));
+      const conditionalRemoved = priorRequiredIdentities.filter((id) => !requiredIdentities.includes(id));
+      sharedBatch.lastObservedRequiredIdentities = Object.freeze(requiredIdentities);
       const priorRequiredFieldCount = sharedBatch.lastIncomplete?.requiredFields ??
         this.#questionnaireRequiredCounts.get(input.pageId);
       const conditionalDelta = Math.max(
@@ -1131,6 +1146,8 @@ export class OwnedWorkdayApplicationRuntime {
         priorCommittedState: "verified_intent_present" | "absent";
         observedState: BrowserReadback["kind"];
         committedReadbackMatches: boolean;
+        operation: string;
+        observedOptionCount: number;
       } = {
         fieldId: null,
         uiBehavior: null,
@@ -1139,6 +1156,8 @@ export class OwnedWorkdayApplicationRuntime {
         priorCommittedState: "absent",
         observedState: "unavailable",
         committedReadbackMatches: false,
+        operation: "resolve_answer",
+        observedOptionCount: 0,
       };
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
@@ -1154,6 +1173,28 @@ export class OwnedWorkdayApplicationRuntime {
             uiBehavior: driveRequest.intent.behavior,
           });
           this.#assertAuthorized(innerSignal);
+          // Rebind and refresh the semantic session immediately before every
+          // admitted field effect. This is the single bounded pre-effect
+          // recovery point for any supported control type after a React
+          // remount; uncertain effects are never replayed.
+          await bindQuestionnaireTargets(page, input.pageId);
+          const rebound = await semantic.observe(
+            { sessionId: semanticSessionId, pageId: input.pageId },
+            innerSignal,
+          );
+          if (!rebound.ok) {
+            this.#trace?.("questionnaire_field_rebind_failed", {
+              fieldId: driveRequest.intent.fieldId,
+              uiBehavior: driveRequest.intent.behavior,
+              operation: driveRequest.intent.kind,
+              underlyingError: rebound.error.code,
+              remountGeneration: reconciliationGeneration,
+            });
+            return {
+              ok: false as const,
+              error: { code: "driver_target_invalid" as const, retryable: false as const },
+            };
+          }
           const driven = await semanticDriver.drive(driveRequest, innerSignal);
           this.#trace?.("questionnaire_field_drive_completed", {
             fieldId: driveRequest.intent.fieldId,
@@ -1209,8 +1250,25 @@ export class OwnedWorkdayApplicationRuntime {
             priorCommittedState: prior === undefined ? "absent" : "verified_intent_present",
             observedState: readback.kind,
             committedReadbackMatches: false,
+            operation: "resolve_answer",
+            observedOptionCount: resolutionRequest.field.options.length,
           };
-          return await sharedBatch.answerResolver.resolve(resolutionRequest, innerSignal);
+          const resolution = await sharedBatch.answerResolver.resolve({
+            ...resolutionRequest,
+            committedReadback: readback,
+          }, innerSignal);
+          if (resolution.ok && resolution.value.kind === "resolved" &&
+              resolution.value.syntheticReplacementReason !== undefined) {
+            this.#trace?.("questionnaire_synthetic_choice_replaced", {
+              fieldId: resolutionRequest.field.fieldId,
+              uiBehavior: resolutionRequest.field.behavior,
+              replacementReason: resolution.value.syntheticReplacementReason,
+              priorCommittedState: prior === undefined ? "absent" : "verified_intent_present",
+              observedState: readback.kind,
+              remountGeneration: reconciliationGeneration,
+            });
+          }
+          return resolution;
         },
       });
       const questionnaire = createQuestionnairePageHandler({
@@ -1237,6 +1295,8 @@ export class OwnedWorkdayApplicationRuntime {
             priorCommittedState: prior === undefined ? "absent" : "verified_intent_present",
             observedState: readback.kind,
             committedReadbackMatches: reusable,
+            operation: "committed_readback",
+            observedOptionCount: field.options.length,
           };
           if (reusable) this.#trace?.("questionnaire_field_verified_reused", {
             fieldId: field.fieldId,
@@ -1267,9 +1327,12 @@ export class OwnedWorkdayApplicationRuntime {
               : "absent",
             observedState: readback.kind,
             committedReadbackMatches: fieldIntentMatchesReadback(attempt.intent, readback),
+            operation: attempt.intent.kind,
+            observedOptionCount: attempt.field.options.length,
           };
           questionLearning.recordAttempt(attempt);
         },
+        recordObserved: questionLearning?.recordObserved,
         recordAnswer: questionLearning?.record,
         recordUnset: questionLearning?.recordUnset,
         recordFailure: questionLearning?.recordFailure,
@@ -1311,8 +1374,12 @@ export class OwnedWorkdayApplicationRuntime {
           priorCommittedState: reconciliationContext.priorCommittedState,
           observedState: reconciliationContext.observedState,
           committedReadbackMatches: reconciliationContext.committedReadbackMatches,
+          operation: reconciliationContext.operation,
+          observedOptionCount: reconciliationContext.observedOptionCount,
           remountGeneration: reconciliationGeneration,
           conditionalDelta,
+          conditionalAdded,
+          conditionalRemoved,
           underlyingError: questionnaireReconciliationError(error),
         });
         throw error;
@@ -1391,21 +1458,32 @@ export class OwnedWorkdayApplicationRuntime {
       const verifiedFields = completion.value.requiredFields.filter(
         ({ verification }) => verification === "verified",
       ).length;
+      const fixedPointSignature = questionnaireFixedPointSignature(
+        completion.value,
+        input.pageId,
+        this.#verifiedQuestionnaireIntents,
+      );
       if (completion.value.c3OwnedDuplicateRows !== 0 || verifiedFields !== requiredFields) {
         const previous = sharedBatch.lastIncomplete;
-        const progressed = previous === undefined ||
-          requiredFields > previous.requiredFields || verifiedFields > previous.verifiedFields;
+        const progressed = previous === undefined || fixedPointSignature !== previous.signature;
         if (!progressed || sharedBatch.pass >= 16 ||
             completion.value.c3OwnedDuplicateRows !== 0) {
           await closeBatch();
           return applicationFailure("page_incomplete", "question_control", "required_field");
         }
-        sharedBatch.lastIncomplete = { requiredFields, verifiedFields };
+        sharedBatch.lastIncomplete = {
+          signature: fixedPointSignature,
+          requiredFields,
+          verifiedFields,
+        };
         sharedBatch.pass += 1;
         this.#trace?.("questionnaire_conditional_rescan_started", {
           pass: sharedBatch.pass,
           requiredFields,
           verifiedFields,
+          conditionalAdded,
+          conditionalRemoved,
+          fixedPointSignature,
         });
         return await this.#reconcileQuestionnaire(
           page,
@@ -1627,8 +1705,86 @@ function reviewReadbackValue(readback: BrowserReadback): string | undefined {
   return undefined;
 }
 
+export async function enrichQuestionnaireFields(
+  page: Page,
+  fields: readonly FieldObservation[],
+): Promise<readonly ApplicationFieldObservation[]> {
+  const observed = await page.locator("[data-hunt-target-token]").evaluateAll((elements) =>
+    elements.map((owner) => {
+      const element = owner as HTMLElement;
+      const leaf = element.matches("input, textarea, select, [contenteditable=true]")
+        ? element
+        : element.querySelector<HTMLElement>(
+          "input:not([type=hidden]), textarea, select, [contenteditable=true], " +
+          "[role=combobox], [role=listbox], [role=radiogroup], [role=checkbox]",
+        ) ?? element;
+      const numeric = (value: string | null): number | null => {
+        if (value === null || value.trim() === "") return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const maxLength = leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement
+        ? leaf.maxLength
+        : Number(leaf.getAttribute("maxlength") ?? -1);
+      const inputType = leaf instanceof HTMLInputElement &&
+          ["email", "url", "number"].includes(leaf.type)
+        ? leaf.type as "email" | "url" | "number"
+        : "text" as const;
+      const selectionMode = element.getAttribute("data-hunt-checkbox-selection-mode") === "multiple" ||
+          leaf instanceof HTMLSelectElement && leaf.multiple ||
+          leaf.getAttribute("aria-multiselectable") === "true"
+        ? "multiple" as const
+        : "single" as const;
+      return {
+        target: element.getAttribute("data-hunt-target-token") ?? "",
+        constraints: {
+          inputType,
+          min: numeric(leaf.getAttribute("min")),
+          max: numeric(leaf.getAttribute("max")),
+          maxLength: Number.isSafeInteger(maxLength) && maxLength >= 0 ? maxLength : null,
+          pattern: leaf.getAttribute("pattern"),
+          readOnly: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
+              leaf.readOnly || leaf.getAttribute("aria-readonly") === "true",
+        },
+        selectionMode,
+      };
+    })
+  );
+  const byTarget = new Map(observed.map((item) => [item.target, item]));
+  return Object.freeze(fields.map((field): ApplicationFieldObservation => {
+    const metadata = byTarget.get(String(field.target));
+    if (metadata === undefined) return field;
+    const text = field.behavior === "text" || field.behavior === "textarea";
+    const choice = field.behavior === "radio" || field.behavior === "checkbox" ||
+      field.behavior === "select" || field.behavior === "listbox";
+    return Object.freeze({
+      ...field,
+      ...(text ? {
+        constraints: Object.freeze({ ...metadata.constraints }),
+        readOnly: metadata.constraints.readOnly,
+      } : {}),
+      ...(choice ? { selectionMode: metadata.selectionMode } : {}),
+    });
+  }));
+}
+
 function questionnaireIntentKey(pageId: BrowserPageId, questionFieldId: FieldId): string {
   return `${pageId}\0${questionFieldId}`;
+}
+
+function questionnaireFixedPointSignature(
+  truth: ApplicationPageTruth,
+  pageId: BrowserPageId,
+  committedIntents: ReadonlyMap<string, string>,
+): string {
+  return JSON.stringify({
+    duplicateRows: truth.c3OwnedDuplicateRows,
+    required: truth.requiredFields.map(({ fieldId: id, page, verification }) => ({
+      identity: `${page ?? truth.page}:${id}`,
+      verification,
+      committedIntent: committedIntents.get(questionnaireIntentKey(pageId, id)) ?? null,
+    })).sort((left, right) => left.identity.localeCompare(right.identity)),
+  });
 }
 
 function questionnaireIntentFingerprint(intent: FieldIntent): string {
@@ -2292,15 +2448,20 @@ async function captureIndependentReviewFields(
   const count = await rows.count();
   const seen = new Set<string>();
   if (count > 0) {
-    if (count !== expected.size) throw new TypeError("Review fields incomplete or ambiguous");
+    const extraIds: string[] = [];
     for (let index = 0; index < count; index += 1) {
       const row = rows.nth(index);
-      if (!await row.isVisible()) throw new TypeError("Review field hidden");
       const id = await row.getAttribute("data-hunt-review-field-id");
       if (id === null) throw new TypeError("Review field identity unavailable");
+      if (!expected.has(id)) {
+        extraIds.push(id);
+        continue;
+      }
+      if (!await row.isVisible()) throw new TypeError("Review field hidden");
       const value = normalizeReviewValue(await row.textContent() ?? "");
       verifyReviewBinding(expected.get(id), id, value, seen);
     }
+    logReviewStructuralDrift(expected.size, count, extraIds);
   } else {
     const realRows = page.locator(
       '[data-automation-id="applyFlowReviewPage"] [data-automation-id^="formField-"]',
@@ -2321,18 +2482,21 @@ async function captureIndependentReviewFields(
         },
       })}\n`);
     }
-    const exactIdentityShape = realCount === expected.size &&
-      identities.every((identity) => byIdentity.has(identity));
-    if (exactIdentityShape) {
+    const expectedIdentityCount = identities.filter((identity) => byIdentity.has(identity)).length;
+    if (expectedIdentityCount > 0) {
+      const extraIds: string[] = [];
       for (let index = 0; index < realCount; index += 1) {
         const row = realRows.nth(index);
-        if (!await row.isVisible()) throw new TypeError("Review field hidden");
         const identity = identities[index];
+        const fact = identity === undefined ? undefined : byIdentity.get(identity);
+        if (fact === undefined) {
+          extraIds.push(identity ?? "");
+          continue;
+        }
         if (identity === undefined || !isStableRowIdentity(identity)) {
           throw new TypeError("Review field identity unavailable");
         }
-        const fact = byIdentity.get(identity);
-        if (fact === undefined) throw new TypeError("Unknown Review row identity");
+        if (!await row.isVisible()) throw new TypeError("Review field hidden");
         const values = await row.evaluate((root) => {
           const leaves = [...root.querySelectorAll<HTMLElement>("*")]
             .filter((element) => element.children.length === 0)
@@ -2345,6 +2509,7 @@ async function captureIndependentReviewFields(
         if (matches.length !== 1) throw new TypeError("Review field mismatch");
         verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
       }
+      logReviewStructuralDrift(expected.size, realCount, extraIds);
     } else if (realCount === 1 && identities[0] === "formField-") {
       await verifyWorkdayReviewSummary(page, expected);
       expected.forEach((_fact, id) => seen.add(id));
@@ -2373,6 +2538,22 @@ async function captureIndependentReviewFields(
       fieldId: verifiedFieldId,
     }))),
   });
+}
+
+function logReviewStructuralDrift(
+  expectedCount: number,
+  observedCount: number,
+  extraIdentities: readonly string[],
+): void {
+  if (extraIdentities.length === 0 || process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+  process.stderr.write(`${JSON.stringify({
+    applicationReviewStructuralDrift: {
+      severity: "evidence_warning",
+      expectedCount,
+      observedCount,
+      extraIdentities: [...extraIdentities],
+    },
+  })}\n`);
 }
 
 async function verifyWorkdayReviewSummary(
@@ -2632,7 +2813,8 @@ export async function bindQuestionnaireTargets(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
-        'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], ' +
+         'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], ' +
+        '[contenteditable="true"], [role="combobox"], [role="radiogroup"], [role="checkbox"], ' +
         'button[aria-haspopup="listbox"]',
     );
     const identities = new Map<string, number>();
@@ -2653,9 +2835,21 @@ export async function bindQuestionnaireTargets(
       const genericCheckboxes = genericCheckboxOwner === null ? [] :
         [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
           .filter(visible);
+      const genericCheckboxNames = new Set(genericCheckboxes
+        .map((checkbox) => (checkbox.getAttribute("name") ?? "")
+          .normalize("NFC").replace(/\s+/gu, " ").trim())
+        .filter(Boolean));
+      const genericGroupText = (genericCheckboxOwner?.textContent ?? "")
+        .normalize("NFC").replace(/\s+/gu, " ").trim();
       const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
         genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-        genericCheckboxes.length >= 2;
+        genericCheckboxes.length >= 2 && (
+          genericCheckboxOwner.getAttribute("role") === "group" ||
+          genericCheckboxOwner.getAttribute("role") === "radiogroup" ||
+          genericCheckboxOwner.getAttribute("aria-multiselectable") === "true" ||
+          genericCheckboxNames.size === 1 ||
+          /select (?:all|any|one)|all that apply|choose (?:all|any|one)|check one|one of (?:the )?(?:boxes|options)/iu.test(genericGroupText)
+        );
       if (isGenericCheckboxGroup) {
         if (genericCheckboxOwner !== control) continue;
         control.setAttribute("data-hunt-exclusive-checkbox-group", "true");
@@ -2670,8 +2864,21 @@ export async function bindQuestionnaireTargets(
       if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) continue;
       if (control instanceof HTMLInputElement && control.type === "radio" &&
           control.closest("fieldset") !== null) continue;
+      if (control.getAttribute("role") === "radio" &&
+          control.closest('[role="radiogroup"]') !== null) continue;
       const normalize = (value: string | null | undefined) =>
         (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+      if (control.matches(
+        '[data-automation-id$="-CheckboxGroup"], [data-hunt-exclusive-checkbox-group="true"]',
+      )) {
+        const groupText = normalize(control.textContent);
+        const multiple = control.getAttribute("aria-multiselectable") === "true" ||
+          /select (?:all|any)|all that apply|choose (?:all|any)|multiple selections?/iu.test(groupText);
+        control.setAttribute(
+          "data-hunt-checkbox-selection-mode",
+          multiple ? "multiple" : "exclusive",
+        );
+      }
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
@@ -2720,6 +2927,7 @@ export async function bindQuestionnaireTargets(
         control.getAttribute("type") ?? "",
         control.getAttribute("role") ?? "",
         control.getAttribute("data-automation-id") ?? "",
+        fieldIdentity,
         stableControlId,
         control.getAttribute("name") ?? "",
         ...(isConditionalApplicationDate

@@ -211,6 +211,15 @@ export function createProfileFieldLearningCapture(input: {
   let inspectionFailure: ProfileInspectionFailure | undefined;
 
   const page: WorkdayProfilePagePort = {
+    registerSyntheticField(field) {
+      plans.set(field.fieldId, field);
+      for (const record of records.values()) {
+        if (record.fieldIdentity === `profile.${field.fieldId}` ||
+            record.fieldIdentity.endsWith(`.${field.fieldId}`)) {
+          applyRegisteredPlan(record, field);
+        }
+      }
+    },
     async inspect(signal) {
       inspectionFailure = undefined;
       let snapshot: ProfilePageSnapshot;
@@ -691,7 +700,8 @@ function validFieldIdentity(value: string): boolean {
   const match = /^profile\.(experience|education|skills|websites)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(value);
   if (match === null) return false;
   const section = match[1] as "experience" | "education" | "skills" | "websites";
-  return repeatableFields.get(section)?.has(match[3]!) === true;
+  return repeatableFields.get(section)?.has(match[3]!) === true ||
+    /^unknown\.required\.[1-9][0-9]{0,2}$/u.test(match[3]!);
 }
 
 function validPlanBinding(value: unknown): value is ObservedPlanBinding {
@@ -716,15 +726,25 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
   );
   if (unknown !== null) {
     const expectedMechanics = emptyMechanics(field.uiType as ProfileControlSnapshot["uiBehavior"]);
-    return field.uiVariant === "workday_unknown_required_v1" &&
-      field.questionCategory === "unknown" && field.answerCategory === "unknown" &&
-      field.required === (unknown[1] === "required") &&
+    const synthetic = field.answerState === "answered" &&
+      field.lane === "synthetic_test_default" &&
+      field.questionCategory === "unknown" &&
+      answerCategories.has(field.answerCategory) &&
+      field.prefillDisposition === "needs_owner_input" &&
+      field.driverAttempt === field.uiType &&
+      (field.terminalDisposition === "verified" ||
+        field.terminalDisposition === "verified_without_mutation") &&
+      validMechanicsRelations(field);
+    const unresolved = field.questionCategory === "unknown" &&
+      field.answerCategory === "unknown" &&
       field.visibleOptionIds.length === 0 && field.selectedOptionId === null &&
       field.optionMapping === "unresolved" &&
       field.prefillDisposition === "needs_owner_input" &&
       field.answerState === "unset" && field.lane === null &&
       field.driverAttempt === "none" &&
       sameMechanics(field.mechanics, expectedMechanics);
+    return field.uiVariant === "workday_unknown_required_v1" &&
+      field.required === (unknown[1] === "required") && (synthetic || unresolved);
   }
   const repeatable = /^profile\.(experience|education|skills|websites)\.([1-9][0-9]{0,2})\.(.+)$/u.exec(
     field.fieldIdentity,
@@ -732,9 +752,16 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
   if (repeatable === null) return false;
   const section = repeatable[1] as "experience" | "education" | "skills" | "websites";
   const catalog = profileRepeatableCatalog.find((entry) => entry.section === section);
-  return catalog?.fields.some(({ fieldId, uiBehavior, uiVariant }) =>
+  const known = catalog?.fields.some(({ fieldId, uiBehavior, uiVariant }) =>
     fieldId === repeatable[3] && field.uiType === uiBehavior && field.uiVariant === uiVariant
   ) === true;
+  if (known) return true;
+  return /^unknown\.required\.[1-9][0-9]{0,2}$/u.test(repeatable[3]!) &&
+    field.uiVariant === "workday_unknown_required_v1" &&
+    field.questionCategory === "unknown" &&
+    field.answerState === "answered" && field.lane === "synthetic_test_default" &&
+    field.prefillDisposition === "needs_owner_input" &&
+    field.driverAttempt === field.uiType && validMechanicsRelations(field);
 }
 
 function validMetadataReconciliation(field: ProfileFieldLearningRecordV2): boolean {
@@ -744,12 +771,13 @@ function validMetadataReconciliation(field: ProfileFieldLearningRecordV2): boole
     const matches = guideMetadataMatches(field, guide);
     return field.metadataReconciliation === (matches ? "matched" : "mismatch");
   }
-  if (identity.startsWith("unknown.")) {
+  if (identity.startsWith("unknown.") ||
+      /^profile\.(experience|education|skills|websites)\.[1-9][0-9]{0,2}\.unknown\./u.test(
+        field.fieldIdentity,
+      )) {
     return field.metadataReconciliation === "unresolved" &&
       field.binderStrategy === "opaque_machine_key" &&
-      field.sanitizedLabelSha256 === null && field.questionCategory === "unknown" &&
-      field.answerCategory === "unknown" && field.optionCatalogState === "unknown" &&
-      field.visibleOptionIds.length === 0 && field.selectedOptionId === null;
+      field.sanitizedLabelSha256 === null && field.questionCategory === "unknown";
   }
   const repeatable = /^profile\.(experience|education|skills|websites)\.[1-9][0-9]{0,2}\./u
     .test(field.fieldIdentity);
@@ -853,7 +881,7 @@ type MetadataRecord = Pick<MutableRecord,
   "sanitizedLabelSha256" | "optionCatalogState" | "visibleOptionIds"
 >;
 
-function plannedFields(plan: ProfilePagePlan): ReadonlyMap<string, ProfileFieldPlan> {
+function plannedFields(plan: ProfilePagePlan): Map<string, ProfileFieldPlan> {
   const result = new Map<string, ProfileFieldPlan>();
   for (const field of [
     ...plan.fields,
@@ -872,6 +900,18 @@ function plannedFields(plan: ProfilePagePlan): ReadonlyMap<string, ProfileFieldP
     }
   }
   return result;
+}
+
+function applyRegisteredPlan(record: MutableRecord, plan: ProfileFieldPlan): void {
+  record.questionCategory = plan.questionType;
+  record.answerCategory = plan.answerType;
+  record.planBinding = planBindingFromPlan(plan);
+  record.answerState = plan.answer.kind === "answered" ? "answered" : "unset";
+  record.lane = plan.answer.kind === "answered" ? plan.answer.lane : null;
+  record.optionMapping = optionMapping(plan);
+  record.prefillDisposition = "needs_owner_input";
+  record.terminalDisposition = plan.answer.kind === "answered" ? "pending" :
+    record.required ? "required_unset" : "optional_unset";
 }
 
 function observe(
@@ -1033,9 +1073,9 @@ function applyControlObservation(
   const guide = retainedProfileGuide.get(control.fieldId);
   if (guide === undefined && control.fieldId.startsWith("unknown.")) {
     record.sanitizedLabelSha256 = null;
-    record.visibleOptionIds = Object.freeze([]);
-    record.selectedOptionId = null;
-    record.optionCatalogState = "unknown";
+    record.visibleOptionIds = observed.observation.visibleOptionIds;
+    record.selectedOptionId = observed.observation.selectedOptionId;
+    record.optionCatalogState = observed.observation.optionCatalogState;
     record.metadataReconciliation = "unresolved";
     return;
   }

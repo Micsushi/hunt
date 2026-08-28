@@ -465,6 +465,42 @@ test("converges through chained questionnaire conditional reveals", async () => 
   );
 });
 
+test("continues a questionnaire fixed point through same-count field replacement", async () => {
+  const calls: string[] = [];
+  const questionnaireTruth = (id: string, verification: "verified" | "unverified") => ({
+    ...truth("questionnaire"),
+    requiredFields: [{
+      ...truth("questionnaire").requiredFields[0]!,
+      fieldId: id as never,
+      verification,
+    }],
+  });
+  const result = await runApplicationPageWalk(
+    dependenciesFor([
+      truth("profile"), truth("profile"),
+      truth("resume"), truth("resume"),
+      truth("questionnaire"),
+      questionnaireTruth("conditional-a", "unverified"),
+      questionnaireTruth("conditional-b", "unverified"),
+      questionnaireTruth("conditional-b", "verified"),
+      truth("pre_review"),
+    ], calls),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    { pageRetryLimit: 1 },
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("reconcile:questionnaire")),
+    [
+      "reconcile:questionnaire:1",
+      "reconcile:questionnaire:2",
+      "reconcile:questionnaire:3",
+    ],
+  );
+});
+
 test("stops a questionnaire fixed-point pass when browser truth stalls", async () => {
   const calls: string[] = [];
   const incomplete = {

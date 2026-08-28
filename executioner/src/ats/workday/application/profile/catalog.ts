@@ -152,6 +152,7 @@ export const profileInteractiveControlSelector = [
   '[role="checkbox"]',
   '[role="radio"]',
   '[role="radiogroup"]',
+  '[role="listbox"][aria-multiselectable="true"]',
   '[contenteditable="true"]',
   'button[aria-haspopup="listbox"]',
 ].join(", ");

@@ -23,9 +23,12 @@ const controlSelector = [
   "fieldset[data-hunt-target-token]",
   'input:not([type="hidden"])',
   "textarea",
+  '[contenteditable="true"]',
   "select",
   "button",
   '[role="combobox"][data-hunt-target-token]',
+  '[role="radiogroup"][data-hunt-target-token]',
+  '[role="checkbox"][data-hunt-target-token]',
   '[role="listbox"]',
   '[role="button"]',
 ].join(",");
@@ -2294,20 +2297,40 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       } else if (element instanceof HTMLTextAreaElement) {
         control = { kind: "text", element: "textarea" };
         readback = element.value.length === 0 ? { kind: "empty" } : { kind: "text", value: element.value as never };
+      } else if (element instanceof HTMLElement && element.isContentEditable) {
+        control = { kind: "text", element: "input" };
+        const value = normalize(element.textContent);
+        readback = value === "" ? { kind: "empty" } : { kind: "text", value: value as never };
       } else if (element instanceof HTMLSelectElement) {
-        if (isMultiSelect(element)) return [];
         const options = [...element.options].map((option) => normalize(option.text)).filter(Boolean) as never[];
         control = { kind: "select", element: "select", options };
-        const selected = element.selectedOptions.length === 1 ? normalize(element.selectedOptions[0]?.text) : "";
+        const selected = element.selectedOptions.length >= 1 ? normalize(element.selectedOptions[0]?.text) : "";
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
       } else if (element instanceof HTMLButtonElement || element.getAttribute("role") === "button") {
         control = { kind: "button", element: "button" };
       } else if (element.getAttribute("role") === "listbox") {
-        if (isMultiSelect(element)) return [];
         const options = [...element.querySelectorAll("[role=option]")].map((option) => normalize(option.textContent)).filter(Boolean) as never[];
         control = { kind: "select", element: "listbox", options };
         const selected = [...element.querySelectorAll("[role=option][aria-selected=true]")];
-        readback = { kind: "selected", option: selected.length === 1 ? normalize(selected[0]?.textContent) as never : null };
+        readback = { kind: "selected", option: selected.length >= 1 ? normalize(selected[0]?.textContent) as never : null };
+      } else if (element.getAttribute("role") === "radiogroup") {
+        const radios = [...element.querySelectorAll<HTMLElement>('[role="radio"]')];
+        radioOptions = radios.map(nameOf).filter(Boolean);
+        const selected = radios.filter((radio) => radio.getAttribute("aria-checked") === "true");
+        control = {
+          kind: "choice", element: "input", choice: "radio", group: name as never,
+          checked: selected.length === 1,
+        };
+        readback = {
+          kind: "selected",
+          option: selected.length === 1 ? nameOf(selected[0]!) as never : null,
+        };
+      } else if (element.getAttribute("role") === "checkbox") {
+        const checked = element.getAttribute("aria-checked") === "true";
+        control = {
+          kind: "choice", element: "input", choice: "checkbox", group: name as never, checked,
+        };
+        readback = { kind: "checked", checked };
       } else if (element instanceof HTMLInputElement) {
         if (element.type === "date") {
           control = { kind: "date", element: "input" };

@@ -174,7 +174,7 @@ test("rejects overbound structural strings and readbacks without fabricating pre
   }
 });
 
-test("does not expose plural selection controls as singular mutation targets", async () => {
+test("exposes native and ARIA plural selection controls with explicit multiple semantics", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("cccccccccccccccc") });
@@ -192,7 +192,32 @@ test("does not expose plural selection controls as singular mutation targets", a
     if (!started.ok) throw new Error("start failed");
     const observed = await provider.observe(started.value, new AbortController().signal);
     if (!observed.ok) throw new Error("observe failed");
-    assert.deepEqual(observed.value.targets, []);
+    assert.deepEqual(observed.value.targets, [
+      {
+        token: "target-skills",
+        name: "Skills",
+        required: false,
+        control: {
+          kind: "select",
+          element: "select",
+          options: ["TypeScript", "Python"],
+        },
+        state: { visibility: "visible", enabled: true, actionable: true },
+        readback: { kind: "selected", option: "TypeScript" },
+      },
+      {
+        token: "target-locations",
+        name: "Locations",
+        required: false,
+        control: {
+          kind: "select",
+          element: "listbox",
+          options: ["Denver", "Toronto"],
+        },
+        state: { visibility: "visible", enabled: true, actionable: true },
+        readback: { kind: "selected", option: "Denver" },
+      },
+    ]);
   } finally {
     await context.close();
     await browser.close();

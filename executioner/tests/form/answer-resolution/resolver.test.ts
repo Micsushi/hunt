@@ -635,6 +635,194 @@ test("one resolver keeps a random synthetic choice stable across remounted optio
   assert.equal(selection, 1);
 });
 
+test("synthetic choices are isolated by stable field slot for same-canonical disjoint catalogs", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const picks = [0, 1];
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => picks.shift() ?? 0,
+  );
+  const sponsorship = field("Will you require sponsorship?", "listbox", [
+    { id: optionId("sponsorship-yes"), label: boundedText("Yes") },
+    { id: optionId("sponsorship-no"), label: boundedText("No") },
+  ]);
+  const status = Object.freeze({
+    ...field("If you require sponsorship, what is your current status?", "listbox", [
+      { id: optionId("status-f1"), label: boundedText("F-1") },
+      { id: optionId("status-h1b"), label: boundedText("H-1B") },
+      { id: optionId("status-other"), label: boundedText("Other") },
+      { id: optionId("status-none"), label: boundedText("None of these") },
+    ]),
+    fieldId: fieldId("field-sponsorship-status"),
+    target: browserTargetToken("target-sponsorship-status"),
+  });
+
+  const first = await resolver.resolve(syntheticRequest(sponsorship), new AbortController().signal);
+  const second = await resolver.resolve(syntheticRequest(status), new AbortController().signal);
+
+  assert.equal(first.ok && first.value.kind, "resolved");
+  assert.equal(second.ok && second.value.kind, "resolved");
+  if (second.ok && second.value.kind === "resolved" && second.value.intent.kind === "choice") {
+    assert.equal(second.value.intent.expectedOption, "H-1B");
+  }
+});
+
+test("synthetic choices are isolated by stable field slot for equal normalized labels", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => 0,
+  );
+  const first = field("Other", "select", [
+    { id: optionId("first-alpha"), label: boundedText("Alpha") },
+    { id: optionId("first-beta"), label: boundedText("Beta") },
+  ]);
+  const second = Object.freeze({
+    ...field("  OTHER  ", "select", [
+      { id: optionId("second-gamma"), label: boundedText("Gamma") },
+      { id: optionId("second-delta"), label: boundedText("Delta") },
+    ]),
+    fieldId: fieldId("field-other-second"),
+    target: browserTargetToken("target-other-second"),
+  });
+
+  const initial = await resolver.resolve(syntheticRequest(first), new AbortController().signal);
+  const distinct = await resolver.resolve(syntheticRequest(second), new AbortController().signal);
+
+  assert.equal(initial.ok && initial.value.kind, "resolved");
+  assert.equal(distinct.ok && distinct.value.kind, "resolved");
+});
+
+test("same-field option disappearance adopts a current committed site-valid selection", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let selections = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => selections++,
+  );
+  const initialField = field("Unreviewed choice", "listbox", [
+    { id: optionId("initial-alpha"), label: boundedText("Alpha") },
+    { id: optionId("initial-beta"), label: boundedText("Beta") },
+  ]);
+  const changedField = Object.freeze({
+    ...initialField,
+    target: browserTargetToken("target-remounted-current-choice"),
+    options: Object.freeze([
+      { id: optionId("changed-gamma"), label: boundedText("Gamma") },
+      { id: optionId("changed-delta"), label: boundedText("Delta") },
+    ]),
+  });
+
+  await resolver.resolve(syntheticRequest(initialField), new AbortController().signal);
+  const adopted = await resolver.resolve(Object.freeze({
+    ...syntheticRequest(changedField),
+    committedReadback: { kind: "selected" as const, option: boundedText("Delta") },
+  }), new AbortController().signal);
+
+  assert.equal(adopted.ok && adopted.value.kind, "resolved");
+  if (adopted.ok && adopted.value.kind === "resolved" && adopted.value.intent.kind === "choice") {
+    assert.equal(adopted.value.intent.expectedOption, "Delta");
+    assert.equal(adopted.value.syntheticReplacementReason, "committed_value_adopted");
+  }
+  assert.equal(selections, 1);
+});
+
+test("same-field option disappearance reselects once when no valid value is committed", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const picks = [1, 0];
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => picks.shift() ?? 0,
+  );
+  const initialField = field("Unreviewed choice", "radio", [
+    { id: optionId("initial-alpha"), label: boundedText("Alpha") },
+    { id: optionId("initial-beta"), label: boundedText("Beta") },
+  ]);
+  const changedField = Object.freeze({
+    ...initialField,
+    options: Object.freeze([
+      { id: optionId("changed-gamma"), label: boundedText("Gamma") },
+      { id: optionId("changed-delta"), label: boundedText("Delta") },
+    ]),
+  });
+
+  await resolver.resolve(syntheticRequest(initialField), new AbortController().signal);
+  const replaced = await resolver.resolve(syntheticRequest(changedField), new AbortController().signal);
+
+  assert.equal(replaced.ok && replaced.value.kind, "resolved");
+  if (replaced.ok && replaced.value.kind === "resolved" && replaced.value.intent.kind === "choice") {
+    assert.equal(replaced.value.intent.expectedOption, "Gamma");
+    assert.equal(replaced.value.syntheticReplacementReason, "cached_option_unavailable");
+  }
+});
+
+test("unknown synthetic text honors native email, url, number, pattern, and length constraints", async () => {
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const cases = [
+    [{ inputType: "email", min: null, max: null, maxLength: 64, pattern: null, readOnly: false }, "test@example.invalid"],
+    [{ inputType: "url", min: null, max: null, maxLength: 64, pattern: null, readOnly: false }, "https://example.invalid/test"],
+    [{ inputType: "number", min: 4, max: 9, maxLength: null, pattern: null, readOnly: false }, "4"],
+    [{ inputType: "text", min: null, max: null, maxLength: 5, pattern: "[A-Za-z0-9]+", readOnly: false }, "Test1"],
+  ] as const;
+  for (const [constraints, expected] of cases) {
+    const observed = Object.freeze({
+      ...field("Unreviewed constrained value", "text"),
+      constraints,
+    });
+    const result = await resolver.resolve(syntheticRequest(observed), new AbortController().signal);
+    assert.equal(result.ok && result.value.kind, "resolved");
+    if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "text") {
+      assert.equal(result.value.intent.value, expected);
+    }
+  }
+});
+
+test("nonempty readonly fields are readback-only and empty required readonly fields diagnose UI support", async () => {
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const readonly = {
+    inputType: "text" as const,
+    min: null,
+    max: null,
+    maxLength: null,
+    pattern: null,
+    readOnly: true,
+  };
+  const populated = await resolver.resolve(syntheticRequest(Object.freeze({
+    ...field("Derived identifier", "text", [], "populated"),
+    constraints: readonly,
+    readOnly: true,
+  })), new AbortController().signal);
+  const empty = await resolver.resolve(syntheticRequest(Object.freeze({
+    ...field("Derived identifier", "text"),
+    constraints: readonly,
+    readOnly: true,
+  })), new AbortController().signal);
+  assert.deepEqual(populated, {
+    ok: true,
+    value: { kind: "readback_only", fieldId: fieldId("s1-field-given-name") },
+  });
+  assert.deepEqual(empty, {
+    ok: true,
+    value: { kind: "unsupported", fieldId: fieldId("s1-field-given-name") },
+  });
+});
+
 test("semantic testing defaults distinguish qualifications from sponsorship", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },

@@ -210,6 +210,15 @@ export interface QuestionnairePageHandlerDependencies {
     readonly generatedDefault: boolean;
     readonly conditionalReveal?: boolean;
     readonly semanticQuestionType?: TestingQuestionSemanticType;
+    readonly syntheticReplacementReason?:
+      | "committed_value_adopted"
+      | "cached_option_unavailable";
+  }) => void;
+  readonly recordObserved?: (input: {
+    readonly questionId: QuestionId;
+    readonly field: FieldObservation;
+    readonly conditionalReveal?: boolean;
+    readonly semanticQuestionType?: TestingQuestionSemanticType;
   }) => void;
   readonly recordUnset?: (input: {
     readonly questionId: QuestionId;
@@ -273,6 +282,12 @@ export function createQuestionnairePageHandler(
           conditionalReveal: request.conditionalReveal ?? false,
           semanticQuestionType: testingQuestionSemanticType(field.label),
         });
+        dependencies.recordObserved?.({
+          questionId: resolvedQuestionId,
+          field,
+          conditionalReveal: request.conditionalReveal ?? false,
+          semanticQuestionType: testingQuestionSemanticType(field.label),
+        });
         const answer = await resolver.resolve({
           mode,
           field,
@@ -304,6 +319,7 @@ export function createQuestionnairePageHandler(
           }
           return answer;
         }
+        if (answer.value.kind === "readback_only") continue;
         if (answer.value.kind !== "resolved") {
           recordUnset();
           const candidate = answer.value.kind === "option_no_match" ||
@@ -432,6 +448,9 @@ export function createQuestionnairePageHandler(
           generatedDefault,
           conditionalReveal: request.conditionalReveal ?? false,
           semanticQuestionType: testingQuestionSemanticType(field.label),
+          ...(answer.value.syntheticReplacementReason === undefined
+            ? {}
+            : { syntheticReplacementReason: answer.value.syntheticReplacementReason }),
         });
         const driven = await dependencies.driver.drive({
           journeyId: request.journeyId,

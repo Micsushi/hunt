@@ -449,7 +449,55 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const interaction = emptyInteraction(request.uiBehavior);
     this.#interactions.set(request.controlId, interaction);
     try {
-    if (request.uiBehavior === "multi_select") {
+    if (request.uiBehavior === "multi_select" &&
+        await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)) {
+      const options = parseOptionList(request.value);
+      await resolved.locator.selectOption(
+        options.map((label) => ({ label })),
+        { timeout: this.#timeoutMs },
+      );
+      await resolved.locator.blur({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
+      interaction.popupBound = false;
+      interaction.optionFocused = false;
+      interaction.optionActivated = true;
+      interaction.popupClosed = true;
+      interaction.visibleOptionCount = await resolved.locator.locator("option").count();
+      interaction.selectedOptionOrdinal = null;
+      interaction.backingValueCommitted = exactOptionListReadback(
+        await readback(resolved.locator, "multi_select"),
+        options,
+      );
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday native multi-select value did not commit");
+      }
+    } else if (request.uiBehavior === "multi_select" &&
+        await resolved.locator.getAttribute("role") === "listbox") {
+      const options = parseOptionList(request.value);
+      for (const option of options) {
+        if (await selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
+        const matches = resolved.locator.getByRole("option", { name: option, exact: true });
+        if (await matches.count() !== 1) {
+          throw new TypeError("Workday ARIA multi-select option is missing or ambiguous");
+        }
+        await matches.click({ timeout: this.#timeoutMs });
+      }
+      interaction.popupBound = false;
+      interaction.optionFocused = false;
+      interaction.optionActivated = true;
+      interaction.popupClosed = false;
+      interaction.visibleOptionCount = await resolved.locator.getByRole("option").count();
+      interaction.selectedOptionOrdinal = null;
+      interaction.backingValueCommitted = exactOptionListReadback(
+        await readback(resolved.locator, "multi_select"),
+        options,
+      );
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday ARIA multi-select value did not commit");
+      }
+    } else if (request.uiBehavior === "multi_select") {
       const options = parseOptionList(request.value);
       for (const option of options) {
         if (await selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
@@ -479,12 +527,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (request.value !== "true" && request.value !== "false") {
         throw new TypeError("Workday checkbox value is invalid");
       }
-      if (await resolved.locator.isChecked() !== checked) {
+      if (await checkboxReadback(resolved.locator) !== checked) {
         await resolved.locator.click({ timeout: this.#timeoutMs });
       }
       await resolved.locator.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
-      interaction.backingValueCommitted = await resolved.locator.isChecked() === checked;
+      interaction.backingValueCommitted = await checkboxReadback(resolved.locator) === checked;
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
         throw new TypeError("Workday checkbox value did not commit");
@@ -762,6 +810,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const unreviewed: { readonly candidate: Locator; readonly machineKey: string | null }[] = [];
     for (const candidate of candidates) {
       if (await candidate.isDisabled()) continue;
+      if (await candidate.evaluate((element) =>
+        element.getAttribute("role") === "radio" &&
+        element.closest('[role="radiogroup"]') !== null
+      )) continue;
       if (await candidate.evaluate((element) => element.matches(
         'input[type="file"][data-automation-id="file-upload-input-ref"]',
       ))) continue;
@@ -876,13 +928,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         this.#unknownControlOrdinals.set(stableKey, ordinal);
       }
       const isRequired = await required(candidate);
+      const uiBehavior = await unknownUiBehavior(candidate);
+      const allowedOptions = await unknownAllowedOptions(candidate);
+      const constraints = await unknownConstraints(candidate);
+      const currentReadback = await readback(candidate, uiBehavior).catch(() => null);
       unknown.push({
         controlId: `unknown-required:${ordinal}`,
         fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
         required: isRequired,
-        uiBehavior: await unknownUiBehavior(candidate),
+        uiBehavior,
         uiVariant: "workday_unknown_required_v1",
-        readback: null,
+        readback: currentReadback,
+        ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
+        ...(constraints === undefined ? {} : { constraints }),
       });
       this.#controls.set(`unknown-required:${ordinal}`, {
         locator: candidate,
@@ -1931,7 +1989,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     value: string,
     interaction: MutableInteraction,
   ): Promise<void> {
-    const visible = await visibleLocators(controls);
+    const visible = await controls.count() === 1 &&
+        await controls.getAttribute("role") === "radiogroup"
+      ? await visibleLocators(controls.locator('[role="radio"], input[type="radio"]'))
+      : await visibleLocators(controls);
     const matches: Locator[] = [];
     for (const radio of visible) {
       if (normalize(await radioOptionLabel(radio)) === normalize(value)) matches.push(radio);
@@ -2126,19 +2187,78 @@ async function unknownUiBehavior(
     const role = element.getAttribute("role");
     if (role === "checkbox") return "checkbox";
     if (role === "radio" || role === "radiogroup") return "radio_group";
+    if (role === "listbox" && element.getAttribute("aria-multiselectable") === "true") {
+      return "multi_select";
+    }
+    if (element instanceof HTMLSelectElement) {
+      return element.multiple ? "multi_select" : "select";
+    }
     if (
-      element instanceof HTMLSelectElement || role === "combobox" ||
+      role === "combobox" ||
       element.getAttribute("aria-haspopup") === "listbox"
     ) return "search_select";
     if (element instanceof HTMLInputElement) {
       if (element.type === "checkbox") return "checkbox";
-      if (element.type === "date" || element.type === "month") return "date";
+      if (element.type === "date") return "date";
+      if (element.type === "month") return "month";
       if (element.type === "file") return "file";
       if (element.type === "radio") return "radio_group";
       if (element.type === "tel") return "phone";
+      if (element.type === "number") return "number";
+      if (element.type === "url") return "url";
     }
     return "text";
   });
+}
+
+async function unknownConstraints(
+  locator: Locator,
+): Promise<ProfileControlSnapshot["constraints"] | undefined> {
+  return await locator.evaluate((element) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+        !(element instanceof HTMLElement && element.isContentEditable)) return undefined;
+    const numeric = (value: string | null): number | null => {
+      if (value === null || value.trim() === "") return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const inputType = element instanceof HTMLInputElement &&
+        ["email", "url", "number"].includes(element.type)
+      ? element.type as "email" | "url" | "number"
+      : "text" as const;
+    const maxLength = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+      ? element.maxLength
+      : Number(element.getAttribute("maxlength") ?? -1);
+    return {
+      inputType,
+      min: numeric(element.getAttribute("min")),
+      max: numeric(element.getAttribute("max")),
+      maxLength: Number.isSafeInteger(maxLength) && maxLength >= 0 ? maxLength : null,
+      pattern: element.getAttribute("pattern"),
+    };
+  });
+}
+
+async function unknownAllowedOptions(locator: Locator): Promise<readonly string[]> {
+  return Object.freeze(await locator.evaluate((element) => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const owner = element.closest(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    ) ?? element;
+    const options = element instanceof HTMLSelectElement
+      ? [...element.options].map((option) => normalize(option.label || option.textContent))
+      : [...owner.querySelectorAll(
+          '[role="option"], [role="radio"], input[type="radio"], input[type="checkbox"]',
+        )].map((option) => {
+          if (option instanceof HTMLInputElement) {
+            return normalize(option.labels?.[0]?.textContent ?? option.getAttribute("aria-label"));
+          }
+          return normalize(option.getAttribute("aria-label") ?? option.textContent);
+        });
+    return [...new Set(options.filter((option) => option !== "" &&
+      !/^(?:select|select one|choose|choose one)$/iu.test(option)))].slice(0, 128);
+  }));
 }
 
 async function unknownMachineKey(locator: Locator): Promise<string | null> {
@@ -2163,7 +2283,21 @@ async function readback(
   behavior: ProfileControlSnapshot["uiBehavior"],
 ): Promise<string | null> {
   if (behavior === "checkbox") {
-    return await locator.isChecked() ? "true" : "false";
+    return await checkboxReadback(locator) ? "true" : "false";
+  }
+  if (behavior === "radio_group") {
+    const ownerRole = await locator.getAttribute("role");
+    const radios = ownerRole === "radiogroup"
+      ? await visibleLocators(locator.locator('[role="radio"], input[type="radio"]'))
+      : await visibleLocators(locator);
+    return radioReadback(radios);
+  }
+  if (behavior === "text" && await locator.evaluate((element) =>
+    element instanceof HTMLElement && element.isContentEditable
+  )) {
+    const value = (await locator.textContent() ?? "").normalize("NFC")
+      .replace(/\s+/gu, " ").trim();
+    return value === "" ? null : value;
   }
   if (behavior !== "search_select" && behavior !== "select" && behavior !== "multi_select") {
     const value = await locator.inputValue();
@@ -2173,13 +2307,24 @@ async function readback(
   if (ariaValue !== "") return ariaValue;
   const selected = (await locator.getAttribute("data-selected-label"))?.trim() ?? "";
   if (selected !== "") return selected;
-  const nativeSelected = await locator.evaluate((element) => {
-    if (!(element instanceof HTMLSelectElement) || element.selectedOptions.length !== 1) return "";
-    const option = element.selectedOptions[0]!;
-    return (option.label || option.textContent || "").replace(/\s+/gu, " ").trim();
+  const directSelected = await locator.evaluate((element) => {
+    const normalize = (value: string | null | undefined) => (value ?? "")
+      .normalize("NFC").replace(/\s+/gu, " ").trim();
+    if (element instanceof HTMLSelectElement) {
+      const labels = [...element.selectedOptions]
+        .map((option) => normalize(option.label || option.textContent)).filter(Boolean);
+      return labels.length > 1 ? JSON.stringify(labels) : labels[0] ?? "";
+    }
+    if (element.getAttribute("role") === "listbox") {
+      const labels = [...element.querySelectorAll('[role="option"][aria-selected="true"]')]
+        .map((option) => normalize(option.getAttribute("aria-label") ?? option.textContent))
+        .filter(Boolean);
+      return labels.length > 1 ? JSON.stringify(labels) : labels[0] ?? "";
+    }
+    return "";
   });
-  if (nativeSelected !== "" && normalize(nativeSelected) !== "select one") {
-    return nativeSelected;
+  if (directSelected !== "" && normalize(directSelected) !== "select one") {
+    return directSelected;
   }
   if (await locator.evaluate((element) => element instanceof HTMLButtonElement)) {
     const label = (await locator.innerText()).replace(/\s+/gu, " ").trim();
@@ -2370,19 +2515,27 @@ async function exactNormalizedOption(
 async function radioReadback(radios: readonly Locator[]): Promise<string | null> {
   const checked: Locator[] = [];
   for (const radio of radios) {
-    if (await radio.isChecked()) checked.push(radio);
+    if (await radio.getAttribute("aria-checked") === "true" ||
+        await radio.evaluate((element) =>
+          element instanceof HTMLInputElement && element.checked
+        )) checked.push(radio);
   }
   return checked.length === 1 ? await radioOptionLabel(checked[0]!) : null;
 }
 
 async function radioOptionLabel(radio: Locator): Promise<string> {
   return await radio.evaluate((element) => {
-    if (!(element instanceof HTMLInputElement)) return "";
-    const label = element.labels?.length === 1
+    const label = element instanceof HTMLInputElement && element.labels?.length === 1
       ? element.labels[0]?.innerText ?? element.labels[0]?.textContent ?? ""
-      : element.getAttribute("aria-label") ?? "";
+      : element.getAttribute("aria-label") ?? element.textContent ?? "";
     return label.replace(/\s+/gu, " ").trim();
   });
+}
+
+async function checkboxReadback(control: Locator): Promise<boolean> {
+  const aria = await control.getAttribute("aria-checked");
+  if (aria === "true" || aria === "false") return aria === "true";
+  return await control.isChecked();
 }
 
 async function required(

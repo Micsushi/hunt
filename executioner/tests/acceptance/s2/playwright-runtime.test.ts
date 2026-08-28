@@ -21,6 +21,7 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { PlaywrightWorkdayApplicationPage } from
   "../../../src/ats/workday/application/playwright-page.ts";
 import { applyMutation, inspectPage } from "../../../src/browser/adapter.ts";
+import { discoverFields } from "../../../src/form/discovery/discover-fields.ts";
 import type {
   PersistentContext,
   PersistentPage,
@@ -38,6 +39,7 @@ import { createQuestionAnswerLearningCapture } from
   "../../../src/live/evidence/question-answer-learning.ts";
 import {
   bindQuestionnaireTargets,
+  enrichQuestionnaireFields,
   hydrateQuestionnairePopupOptions,
   isReviewExpectedField,
   isWorkdayReviewOmittedProfileField,
@@ -1921,7 +1923,7 @@ test("questionnaire batches external proof once while every field keeps independ
       input: { attempt: 1, pageId: "page-self-identify" } as never,
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(selfIdentifyResult.ok, false, JSON.stringify(selfIdentifyResult));
-    assert.equal(selfIdentifyResult.error?.code, "page_incomplete");
+    assert.equal(selfIdentifyResult.error?.code, "question_unknown");
     assert.equal(
       await page.locator('[data-automation-id="formField-selfIdentifiedDisabilityData--disabilityForm"] button').innerText(),
       "Select One",
@@ -1970,28 +1972,41 @@ test("questionnaire batches external proof once while every field keeps independ
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(learningGap.ok, false);
     assert.equal(learningGap.error?.code, "page_incomplete");
-    assert.deepEqual(traces.filter(({ event }) => event === "questionnaire_reconciliation_blocked"), [
+    const blockedTraces = traces.filter(({ event }) =>
+      event === "questionnaire_reconciliation_blocked"
+    );
+    assert.equal(blockedTraces.length, 2);
+    assert.deepEqual(blockedTraces.map(({ details }) => {
+      const value = details as {
+        pageId: string;
+        fieldId: string;
+        code: string;
+        protectedCategory: string | null;
+        candidatePresent: boolean;
+        retryable: boolean;
+      };
+      assert.match(value.fieldId, /^field-workday-[0-9a-f]{8}-1$/u);
+      return {
+        pageId: value.pageId,
+        code: value.code,
+        protectedCategory: value.protectedCategory,
+        candidatePresent: value.candidatePresent,
+        retryable: value.retryable,
+      };
+    }), [
       {
-        event: "questionnaire_reconciliation_blocked",
-        details: {
-          pageId: "page-self-identify",
-          fieldId: "field-workday-16ba06e3-1",
-          code: "profile_answer_missing",
-          protectedCategory: "legal",
-          candidatePresent: false,
-          retryable: false,
-        },
+        pageId: "page-self-identify",
+        code: "question_unknown",
+        protectedCategory: null,
+        candidatePresent: true,
+        retryable: false,
       },
       {
-        event: "questionnaire_reconciliation_blocked",
-        details: {
-          pageId: "page-learning-gap",
-          fieldId: "field-workday-0cbbbffc-1",
-          code: "profile_answer_missing",
-          protectedCategory: "legal",
-          candidatePresent: false,
-          retryable: false,
-        },
+        pageId: "page-learning-gap",
+        code: "profile_answer_missing",
+        protectedCategory: "legal",
+        candidatePresent: false,
+        retryable: false,
       },
     ]);
 
@@ -2315,6 +2330,109 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   } finally {
     runtime.dispose();
     await context.close();
+    await browser.close();
+  }
+});
+
+test("questionnaire binding distinguishes independent, exclusive, and multi checkbox semantics", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-independent">
+        <label><input id="ack-one" name="ack-one" type="checkbox" required> Acknowledge one</label>
+        <label><input id="ack-two" name="ack-two" type="checkbox" required> Acknowledge two</label>
+      </div>
+      <div data-automation-id="formField-exclusive" role="group" aria-label="Choose one status">
+        <label><input id="exclusive-a" name="status" type="checkbox"> Status A</label>
+        <label><input id="exclusive-b" name="status" type="checkbox"> Status B</label>
+      </div>
+      <div data-automation-id="formField-multiple" role="group" aria-label="Select all that apply"
+        aria-multiselectable="true">
+        <label><input id="multiple-a" name="skills" type="checkbox"> Skill A</label>
+        <label><input id="multiple-b" name="skills" type="checkbox"> Skill B</label>
+      </div>
+    </main>`);
+    const pageId = "page-checkbox-semantics" as never;
+    await bindQuestionnaireTargets(page, pageId);
+
+    assert.equal(await page.locator('[data-automation-id="formField-independent"]')
+      .getAttribute("data-hunt-exclusive-checkbox-group"), null);
+    assert.equal(await page.locator('[data-automation-id="formField-independent"] input[data-hunt-target-token]')
+      .count(), 2);
+    assert.equal(await page.locator('[data-automation-id="formField-exclusive"]')
+      .getAttribute("data-hunt-checkbox-selection-mode"), "exclusive");
+    assert.equal(await page.locator('[data-automation-id="formField-multiple"]')
+      .getAttribute("data-hunt-checkbox-selection-mode"), "multiple");
+
+    const inspected = await inspectPage(
+      page,
+      "live_session_checkbox_semantics_01" as never,
+      pageId,
+      new Map(),
+    );
+    const multiple = inspected.observation.targets.find(({ name }) =>
+      String(name).includes("Select all that apply")
+    );
+    assert.equal(multiple?.control.kind, "choice");
+    assert.equal(Object.hasOwn(multiple?.control ?? {}, "multiple"), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("semantic adapter covers ARIA controls, contenteditable, multiselect, and readonly constraints", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main>
+      <div role="radiogroup" aria-label="ARIA radio" data-hunt-target-token="target-workday-11111111-1">
+        <div role="radio" aria-label="One" aria-checked="false"></div>
+        <div role="radio" aria-label="Two" aria-checked="true"></div>
+      </div>
+      <div role="checkbox" aria-label="ARIA acknowledgement" aria-checked="false"
+        data-hunt-target-token="target-workday-22222222-1"></div>
+      <div contenteditable="true" aria-label="Editable narrative"
+        data-hunt-target-token="target-workday-33333333-1">Draft</div>
+      <select multiple aria-label="Native multiple" data-hunt-target-token="target-workday-44444444-1">
+        <option selected>Alpha</option><option>Beta</option>
+      </select>
+      <input readonly required aria-label="Derived identifier" value="DERIVED-1"
+        data-hunt-target-token="target-workday-55555555-1">
+      <input type="email" maxlength="64" aria-label="Constrained email"
+        data-hunt-target-token="target-workday-66666666-1">
+    </main>`);
+    const observed = await inspectPage(
+      page,
+      "live_session_supported_controls_01" as never,
+      "page-supported-controls" as never,
+      new Map(),
+    );
+    const controls = new Map(observed.observation.targets.map((target) => [String(target.name), target]));
+    assert.equal(controls.get("ARIA radio")?.readback.kind, "selected");
+    assert.equal(controls.get("ARIA acknowledgement")?.control.kind, "choice");
+    assert.equal(controls.get("Editable narrative")?.control.kind, "text");
+    const multiple = controls.get("Native multiple")?.control;
+    assert.equal(multiple?.kind, "select");
+    assert.equal(Object.hasOwn(multiple ?? {}, "multiple"), false);
+    const derived = controls.get("Derived identifier")?.control;
+    assert.equal(derived?.kind, "text");
+    assert.equal(Object.hasOwn(derived ?? {}, "constraints"), false);
+    const email = controls.get("Constrained email")?.control;
+    assert.equal(email?.kind, "text");
+    assert.equal(Object.hasOwn(email ?? {}, "constraints"), false);
+
+    const applicationFields = await enrichQuestionnaireFields(
+      page,
+      discoverFields(observed.observation.targets),
+    );
+    const fields = new Map(applicationFields.map((field) => [String(field.label), field]));
+    assert.equal(fields.get("Native multiple")?.selectionMode, "multiple");
+    assert.equal(fields.get("Derived identifier")?.readOnly, true);
+    assert.equal(fields.get("Derived identifier")?.constraints?.readOnly, true);
+    assert.equal(fields.get("Constrained email")?.constraints?.inputType, "email");
+    assert.equal(fields.get("Constrained email")?.constraints?.maxLength, 64);
+  } finally {
     await browser.close();
   }
 });
@@ -2799,6 +2917,16 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     });
     const realShape = await runtime.review.capture(new AbortController().signal);
     assert.equal(realShape.request.verification.length, 2);
+    await reviewRoot.evaluate((root) => {
+      const extra = document.createElement("section");
+      extra.setAttribute("data-automation-id", "formField-tenantOptionalDisplay");
+      extra.innerHTML = "<span>Tenant optional display</span><span>Unrelated value</span>";
+      root.prepend(extra);
+    });
+    const realShapeWithExtra = await runtime.review.capture(new AbortController().signal);
+    assert.equal(realShapeWithExtra.request.verification.length, 2);
+    await reviewRoot.locator('[data-automation-id="formField-tenantOptionalDisplay"]')
+      .evaluate((node) => node.remove());
     await resumeRow.evaluate((node) => { node.removeAttribute("data-automation-id"); });
     await row.evaluate((node) => { node.removeAttribute("data-automation-id"); });
     await reviewRoot.evaluate((root) => {
@@ -2841,7 +2969,8 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       extra.textContent = "unknown";
       root.prepend(extra);
     });
-    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
+    const extraRowShape = await runtime.review.capture(new AbortController().signal);
+    assert.equal(extraRowShape.request.verification.length, 2);
     await reviewRoot.locator('[data-hunt-review-field-id="unknown-extra-field"]').evaluate((node) => node.remove());
     const captured = await runtime.review.capture(new AbortController().signal);
     const structure = await inspectWorkdayReview(captured.page);
