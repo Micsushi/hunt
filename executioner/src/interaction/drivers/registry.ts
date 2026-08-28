@@ -11,9 +11,8 @@ import {
   type FieldIntent,
   type SafetyAdmissionRequest,
   type SafetyGuard,
-  type UiBehaviorId,
-  uiBehaviorIds,
 } from "../../contracts/index.ts";
+import { isSupportedUiBehavior } from "../../deterministic/supported-controls.ts";
 
 const provenances = new Set([
   "owner_provided",
@@ -31,10 +30,6 @@ const cancelled = {
   ok: false,
   error: { code: "operation_cancelled", retryable: false },
 } as const;
-
-function isSupportedUiBehavior(value: unknown): value is UiBehaviorId {
-  return typeof value === "string" && (uiBehaviorIds as readonly string[]).includes(value);
-}
 
 export function createFieldDriver(
   browser: BrowserSession,

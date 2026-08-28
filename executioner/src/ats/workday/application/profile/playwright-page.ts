@@ -449,7 +449,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const interaction = emptyInteraction(request.uiBehavior);
     this.#interactions.set(request.controlId, interaction);
     try {
-    if (request.uiBehavior === "multi_select" &&
+    if (request.uiBehavior === "file") {
+      if (request.syntheticFile === undefined || request.value !== request.syntheticFile.name) {
+        throw new TypeError("synthetic profile file artifact is missing");
+      }
+      await resolved.locator.setInputFiles({
+        name: request.syntheticFile.name,
+        mimeType: request.syntheticFile.mimeType,
+        buffer: Buffer.from(
+          request.syntheticFile.bytes.buffer,
+          request.syntheticFile.bytes.byteOffset,
+          request.syntheticFile.bytes.byteLength,
+        ),
+      }, { timeout: this.#timeoutMs });
+      interaction.backingValueCommitted = await readback(resolved.locator, "file") === request.value;
+      interaction.validationCleared = await validationCleared(resolved.locator);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw new TypeError("Workday profile file did not commit");
+      }
+    } else if (request.uiBehavior === "multi_select" &&
         await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)) {
       const options = parseOptionList(request.value);
       await resolved.locator.selectOption(
@@ -2222,6 +2240,24 @@ async function unknownConstraints(
       const parsed = Number(value);
       return Number.isFinite(parsed) ? parsed : null;
     };
+    if (element instanceof HTMLInputElement && element.type === "file") {
+      const acceptedExtensions = element.accept.split(",").map((item) => item.trim().toLowerCase())
+        .filter((item) => /^\.[a-z0-9]{1,10}$/u.test(item));
+      const exposedMaximum = Number(element.getAttribute("data-max-file-size") ?? "");
+      return {
+        inputType: "text" as const,
+        min: null,
+        max: null,
+        step: null,
+        minLength: null,
+        maxLength: null,
+        pattern: null,
+        acceptedExtensions,
+        maxFileBytes: Number.isSafeInteger(exposedMaximum) && exposedMaximum > 0
+          ? exposedMaximum
+          : null,
+      };
+    }
     const inputType = element instanceof HTMLInputElement &&
         ["email", "url", "number"].includes(element.type)
       ? element.type as "email" | "url" | "number"
@@ -2233,6 +2269,13 @@ async function unknownConstraints(
       inputType,
       min: numeric(element.getAttribute("min")),
       max: numeric(element.getAttribute("max")),
+      step: numeric(element.getAttribute("step")),
+      minLength: (() => {
+        const value = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+          ? element.minLength
+          : Number(element.getAttribute("minlength") ?? -1);
+        return Number.isSafeInteger(value) && value >= 0 ? value : null;
+      })(),
       maxLength: Number.isSafeInteger(maxLength) && maxLength >= 0 ? maxLength : null,
       pattern: element.getAttribute("pattern"),
     };
@@ -2284,6 +2327,13 @@ async function readback(
 ): Promise<string | null> {
   if (behavior === "checkbox") {
     return await checkboxReadback(locator) ? "true" : "false";
+  }
+  if (behavior === "file") {
+    return await locator.evaluate((element) => {
+      if (!(element instanceof HTMLInputElement) || element.type !== "file" ||
+          element.files === null || element.files.length !== 1) return null;
+      return element.files[0]?.name ?? null;
+    });
   }
   if (behavior === "radio_group") {
     const ownerRole = await locator.getAttribute("role");

@@ -23,6 +23,7 @@ import {
   profileInspectionFailureFromError,
 } from "./inspection.ts";
 import { answerLaneAdmitted } from "../../../../form/answers/application-types.ts";
+import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-value.ts";
 
 const reviewedVariants = new Set([
   "workday_text_v1",
@@ -68,7 +69,7 @@ const questionTypes = new Set([
 ]);
 const answerTypes = new Set([
   "text", "phone", "date", "month", "year", "number", "url", "boolean",
-  "option", "single_select", "multi_select",
+  "option", "single_select", "multi_select", "file",
 ]);
 const repeatableSections = new Set(["experience", "education", "skills", "websites"]);
 const optionalOwnerInputIds = new Set(
@@ -269,7 +270,9 @@ function preflightRequiredControls(
     )
   );
   if (unknownScalar !== undefined) {
-    return blocked("answer_type_unknown", {
+    return blocked(plan.mode === "synthetic_test_non_submittable"
+      ? syntheticProfileBlockCode(unknownScalar)
+      : "answer_type_unknown", {
       fieldId: unknownScalar.fieldId,
       uiBehavior: unknownScalar.uiBehavior,
       uiVariant: unknownScalar.uiVariant,
@@ -315,7 +318,9 @@ function preflightRequiredControls(
         syntheticProfileField(control) !== undefined
       ));
     if (unknownRepeatable !== undefined) {
-      return blocked("answer_type_unknown", {
+      return blocked(plan.mode === "synthetic_test_non_submittable"
+        ? syntheticProfileBlockCode(unknownRepeatable)
+        : "answer_type_unknown", {
         fieldId: unknownRepeatable.fieldId,
         uiBehavior: unknownRepeatable.uiBehavior,
         uiVariant: unknownRepeatable.uiVariant,
@@ -468,7 +473,7 @@ async function reconcileSupportedSyntheticUnknowns(
     const fallbackKey = `${pending.rowKey ?? "scalar"}\u0000${pending.control.fieldId}`;
     const field = syntheticProfileField(pending.control, fallbacks, fallbackKey);
     if (field === undefined) {
-      return blocked("answer_type_unknown", {
+      return blocked(syntheticProfileBlockCode(pending.control), {
         fieldId: pending.control.fieldId,
         uiBehavior: pending.control.uiBehavior,
         uiVariant: pending.control.uiVariant,
@@ -534,9 +539,17 @@ function syntheticProfileAnswerType(
   if (behavior === "url") return "url";
   if (behavior === "checkbox") return "boolean";
   if (behavior === "multi_select") return "multi_select";
+  if (behavior === "file") return "file";
   if (behavior === "select") return "single_select";
   if (behavior === "search_select" || behavior === "radio_group") return "option";
   return undefined;
+}
+
+function syntheticProfileBlockCode(control: ProfileControlSnapshot): BlockedResult["code"] {
+  if (syntheticProfileAnswerType(control.uiBehavior) === undefined) return "answer_type_unknown";
+  if (["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior) &&
+      (control.allowedOptions?.length ?? 0) === 0) return "profile_ui_behavior_mismatch";
+  return "profile_constraint_unsupported";
 }
 
 function syntheticProfileValue(
@@ -544,6 +557,12 @@ function syntheticProfileValue(
   choice: string | undefined,
 ): string | undefined {
   if (control.uiBehavior === "checkbox") return "true";
+  if (control.uiBehavior === "file") {
+    const file = syntheticProfileFile(control);
+    const name = file?.name;
+    file?.bytes.fill(0);
+    return name;
+  }
   if (control.uiBehavior === "date") return control.readback ?? new Date().toISOString().slice(0, 10);
   if (control.uiBehavior === "month") return control.readback ?? "1";
   if (control.uiBehavior === "year") return control.readback ?? String(new Date().getFullYear());
@@ -551,80 +570,47 @@ function syntheticProfileValue(
     return choice;
   }
   if (control.readback !== null) return control.readback;
-  const unconstrained = control.uiBehavior === "url"
-    ? "https://x"
-    : control.uiBehavior === "number"
-      ? syntheticNumber(control)
-      : control.constraints?.inputType === "email"
-        ? "a@b"
-        : control.constraints?.inputType === "url"
-          ? "https://x"
-          : control.uiBehavior === "phone"
-            ? "5550100"
-            : control.uiBehavior === "text" || control.uiBehavior === "textarea"
-              ? "Test response pending owner review."
-              : undefined;
-  return unconstrained === undefined ? undefined : constrainSyntheticProfileValue(
-    unconstrained,
-    control,
-  );
+  if (control.uiBehavior === "phone") return "5550100";
+  if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
+      control.uiBehavior !== "number" && control.uiBehavior !== "url") return undefined;
+  const generated = generateSyntheticTextValue(control.constraints === undefined
+    ? undefined
+    : {
+        inputType: control.constraints.inputType,
+        min: control.constraints.min,
+        max: control.constraints.max,
+        step: control.constraints.step,
+        minLength: control.constraints.minLength,
+        maxLength: control.constraints.maxLength,
+        pattern: control.constraints.pattern,
+      });
+  return generated.kind === "generated" ? generated.value : undefined;
 }
 
-function syntheticNumber(control: ProfileControlSnapshot): string | undefined {
-  const minimum = control.constraints?.min;
-  const maximum = control.constraints?.max;
-  if (minimum !== null && minimum !== undefined &&
-      maximum !== null && maximum !== undefined && minimum > maximum) return undefined;
-  return String(Math.min(maximum ?? 0, Math.max(minimum ?? 0, 0)));
-}
-
-function constrainSyntheticProfileValue(
-  initial: string,
-  control: ProfileControlSnapshot,
-): string | undefined {
-  const maximum = control.constraints?.maxLength ?? 512;
-  if (maximum < 1) return undefined;
-  const candidates = [initial, "a@b", "https://x", "Test1", "Test", "1", "0", "A", "a"]
-    .map((value) => [...value].slice(0, maximum).join(""))
-    .filter((value) => value !== "");
-  const pattern = control.constraints?.pattern;
-  let compiled: RegExp | undefined;
-  if (pattern !== null && pattern !== undefined) {
-    try {
-      compiled = new RegExp(`^(?:${pattern})$`, "u");
-    } catch {
-      return undefined;
-    }
+function syntheticProfileFile(control: ProfileControlSnapshot): {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+} | undefined {
+  const accepted = control.constraints?.acceptedExtensions ?? [];
+  const extension = accepted.length === 0 || accepted.includes(".pdf")
+    ? ".pdf"
+    : accepted.includes(".txt") ? ".txt" : undefined;
+  if (extension === undefined) return undefined;
+  const source = extension === ".pdf"
+    ? "%PDF-1.1\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+    : "Synthetic test artifact. Owner value pending.\n";
+  const bytes = new TextEncoder().encode(source);
+  const maximum = control.constraints?.maxFileBytes;
+  if (maximum !== null && maximum !== undefined && bytes.byteLength > maximum) {
+    bytes.fill(0);
+    return undefined;
   }
-  return candidates.find((value) =>
-    validSyntheticProfileType(value, control) && (compiled?.test(value) ?? true)
-  );
-}
-
-function validSyntheticProfileType(
-  value: string,
-  control: ProfileControlSnapshot,
-): boolean {
-  const inputType = control.constraints?.inputType ??
-    (control.uiBehavior === "number" ? "number" : control.uiBehavior === "url" ? "url" : "text");
-  if (inputType === "email" && !/^[^@\s]+@[^@\s]+$/u.test(value)) return false;
-  if (inputType === "url") {
-    try {
-      const url = new URL(value);
-      if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-    } catch {
-      return false;
-    }
-  }
-  if (inputType === "number") {
-    const number = Number(value);
-    if (!Number.isFinite(number) ||
-        control.constraints?.min !== null && control.constraints?.min !== undefined &&
-          number < control.constraints.min ||
-        control.constraints?.max !== null && control.constraints?.max !== undefined &&
-          number > control.constraints.max) return false;
-  }
-  return true;
+  return {
+    name: `synthetic-owner-review${extension}`,
+    mimeType: extension === ".pdf" ? "application/pdf" : "text/plain",
+    bytes,
+  };
 }
 
 function syntheticProfileSelectedValues(value: string): readonly string[] {
@@ -1032,7 +1018,7 @@ async function reconcileField(
   const control = matches[0]!;
   const replanned = replanSynthetic?.(control);
   if (replanSynthetic !== undefined && replanned === undefined) {
-    return blocked("answer_type_unknown", {
+    return blocked(syntheticProfileBlockCode(control), {
       fieldId: control.fieldId,
       uiBehavior: control.uiBehavior,
       uiVariant: control.uiVariant,
@@ -1050,10 +1036,19 @@ async function reconcileField(
   }
   const expected = visibleValue(effectiveField);
   if (!readbackMatches(effectiveField, control.readback, expected)) {
+    const syntheticFile = control.uiBehavior === "file" &&
+        effectiveField.answer.kind === "answered" &&
+        effectiveField.answer.lane === "synthetic_test_default"
+      ? syntheticProfileFile(control)
+      : undefined;
+    if (control.uiBehavior === "file" && syntheticFile === undefined) {
+      return blocked("profile_constraint_unsupported", { fieldId: field.fieldId });
+    }
     const request: ProfileCommitRequest = {
       controlId: control.controlId,
       uiBehavior: control.uiBehavior,
       value: expected,
+      ...(syntheticFile === undefined ? {} : { syntheticFile }),
     };
     try {
       await page.commit(request, signal);
@@ -1072,26 +1067,50 @@ async function reconcileField(
         !readbackMatches(effectiveField, fresh[0]!.readback, expected)
       ) return blocked("profile_commit_unverified", { fieldId: field.fieldId });
     } catch {
-      return portFailure(signal, { fieldId: field.fieldId });
+      try {
+        const rebound = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
+        if (rebound.length === 1 && readbackMatches(effectiveField, rebound[0]!.readback, expected)) {
+          return verifiedProfileField(effectiveField, rebound[0]!);
+        }
+        if (rebound.length === 1 && rebound[0]!.readback === null && syntheticFile === undefined) {
+          await page.commit(request, signal);
+          const retried = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
+          if (retried.length === 1 && readbackMatches(effectiveField, retried[0]!.readback, expected)) {
+            return verifiedProfileField(effectiveField, retried[0]!);
+          }
+        }
+        return blocked("profile_effect_uncertain", { fieldId: field.fieldId });
+      } catch {
+        return portFailure(signal, { fieldId: field.fieldId });
+      }
+    } finally {
+      syntheticFile?.bytes.fill(0);
     }
   }
+  return verifiedProfileField(effectiveField, control);
+}
+
+function verifiedProfileField(
+  field: ProfileFieldPlan,
+  control: ProfileControlSnapshot,
+): { readonly kind: "verified"; readonly field: VerifiedProfileField } {
   return {
     kind: "verified",
     field: {
-      fieldId: effectiveField.fieldId,
-      questionType: effectiveField.questionType,
-      answerType: effectiveField.answerType,
+      fieldId: field.fieldId,
+      questionType: field.questionType,
+      answerType: field.answerType,
       uiBehavior: control.uiBehavior,
       uiVariant: control.uiVariant,
-      provenance: effectiveField.answer.kind === "answered"
-        ? effectiveField.answer.provenance
+      provenance: field.answer.kind === "answered"
+        ? field.answer.provenance
         : "owner_provided",
-      lane: effectiveField.answer.kind === "answered"
-        ? effectiveField.answer.lane
+      lane: field.answer.kind === "answered"
+        ? field.answer.lane
         : "synthetic_test_default",
-      ...(effectiveField.optionMapping === undefined
+      ...(field.optionMapping === undefined
         ? {}
-        : { optionMappingProvenance: effectiveField.optionMapping.provenance }),
+        : { optionMappingProvenance: field.optionMapping.provenance }),
     },
   };
 }
@@ -1112,6 +1131,7 @@ function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): b
       (control.uiBehavior === "search_select" || control.uiBehavior === "radio_group")) ||
     (field.answerType === "single_select" && control.uiBehavior === "select") ||
     (field.answerType === "multi_select" && control.uiBehavior === "multi_select")
+    || (field.answerType === "file" && control.uiBehavior === "file")
   );
 }
 

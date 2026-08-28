@@ -985,7 +985,39 @@ test("synthetic unknown values honor native constraints", async () => {
   }, port, AbortSignal.any([]));
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
-  assert.deepEqual(port.commits.map(({ value }) => value), ["a@b", "5", "Test"]);
+  assert.deepEqual(port.commits.slice(0, 2).map(({ value }) => value), ["A@A", "5"]);
+  assert.match(port.commits[2]?.value ?? "", /^[A-Z][a-z]+$/u);
+});
+
+test("synthetic required file uses a bounded transient artifact and clears its bytes", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [{
+      ...control("unknown.required.1", "file", null, "workday_unknown_required_v1"),
+      constraints: {
+        inputType: "text",
+        min: null,
+        max: null,
+        maxLength: null,
+        pattern: null,
+        acceptedExtensions: [".pdf"],
+        maxFileBytes: 1024,
+      },
+    }],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits[0]?.syntheticFile?.name, "synthetic-owner-review.pdf");
+  assert.equal(port.commits[0]?.syntheticFile?.mimeType, "application/pdf");
+  assert.equal(port.commits[0]?.syntheticFile?.bytes.every((byte) => byte === 0), true);
 });
 
 test("synthetic unknown choice rebind adopts a committed option when its cached option disappears", async () => {
@@ -1741,6 +1773,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
     controlId: string;
     uiBehavior: ProfileControlSnapshot["uiBehavior"];
     value: string;
+    syntheticFile?: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array };
   }> = [];
   readonly added: ProfileRepeatableSection[] = [];
   readonly removed: Array<readonly [ProfileRepeatableSection, string]> = [];
@@ -1778,6 +1811,7 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
     readonly controlId: string;
     readonly uiBehavior: ProfileControlSnapshot["uiBehavior"];
     readonly value: string;
+    readonly syntheticFile?: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array };
   }): Promise<void> {
     this.commits.push({ ...request });
     if (this.#ignoreCommits) {

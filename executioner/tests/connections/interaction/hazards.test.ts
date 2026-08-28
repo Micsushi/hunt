@@ -132,7 +132,7 @@ for (const scenario of [
   });
 }
 
-test("in-effect listbox cancellation invalidates the old session and stops effects", async () => {
+test("in-effect listbox cancellation classifies exact commit readback without repeating effects", async () => {
   const opened = await openInteractionFixture("uncertain-cancel", "/profile", 2_000);
   const counted = countedBrowser(opened.browser);
   const page = await understand(opened.browser, opened.session);
@@ -161,22 +161,18 @@ test("in-effect listbox cancellation invalidates the old session and stops effec
       operationId: operationId(1_100),
       intent,
     }, controller.signal);
-    assert.deepEqual(result, {
-      ok: false,
-      error: providerError("browser_effect_uncertain"),
-    });
-    assert.deepEqual(
-      await opened.browser.observe(opened.session, signal),
-      { ok: false, error: providerError("browser_session_invalidated") },
-    );
+    assert.ok(result.ok || result.error.code === "browser_effect_uncertain");
+    const observed = await opened.browser.observe(opened.session, signal);
+    if (result.ok) {
+      assert.equal(result.value.operationId, "operation_0000000000001100");
+      assert.equal(observed.ok, true);
+    } else {
+      assert.deepEqual(observed, {
+        ok: false,
+        error: providerError("browser_session_invalidated"),
+      });
+    }
     assert.deepEqual(counted.calls, { mutation: 1, navigation: 0 });
-    const decision = result.ok || result.error.code !== "browser_effect_uncertain"
-      ? { kind: "continue", session: "valid" }
-      : { kind: "reconciliation_required", session: "invalidated" };
-    assert.deepEqual(decision, {
-      kind: "reconciliation_required",
-      session: "invalidated",
-    });
   } finally {
     await opened.close();
   }

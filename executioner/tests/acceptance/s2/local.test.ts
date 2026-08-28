@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   copyFileSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -24,6 +25,10 @@ import {
   writeStage2AcceptanceManifest,
 } from "../../../src/acceptance/s2-local.ts";
 import type { Stage2AcceptanceManifest } from "../../../src/acceptance/s2-gate.ts";
+import {
+  prepareStage2RunStorage,
+  readStage2StorageCatalog,
+} from "../../../src/composition/private/s2-run-storage.ts";
 
 const secret = "never-retain-this-password";
 const targetUrl = "https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345";
@@ -178,6 +183,96 @@ test("local ports fail closed before finalization when Review completion audit i
 
   await assert.rejects(ports.cleanup.finalize(paths, gateManifest()), /injected audit denial/u);
   assert.equal(finalized, false);
+});
+
+test("real local failure composition seals terminal, process, disposal, and retained storage", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-local-failure-"));
+  try {
+    const layout = await prepareStage2RunStorage({
+      storageRoot,
+      runKey: "run_20260828_failureaudit0001",
+    }, { protect: async () => undefined });
+    const owner = {
+      schemaVersion: 1,
+      contractRevision: "s2-owner-inputs-v1",
+      revisionId: "revision_0123456789abcdef",
+      journeyId: "journey_0123456789abcdef",
+      target: {
+        handleId: "target_ref_0123456789abcdef",
+        url: "https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345",
+        host: "tenant.wd5.myworkdayjobs.com",
+        tenant: "tenant",
+        posting: "R12345",
+      },
+      approval: { approvalId: "approval_0123456789abcdef" },
+      roots: {
+        runtime: { path: layout.runtimeRoot },
+        secrets: { path: layout.secretsRoot },
+        evidence: { path: layout.evidenceRoot },
+      },
+      policy: { cleanupLeaseHours: 24, retentionDays: 30 },
+    };
+    writeFileSync(layout.ownerConfigPath, JSON.stringify(owner), "utf8");
+    const config = captureStage2Config(layout.ownerConfigPath);
+    mkdirSync(join(layout.evidenceRoot, "monitor"));
+    writeFileSync(
+      join(layout.evidenceRoot, "monitor", "0001-questionnaire-state_observed.ack.json"),
+      "{}",
+      "utf8",
+    );
+    writeFileSync(join(layout.evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "pre_review_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: owner.journeyId,
+        status: "failed",
+        completedPages: 3,
+        errorCode: "browser_effect_uncertain",
+      },
+    }), "utf8");
+    writeFileSync(join(layout.evidenceRoot, "process-audit.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-windows-process-audit-v2",
+      status: "pass",
+      runKey: layout.runKey,
+      journeyId: owner.journeyId,
+      targetHandleId: owner.target.handleId,
+      configSha256: config.configSha256,
+      processLiveNonceSha256: "a".repeat(64),
+      processIssuedAt: "2026-08-28T12:00:00.000Z",
+      processOwnerPid: 1234,
+      processOwnerStartedAt: "2026-08-28T12:00:01.000Z",
+      processExitObservedAt: "2026-08-28T12:01:00.000Z",
+      jobCloseApplied: true,
+      membersObservedBeforeClose: 0,
+      membersAliveAfterClose: 0,
+      monitorFileCount: 1,
+      monitorChainSha256: "b".repeat(64),
+      checkedAt: "2026-08-28T12:01:01.000Z",
+    }), "utf8");
+    const ports = createLocalStage2AcceptancePorts(resolve("executioner"), {
+      sourceCapture: () => ({
+        repositoryRoot: resolve("repository"),
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      }),
+    });
+
+    await ports.cleanup.sealFailure?.({
+      configPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    }, "real_journey_failed");
+
+    assert.equal(existsSync(layout.transientRoot), false);
+    assert.equal(JSON.parse(readFileSync(join(layout.evidenceRoot, "completion-audit.json"), "utf8"))
+      .runStatus, "failed");
+    assert.equal(JSON.parse(readFileSync(join(layout.evidenceRoot, "disposal-audit.json"), "utf8"))
+      .status, "pass");
+    assert.equal(readStage2StorageCatalog(storageRoot).entries[0]?.runStatus, "failed");
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
 });
 
 test("local command converts a synchronous spawn denial to a stable failure code", async () => {

@@ -12,6 +12,7 @@ import {
   type ProfileQuery,
   type ProfileQueryRequest,
 } from "../../contracts/index.ts";
+import { generateSyntheticTextValue } from "../../deterministic/synthetic-value.ts";
 import type {
   AnswerProvenanceLane,
   ApplicationFieldObservation,
@@ -214,8 +215,10 @@ function generatedLearningIntent(
   selectRandomIndex: (length: number) => number,
 ): ApplicationAnswerResolutionResult | undefined {
   if (field.behavior === "text" || field.behavior === "textarea") {
-    const value = generatedTextValue(field);
-    if (value === undefined) return undefined;
+    const generated = generateSyntheticTextValue(field.constraints);
+    if (generated.kind === "unsupported_constraint") {
+      return { kind: "unsupported_constraint", fieldId: field.fieldId };
+    }
     return {
       kind: "resolved",
       lane: "synthetic_test_default",
@@ -224,7 +227,7 @@ function generatedLearningIntent(
         behavior: field.behavior,
         fieldId: field.fieldId,
         target: field.target,
-        value,
+        value: generated.value,
         provenance: "reviewed_catalog",
       },
     };
@@ -299,36 +302,6 @@ function generatedLearningIntent(
     };
   }
   return undefined;
-}
-
-function generatedTextValue(field: ApplicationFieldObservation): string | undefined {
-  const constraints = field.constraints;
-  let value = constraints?.inputType === "email"
-    ? "test@example.invalid"
-    : constraints?.inputType === "url"
-      ? "https://example.invalid/test"
-      : constraints?.inputType === "number"
-        ? String(Math.min(constraints.max ?? 0, Math.max(constraints.min ?? 0, 0)))
-        : "Test response pending owner review.";
-  if (constraints?.maxLength !== null && constraints?.maxLength !== undefined) {
-    value = [...value].slice(0, constraints.maxLength).join("");
-  }
-  if (value === "") return undefined;
-  if (constraints?.pattern !== null && constraints?.pattern !== undefined) {
-    let pattern: RegExp;
-    try {
-      pattern = new RegExp(`^(?:${constraints.pattern})$`, "u");
-    } catch {
-      return undefined;
-    }
-    const maximum = constraints.maxLength ?? 512;
-    const candidates = [value, "Test1", "Test", "1", "0", "A", "a"]
-      .map((candidate) => [...candidate].slice(0, maximum).join(""))
-      .filter(Boolean);
-    value = candidates.find((candidate) => pattern.test(candidate)) ?? "";
-    if (value === "") return undefined;
-  }
-  return value;
 }
 
 export function createApplicationAnswerResolver(
@@ -522,7 +495,12 @@ export function createApplicationAnswerResolver(
           const matched = matchedChoiceIntent(field, candidate);
           if (matched !== undefined) return success(matched);
         }
-        return failure("protected_answer_denied");
+        const generated = generatedLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        );
+        return generated === undefined
+          ? failure("protected_answer_denied")
+          : generatedSuccess(field, generated);
       }
       if (question.source.kind === "synthetic_placeholder") {
         if (!synthetic) return failure("protected_answer_denied");
@@ -602,7 +580,13 @@ export function createApplicationAnswerResolver(
         (answer.value.provenance !== "owner_provided" ||
           answer.value.lane !== "live_owner_fact")
       ) {
-        return failure("protected_answer_denied");
+        if (!synthetic) return failure("protected_answer_denied");
+        const generated = generatedLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        );
+        return generated === undefined
+          ? failure("protected_answer_denied")
+          : generatedSuccess(field, generated);
       }
       const intent = intentFor(
         field,
@@ -613,7 +597,13 @@ export function createApplicationAnswerResolver(
       );
       if (intent.kind === "resolved") return success(intent);
       if (question.source.ownerProvidedOnly === true) {
-        return failure("protected_answer_denied");
+        if (!synthetic) return failure("protected_answer_denied");
+        const generated = generatedLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        );
+        return generated === undefined
+          ? failure("protected_answer_denied")
+          : generatedSuccess(field, generated);
       }
       return synthetic
         ? generatedSuccess(field, generatedLearningIntent(

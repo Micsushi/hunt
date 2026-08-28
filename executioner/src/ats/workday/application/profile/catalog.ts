@@ -8,6 +8,7 @@ import type {
   ProfileRepeatableSection,
   ProfileUiBehavior,
 } from "./types.ts";
+import { supportedControlSelector } from "../../../../deterministic/supported-controls.ts";
 
 export interface ProfileControlCatalogEntry {
   readonly fieldId: string;
@@ -144,18 +145,7 @@ export const profileRequiredControlSelector = [
   '[contenteditable="true"][aria-required="true"]',
 ].join(", ");
 
-export const profileInteractiveControlSelector = [
-  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"])',
-  "textarea",
-  "select",
-  '[role="combobox"]',
-  '[role="checkbox"]',
-  '[role="radio"]',
-  '[role="radiogroup"]',
-  '[role="listbox"][aria-multiselectable="true"]',
-  '[contenteditable="true"]',
-  'button[aria-haspopup="listbox"]',
-].join(", ");
+export const profileInteractiveControlSelector = supportedControlSelector;
 
 const text = (fieldId: string, automationId: string): ProfileControlCatalogEntry => ({
   fieldId,

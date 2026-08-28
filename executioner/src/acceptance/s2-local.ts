@@ -1,31 +1,15 @@
 import { createHash } from "node:crypto";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import {
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
 import { inspectCleanSourceRevision } from "../composition/private/s2-clean-source-revision.ts";
-import {
-  finalizeStage2RunStorage,
-  type FinalizeStage2RunStorageRequest,
-} from "../composition/private/s2-run-storage.ts";
+import { writeStage2ApplicationFailureBinding } from "../composition/private/s2-application-failure-completion-audit.ts";
+import { readStage2TerminalArtifact } from "./s2-terminal-artifact.ts";
+import { finalizeStage2RunStorage, type FinalizeStage2RunStorageRequest } from "../composition/private/s2-run-storage.ts";
 import { writeAtomicJsonEvidence } from "../live/evidence/private/atomic-json-evidence.ts";
-import {
-  runWindowsIsolatedStage2Acceptance,
-  supportsWindowsIsolatedNodeRuntime,
-} from "../live/runner/windows-isolated-process.ts";
-import type {
-  Stage2AcceptanceGatePorts,
-  Stage2AcceptanceManifest,
-  Stage2ConfigCapture,
-  Stage2RealAcceptanceArgs,
-  Stage2ReviewAcceptance,
-  Stage2SourceCapture,
-} from "./s2-gate.ts";
+import { runWindowsIsolatedStage2Acceptance, supportsWindowsIsolatedNodeRuntime } from "../live/runner/windows-isolated-process.ts";
+import type { Stage2AcceptanceGatePorts, Stage2AcceptanceManifest, Stage2ConfigCapture, Stage2RealAcceptanceArgs, Stage2ReviewAcceptance, Stage2SourceCapture } from "./s2-gate.ts";
 
 const REVIEW_KEYS = [
   "schemaVersion", "evidenceRevision", "sourceRevision", "configSha256",
@@ -133,6 +117,20 @@ export function createLocalStage2AcceptancePorts(
         });
       },
       sealFailure: async (args) => {
+        const source = sourceCapture();
+        const config = configCapture(args.configPath);
+        const terminal = readStage2TerminalArtifact(args.evidenceRoot);
+        if (terminal.terminal.status !== "failed" && terminal.terminal.status !== "blocked") {
+          throw new Error("application failure completion denied");
+        }
+        writeStage2ApplicationFailureBinding(args.evidenceRoot, {
+          schemaVersion: 1,
+          evidenceRevision: "s2-application-failure-source-binding-v1",
+          sourceRevision: source.sourceRevision,
+          configSha256: config.configSha256,
+          journeyId: config.journeyId,
+          targetHandleId: config.targetHandleId,
+        });
         await completionAudit(args.evidenceRoot);
         await finalize({
           storageRoot: dirname(dirname(dirname(args.configPath))),

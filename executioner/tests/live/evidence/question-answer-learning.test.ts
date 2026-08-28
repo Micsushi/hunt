@@ -503,6 +503,8 @@ test("pending owner questions retain native synthetic text constraints", () => {
       inputType: "email",
       min: null,
       max: null,
+      step: null,
+      minLength: null,
       maxLength: 32,
       pattern: "[^@]+@[^@]+",
     });
@@ -761,6 +763,65 @@ test("question learning admits one page monitor batch for independently verified
       evidence.questions.map(({ attemptHistory }) => attemptHistory.length),
       [1, 1],
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one open production batch retains and ACKs same-field synthetic option replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-open-batch-replacement-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const batchOperationId = operation(50);
+    capture.monitorBatchAck({ operationId: batchOperationId, attempt: 1, moment: "before_mutation" });
+    const initial = {
+      ...ownerChoice(51),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(51).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(51);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.record({ operationId: first, ...initial });
+    const replacement = {
+      ...initial,
+      field: {
+        ...initial.field,
+        target: browserTargetToken("target-owner-remounted-51"),
+        options: Object.freeze([
+          { id: optionId("replacement-gamma"), label: boundedText("Gamma") },
+          { id: optionId("replacement-delta"), label: boundedText("Delta") },
+        ]),
+      },
+      intent: {
+        ...initial.intent,
+        target: browserTargetToken("target-owner-remounted-51"),
+        optionId: optionId("replacement-gamma"),
+        expectedOption: boundedText("Gamma"),
+      },
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable" as const,
+    };
+    const second = operation(52);
+    capture.recordAttempt({ operationId: second, ...replacement });
+    capture.record({ operationId: second, ...replacement });
+    capture.monitorBatchAck({ operationId: batchOperationId, attempt: 1, moment: "after_readback" });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.questions.length, 1);
+    assert.equal(evidence.questions[0]?.chosenAnswer, "Gamma");
+    assert.deepEqual(evidence.questions[0]?.attemptHistory.map(({ operationId }) => operationId), [
+      first,
+      second,
+    ]);
+    assert.deepEqual(evidence.questions[0]?.attemptHistory.map(({ attempt }) => attempt), [1, 1]);
+    assert.equal(evidence.questions[0]?.monitorBinding?.operationId, batchOperationId);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

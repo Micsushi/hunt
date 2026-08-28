@@ -14,6 +14,7 @@ import {
   type BrowserTargetState,
   type ResumeId,
 } from "../contracts/index.ts";
+import { supportedControlSelector } from "../deterministic/supported-controls.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
@@ -21,10 +22,7 @@ const controlSelector = [
   '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
   '[data-hunt-exclusive-checkbox-group="true"][data-hunt-target-token]',
   "fieldset[data-hunt-target-token]",
-  'input:not([type="hidden"])',
-  "textarea",
-  '[contenteditable="true"]',
-  "select",
+  supportedControlSelector,
   "button",
   '[role="combobox"][data-hunt-target-token]',
   '[role="radiogroup"][data-hunt-target-token]',
@@ -44,7 +42,8 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
-  readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" | "exclusive-checkbox-group";
+  readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" |
+    "exclusive-checkbox-group" | "multi-checkbox-group" | "multi-select";
 }
 
 export interface ResolvedBrowserTarget extends RawControl {
@@ -207,6 +206,20 @@ export async function applyMutation(
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
   if (mutation.kind === "select") {
+    if (target.interaction === "multi-checkbox-group") {
+      if (target.control.kind !== "select" || !target.radioOptions?.includes(mutation.option)) {
+        return "invalid";
+      }
+      const group = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+      const checkboxes = group.locator('input[type="checkbox"]');
+      const indexes = await checkboxes.evaluateAll((elements, expected) => elements.flatMap(
+        (element, index) => element.getAttribute("data-hunt-option-label") === expected ? [index] : [],
+      ), mutation.option);
+      if (indexes.length !== 1) return indexes.length === 0 ? "invalid" : "ambiguous";
+      const selected = checkboxes.nth(indexes[0]!);
+      if (!await selected.isChecked()) await selected.setChecked(true, { timeout: timeoutMs });
+      return await selected.isChecked() ? "applied" : "invalid";
+    }
     try {
       await page.evaluate((exclusiveChoice) => {
         const root = document.documentElement as unknown as Record<string, unknown>;
@@ -2177,7 +2190,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
-      let interaction: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" | "exclusive-checkbox-group" | undefined;
+      let interaction: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" |
+        "exclusive-checkbox-group" | "multi-checkbox-group" | "multi-select" | undefined;
       if (["dateSection", "dateInputWrapper"].includes(
         element.getAttribute("data-automation-id") ?? "",
       )) {
@@ -2246,24 +2260,23 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           }
         });
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
-        control = {
-          kind: "choice",
-          element: "input",
-          choice: "radio",
-          group: name as never,
-          checked: selected.length === 1,
-        };
-        readback = {
-          kind: "selected",
-          option: selected.length === 1 ? checkboxOptionName(selected[0]!) as never : null,
-        };
+        const multiple = element.getAttribute("data-hunt-checkbox-selection-mode") === "multiple";
+        control = multiple
+          ? { kind: "select", element: "listbox", options: options as never[] }
+          : {
+              kind: "choice", element: "input", choice: "radio", group: name as never,
+              checked: selected.length === 1,
+            };
+        readback = { kind: "selected", option: selected.length >= 1
+          ? checkboxOptionName(selected[0]!) as never
+          : null };
         radioOptions = options;
-        interaction = "exclusive-checkbox-group";
+        interaction = multiple ? "multi-checkbox-group" : "exclusive-checkbox-group";
       } else if (
         element.getAttribute("role") === "combobox" ||
         element.getAttribute("aria-haspopup") === "listbox"
       ) {
-        if (isMultiSelect(element)) return [];
+        const multiple = isMultiSelect(element);
         const popupOwnerId = ownedListboxId(element);
         const selected = selectedPopupLabel(element);
         const popupOptions = [...(ownedListbox(element)?.querySelectorAll("[role=option]") ?? [])]
@@ -2275,7 +2288,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         ])] as never[];
         control = { kind: "select", element: "listbox", options };
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
-        interaction = popupOwnerId === undefined ? "field-popup" : "owned-popup";
+        interaction = multiple ? "multi-select" : popupOwnerId === undefined ? "field-popup" : "owned-popup";
       } else if (element instanceof HTMLFieldSetElement) {
         const radios = [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
         if (radios.length === 0) return [];
@@ -2306,6 +2319,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "select", element: "select", options };
         const selected = element.selectedOptions.length >= 1 ? normalize(element.selectedOptions[0]?.text) : "";
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
+        if (element.multiple) interaction = "multi-select";
       } else if (element instanceof HTMLButtonElement || element.getAttribute("role") === "button") {
         control = { kind: "button", element: "button" };
       } else if (element.getAttribute("role") === "listbox") {
@@ -2313,6 +2327,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "select", element: "listbox", options };
         const selected = [...element.querySelectorAll("[role=option][aria-selected=true]")];
         readback = { kind: "selected", option: selected.length >= 1 ? normalize(selected[0]?.textContent) as never : null };
+        if (element.getAttribute("aria-multiselectable") === "true") interaction = "multi-select";
       } else if (element.getAttribute("role") === "radiogroup") {
         const radios = [...element.querySelectorAll<HTMLElement>('[role="radio"]')];
         radioOptions = radios.map(nameOf).filter(Boolean);

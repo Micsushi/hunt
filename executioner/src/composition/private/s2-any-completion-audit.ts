@@ -4,8 +4,12 @@ import { join } from "node:path";
 import { auditStage2AccountVerifiedCompletion } from "./s2-account-verified-completion-audit.ts";
 import { auditStage2AccountAccessCompletion } from "./s2-completion-audit.ts";
 import { auditStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
+import { auditStage2ApplicationFailureCompletion } from "./s2-application-failure-completion-audit.ts";
 
 export async function auditStage2Completion(root: string): Promise<unknown> {
+  if (existsSync(join(root, "failure-source-binding.json"))) {
+    return auditStage2ApplicationFailureCompletion(root);
+  }
   if (existsSync(join(root, "review-acceptance.json"))) {
     return auditStage2ReviewCompletion(root);
   }

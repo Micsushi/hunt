@@ -231,7 +231,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const matches = fresh.targets.get(mutation.target);
     const observedTarget = observed[0];
     const mayRebindExclusiveChoice = mutation.kind === "select" &&
-      observedTarget?.interaction === "exclusive-checkbox-group" &&
+      (observedTarget?.interaction === "exclusive-checkbox-group" ||
+        observedTarget?.interaction === "multi-checkbox-group") &&
       compatible(observedTarget, mutation);
     if ((matches === undefined || matches.length === 0) && !mayRebindExclusiveChoice) {
       return failure("browser_target_stale");
@@ -243,7 +244,23 @@ export class PlaywrightBrowserSession implements BrowserSession {
     let effectStarted = false;
     const effect = async (upload?: Uint8Array) => {
       effectStarted = true;
-      return applyMutation(active.page, target, mutation, upload, Math.min(5_000, this.#timeoutMs));
+      const apply = () => applyMutation(
+        active.page, target, mutation, upload, Math.min(5_000, this.#timeoutMs),
+      );
+      try {
+        return await apply();
+      } catch (error) {
+        const reconciled = await reconcileCommittedMutation(
+          active.page,
+          snapshot.effect.sessionId,
+          snapshot.effect.pageId,
+          mutation,
+          this.#uploads,
+        );
+        if (reconciled === "committed") return "applied" as const;
+        if (reconciled === "absent") return await apply();
+        throw error;
+      }
     };
     const action = mutation.kind === "upload"
       ? useResumeArtifactUpload<"applied" | "ambiguous" | "invalid", never>(
@@ -254,22 +271,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const result = await bounded(action, signal, this.#timeoutMs);
     if (result.kind === "cancelled" || result.kind === "timeout") {
       if (effectStarted) {
-        if (
-          result.kind === "timeout" && mutation.kind === "select" &&
-          (target.interaction === "field-popup" ||
-            target.interaction === "exclusive-checkbox-group") &&
-          await reconcileCommittedSelection(
-            active.page,
-            snapshot.effect.sessionId,
-            snapshot.effect.pageId,
-            mutation.target,
-            mutation.option,
-            target.interaction,
-            this.#uploads,
-            signal,
-            this.#timeoutMs,
-          )
-        ) {
+        if (await reconcileCommittedMutation(
+          active.page, snapshot.effect.sessionId, snapshot.effect.pageId, mutation, this.#uploads,
+        ) === "committed") {
+          if (mutation.kind === "upload") rememberUpload(this.#uploads, mutation);
           return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
         }
         await this.#invalidateOwnedSession();
@@ -279,22 +284,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
     }
     if (result.kind === "error") {
       if (effectStarted) {
-        if (
-          mutation.kind === "select" &&
-          (target.interaction === "field-popup" ||
-            target.interaction === "exclusive-checkbox-group") &&
-          await reconcileCommittedSelection(
-            active.page,
-            snapshot.effect.sessionId,
-            snapshot.effect.pageId,
-            mutation.target,
-            mutation.option,
-            target.interaction,
-            this.#uploads,
-            signal,
-            this.#timeoutMs,
-          )
-        ) {
+        if (await reconcileCommittedMutation(
+          active.page, snapshot.effect.sessionId, snapshot.effect.pageId, mutation, this.#uploads,
+        ) === "committed") {
+          if (mutation.kind === "upload") rememberUpload(this.#uploads, mutation);
           return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
         }
         await this.#invalidateOwnedSession();
@@ -317,10 +310,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
       return failure(applied === "ambiguous" ? "browser_target_ambiguous" : "browser_target_invalid");
     }
     if (mutation.kind === "upload") {
-      this.#uploads.set(mutation.target, {
-        resumeId: mutation.artifact.resumeId,
-        sha256: sha256Digest(mutation.artifact.sha256),
-      });
+      rememberUpload(this.#uploads, mutation);
     }
     return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
   }
@@ -453,39 +443,51 @@ function compatible(target: ResolvedBrowserTarget, mutation: BrowserMutation): b
   return target.control.kind === "file";
 }
 
-async function reconcileCommittedSelection(
+export async function reconcileCommittedMutation(
   page: Page,
   sessionId: BrowserSessionResult["sessionId"],
   pageId: BrowserSessionResult["pageId"],
-  targetToken: Extract<BrowserMutation, { readonly kind: "select" }>["target"],
-  option: Extract<BrowserMutation, { readonly kind: "select" }>["option"],
-  interaction: "field-popup" | "exclusive-checkbox-group",
+  mutation: BrowserMutation,
   uploads: ReadonlyMap<string, UploadedArtifactReadback>,
-  signal: AbortSignal,
-  timeoutMs: number,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (!signal.aborted) {
-    const observed = await inspectPage(page, sessionId, pageId, uploads).catch(() => undefined);
-    const matches = observed?.targets.get(targetToken);
-    if (
-      matches?.length === 1 && matches[0]?.readback.kind === "selected" &&
-      matches[0].readback.option === option
-    ) return true;
-    if (observed !== undefined && interaction === "exclusive-checkbox-group") {
-      const rebound = [...observed.targets.values()].flat().filter((target) =>
-        target.interaction === "exclusive-checkbox-group" &&
-        target.readback.kind === "selected" &&
-        target.readback.option === option &&
-        target.radioOptions?.includes(option)
-      );
-      if (rebound.length === 1) return true;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return false;
-    await page.waitForTimeout(Math.min(50, remaining)).catch(() => undefined);
+): Promise<"committed" | "absent" | "uncertain"> {
+  const provisional = new Map(uploads);
+  if (mutation.kind === "upload") rememberUpload(provisional, mutation);
+  const observed = await inspectPage(page, sessionId, pageId, provisional).catch(() => undefined);
+  const matches = observed?.targets.get(mutation.target);
+  if (matches?.length !== 1) return "uncertain";
+  const readback = matches[0]!.readback;
+  if (mutation.kind === "set_text") {
+    if (readback.kind === "text" && readback.value === mutation.text) return "committed";
+    return readback.kind === "empty" ? "absent" : "uncertain";
   }
-  return false;
+  if (mutation.kind === "set_date") {
+    if (readback.kind === "text" && readback.value === mutation.isoDate) return "committed";
+    return readback.kind === "empty" ? "absent" : "uncertain";
+  }
+  if (mutation.kind === "set_checked") {
+    if (readback.kind !== "checked") return "uncertain";
+    return readback.checked === mutation.checked ? "committed" : "absent";
+  }
+  if (mutation.kind === "select") {
+    if (readback.kind !== "selected") return "uncertain";
+    return readback.option === mutation.option
+      ? "committed"
+      : readback.option === null ? "absent" : "uncertain";
+  }
+  if (readback.kind !== "upload") return "uncertain";
+  if (readback.resumeId === mutation.artifact.resumeId &&
+      readback.sha256 === mutation.artifact.sha256) return "committed";
+  return readback.resumeId === null && readback.sha256 === null ? "absent" : "uncertain";
+}
+
+function rememberUpload(
+  uploads: Map<string, UploadedArtifactReadback>,
+  mutation: Extract<BrowserMutation, { readonly kind: "upload" }>,
+): void {
+  uploads.set(mutation.target, {
+    resumeId: mutation.artifact.resumeId,
+    sha256: sha256Digest(mutation.artifact.sha256),
+  });
 }
 
 type BoundedResult<T> =

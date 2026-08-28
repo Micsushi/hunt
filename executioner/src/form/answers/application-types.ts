@@ -153,6 +153,8 @@ export interface ApplicationTextConstraints {
   readonly inputType: "text" | "email" | "url" | "number";
   readonly min: number | null;
   readonly max: number | null;
+  readonly step?: number | null;
+  readonly minLength?: number | null;
   readonly maxLength: number | null;
   readonly pattern: string | null;
   readonly readOnly: boolean;
@@ -188,6 +190,7 @@ export type ApplicationAnswerResolutionResult =
   | { readonly kind: "option_no_match"; readonly questionId: QuestionId }
   | { readonly kind: "option_ambiguous"; readonly questionId: QuestionId }
   | { readonly kind: "unsupported"; readonly fieldId: FieldId }
+  | { readonly kind: "unsupported_constraint"; readonly fieldId: FieldId }
   | { readonly kind: "readback_only"; readonly fieldId: FieldId };
 
 export interface ApplicationAnswerResolver {

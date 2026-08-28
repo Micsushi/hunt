@@ -217,6 +217,18 @@ test("exposes native and ARIA plural selection controls with explicit multiple s
         state: { visibility: "visible", enabled: true, actionable: true },
         readback: { kind: "selected", option: "Denver" },
       },
+      {
+        token: "target-tools",
+        name: "Tools",
+        required: false,
+        control: {
+          kind: "select",
+          element: "listbox",
+          options: ["Git", "Docker"],
+        },
+        state: { visibility: "visible", enabled: true, actionable: true },
+        readback: { kind: "selected", option: null },
+      },
     ]);
   } finally {
     await context.close();

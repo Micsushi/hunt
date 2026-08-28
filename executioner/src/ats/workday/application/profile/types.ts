@@ -45,7 +45,8 @@ export type ProfileCanonicalAnswerType =
   | "boolean"
   | "option"
   | "single_select"
-  | "multi_select";
+  | "multi_select"
+  | "file";
 export type ProfileUiBehavior =
   | "checkbox"
   | "file"
@@ -115,8 +116,12 @@ export interface ProfileControlSnapshot {
     readonly inputType: "text" | "email" | "url" | "number";
     readonly min: number | null;
     readonly max: number | null;
+    readonly step?: number | null;
+    readonly minLength?: number | null;
     readonly maxLength: number | null;
     readonly pattern: string | null;
+    readonly acceptedExtensions?: readonly string[];
+    readonly maxFileBytes?: number | null;
   };
 }
 
@@ -204,6 +209,11 @@ export interface ProfileCommitRequest {
   readonly controlId: string;
   readonly uiBehavior: ProfileUiBehavior;
   readonly value: string;
+  readonly syntheticFile?: {
+    readonly name: string;
+    readonly mimeType: string;
+    readonly bytes: Uint8Array;
+  };
 }
 
 export interface ProfileInteractionSnapshot {
@@ -341,6 +351,8 @@ export type ProfilePageCompletionResult =
         | "profile_answer_missing"
         | "profile_answer_provenance_denied"
         | "profile_commit_unverified"
+        | "profile_constraint_unsupported"
+        | "profile_effect_uncertain"
         | "profile_control_ambiguous"
         | "profile_control_missing"
         | "profile_page_mismatch"

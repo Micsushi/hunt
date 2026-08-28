@@ -127,6 +127,7 @@ export type QuestionnaireStopCode =
   | "question_ambiguous"
   | "question_unknown"
   | "unsupported"
+  | "unsupported_constraint"
   | "synthetic_test_non_submittable"
   | "verification_ambiguous"
   | "verification_rejected"

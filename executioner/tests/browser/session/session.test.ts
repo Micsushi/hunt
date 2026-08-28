@@ -5,7 +5,10 @@ import { chromium } from "playwright";
 import { createHash } from "node:crypto";
 
 import { captureResumeArtifact, upstreamResumeId } from "../../../src/contracts/index.ts";
-import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
+import {
+  PlaywrightBrowserSession,
+  reconcileCommittedMutation,
+} from "../../../src/browser/session.ts";
 import { admittedMutation, dataPage, testIds, testJourneyId } from "../playwright-fixture.ts";
 
 test("owns exactly one page and leaves foreign pages alone", async () => {
@@ -196,6 +199,61 @@ test("close clears upload, seen-target, and operation metadata before restart", 
     const absent = await provider.mutate(admittedMutation(second.value.sessionId, second.value.pageId, { kind: "set_text", target: ephemeral, text: "x" }, "2525252525252525"), new AbortController().signal);
     assert.equal(absent.ok ? "ok" : absent.error.code, "browser_target_invalid");
   } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
+test("post-effect reconciliation accepts exact committed state across sibling remounted controls", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const sessionId = "browser_session_reconcile_siblings" as never;
+  const pageId = "page-reconcile-siblings" as never;
+  try {
+    await page.route("https://fixture.test/reconcile", (route) => route.fulfill({
+      contentType: "text/html",
+      body: `<html data-hunt-page-id="page-reconcile-siblings"><body>
+      <label>Text <input data-hunt-target-token="target-text" value="Ada"></label>
+      <label>Narrative <textarea data-hunt-target-token="target-area">Hello</textarea></label>
+      <div contenteditable="true" aria-label="Editable" data-hunt-target-token="target-edit">World</div>
+      <label>Date <input type="date" data-hunt-target-token="target-date" value="2026-08-28"></label>
+      <label>Choice <select data-hunt-target-token="target-select"><option>Red</option><option selected>Blue</option></select></label>
+      <label>Ack <input type="checkbox" data-hunt-target-token="target-check" checked></label>
+      <label>Many <select multiple data-hunt-target-token="target-many"><option selected>One</option><option>Two</option></select></label>
+      <label>File <input type="file" data-hunt-target-token="target-file"></label>
+    </body></html>`,
+    }));
+    await page.goto("https://fixture.test/reconcile");
+    await page.locator("[data-hunt-target-token]").evaluateAll((controls) => {
+      for (const control of controls) control.replaceWith(control.cloneNode(true));
+    });
+    const committed = async (mutation: Parameters<typeof reconcileCommittedMutation>[3]) =>
+      reconcileCommittedMutation(page, sessionId, pageId, mutation, new Map());
+    assert.equal(await committed({ kind: "set_text", target: "target-text" as never, text: "Ada" }), "committed");
+    assert.equal(await committed({ kind: "set_text", target: "target-area" as never, text: "Hello" }), "committed");
+    assert.equal(await committed({ kind: "set_text", target: "target-edit" as never, text: "World" }), "committed");
+    assert.equal(await committed({ kind: "set_date", target: "target-date" as never, isoDate: "2026-08-28" }), "committed");
+    assert.equal(await committed({ kind: "select", target: "target-select" as never, option: "Blue" as never }), "committed");
+    assert.equal(await committed({ kind: "set_checked", target: "target-check" as never, checked: true }), "committed");
+    assert.equal(await committed({ kind: "select", target: "target-many" as never, option: "One" as never }), "committed");
+
+    const bytes = new TextEncoder().encode("test upload");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const artifact = captureResumeArtifact({ resumeId: upstreamResumeId("resume-reconcile"), sha256 }, bytes);
+    if (!artifact.ok) throw new Error("artifact capture failed");
+    await page.locator('[data-hunt-target-token="target-file"]').setInputFiles({
+      name: "resume.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    });
+    assert.equal(await committed({
+      kind: "upload",
+      target: "target-file" as never,
+      artifact: artifact.value,
+    }), "committed");
+  } finally {
+    await page.close();
     await context.close();
     await browser.close();
   }

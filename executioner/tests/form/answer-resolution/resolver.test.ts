@@ -569,6 +569,43 @@ test("unknown choices randomly select a visible non-placeholder option only in s
   });
 });
 
+test("synthetic mode traverses protected catalogs without an owner answer", async () => {
+  const demographic = resolverWith({ kind: "profile_answer_missing" });
+  const demographicResult = await demographic.resolver.resolve(syntheticRequest(field(
+    "Gender",
+    "listbox",
+    [
+      { id: optionId("gender-alpha"), label: boundedText("Female") },
+      { id: optionId("gender-beta"), label: boundedText("Male") },
+    ],
+  )), new AbortController().signal);
+  assert.equal(demographicResult.ok && demographicResult.value.kind, "resolved");
+  if (demographicResult.ok && demographicResult.value.kind === "resolved") {
+    assert.equal(demographicResult.value.lane, "synthetic_test_default");
+    assert.equal(demographicResult.value.intent.provenance, "visible_option");
+  }
+
+  const nonOwner = resolverWith({
+    kind: "answered",
+    value: true,
+    provenance: "resume_verified",
+    lane: "live_owner_fact",
+  });
+  const ownerOnlyResult = await nonOwner.resolver.resolve(syntheticRequest(field(
+    "Are you authorized to work in this location?",
+    "radio",
+    [
+      { id: optionId("authorization-yes"), label: boundedText("Yes") },
+      { id: optionId("authorization-no"), label: boundedText("No") },
+    ],
+  )), new AbortController().signal);
+  assert.equal(ownerOnlyResult.ok && ownerOnlyResult.value.kind, "resolved");
+  if (ownerOnlyResult.ok && ownerOnlyResult.value.kind === "resolved") {
+    assert.equal(ownerOnlyResult.value.lane, "synthetic_test_default");
+    assert.equal(ownerOnlyResult.value.intent.provenance, "visible_option");
+  }
+});
+
 test("one resolver keeps a random synthetic choice stable across conditional rescans", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
@@ -772,13 +809,16 @@ test("same-field option disappearance reselects once when no valid value is comm
   }
 });
 
-test("unknown synthetic text honors native email, url, number, pattern, and length constraints", async () => {
+test("unknown synthetic text honors bounded native types, quantified patterns, lengths, ranges, and steps", async () => {
   const { resolver } = resolverWith({ kind: "profile_answer_missing" });
   const cases = [
-    [{ inputType: "email", min: null, max: null, maxLength: 64, pattern: null, readOnly: false }, "test@example.invalid"],
-    [{ inputType: "url", min: null, max: null, maxLength: 64, pattern: null, readOnly: false }, "https://example.invalid/test"],
-    [{ inputType: "number", min: 4, max: 9, maxLength: null, pattern: null, readOnly: false }, "4"],
-    [{ inputType: "text", min: null, max: null, maxLength: 5, pattern: "[A-Za-z0-9]+", readOnly: false }, "Test1"],
+    [{ inputType: "email", min: null, max: null, step: null, minLength: null, maxLength: 64, pattern: null, readOnly: false }, "test@example.invalid"],
+    [{ inputType: "url", min: null, max: null, step: null, minLength: null, maxLength: 64, pattern: null, readOnly: false }, "https://example.invalid/test"],
+    [{ inputType: "number", min: 5, max: 11, step: 3, minLength: null, maxLength: null, pattern: null, readOnly: false }, "5"],
+    [{ inputType: "text", min: null, max: null, step: null, minLength: null, maxLength: 6, pattern: "\\d{6}", readOnly: false }, /^\d{6}$/u],
+    [{ inputType: "text", min: null, max: null, step: null, minLength: null, maxLength: 8, pattern: "EMP-\\d{4}", readOnly: false }, /^EMP-\d{4}$/u],
+    [{ inputType: "text", min: null, max: null, step: null, minLength: 8, maxLength: 8, pattern: null, readOnly: false }, /^.{8}$/u],
+    [{ inputType: "text", min: null, max: null, step: null, minLength: 3, maxLength: 5, pattern: "[A-Za-z0-9]+", readOnly: false }, /^[A-Za-z0-9]{3,5}$/u],
   ] as const;
   for (const [constraints, expected] of cases) {
     const observed = Object.freeze({
@@ -788,9 +828,25 @@ test("unknown synthetic text honors native email, url, number, pattern, and leng
     const result = await resolver.resolve(syntheticRequest(observed), new AbortController().signal);
     assert.equal(result.ok && result.value.kind, "resolved");
     if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "text") {
-      assert.equal(result.value.intent.value, expected);
+      if (expected instanceof RegExp) assert.match(result.value.intent.value, expected);
+      else assert.equal(result.value.intent.value, expected);
     }
   }
+
+  const unsupported = await resolver.resolve(syntheticRequest(Object.freeze({
+    ...field("Unreviewed constrained value", "text"),
+    constraints: {
+      inputType: "text" as const,
+      min: null,
+      max: null,
+      step: null,
+      minLength: null,
+      maxLength: 8,
+      pattern: "(A|B)",
+      readOnly: false,
+    },
+  })), new AbortController().signal);
+  assert.equal(unsupported.ok && unsupported.value.kind, "unsupported_constraint");
 });
 
 test("nonempty readonly fields are readback-only and empty required readonly fields diagnose UI support", async () => {

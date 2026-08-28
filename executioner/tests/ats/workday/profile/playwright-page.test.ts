@@ -2117,8 +2117,7 @@ test("inventories optional custom ARIA and contenteditable controls", async () =
     })), [
       { fieldId: "unknown.optional.1", uiBehavior: "checkbox", required: false },
       { fieldId: "unknown.optional.2", uiBehavior: "radio_group", required: false },
-      { fieldId: "unknown.optional.3", uiBehavior: "radio_group", required: false },
-      { fieldId: "unknown.optional.4", uiBehavior: "text", required: false },
+      { fieldId: "unknown.optional.3", uiBehavior: "text", required: false },
     ]);
   } finally {
     await browser.close();
@@ -2155,6 +2154,8 @@ test("synthetic traversal commits required ARIA, contenteditable, plural, and co
             data-automation-id="tenantNumber">
           <input required maxlength="4" pattern="[A-Z][a-z]+"
             data-automation-id="tenantPattern">
+          <input required type="file" accept=".pdf" data-max-file-size="1024"
+            data-automation-id="tenantRequiredDocument">
         </main>
         <script>
           document.querySelector('[role="checkbox"]').addEventListener('click', (event) => {
@@ -2193,6 +2194,8 @@ test("synthetic traversal commits required ARIA, contenteditable, plural, and co
     assert.match(await page.locator('[type="email"]').inputValue(), /^[^@\s]+@[^@\s]+$/u);
     assert.equal(await page.locator('[type="number"]').inputValue(), "5");
     assert.match(await page.locator('[data-automation-id="tenantPattern"]').inputValue(), /^[A-Z][a-z]+$/u);
+    assert.equal(await page.locator('[type="file"]').evaluate((element) =>
+      (element as HTMLInputElement).files?.[0]?.name), "synthetic-owner-review.pdf");
   } finally {
     await browser.close();
   }

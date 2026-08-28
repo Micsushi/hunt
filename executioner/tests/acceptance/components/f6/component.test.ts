@@ -216,7 +216,7 @@ test("resolver preserves all F4 errors byte-for-byte without throwing", async ()
   }
 });
 
-test("protected controls reject non-owner facts without learning defaults", async () => {
+test("the synthetic compatibility resolver replaces non-owner protected facts", async () => {
   const cases = [
     ["Available start date", "date", "2026-09-01"],
     ["Are you authorized to work in this location?", "radio", true],
@@ -242,15 +242,15 @@ test("protected controls reject non-owner facts without learning defaults", asyn
         request(field(label, behavior, options)),
         new AbortController().signal,
       );
-      assert.deepEqual(result, {
-        ok: false,
-        error: { code: "protected_answer_denied", retryable: false },
-      });
+      assert.equal(result.ok && result.value.kind, "resolved");
+      if (result.ok && result.value.kind === "resolved") {
+        assert.ok(["reviewed_catalog", "visible_option"].includes(result.value.intent.provenance));
+      }
     }
   }
 });
 
-test("unresolved and unmatched live facts fail closed while synthetic mode learns mechanics", async () => {
+test("unresolved and unmatched synthetic facts learn supported mechanics", async () => {
   const missing = createAnswerResolver(createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   }).port, "Narrative.");
@@ -291,18 +291,37 @@ test("unresolved and unmatched live facts fail closed while synthetic mode learn
       ])),
       new AbortController().signal,
     ),
-    { ok: false, error: { code: "protected_answer_denied", retryable: false } },
+    {
+      ok: true,
+      value: {
+        kind: "resolved",
+        intent: {
+          kind: "choice",
+          behavior: "radio",
+          fieldId: "s1-field-given-name",
+          target: "target-acceptance",
+          optionId: "no",
+          expectedOption: "No",
+          provenance: "visible_option",
+        },
+      },
+    },
   );
-  assert.deepEqual(
-    await resolver.resolve(
-      request(field("Are you authorized to work in this location?", "radio", [
-        { id: optionId("yes"), label: boundedText("Yes") },
-        { id: optionId("y"), label: boundedText("Y") },
-      ])),
-      new AbortController().signal,
-    ),
-    { ok: false, error: { code: "protected_answer_denied", retryable: false } },
+  const ambiguousOwner = await resolver.resolve(
+    request(field("Are you authorized to work in this location?", "radio", [
+      { id: optionId("yes"), label: boundedText("Yes") },
+      { id: optionId("y"), label: boundedText("Y") },
+    ])),
+    new AbortController().signal,
   );
+  assert.equal(ambiguousOwner.ok && ambiguousOwner.value.kind, "resolved");
+  if (ambiguousOwner.ok && ambiguousOwner.value.kind === "resolved") {
+    assert.equal(ambiguousOwner.value.intent.kind, "choice");
+    assert.equal(ambiguousOwner.value.intent.provenance, "visible_option");
+    if (ambiguousOwner.value.intent.kind === "choice") {
+      assert.ok(["Yes", "Y"].includes(String(ambiguousOwner.value.intent.expectedOption)));
+    }
+  }
   assert.deepEqual(
     await resolver.resolve(
       request(field("Given name", "unsupported")),

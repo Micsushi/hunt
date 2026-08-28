@@ -40,6 +40,7 @@ import { createQuestionAnswerLearningCapture } from
 import {
   bindQuestionnaireTargets,
   enrichQuestionnaireFields,
+  finalizeQuestionnaireReconciliation,
   hydrateQuestionnairePopupOptions,
   isReviewExpectedField,
   isWorkdayReviewOmittedProfileField,
@@ -50,6 +51,42 @@ import {
   seedCanonicalBinaryQuestionnaireOptions,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+
+test("questionnaire finalization preserves causal order and always attempts learning evidence", async () => {
+  const earliest = new Error("operation cancelled");
+  const monitor = new Error("monitor rejected");
+  const semantic = new Error("semantic close rejected");
+  let writes = 0;
+  const traces: object[] = [];
+  await finalizeQuestionnaireReconciliation({
+    causalError: earliest,
+    closeBatch: async () => { throw monitor; },
+    closeSemantic: async () => { throw semantic; },
+    writeLearning: () => { writes += 1; return "a".repeat(64); },
+    trace: (details) => traces.push(details),
+  });
+  assert.equal(writes, 1);
+  assert.deepEqual(traces, [{
+    learningPresent: true,
+    closeFailure: true,
+    secondaryFailureCount: 2,
+  }]);
+
+  await assert.rejects(finalizeQuestionnaireReconciliation({
+    causalError: undefined,
+    closeBatch: async () => { throw monitor; },
+    closeSemantic: async () => undefined,
+    writeLearning: () => { writes += 1; return null; },
+  }), (error) => error === monitor);
+  await assert.rejects(finalizeQuestionnaireReconciliation({
+    causalError: undefined,
+    closeBatch: async () => { throw monitor; },
+    closeSemantic: async () => { throw semantic; },
+    writeLearning: () => { writes += 1; return null; },
+  }), (error) => error instanceof AggregateError &&
+    error.errors[0] === monitor && error.errors[1] === semantic);
+  assert.equal(writes, 3);
+});
 
 test("known binary questionnaire choices defer discovery to the exact selection popup", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -2374,8 +2411,37 @@ test("questionnaire binding distinguishes independent, exclusive, and multi chec
     const multiple = inspected.observation.targets.find(({ name }) =>
       String(name).includes("Select all that apply")
     );
-    assert.equal(multiple?.control.kind, "choice");
-    assert.equal(Object.hasOwn(multiple?.control ?? {}, "multiple"), false);
+    assert.equal(multiple?.control.kind, "select");
+    assert.equal(Object.hasOwn(multiple?.control ?? {}, "choice"), false);
+    const exclusive = inspected.observation.targets.find(({ name }) =>
+      String(name).includes("Choose one status")
+    );
+    const acknowledgement = inspected.observation.targets.find(({ name }) =>
+      String(name).includes("Acknowledge one")
+    );
+    const multipleTarget = multiple === undefined ? undefined : inspected.targets.get(multiple.token)?.[0];
+    const exclusiveTarget = exclusive === undefined ? undefined : inspected.targets.get(exclusive.token)?.[0];
+    const acknowledgementTarget = acknowledgement === undefined
+      ? undefined
+      : inspected.targets.get(acknowledgement.token)?.[0];
+    assert.equal(await applyMutation(page, acknowledgementTarget!, {
+      kind: "set_checked",
+      target: acknowledgement!.token,
+      checked: true,
+    }, undefined, 1_000), "applied");
+    assert.equal(await applyMutation(page, exclusiveTarget!, {
+      kind: "select",
+      target: exclusive!.token,
+      option: "Status A" as never,
+    }, undefined, 1_000), "applied");
+    assert.equal(await applyMutation(page, multipleTarget!, {
+      kind: "select",
+      target: multiple!.token,
+      option: "Skill A" as never,
+    }, undefined, 1_000), "applied");
+    assert.equal(await page.locator('[data-automation-id="formField-exclusive"] input:checked').count(), 1);
+    assert.equal(await page.locator('[data-automation-id="formField-multiple"] input:checked').count(), 1);
+    assert.equal(await page.locator("#ack-one").isChecked(), true);
   } finally {
     await browser.close();
   }
@@ -2433,6 +2499,33 @@ test("semantic adapter covers ARIA controls, contenteditable, multiselect, and r
     assert.equal(fields.get("Constrained email")?.constraints?.inputType, "email");
     assert.equal(fields.get("Constrained email")?.constraints?.maxLength, 64);
   } finally {
+    await browser.close();
+  }
+});
+
+test("production questionnaire coverage uses the shared supported-control registry", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div contenteditable="true" aria-required="true" aria-label="Narrative"></div>
+      <div role="radiogroup" aria-required="true" aria-label="Status">
+        <div role="radio" aria-label="One" aria-checked="false"></div>
+        <div role="radio" aria-label="Two" aria-checked="false"></div>
+      </div>
+      <select required multiple aria-label="Native skills"><option>One</option><option>Two</option></select>
+      <div role="combobox" aria-required="true" aria-multiselectable="true"
+        aria-label="ARIA skills"></div>
+    </main>`);
+
+    const coverage = await monitorQuestionnaireCoverage(page);
+    assert.deepEqual(coverage, {
+      fieldCount: 4,
+      requiredFieldCount: 4,
+      typeCounts: { text: 1, radio: 1, select: 2 },
+    });
+  } finally {
+    await page.close();
     await browser.close();
   }
 });

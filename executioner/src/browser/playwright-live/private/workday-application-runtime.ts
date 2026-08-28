@@ -36,6 +36,7 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
+import { supportedControlSelector } from "../../../deterministic/supported-controls.ts";
 import {
   browserTargetToken,
   boundedText,
@@ -1031,11 +1032,11 @@ export class OwnedWorkdayApplicationRuntime {
           moment: "before_mutation",
         });
       }
-      let batchClosed = false;
-      const close = async () => {
-        if (batchClosed) return;
+      let closePromise: Promise<void> | undefined;
+      const close = () => closePromise ??= (async () => {
+        const cleanupSignal = AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000));
         await this.#monitor(
-          page, monitorPageName, "after_readback", batchOperationId, batchAttempt, signal,
+          page, monitorPageName, "after_readback", batchOperationId, batchAttempt, cleanupSignal,
         );
         if (this.#externalMonitor !== undefined) {
           request.questionLearning?.monitorBatchAck({
@@ -1044,9 +1045,8 @@ export class OwnedWorkdayApplicationRuntime {
             moment: "after_readback",
           });
         }
-        batchClosed = true;
-        this.#assertAuthorized(signal);
-      };
+        this.#assertAuthorizationTime();
+      })();
       sharedBatch = {
         operationId: batchOperationId,
         attempt: batchAttempt,
@@ -1076,6 +1076,8 @@ export class OwnedWorkdayApplicationRuntime {
       ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
       timeoutMs: this.#timeoutMs,
     });
+    const questionLearning = request.questionLearning;
+    let causalError: unknown;
     try {
       const semanticObservationStartedAt = Date.now();
       const observed = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
@@ -1231,7 +1233,6 @@ export class OwnedWorkdayApplicationRuntime {
           return verified;
         },
       });
-      const questionLearning = request.questionLearning;
       const answerResolver: ApplicationAnswerResolver = Object.freeze({
         resolve: async (
           resolutionRequest: Parameters<ApplicationAnswerResolver["resolve"]>[0],
@@ -1356,10 +1357,9 @@ export class OwnedWorkdayApplicationRuntime {
           conditionalReveal: input.attempt > 1 || sharedBatch.pass > 1,
         }, signal);
       } catch (error) {
-        await closeBatch();
-        const learningSha256 = questionLearning?.write() ?? null;
+        causalError = error;
         this.#trace?.("questionnaire_reconciliation_exception", {
-          learningPresent: learningSha256 !== null,
+          learningPresent: questionLearning !== undefined,
           errorType: error instanceof Error ? error.name : "unknown",
           ...(reconciliationContext.fieldId === null
             ? {}
@@ -1387,16 +1387,13 @@ export class OwnedWorkdayApplicationRuntime {
       if (!completed.ok && new Set([
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) {
-        const learningSha256 = questionLearning?.write() ?? null;
         this.#trace?.("questionnaire_reconciliation_uncertain", {
           code: completed.error.code,
-          learningPresent: learningSha256 !== null,
+          learningPresent: questionLearning !== undefined,
         });
         throw new TypeError("questionnaire browser effect uncertain");
       }
       if (!completed.ok) {
-        await closeBatch();
-        questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_failed", {
@@ -1405,8 +1402,6 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (completed.value.kind === "blocked") {
-        await closeBatch();
-        questionLearning?.write();
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_blocked", {
@@ -1436,7 +1431,6 @@ export class OwnedWorkdayApplicationRuntime {
         );
       }
       if (completed.value.protectedPlaceholderCount !== 0) {
-        await closeBatch();
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       await bindQuestionnaireTargets(page, input.pageId);
@@ -1451,7 +1445,6 @@ export class OwnedWorkdayApplicationRuntime {
       });
       if (!completion.ok || completion.value.page !== "questionnaire" ||
           completion.value.submitActivated) {
-        await closeBatch();
         throw new TypeError("questionnaire completion truth unavailable");
       }
       const requiredFields = completion.value.requiredFields.length;
@@ -1468,7 +1461,6 @@ export class OwnedWorkdayApplicationRuntime {
         const progressed = previous === undefined || fixedPointSignature !== previous.signature;
         if (!progressed || sharedBatch.pass >= 16 ||
             completion.value.c3OwnedDuplicateRows !== 0) {
-          await closeBatch();
           return applicationFailure("page_incomplete", "question_control", "required_field");
         }
         sharedBatch.lastIncomplete = {
@@ -1524,9 +1516,20 @@ export class OwnedWorkdayApplicationRuntime {
         this.#recordReviewExpectation(answer.fieldId, answer.provenance, value);
       }
       return verified("questionnaire", "questionnaire_verified", input.pageId);
+    } catch (error) {
+      causalError ??= error;
+      throw error;
     } finally {
-      await closeBatch();
-      await semantic.close({ sessionId: semanticSessionId }, new AbortController().signal);
+      await finalizeQuestionnaireReconciliation({
+        causalError,
+        closeBatch,
+        closeSemantic: () => semantic.close(
+          { sessionId: semanticSessionId },
+          AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000)),
+        ).then(() => undefined),
+        writeLearning: () => questionLearning?.write() ?? null,
+        trace: (details) => this.#trace?.("questionnaire_semantic_finalized", details),
+      });
     }
   }
 
@@ -1581,6 +1584,50 @@ export class OwnedWorkdayApplicationRuntime {
     }));
   }
 
+}
+
+export async function finalizeQuestionnaireReconciliation(input: {
+  readonly causalError: unknown;
+  readonly closeBatch: () => Promise<void>;
+  readonly closeSemantic: () => Promise<void>;
+  readonly writeLearning: () => string | null;
+  readonly trace?: (details: {
+    readonly learningPresent: boolean;
+    readonly closeFailure: boolean;
+    readonly secondaryFailureCount: number;
+  }) => void;
+}): Promise<void> {
+  const errors: unknown[] = [];
+  let learningSha256: string | null = null;
+  try {
+    await input.closeBatch();
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    try {
+      await input.closeSemantic();
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      try {
+        learningSha256 = input.writeLearning();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  input.trace?.({
+    learningPresent: learningSha256 !== null,
+    closeFailure: errors.length > 0,
+    secondaryFailureCount: input.causalError === undefined
+      ? Math.max(0, errors.length - 1)
+      : errors.length,
+  });
+  if (input.causalError === undefined && errors.length > 0) {
+    throw errors.length === 1
+      ? errors[0]
+      : new AggregateError(errors, "questionnaire finalization failed");
+  }
 }
 
 function repeatableReviewFieldId(rowKey: string, fieldIdValue: string): string {
@@ -1741,6 +1788,13 @@ export async function enrichQuestionnaireFields(
           inputType,
           min: numeric(leaf.getAttribute("min")),
           max: numeric(leaf.getAttribute("max")),
+          step: numeric(leaf.getAttribute("step")),
+          minLength: (() => {
+            const value = leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement
+              ? leaf.minLength
+              : Number(leaf.getAttribute("minlength") ?? -1);
+            return Number.isSafeInteger(value) && value >= 0 ? value : null;
+          })(),
           maxLength: Number.isSafeInteger(maxLength) && maxLength >= 0 ? maxLength : null,
           pattern: leaf.getAttribute("pattern"),
           readOnly: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
@@ -1913,7 +1967,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
   readonly requiredFieldCount: number;
   readonly typeCounts: Readonly<Record<string, number>>;
 } | null> {
-  return page.evaluate(() => {
+  return page.evaluate((supportedControls) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -1937,9 +1991,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
-        'fieldset, input:not([type="hidden"]), textarea, select, [role="combobox"], ' +
-        '[role="listbox"], [role="radio"], [role="checkbox"], ' +
-        'button[aria-haspopup="listbox"]',
+        `fieldset, ${supportedControls}`,
     ))].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true") return false;
@@ -2022,6 +2074,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
           control.getAttribute("role") === "listbox" ||
           control.getAttribute("aria-haspopup") === "listbox") type = "select";
       else if (control instanceof HTMLFieldSetElement ||
+          control.getAttribute("role") === "radiogroup" ||
           control instanceof HTMLInputElement && control.type === "radio" ||
           control.getAttribute("role") === "radio") type = "radio";
       else if (control instanceof HTMLInputElement && control.type === "checkbox" ||
@@ -2052,7 +2105,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
       ) requiredFieldCount += 1;
     }
     return { fieldCount: controls.length, requiredFieldCount, typeCounts };
-  });
+  }, supportedControlSelector);
 }
 
 async function monitorTaxonomy(
@@ -2786,7 +2839,7 @@ export async function bindQuestionnaireTargets(
   page: Page,
   pageId: BrowserPageId,
 ): Promise<void> {
-  const result = await page.evaluate(({ declaredPageId, selectors }) => {
+  const result = await page.evaluate(({ declaredPageId, selectors, supportedControls }) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -2813,9 +2866,7 @@ export async function bindQuestionnaireTargets(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
-         'fieldset, input:not([type="hidden"]), textarea, select, [role="listbox"], ' +
-        '[contenteditable="true"], [role="combobox"], [role="radiogroup"], [role="checkbox"], ' +
-        'button[aria-haspopup="listbox"]',
+         `fieldset, ${supportedControls}`,
     );
     const identities = new Map<string, number>();
     const hash = (value: string) => {
@@ -2853,6 +2904,17 @@ export async function bindQuestionnaireTargets(
       if (isGenericCheckboxGroup) {
         if (genericCheckboxOwner !== control) continue;
         control.setAttribute("data-hunt-exclusive-checkbox-group", "true");
+        const explicitlyMultiple = genericCheckboxOwner.getAttribute("aria-multiselectable") === "true" ||
+          /select (?:all|any)|all that apply|choose (?:all|any)|multiple selections?/iu.test(genericGroupText);
+        const exclusive = !explicitlyMultiple && (
+          genericCheckboxOwner.getAttribute("role") === "radiogroup" ||
+          genericCheckboxNames.size === 1 ||
+          /select one|choose one|check one|one of (?:the )?(?:boxes|options)/iu.test(genericGroupText)
+        );
+        control.setAttribute(
+          "data-hunt-checkbox-selection-mode",
+          exclusive ? "exclusive" : "multiple",
+        );
       } else if (control.matches(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       )) continue;
@@ -2874,10 +2936,12 @@ export async function bindQuestionnaireTargets(
         const groupText = normalize(control.textContent);
         const multiple = control.getAttribute("aria-multiselectable") === "true" ||
           /select (?:all|any)|all that apply|choose (?:all|any)|multiple selections?/iu.test(groupText);
-        control.setAttribute(
-          "data-hunt-checkbox-selection-mode",
-          multiple ? "multiple" : "exclusive",
-        );
+        if (!control.hasAttribute("data-hunt-checkbox-selection-mode")) {
+          control.setAttribute(
+            "data-hunt-checkbox-selection-mode",
+            multiple ? "multiple" : "exclusive",
+          );
+        }
       }
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2944,7 +3008,11 @@ export async function bindQuestionnaireTargets(
       index += 1;
     }
     return index <= 128;
-  }, { declaredPageId: pageId, selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
+  }, {
+    declaredPageId: pageId,
+    selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
+    supportedControls: supportedControlSelector,
+  });
   if (!result) throw new TypeError("questionnaire control binding denied");
 }
 

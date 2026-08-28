@@ -5,9 +5,8 @@ import type {
   FieldIntent,
   FieldObservation,
   QuestionId,
-  UiBehaviorId,
 } from "../../contracts/index.ts";
-import { uiBehaviorIds } from "../../contracts/index.ts";
+import { isSupportedUiBehavior } from "../../deterministic/supported-controls.ts";
 import type {
   ApplicationFieldObservation,
   AnswerExecutionMode,
@@ -116,6 +115,8 @@ export type PendingQuestionConstraintsV1 =
       readonly inputType: "text" | "email" | "url" | "number";
       readonly min: number | null;
       readonly max: number | null;
+      readonly step: number | null;
+      readonly minLength: number | null;
       readonly maxLength: number | null;
       readonly pattern: string | null;
     };
@@ -227,12 +228,12 @@ export function createQuestionAnswerLearningCapture(input: {
       const retryableFailure = prior !== undefined &&
         prior.interactionState === "attempted" &&
         ["driver_failed", "verification_failed"].includes(prior.terminalDisposition) &&
-        prior.attemptHistory.length > 0;
+        retainedOrProvisionalAttempts(prior) > 0;
       const verifiedRemountRestore = prior !== undefined &&
         value.conditionalReveal === true &&
         prior.interactionState === "attempted" &&
         prior.terminalDisposition === "verified" &&
-        prior.attemptHistory.length > 0 &&
+        retainedOrProvisionalAttempts(prior) > 0 &&
         intentFingerprints.get(value.field.fieldId) === fingerprint;
       const observedOnly = prior !== undefined &&
         prior.interactionState === "not_attempted" &&
@@ -247,13 +248,17 @@ export function createQuestionAnswerLearningCapture(input: {
         prior.provenance !== "configured_template" &&
         prior.provenance !== "resume_verified" &&
         prior.chosenAnswer !== null &&
+        retainedOrProvisionalAttempts(prior) > 0 &&
         !value.field.options.some(({ label }) =>
           normalizeAnswer(label) === normalizeAnswer(prior.chosenAnswer!)
         );
       if (value.syntheticReplacementReason !== undefined && !verifiedSyntheticReplacement) denied();
       if (prior !== undefined && !retryableFailure && !verifiedRemountRestore &&
           !observedOnly && !verifiedSyntheticReplacement) denied();
-      if (prior !== undefined) record.attemptHistory = [...prior.attemptHistory];
+      if (prior !== undefined) {
+        record.attemptHistory = [...prior.attemptHistory];
+        record.provisionalAttempts = [...prior.provisionalAttempts];
+      }
       records.set(value.field.fieldId, record);
       intentFingerprints.set(value.field.fieldId, fingerprint);
       operations.set(value.operationId, value.field.fieldId);
@@ -276,7 +281,8 @@ export function createQuestionAnswerLearningCapture(input: {
       record.failureCode = null;
       record.retryable = false;
       record.terminalDisposition = "verified";
-      if (record.monitorBinding !== null) retainAttempt(record);
+      if (record.monitorBinding !== null) retainAttempt(record, value.operationId);
+      else if (pendingBatch !== null) retainProvisionalAttempt(record, value.operationId);
     },
     recordUnset(value: Parameters<QuestionAnswerLearningCapture["recordUnset"]>[0]) {
       observeQuestion(records, value);
@@ -287,7 +293,8 @@ export function createQuestionAnswerLearningCapture(input: {
       record.failureCode = safeFailureCode(value.code);
       record.retryable = value.retryable;
       record.terminalDisposition = record.verificationResult;
-      if (record.monitorBinding !== null) retainAttempt(record);
+      if (record.monitorBinding !== null) retainAttempt(record, value.operationId);
+      else if (pendingBatch !== null) retainProvisionalAttempt(record, value.operationId);
     },
     monitorAck(value: Parameters<QuestionAnswerLearningCapture["monitorAck"]>[0]) {
       const record = attemptedRecord(records, operations, value.operationId);
@@ -308,6 +315,10 @@ export function createQuestionAnswerLearningCapture(input: {
         afterReadbackAck: true,
       });
       record.pendingMonitor = null;
+      if (record.verificationResult !== "not_attempted" &&
+          !record.attemptHistory.some(({ operationId }) => operationId === value.operationId)) {
+        retainAttempt(record, value.operationId);
+      }
     },
     monitorBatchAck(value: Parameters<QuestionAnswerLearningCapture["monitorBatchAck"]>[0]) {
       if (value.moment === "before_mutation") {
@@ -331,7 +342,7 @@ export function createQuestionAnswerLearningCapture(input: {
             record.monitorBinding !== null ||
             record.verificationResult === "not_attempted") denied();
         record.monitorBinding = binding;
-        retainAttempt(record);
+        finalizeProvisionalAttempts(record, binding);
       }
       pendingBatch = null;
       batchFields.clear();
@@ -341,17 +352,7 @@ export function createQuestionAnswerLearningCapture(input: {
       written = true;
       try {
         const questions = [...records.values()].map(freezeRecord);
-        const evidence = admitQuestionAnswerLearningEvidence({
-          schemaVersion: 4,
-          evidenceRevision: "s2-question-answer-learning-v4",
-          page: "questionnaire",
-          executionMode: input.mode,
-          testOnly: input.mode === "synthetic_test_non_submittable",
-          liveAcceptanceEligible: input.mode === "live" &&
-            questions.every(liveEligibleQuestion),
-          questions,
-        });
-        const publicUiStrings = evidence.questions.flatMap((question) => [
+        const publicUiStrings = questions.flatMap((question) => [
           question.label,
           ...question.possibleAnswers,
           ...(typeof question.chosenAnswer === "string" &&
@@ -377,6 +378,16 @@ export function createQuestionAnswerLearningCapture(input: {
           reviewedOpaqueIdKeys: [],
           label: "pending profile questions",
           fileName: "pending-profile-questions.json",
+        });
+        const evidence = admitQuestionAnswerLearningEvidence({
+          schemaVersion: 4,
+          evidenceRevision: "s2-question-answer-learning-v4",
+          page: "questionnaire",
+          executionMode: input.mode,
+          testOnly: input.mode === "synthetic_test_non_submittable",
+          liveAcceptanceEligible: input.mode === "live" &&
+            questions.every(liveEligibleQuestion),
+          questions,
         });
         return writeAtomicJsonEvidence({
           root: input.root,
@@ -424,6 +435,7 @@ function observeQuestion(
     retryable: false,
     terminalDisposition: "needs_owner_input",
     attemptHistory: prior === undefined ? [] : [...prior.attemptHistory],
+    provisionalAttempts: prior === undefined ? [] : [...prior.provisionalAttempts],
     conditionalReveal: value.conditionalReveal ?? false,
     semanticQuestionType: value.semanticQuestionType ?? "unknown",
     constraints: observedQuestionConstraints(value.field),
@@ -559,7 +571,10 @@ export function admitQuestionAnswerLearningEvidence(
   });
 }
 
-function answerType(intent: FieldIntent): string {
+function answerType(intent: FieldIntent, field?: FieldObservation): string {
+  if ((field as ApplicationFieldObservation | undefined)?.selectionMode === "multiple") {
+    return "multi_select";
+  }
   if (intent.kind === "choice") return "single_select";
   if (intent.kind === "toggle") return "boolean";
   if (intent.kind === "date") return "date";
@@ -594,10 +609,6 @@ function observedAnswerType(field: FieldObservation): string {
   return "text";
 }
 
-function isSupportedUiBehavior(value: unknown): value is UiBehaviorId {
-  return typeof value === "string" && (uiBehaviorIds as readonly string[]).includes(value);
-}
-
 function strategy(
   intent: FieldIntent,
   lane: AnswerProvenanceLane,
@@ -628,6 +639,7 @@ function strategy(
 function freezeRecord(value: QuestionAnswerLearningRecordV2 | MutableQuestionRecord): QuestionAnswerLearningRecordV2 {
   const {
     pendingMonitor: _pendingMonitor,
+    provisionalAttempts: _provisionalAttempts,
     conditionalReveal: _conditionalReveal,
     semanticQuestionType: _semanticQuestionType,
     constraints: _constraints,
@@ -663,6 +675,7 @@ interface MutableQuestionRecord extends Omit<{
     beforeMutationAck: true;
   } | null;
   attemptHistory: QuestionAnswerAttemptV1[];
+  provisionalAttempts: ProvisionalQuestionAnswerAttempt[];
   conditionalReveal: boolean;
   semanticQuestionType: TestingQuestionSemanticType;
   constraints: PendingQuestionConstraintsV1 | null;
@@ -685,7 +698,7 @@ function answerRecord(value: {
     label: value.field.label,
     required: value.field.required,
     uiType: value.field.behavior,
-    answerType: answerType(value.intent),
+    answerType: answerType(value.intent, value.field),
     possibleAnswers: value.field.options.map(({ label }) => String(label)),
     answerState: "answered",
     lane: value.lane,
@@ -708,6 +721,7 @@ function answerRecord(value: {
     retryable: false,
     terminalDisposition: disposition,
     attemptHistory: [],
+    provisionalAttempts: [],
     conditionalReveal: value.conditionalReveal ?? false,
     semanticQuestionType: value.semanticQuestionType ?? "unknown",
     constraints: observedQuestionConstraints(value.field),
@@ -752,6 +766,8 @@ function observedQuestionConstraints(
     inputType: constraints.inputType,
     min: constraints.min,
     max: constraints.max,
+    step: constraints.step ?? null,
+    minLength: constraints.minLength ?? null,
     maxLength: constraints.maxLength,
     pattern: constraints.pattern,
   });
@@ -763,30 +779,82 @@ function validPendingConstraints(value: unknown): value is PendingQuestionConstr
   if (exactKeys(value, ["displayFormat"])) {
     return (value as { readonly displayFormat?: unknown }).displayFormat === "YYYY-MM-DD";
   }
-  if (!exactKeys(value, ["inputType", "min", "max", "maxLength", "pattern"])) return false;
+  if (!exactKeys(value, ["inputType", "min", "max", "step", "minLength", "maxLength", "pattern"])) return false;
   const constraints = value as {
     readonly inputType?: unknown;
     readonly min?: unknown;
     readonly max?: unknown;
+    readonly step?: unknown;
+    readonly minLength?: unknown;
     readonly maxLength?: unknown;
     readonly pattern?: unknown;
   };
   return ["text", "email", "url", "number"].includes(String(constraints.inputType)) &&
     (constraints.min === null || typeof constraints.min === "number" && Number.isFinite(constraints.min)) &&
     (constraints.max === null || typeof constraints.max === "number" && Number.isFinite(constraints.max)) &&
+    (constraints.step === null || typeof constraints.step === "number" &&
+      Number.isFinite(constraints.step) && constraints.step > 0) &&
+    (constraints.minLength === null || typeof constraints.minLength === "number" &&
+      Number.isSafeInteger(constraints.minLength) && constraints.minLength >= 0) &&
     (constraints.maxLength === null || typeof constraints.maxLength === "number" &&
       Number.isSafeInteger(constraints.maxLength) && constraints.maxLength >= 0) &&
     (constraints.pattern === null || typeof constraints.pattern === "string" &&
       bounded(constraints.pattern, 512));
 }
 
-function retainAttempt(record: MutableQuestionRecord): void {
+interface ProvisionalQuestionAnswerAttempt {
+  readonly operationId: string;
+  readonly outcome: QuestionAnswerAttemptV1["outcome"];
+  readonly failureCode: string | null;
+  readonly retryable: boolean;
+}
+
+function retainedOrProvisionalAttempts(record: MutableQuestionRecord): number {
+  return record.attemptHistory.length + record.provisionalAttempts.length;
+}
+
+function retainProvisionalAttempt(record: MutableQuestionRecord, operationId: string): void {
+  if (record.verificationResult === "not_attempted" ||
+      record.provisionalAttempts.some((attempt) => attempt.operationId === operationId) ||
+      retainedOrProvisionalAttempts(record) >= 256) denied();
+  record.provisionalAttempts.push(Object.freeze({
+    operationId,
+    outcome: record.verificationResult,
+    failureCode: record.failureCode,
+    retryable: record.retryable,
+  }));
+}
+
+function finalizeProvisionalAttempts(
+  record: MutableQuestionRecord,
+  binding: NonNullable<QuestionAnswerLearningRecordV2["monitorBinding"]>,
+): void {
+  if (record.provisionalAttempts.length === 0) denied();
+  for (const attempt of record.provisionalAttempts) {
+    if (record.attemptHistory.some(({ operationId }) => operationId === attempt.operationId)) denied();
+    record.attemptHistory.push(Object.freeze({
+      operationId: attempt.operationId,
+      attempt: binding.attempt,
+      beforeMutationAck: true,
+      afterReadbackAck: true,
+      outcome: attempt.outcome,
+      failureCode: attempt.failureCode,
+      retryable: attempt.retryable,
+    }));
+  }
+  record.provisionalAttempts = [];
+}
+
+function retainAttempt(record: MutableQuestionRecord, operationId: string): void {
   const binding = record.monitorBinding;
   if (binding === null || record.verificationResult === "not_attempted") denied();
-  if (record.attemptHistory.some(({ operationId }) => operationId === binding.operationId)) denied();
+  if (record.attemptHistory.some((attempt) => attempt.operationId === operationId)) denied();
   if (record.attemptHistory.length >= 256) denied();
   record.attemptHistory.push(Object.freeze({
-    ...binding,
+    operationId,
+    attempt: binding.attempt,
+    beforeMutationAck: true,
+    afterReadbackAck: true,
     outcome: record.verificationResult,
     failureCode: record.failureCode,
     retryable: record.retryable,
@@ -846,7 +914,6 @@ function validAttemptHistory(record: QuestionAnswerLearningRecordV2): boolean {
   if (record.interactionState === "not_attempted") return true;
   const latest = record.attemptHistory.at(-1);
   return latest !== undefined && record.monitorBinding !== null &&
-    latest.operationId === record.monitorBinding.operationId &&
     latest.attempt === record.monitorBinding.attempt &&
     latest.outcome === record.verificationResult &&
     latest.failureCode === record.failureCode && latest.retryable === record.retryable;

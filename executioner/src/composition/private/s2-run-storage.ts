@@ -36,6 +36,8 @@ import {
   "../../live/evidence/question-answer-learning.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
+import { inspectStage2ApplicationFailureCompletion } from
+  "./s2-application-failure-completion-audit.ts";
 import { sweepExpiredVerificationReplayClaims } from "./s2-verification-replay-ledger.ts";
 
 const RUN_KEY = /^run_\d{8}_[a-z0-9]{16}$/u;
@@ -71,6 +73,20 @@ const REVIEW_RETAINED_FILES = new Set([
   "process-audit.json",
   "review-acceptance.json",
   "s2-acceptance-manifest.json",
+  "terminal-artifact.json",
+  "value-free-trace.ndjson",
+]);
+const APPLICATION_FAILURE_RETAINED_FILES = new Set([
+  "acceptance.json",
+  "application-walk-acceptance.json",
+  "completion-audit.json",
+  "failure-source-binding.json",
+  "page-local-inspection.json",
+  "pending-profile-questions.json",
+  "process-audit.json",
+  "profile-field-learning-02.json",
+  "profile-field-learning.json",
+  "question-answer-learning.json",
   "terminal-artifact.json",
   "value-free-trace.ndjson",
 ]);
@@ -794,6 +810,7 @@ function readCompletionAudit(root: string): {
   let nestedEvidenceFiles: readonly string[] = Object.freeze([]);
   let terminalArtifactSha256: string | null = null;
   let review = false;
+  let applicationFailure = false;
   if (value.evidenceRevision === "s2-review-completion-v1") {
     const inspection = inspectStage2ReviewCompletion(root);
     review = JSON.stringify(value) === JSON.stringify(inspection.audit);
@@ -807,11 +824,22 @@ function readCompletionAudit(root: string): {
       ? value.terminalArtifactSha256
       : null;
   }
+  if (value.evidenceRevision === "s2-application-failure-completion-v1") {
+    const inspection = inspectStage2ApplicationFailureCompletion(root);
+    applicationFailure = JSON.stringify(value) === JSON.stringify(inspection.audit);
+    allowedRootFiles = APPLICATION_FAILURE_RETAINED_FILES;
+    nestedEvidenceFiles = inspection.nestedEvidenceFiles;
+    terminalArtifactSha256 = typeof value.terminalArtifactSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.terminalArtifactSha256)
+      ? value.terminalArtifactSha256
+      : null;
+  }
   if (
     !common ||
     review && (typeof value.terminalArtifactSha256 !== "string" ||
       !/^[0-9a-f]{64}$/u.test(value.terminalArtifactSha256)) ||
-    (!accountAccess && !accountVerified && !review)
+    (applicationFailure && terminalArtifactSha256 === null) ||
+    (!accountAccess && !accountVerified && !review && !applicationFailure)
   ) {
     denied("storage finalization denied");
   }
