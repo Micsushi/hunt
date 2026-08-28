@@ -116,20 +116,17 @@ export function createLocalStage2AcceptancePorts(
           evidenceRoot: args.evidenceRoot,
         });
       },
-      sealFailure: async (args) => {
-        const source = sourceCapture();
-        const config = configCapture(args.configPath);
+      sealFailure: async (args, code, admission) => {
         const terminal = readStage2TerminalArtifact(args.evidenceRoot);
-        if (terminal.terminal.status !== "failed" && terminal.terminal.status !== "blocked") {
-          throw new Error("application failure completion denied");
-        }
         writeStage2ApplicationFailureBinding(args.evidenceRoot, {
           schemaVersion: 1,
-          evidenceRevision: "s2-application-failure-source-binding-v1",
-          sourceRevision: source.sourceRevision,
-          configSha256: config.configSha256,
-          journeyId: config.journeyId,
-          targetHandleId: config.targetHandleId,
+          evidenceRevision: "s2-application-failure-source-binding-v2",
+          sourceRevision: admission.source.sourceRevision,
+          configSha256: admission.config.configSha256,
+          journeyId: admission.config.journeyId,
+          targetHandleId: admission.config.targetHandleId,
+          gateFailureCode: code,
+          terminalStatus: terminal.terminal.status,
         });
         await completionAudit(args.evidenceRoot);
         await finalize({

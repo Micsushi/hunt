@@ -16,6 +16,7 @@ import {
   admitQuestionAnswerLearningEvidence,
 } from "../../live/evidence/question-answer-learning.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
+import type { Stage2AcceptanceFailureCode } from "../../acceptance/s2-gate.ts";
 
 const ROOT_FILES = new Set([
   "acceptance.json", "application-walk-acceptance.json", "page-local-inspection.json",
@@ -27,11 +28,13 @@ const NESTED_DIRECTORIES = new Set(["auth-monitor", "monitor"]);
 
 export interface Stage2ApplicationFailureBindingV1 {
   readonly schemaVersion: 1;
-  readonly evidenceRevision: "s2-application-failure-source-binding-v1";
+  readonly evidenceRevision: "s2-application-failure-source-binding-v2";
   readonly sourceRevision: string;
   readonly configSha256: string;
   readonly journeyId: string;
   readonly targetHandleId: string;
+  readonly gateFailureCode: Stage2AcceptanceFailureCode;
+  readonly terminalStatus: "review_reached" | "blocked" | "cancelled" | "failed";
 }
 
 export interface Stage2ApplicationFailureCompletionAuditV1 {
@@ -41,13 +44,18 @@ export interface Stage2ApplicationFailureCompletionAuditV1 {
   readonly sourceRevision: string;
   readonly journeyId: string;
   readonly runStatus: "blocked" | "failed";
+  readonly terminalStatus: "review_reached" | "blocked" | "cancelled" | "failed";
+  readonly gateFailureCode: Stage2AcceptanceFailureCode;
   readonly resultCode: string;
   readonly completedPages: number;
   readonly terminalArtifactSha256: string;
   readonly retainedEvidenceFileCount: number;
   readonly retainedEvidenceChainSha256: string;
   readonly monitorFileCount: number;
-  readonly monitorClassification: "application_failed" | "application_blocked";
+  readonly monitorClassification:
+    | "application_failed" | "application_blocked" | "application_cancelled"
+    | "source_drift" | "config_drift" | "review_reconciliation_failed"
+    | "post_journey_preflight_failed";
   readonly processCleanup: "pass";
   readonly privacyScan: "pass";
   readonly submitActivated: false;
@@ -99,9 +107,7 @@ export function inspectStage2ApplicationFailureCompletion(
 } {
   const root = admittedRoot(rootValue);
   const terminal = readStage2TerminalArtifact(root);
-  if (terminal.cleanupErrorCode !== undefined ||
-      terminal.terminal.status !== "failed" && terminal.terminal.status !== "blocked" ||
-      terminal.resultCode === "review_reached") denied();
+  if (terminal.cleanupErrorCode !== undefined) denied();
   const processAudit = readWindowsProcessAudit(root);
   if (processAudit.evidenceRevision !== "s2-windows-process-audit-v2") denied();
   const binding = admitBinding(readJson(join(root, "failure-source-binding.json"), 16 * 1024));
@@ -111,6 +117,8 @@ export function inspectStage2ApplicationFailureCompletion(
     binding.targetHandleId !== processAudit.targetHandleId ||
     terminal.terminal.journeyId !== binding.journeyId
   ) denied();
+  if (terminal.terminal.status !== binding.terminalStatus ||
+      !failureShapeAllowed(binding.gateFailureCode, binding.terminalStatus)) denied();
   validateLearning(root);
   const inventory = evidenceInventory(root);
   if (inventory.monitorFileCount !== processAudit.monitorFileCount) denied();
@@ -121,16 +129,16 @@ export function inspectStage2ApplicationFailureCompletion(
     status: "pass",
     sourceRevision: binding.sourceRevision,
     journeyId: binding.journeyId,
-    runStatus: terminal.terminal.status,
+    runStatus: terminal.terminal.status === "blocked" ? "blocked" : "failed",
+    terminalStatus: terminal.terminal.status,
+    gateFailureCode: binding.gateFailureCode,
     resultCode: terminal.resultCode,
     completedPages: terminal.terminal.completedPages,
     terminalArtifactSha256: digest(terminalBytes),
     retainedEvidenceFileCount: inventory.files.length,
     retainedEvidenceChainSha256: inventory.chainSha256,
     monitorFileCount: inventory.monitorFileCount,
-    monitorClassification: terminal.terminal.status === "failed"
-      ? "application_failed"
-      : "application_blocked",
+    monitorClassification: failureClassification(binding.gateFailureCode, terminal.terminal.status),
     processCleanup: "pass",
     privacyScan: "pass",
     submitActivated: false,
@@ -210,15 +218,54 @@ function validateLearning(root: string): void {
 function admitBinding(value: unknown): Stage2ApplicationFailureBindingV1 {
   if (typeof value !== "object" || value === null || Array.isArray(value)) denied();
   const candidate = value as Record<string, unknown>;
-  const keys = ["schemaVersion", "evidenceRevision", "sourceRevision", "configSha256", "journeyId", "targetHandleId"];
+  const keys = [
+    "schemaVersion", "evidenceRevision", "sourceRevision", "configSha256", "journeyId",
+    "targetHandleId", "gateFailureCode", "terminalStatus",
+  ];
   if (Object.keys(candidate).join("\0") !== keys.join("\0") ||
       candidate.schemaVersion !== 1 ||
-      candidate.evidenceRevision !== "s2-application-failure-source-binding-v1" ||
+      candidate.evidenceRevision !== "s2-application-failure-source-binding-v2" ||
       typeof candidate.sourceRevision !== "string" || !/^[0-9a-f]{40}$/u.test(candidate.sourceRevision) ||
       typeof candidate.configSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(candidate.configSha256) ||
       typeof candidate.journeyId !== "string" || !/^journey_[A-Za-z0-9_-]{16,64}$/u.test(candidate.journeyId) ||
-      typeof candidate.targetHandleId !== "string" || !/^target_ref_[A-Za-z0-9_-]{16,64}$/u.test(candidate.targetHandleId)) denied();
+      typeof candidate.targetHandleId !== "string" || !/^target_ref_[A-Za-z0-9_-]{16,64}$/u.test(candidate.targetHandleId) ||
+      !failureCodes.has(candidate.gateFailureCode as Stage2AcceptanceFailureCode) ||
+      !terminalStatuses.has(candidate.terminalStatus as Stage2ApplicationFailureBindingV1["terminalStatus"])) denied();
   return Object.freeze(candidate as unknown as Stage2ApplicationFailureBindingV1);
+}
+
+const failureCodes = new Set<Stage2AcceptanceFailureCode>([
+  "preflight_failed", "quality_failed", "source_changed", "config_changed",
+  "real_journey_failed", "result_reconciliation_failed", "cleanup_finalize_failed",
+  "operation_cancelled",
+]);
+const terminalStatuses = new Set<Stage2ApplicationFailureBindingV1["terminalStatus"]>([
+  "review_reached", "blocked", "cancelled", "failed",
+]);
+
+function failureShapeAllowed(
+  code: Stage2AcceptanceFailureCode,
+  status: Stage2ApplicationFailureBindingV1["terminalStatus"],
+): boolean {
+  if (code === "real_journey_failed") return status === "failed" || status === "blocked";
+  if (code === "operation_cancelled") return status === "cancelled";
+  if (code === "source_changed" || code === "config_changed" ||
+      code === "result_reconciliation_failed" || code === "preflight_failed") {
+    return status === "review_reached";
+  }
+  return false;
+}
+
+function failureClassification(
+  code: Stage2AcceptanceFailureCode,
+  status: Stage2ApplicationFailureBindingV1["terminalStatus"],
+): Stage2ApplicationFailureCompletionAuditV1["monitorClassification"] {
+  if (code === "source_changed") return "source_drift";
+  if (code === "config_changed") return "config_drift";
+  if (code === "result_reconciliation_failed") return "review_reconciliation_failed";
+  if (code === "preflight_failed") return "post_journey_preflight_failed";
+  if (status === "cancelled") return "application_cancelled";
+  return status === "blocked" ? "application_blocked" : "application_failed";
 }
 
 function readJson(path: string, maximum: number): unknown {

@@ -327,10 +327,24 @@ function validatePendingProfileQuestions(
   const expected = learning.questions.filter(({ replaceWithOwnerAnswer, provenance }) =>
     replaceWithOwnerAnswer && provenance !== "resume_verified"
   );
+  const profilePending = pending.pendingProfileQuestions.filter(({ fieldId }) =>
+    fieldId.startsWith("profile.unknown.")
+  );
+  const questionnairePending = pending.pendingProfileQuestions.filter(({ fieldId }) =>
+    !fieldId.startsWith("profile.unknown.")
+  );
   if (
-    pending.pendingProfileQuestions.length !== expected.length ||
+    questionnairePending.length !== expected.length ||
+    profilePending.some((candidate) =>
+      !/^profile\.unknown\.(?:required|optional)\.\d+$/u.test(candidate.fieldId) ||
+      candidate.questionId !== `question.${candidate.fieldId}` ||
+      candidate.semanticQuestionType !== "unknown" ||
+      candidate.actualOwnerValue !== null || !candidate.needsUserValue ||
+      candidate.provenance !== "visible_option" || candidate.validation !== "verified" ||
+      candidate.testDefault === null || candidate.committedReadback !== candidate.testDefault
+    ) ||
     expected.some((question) => {
-      const matches = pending.pendingProfileQuestions.filter((candidate) =>
+      const matches = questionnairePending.filter((candidate) =>
         candidate.questionId === question.questionId &&
         candidate.fieldId === question.fieldId &&
         candidate.exactQuestion === question.label &&

@@ -25,6 +25,7 @@ import {
   writeStage2AcceptanceManifest,
 } from "../../../src/acceptance/s2-local.ts";
 import type { Stage2AcceptanceManifest } from "../../../src/acceptance/s2-gate.ts";
+import { runStage2RealAcceptance } from "../../../src/acceptance/s2-gate.ts";
 import {
   prepareStage2RunStorage,
   readStage2StorageCatalog,
@@ -262,7 +263,13 @@ test("real local failure composition seals terminal, process, disposal, and reta
     await ports.cleanup.sealFailure?.({
       configPath: layout.ownerConfigPath,
       evidenceRoot: layout.evidenceRoot,
-    }, "real_journey_failed");
+    }, "real_journey_failed", {
+      source: {
+        repositoryRoot: resolve("repository"),
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      },
+      config,
+    });
 
     assert.equal(existsSync(layout.transientRoot), false);
     assert.equal(JSON.parse(readFileSync(join(layout.evidenceRoot, "completion-audit.json"), "utf8"))
@@ -272,6 +279,87 @@ test("real local failure composition seals terminal, process, disposal, and reta
     assert.equal(readStage2StorageCatalog(storageRoot).entries[0]?.runStatus, "failed");
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("real gate-to-local composition seals every post-journey terminal against its admitted source", async () => {
+  const scenarios = [
+    { key: "failterminal0001", terminal: "failed", journeyCode: 1, expected: "real_journey_failed" },
+    { key: "blockterminal001", terminal: "blocked", journeyCode: 1, expected: "real_journey_failed" },
+    { key: "cancelterminal01", terminal: "cancelled", journeyCode: 130, expected: "operation_cancelled" },
+    { key: "sourcedrift00000", terminal: "review_reached", journeyCode: 0, expected: "source_changed" },
+    { key: "configdrift00000", terminal: "review_reached", journeyCode: 0, expected: "config_changed" },
+    { key: "reviewreconcile1", terminal: "review_reached", journeyCode: 0, expected: "result_reconciliation_failed" },
+  ] as const;
+  for (const scenario of scenarios) {
+    const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-gate-${scenario.key}-`));
+    try {
+      const layout = await prepareStage2RunStorage({
+        storageRoot,
+        runKey: `run_20260828_${scenario.key}`,
+      }, { protect: async () => undefined });
+      const owner = failureOwner(layout);
+      writeFileSync(layout.ownerConfigPath, JSON.stringify(owner), "utf8");
+      const admittedConfig = captureStage2Config(layout.ownerConfigPath);
+      const admittedSource = {
+        repositoryRoot: resolve("repository"),
+        sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+      };
+      let sourceCaptures = 0;
+      let configCaptures = 0;
+      const ports = createLocalStage2AcceptancePorts(resolve("executioner"), {
+        sourceCapture: () => {
+          sourceCaptures += 1;
+          return scenario.expected === "source_changed" && sourceCaptures >= 3
+            ? { ...admittedSource, sourceRevision: "1123456789abcdef0123456789abcdef01234567" }
+            : admittedSource;
+        },
+        configCapture: () => {
+          configCaptures += 1;
+          return scenario.expected === "config_changed" && configCaptures >= 3
+            ? { ...admittedConfig, configSha256: "f".repeat(64) }
+            : admittedConfig;
+        },
+        command: { run: async () => 0 },
+        live: { run: async () => {
+          seedFailureEvidence(layout, owner, admittedConfig, scenario.terminal);
+          return scenario.journeyCode;
+        } },
+        resultRead: () => ({
+          ...reviewPacket(),
+          sourceRevision: admittedSource.sourceRevision,
+          configSha256: scenario.expected === "result_reconciliation_failed"
+            ? "e".repeat(64)
+            : admittedConfig.configSha256,
+        }),
+      });
+      const result = await runStage2RealAcceptance({
+        configPath: layout.ownerConfigPath,
+        evidenceRoot: layout.evidenceRoot,
+      }, ports);
+      assert.equal(result.ok, false);
+      if (result.ok) throw new Error("failure scenario unexpectedly passed");
+      assert.equal(result.code, scenario.expected);
+      assert.equal(result.cleanup, "retained_for_exact_reconciliation");
+      assert.equal(existsSync(layout.transientRoot), false);
+      const audit = JSON.parse(readFileSync(
+        join(layout.evidenceRoot, "completion-audit.json"), "utf8",
+      ));
+      assert.equal(audit.gateFailureCode, scenario.expected);
+      assert.equal(audit.terminalStatus, scenario.terminal);
+      assert.equal(audit.sourceRevision, admittedSource.sourceRevision);
+      const binding = JSON.parse(readFileSync(
+        join(layout.evidenceRoot, "failure-source-binding.json"), "utf8",
+      ));
+      assert.equal(binding.configSha256, admittedConfig.configSha256);
+      assert.equal(binding.sourceRevision, admittedSource.sourceRevision);
+      assert.equal(JSON.parse(readFileSync(join(layout.evidenceRoot, "disposal-audit.json"), "utf8"))
+        .status, "pass");
+      assert.equal(readStage2StorageCatalog(storageRoot).entries[0]?.runStatus,
+        scenario.terminal === "blocked" ? "blocked" : "failed");
+    } finally {
+      rmSync(storageRoot, { recursive: true, force: true });
+    }
   }
 });
 
@@ -399,6 +487,77 @@ function ownerConfig() {
     approval: { approvalId: "approval_0123456789abcdef" },
     accountSecret: { value: secret },
   };
+}
+
+function failureOwner(layout: Awaited<ReturnType<typeof prepareStage2RunStorage>>) {
+  return {
+    schemaVersion: 1,
+    contractRevision: "s2-owner-inputs-v1",
+    revisionId: "revision_0123456789abcdef",
+    journeyId: "journey_0123456789abcdef",
+    target: {
+      handleId: "target_ref_0123456789abcdef",
+      url: targetUrl,
+      host: "tenant.wd5.myworkdayjobs.com",
+      tenant: "tenant",
+      posting: "R12345",
+    },
+    approval: { approvalId: "approval_0123456789abcdef" },
+    roots: {
+      runtime: { path: layout.runtimeRoot },
+      secrets: { path: layout.secretsRoot },
+      evidence: { path: layout.evidenceRoot },
+    },
+    policy: { cleanupLeaseHours: 24, retentionDays: 30 },
+  };
+}
+
+function seedFailureEvidence(
+  layout: Awaited<ReturnType<typeof prepareStage2RunStorage>>,
+  owner: ReturnType<typeof failureOwner>,
+  config: ReturnType<typeof captureStage2Config>,
+  status: "review_reached" | "blocked" | "cancelled" | "failed",
+): void {
+  mkdirSync(join(layout.evidenceRoot, "monitor"));
+  writeFileSync(
+    join(layout.evidenceRoot, "monitor", "0001-questionnaire-state_observed.ack.json"),
+    "{}", "utf8",
+  );
+  const terminal = status === "failed"
+    ? { schemaVersion: 4, journeyId: owner.journeyId, status, completedPages: 3,
+      errorCode: "browser_effect_uncertain" }
+    : status === "blocked"
+    ? { schemaVersion: 4, journeyId: owner.journeyId, status, completedPages: 2,
+      factualOutcome: { source: "target_identity", result: {
+        kind: "posting_unavailable", reason: "closed",
+      } } }
+    : { schemaVersion: 4, journeyId: owner.journeyId, status, completedPages: 6 };
+  writeFileSync(join(layout.evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+    schemaVersion: 1,
+    evidenceRevision: "s2-terminal-artifact-v1",
+    resultCode: status === "review_reached" ? "review_reached" : `application_${status}`,
+    terminal,
+  }), "utf8");
+  writeFileSync(join(layout.evidenceRoot, "process-audit.json"), JSON.stringify({
+    schemaVersion: 1,
+    evidenceRevision: "s2-windows-process-audit-v2",
+    status: "pass",
+    runKey: layout.runKey,
+    journeyId: owner.journeyId,
+    targetHandleId: owner.target.handleId,
+    configSha256: config.configSha256,
+    processLiveNonceSha256: "a".repeat(64),
+    processIssuedAt: "2026-08-28T12:00:00.000Z",
+    processOwnerPid: 1234,
+    processOwnerStartedAt: "2026-08-28T12:00:01.000Z",
+    processExitObservedAt: "2026-08-28T12:01:00.000Z",
+    jobCloseApplied: true,
+    membersObservedBeforeClose: 0,
+    membersAliveAfterClose: 0,
+    monitorFileCount: 1,
+    monitorChainSha256: "b".repeat(64),
+    checkedAt: "2026-08-28T12:01:01.000Z",
+  }), "utf8");
 }
 
 function reviewPacket() {

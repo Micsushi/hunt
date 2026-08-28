@@ -136,6 +136,7 @@ const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
   "profileMetadataMismatchFields", "profileMetadataMismatchReasons", "learningFieldIds",
   "learningFieldReasons", "conditionalAdded", "conditionalRemoved",
+  "secondaryFailures",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",

@@ -107,6 +107,7 @@ export interface ProfilePagePlan {
 export interface ProfileControlSnapshot {
   readonly controlId: string;
   readonly fieldId: string;
+  readonly label?: string;
   readonly required: boolean;
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
@@ -336,11 +337,22 @@ export interface VerifiedProfileField {
   readonly rowKey?: string;
 }
 
+export interface CommittedProfileField extends VerifiedProfileField {
+  readonly label: string;
+  readonly required: boolean;
+  readonly committedReadback: string;
+  readonly allowedOptions: readonly string[];
+  readonly constraints: ProfileControlSnapshot["constraints"] | null;
+  readonly synthetic: boolean;
+}
+
 export type ProfilePageCompletionResult =
   | {
       readonly kind: "verified";
       readonly pageType: ProfilePageType;
       readonly verifiedFields: readonly VerifiedProfileField[];
+      readonly effectivePlan: ProfilePagePlan;
+      readonly committedFields: readonly CommittedProfileField[];
       readonly ownedDuplicateRows: 0;
     }
   | {

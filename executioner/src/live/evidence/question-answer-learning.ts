@@ -148,6 +148,7 @@ export interface PendingProfileQuestionsEvidenceV1 {
 }
 
 export interface QuestionAnswerLearningCapture {
+  recordPendingProfile?(input: PendingProfileQuestionV1): void;
   recordAttempt(input: {
     readonly operationId: string;
     readonly questionId: QuestionId;
@@ -213,6 +214,7 @@ export function createQuestionAnswerLearningCapture(input: {
   const operations = new Map<string, string>();
   const intentFingerprints = new Map<string, string>();
   const batchFields = new Set<string>();
+  const profilePending = new Map<string, PendingProfileQuestionV1>();
   let pendingBatch: {
     readonly operationId: string;
     readonly attempt: number;
@@ -220,6 +222,15 @@ export function createQuestionAnswerLearningCapture(input: {
   } | null = null;
   let written = false;
   return Object.freeze({
+    recordPendingProfile(value: PendingProfileQuestionV1) {
+      const admitted = admitPendingProfileQuestionsEvidence({
+        schemaVersion: 1,
+        evidenceRevision: "s2-pending-profile-questions-v1",
+        pendingProfileQuestions: [value],
+      }).pendingProfileQuestions[0]!;
+      if (records.has(admitted.fieldId) || profilePending.has(admitted.fieldId)) denied();
+      profilePending.set(admitted.fieldId, admitted);
+    },
     recordAttempt(value: Parameters<QuestionAnswerLearningCapture["recordAttempt"]>[0]) {
       if (operations.has(value.operationId)) denied();
       const prior = records.get(value.field.fieldId);
@@ -364,9 +375,12 @@ export function createQuestionAnswerLearningCapture(input: {
         const pending = admitPendingProfileQuestionsEvidence({
           schemaVersion: 1,
           evidenceRevision: "s2-pending-profile-questions-v1",
-          pendingProfileQuestions: [...records.values()]
-            .filter(needsPendingProfileQuestion)
-            .map(pendingProfileQuestion),
+          pendingProfileQuestions: [
+            ...profilePending.values(),
+            ...[...records.values()]
+              .filter(needsPendingProfileQuestion)
+              .map(pendingProfileQuestion),
+          ],
         });
         const sensitiveValues = (input.sensitiveValues ?? []).filter((sensitive) =>
           !publicUiStrings.some((value) => value.includes(sensitive))

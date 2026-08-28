@@ -96,6 +96,7 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
     assert.equal(group.ownerAutomationId, "formField-disabilityStatus");
     assert.equal(group.label, "Please check one of the boxes below:*");
     assert.deepEqual(group.group, {
+      kind: "exclusive",
       automationId: "disabilityStatus-CheckboxGroup",
       role: null,
       requiredMarker: true,

@@ -1,6 +1,10 @@
 import type { Locator, Page } from "playwright";
 import { browserPageId, fieldId } from "../../../contracts/index.ts";
 import {
+  annotateCheckboxGroups,
+  checkboxGroupKindAttribute,
+} from "../../../deterministic/supported-controls.ts";
+import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
   type ApplicationHandlerPage,
   type ApplicationPage,
@@ -270,8 +274,12 @@ export class PlaywrightWorkdayApplicationPage {
   async #readSnapshot(signal: AbortSignal): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     if (signal.aborted) return failure("operation_cancelled", "none");
     try {
+      await annotateCheckboxGroups(this.#page);
       const snapshot = await this.#page.evaluate(
-        readApplicationSnapshot, WORKDAY_APPLICATION_PAGE_SELECTORS,
+        readApplicationSnapshot, {
+          selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
+          checkboxGroupAttribute: checkboxGroupKindAttribute,
+        },
       );
       if ("ambiguity" in snapshot) {
         if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
@@ -516,8 +524,12 @@ function hasValidationDowngrade(
   return !newField && after.validationKeys.some((key) => !priorValidation.has(key));
 }
 function readApplicationSnapshot(
-  selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS,
+  input: {
+    readonly selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS;
+    readonly checkboxGroupAttribute: string;
+  },
 ): BrowserApplicationSnapshot | BrowserApplicationAmbiguity {
+  const { selectors, checkboxGroupAttribute } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -641,12 +653,9 @@ function readApplicationSnapshot(
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
-      const genericCheckboxes = genericCheckboxOwner === null ? [] :
-        [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-          .filter((checkbox) => visible(checkbox));
-      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
-        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-        genericCheckboxes.length >= 2;
+      const genericGroupKind = genericCheckboxOwner?.getAttribute(checkboxGroupAttribute);
+      const isGenericCheckboxGroup = genericGroupKind === "exclusive" ||
+        genericGroupKind === "multiple";
       if (isGenericCheckboxGroup) return genericCheckboxOwner === control;
       if (control.matches(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -655,14 +664,19 @@ function readApplicationSnapshot(
         '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
       );
       if (dateOwner !== null && dateOwner !== control) return false;
+      if (control.matches('[data-automation-id$="-CheckboxGroup"]') &&
+          control.getAttribute(checkboxGroupAttribute) === "independent") return false;
       const checkboxGroupOwner = control.closest<HTMLElement>(
-        '[data-automation-id$="-CheckboxGroup"]',
+        `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
       );
       return checkboxGroupOwner === null || checkboxGroupOwner === control;
     });
   const requiredControls = candidates.filter((control) => {
     if (control.hasAttribute("required") ||
         control.getAttribute("aria-required") === "true") return true;
+    if ((control.getAttribute(checkboxGroupAttribute) === "exclusive" ||
+         control.getAttribute(checkboxGroupAttribute) === "multiple") &&
+        control.querySelector('[required], [aria-required="true"]') !== null) return true;
     const labels = control instanceof HTMLInputElement ||
         control instanceof HTMLTextAreaElement ||
         control instanceof HTMLSelectElement
@@ -866,14 +880,14 @@ function readApplicationSnapshot(
         dateReactHandlerLayers = [...layers.values()];
       }
     } else if (
-      control.matches('[data-automation-id$="-CheckboxGroup"]') ||
-      control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
-        control.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-        control.querySelectorAll('input[type="checkbox"]').length >= 2
+      control.getAttribute(checkboxGroupAttribute) === "exclusive" ||
+      control.getAttribute(checkboxGroupAttribute) === "multiple"
     ) {
       const checkboxes = [...control.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-      verified = verified && checkboxes.length >= 2 &&
-        checkboxes.filter(({ checked }) => checked).length === 1;
+      const checked = checkboxes.filter((item) => item.checked).length;
+      verified = verified && checkboxes.length >= 2 && (
+        control.getAttribute(checkboxGroupAttribute) === "multiple" ? checked >= 1 : checked === 1
+      );
       const layers = new Map<string, {
         hostTag: string;
         hostAutomationId: string | null;

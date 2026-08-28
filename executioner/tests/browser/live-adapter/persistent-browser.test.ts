@@ -1811,7 +1811,13 @@ class FakePage {
     return new FakeLocator();
   }
 
-  async evaluate(): Promise<unknown> {
+  async evaluate(_operation?: unknown, argument?: unknown): Promise<unknown> {
+    // The shared checkbox registry annotates in two evaluate calls before the
+    // application observer reads its structural snapshot.
+    if (typeof argument === "string") return [];
+    if (typeof argument === "object" && argument !== null && "decisions" in argument) {
+      return undefined;
+    }
     return {
       page: "profile",
       lanes: ["profile"],

@@ -950,9 +950,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const allowedOptions = await unknownAllowedOptions(candidate);
       const constraints = await unknownConstraints(candidate);
       const currentReadback = await readback(candidate, uiBehavior).catch(() => null);
+      const label = await observedControlLabel(candidate, uiBehavior) ?? stableKey;
       unknown.push({
         controlId: `unknown-required:${ordinal}`,
         fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
+        label,
         required: isRequired,
         uiBehavior,
         uiVariant: "workday_unknown_required_v1",

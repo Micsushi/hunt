@@ -3,6 +3,10 @@ import { join } from "node:path";
 
 import type { ConsoleMessage, Page, Request } from "playwright";
 
+import {
+  annotateCheckboxGroups,
+  checkboxGroupKindAttribute,
+} from "../../deterministic/supported-controls.ts";
 import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 
 const evidenceRevision = "s2-page-local-inspection-v2";
@@ -51,13 +55,14 @@ export function createPageLocalInspection(evidenceRoot: string): {
   const capture = async (input: unknown): Promise<void> => {
     const page = input as Page;
     await prepare(page);
+    await annotateCheckboxGroups(page);
     const pageRecord = records.get(page)!;
-    const live = await page.evaluate(readPageLocalSnapshot);
+    const live = await page.evaluate(readPageLocalSnapshot, checkboxGroupKindAttribute);
     const ariaSnapshots: string[] = [];
     const ariaOwners = page.locator(
       '[data-automation-id="dateInputWrapper"], ' +
-        '[data-automation-id$="-CheckboxGroup"], ' +
-        '[data-hunt-exclusive-checkbox-group="true"]',
+        `[${checkboxGroupKindAttribute}="exclusive"], ` +
+        `[${checkboxGroupKindAttribute}="multiple"]`,
     );
     for (let index = 0; index < await ariaOwners.count(); index += 1) {
       ariaSnapshots.push(await ariaOwners.nth(index).ariaSnapshot({ timeout: 5_000 }));
@@ -134,7 +139,7 @@ function installMutationProbe(): void {
   root.__huntPageLocalMutationProbe = { mutations };
 }
 
-function readPageLocalSnapshot(): object {
+function readPageLocalSnapshot(checkboxGroupAttribute: string): object {
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -279,8 +284,8 @@ function readPageLocalSnapshot(): object {
     };
   });
   const checkboxGroups = [...new Set(document.querySelectorAll<HTMLElement>(
-    '[data-automation-id$="-CheckboxGroup"], ' +
-      '[data-hunt-exclusive-checkbox-group="true"]',
+    `[${checkboxGroupAttribute}="exclusive"], ` +
+      `[${checkboxGroupAttribute}="multiple"]`,
   ))].filter(visible).slice(0, 128).map((group) => {
     const owner = group.closest<HTMLElement>(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -300,6 +305,7 @@ function readPageLocalSnapshot(): object {
       label: (owner?.querySelector("label, legend")?.textContent ?? "")
         .normalize("NFC").replace(/\s+/gu, " ").trim().slice(0, 512),
       group: {
+        kind: group.getAttribute(checkboxGroupAttribute),
         automationId: group.getAttribute("data-automation-id"),
         role: group.getAttribute("role"),
         requiredMarker: owner?.querySelector(

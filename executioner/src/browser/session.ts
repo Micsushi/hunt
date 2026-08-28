@@ -242,14 +242,54 @@ export class PlaywrightBrowserSession implements BrowserSession {
     if (target === undefined || !compatible(target, mutation)) return failure("browser_target_invalid");
 
     let effectStarted = false;
-    const effect = async (upload?: Uint8Array) => {
+    const effect = async (upload?: Uint8Array, maximumAttempts = 2) => {
       effectStarted = true;
-      const apply = () => applyMutation(
-        active.page, target, mutation, upload, Math.min(5_000, this.#timeoutMs),
-      );
-      try {
-        return await apply();
-      } catch (error) {
+      for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+        let outcome: "applied" | "ambiguous" | "invalid";
+        let internallyRebound = false;
+        try {
+          const rebound = await inspectPage(
+            active.page, snapshot.effect.sessionId, snapshot.effect.pageId, this.#uploads,
+          );
+          const current = rebound.targets.get(mutation.target);
+          const mayRebindInsideAdapter = (current === undefined || current.length === 0) &&
+            compatible(target, mutation) && [
+              "formatted-date", "exclusive-checkbox-group", "multi-checkbox-group",
+              "field-popup", "owned-popup",
+            ].includes(target.interaction ?? "");
+          const currentTarget = current?.length === 1
+            ? current[0]!
+            : mayRebindInsideAdapter ? target : undefined;
+          internallyRebound = currentTarget === target && mayRebindInsideAdapter;
+          if (currentTarget === undefined || !compatible(currentTarget, mutation)) {
+            outcome = current !== undefined && current.length > 1 ? "ambiguous" : "invalid";
+          } else {
+            outcome = await applyMutation(
+              active.page, currentTarget, mutation, upload, Math.min(5_000, this.#timeoutMs),
+            );
+          }
+        } catch (error) {
+          const reconciled = await reconcileCommittedMutation(
+            active.page,
+            snapshot.effect.sessionId,
+            snapshot.effect.pageId,
+            mutation,
+            this.#uploads,
+          );
+          if (reconciled === "committed") return "applied" as const;
+          if (reconciled === "absent" && attempt + 1 < maximumAttempts) continue;
+          throw error;
+        }
+        const adapterVerifiedInteraction = [
+          "formatted-date", "composite-date", "exclusive-checkbox-group",
+          "multi-checkbox-group", "field-popup", "owned-popup",
+        ].includes(target.interaction ?? "");
+        if (outcome === "applied" && (
+          mutation.kind === "upload" || internallyRebound || adapterVerifiedInteraction
+        )) {
+          return outcome;
+        }
+        if (outcome === "ambiguous") return outcome;
         const reconciled = await reconcileCommittedMutation(
           active.page,
           snapshot.effect.sessionId,
@@ -258,9 +298,13 @@ export class PlaywrightBrowserSession implements BrowserSession {
           this.#uploads,
         );
         if (reconciled === "committed") return "applied" as const;
-        if (reconciled === "absent") return await apply();
-        throw error;
+        if (reconciled === "absent" && attempt + 1 < maximumAttempts) continue;
+        if (reconciled === "absent") {
+          throw new TypeError(`browser ${outcome} after bounded committed-state recovery`);
+        }
+        throw new TypeError("browser effect uncertain after committed-state reconciliation");
       }
+      return "invalid" as const;
     };
     const action = mutation.kind === "upload"
       ? useResumeArtifactUpload<"applied" | "ambiguous" | "invalid", never>(
@@ -271,11 +315,18 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const result = await bounded(action, signal, this.#timeoutMs);
     if (result.kind === "cancelled" || result.kind === "timeout") {
       if (effectStarted) {
-        if (await reconcileCommittedMutation(
+        const reconciled = await reconcileCommittedMutation(
           active.page, snapshot.effect.sessionId, snapshot.effect.pageId, mutation, this.#uploads,
-        ) === "committed") {
+        );
+        if (reconciled === "committed") {
           if (mutation.kind === "upload") rememberUpload(this.#uploads, mutation);
           return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
+        }
+        if (reconciled === "absent" && result.kind === "timeout" && mutation.kind !== "upload") {
+          const retry = await bounded(effect(undefined, 1), signal, this.#timeoutMs);
+          if (retry.kind === "value" && retry.value === "applied") {
+            return { ok: true, value: { operationId, pageId: snapshot.effect.pageId, attempted: true } };
+          }
         }
         await this.#invalidateOwnedSession();
         return failure("browser_effect_uncertain");
@@ -456,6 +507,7 @@ export async function reconcileCommittedMutation(
   const matches = observed?.targets.get(mutation.target);
   if (matches?.length !== 1) return "uncertain";
   const readback = matches[0]!.readback;
+  const target = matches[0]!;
   if (mutation.kind === "set_text") {
     if (readback.kind === "text" && readback.value === mutation.text) return "committed";
     return readback.kind === "empty" ? "absent" : "uncertain";
@@ -469,10 +521,13 @@ export async function reconcileCommittedMutation(
     return readback.checked === mutation.checked ? "committed" : "absent";
   }
   if (mutation.kind === "select") {
+    if (target.interaction === "multi-select" || target.interaction === "multi-checkbox-group") {
+      return target.selectedOptions?.includes(mutation.option) === true ? "committed" : "absent";
+    }
     if (readback.kind !== "selected") return "uncertain";
     return readback.option === mutation.option
       ? "committed"
-      : readback.option === null ? "absent" : "uncertain";
+      : "absent";
   }
   if (readback.kind !== "upload") return "uncertain";
   if (readback.resumeId === mutation.artifact.resumeId &&

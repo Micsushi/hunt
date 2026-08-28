@@ -5,11 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ApplicationCheckpoint } from "../ats/workday/application/page-walk.ts";
 import {
   disposeResumeArtifact,
-  type FieldIntent,
-  type FieldObservation,
-  type QuestionId,
 } from "../contracts/index.ts";
-import type { AnswerProvenanceLane } from "../profile/application-profile.ts";
 import {
   s2StableErrorPolicy,
   type S2StableErrorCode,
@@ -18,7 +14,7 @@ import type { Stage2UnsealedAccountProofResult } from
   "./s2-account-verified-runner.ts";
 import {
   createQuestionAnswerLearningCapture,
-  type TestingQuestionSemanticType,
+  type QuestionAnswerLearningCapture,
 } from
   "../live/evidence/question-answer-learning.ts";
 import type { RealRunRuntimeBinding } from "../live/preflight/private/runtime-binding.ts";
@@ -71,62 +67,7 @@ export interface Stage2ApplicationWalkRuntimeBindingRequest {
   readonly ownerSources: Stage2ApplicationOwnerSources;
   readonly sourceRevision: string;
   readonly configSha256: string;
-  readonly questionLearning?: {
-    record(input: {
-      readonly operationId: string;
-      readonly questionId: QuestionId;
-      readonly field: FieldObservation;
-      readonly intent: FieldIntent;
-      readonly lane: AnswerProvenanceLane;
-      readonly protectedCategory: string | null;
-      readonly generatedDefault: boolean;
-      readonly conditionalReveal?: boolean;
-      readonly semanticQuestionType?: TestingQuestionSemanticType;
-    }): void;
-    recordAttempt(input: {
-      readonly operationId: string;
-      readonly questionId: QuestionId;
-      readonly field: FieldObservation;
-      readonly intent: FieldIntent;
-      readonly lane: AnswerProvenanceLane;
-      readonly protectedCategory: string | null;
-      readonly generatedDefault: boolean;
-      readonly conditionalReveal?: boolean;
-      readonly semanticQuestionType?: TestingQuestionSemanticType;
-      readonly syntheticReplacementReason?:
-        | "committed_value_adopted"
-        | "cached_option_unavailable";
-    }): void;
-    recordObserved(input: {
-      readonly questionId: QuestionId;
-      readonly field: FieldObservation;
-      readonly conditionalReveal?: boolean;
-      readonly semanticQuestionType?: TestingQuestionSemanticType;
-    }): void;
-    recordUnset(input: {
-      readonly questionId: QuestionId;
-      readonly field: FieldObservation;
-      readonly conditionalReveal?: boolean;
-      readonly semanticQuestionType?: TestingQuestionSemanticType;
-    }): void;
-    recordFailure(input: {
-      readonly operationId: string;
-      readonly code: string;
-      readonly retryable: boolean;
-      readonly stage: "driver" | "verification";
-    }): void;
-    monitorAck(input: {
-      readonly operationId: string;
-      readonly attempt: number;
-      readonly moment: "before_mutation" | "after_readback";
-    }): void;
-    monitorBatchAck(input: {
-      readonly operationId: string;
-      readonly attempt: number;
-      readonly moment: "before_mutation" | "after_readback";
-    }): void;
-    write(): string | null;
-  };
+  readonly questionLearning?: QuestionAnswerLearningCapture;
 }
 
 export interface Stage2ApplicationWalkRuntimeBinding {

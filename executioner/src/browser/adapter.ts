@@ -14,13 +14,19 @@ import {
   type BrowserTargetState,
   type ResumeId,
 } from "../contracts/index.ts";
-import { supportedControlSelector } from "../deterministic/supported-controls.ts";
+import {
+  annotateCheckboxGroups,
+  checkboxGroupKindAttribute,
+  supportedControlSelector,
+} from "../deterministic/supported-controls.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
   '[data-automation-id="dateInputWrapper"][data-hunt-target-token]',
   '[data-automation-id$="-CheckboxGroup"][data-hunt-target-token]',
   '[data-hunt-exclusive-checkbox-group="true"][data-hunt-target-token]',
+  `[${checkboxGroupKindAttribute}="exclusive"][data-hunt-target-token]`,
+  `[${checkboxGroupKindAttribute}="multiple"][data-hunt-target-token]`,
   "fieldset[data-hunt-target-token]",
   supportedControlSelector,
   "button",
@@ -42,6 +48,7 @@ interface RawControl {
   readonly state: BrowserTargetState;
   readonly readback: BrowserReadback;
   readonly radioOptions?: readonly string[];
+  readonly selectedOptions?: readonly string[];
   readonly interaction?: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" |
     "exclusive-checkbox-group" | "multi-checkbox-group" | "multi-select";
 }
@@ -66,6 +73,7 @@ export async function inspectPage(
   pageId: BrowserPageId,
   uploads: ReadonlyMap<string, UploadedArtifactReadback>,
 ): Promise<PageInspection> {
+  await annotateCheckboxGroups(page);
   const raw = await inspectControls(page);
   const targets = new Map<string, ResolvedBrowserTarget[]>();
   const observations: BrowserObservation["targets"][number][] = [];
@@ -87,6 +95,7 @@ export async function inspectPage(
       readback,
       token,
       radioOptions: item.radioOptions?.map(bounded),
+      selectedOptions: item.selectedOptions?.map(bounded),
     };
     const matches = targets.get(token);
     if (matches === undefined) targets.set(token, [target]);
@@ -1669,7 +1678,10 @@ export async function applyMutation(
       return matches.length === 0 ? "invalid" : "ambiguous";
     }
     if (target.control.element === "select") {
-      await locator.selectOption({ label: mutation.option }, { timeout: timeoutMs });
+      const labels = target.interaction === "multi-select"
+        ? [...new Set([...(target.selectedOptions ?? []), mutation.option])]
+        : [mutation.option];
+      await locator.selectOption(labels.map((label) => ({ label })), { timeout: timeoutMs });
       return "applied";
     }
     if (target.interaction === "field-popup") {
@@ -2190,6 +2202,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       let control: BrowserControl | undefined;
       let readback: BrowserReadback = { kind: "unavailable" };
       let radioOptions: string[] | undefined;
+      let selectedOptions: string[] | undefined;
       let interaction: "owned-popup" | "field-popup" | "composite-date" | "formatted-date" |
         "exclusive-checkbox-group" | "multi-checkbox-group" | "multi-select" | undefined;
       if (["dateSection", "dateInputWrapper"].includes(
@@ -2270,6 +2283,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         readback = { kind: "selected", option: selected.length >= 1
           ? checkboxOptionName(selected[0]!) as never
           : null };
+        selectedOptions = selected.map(checkboxOptionName).filter(Boolean);
         radioOptions = options;
         interaction = multiple ? "multi-checkbox-group" : "exclusive-checkbox-group";
       } else if (
@@ -2288,6 +2302,15 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         ])] as never[];
         control = { kind: "select", element: "listbox", options };
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
+        if (multiple) {
+          const field = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
+          selectedOptions = [...new Set([
+            ...[...(field?.querySelectorAll('[data-automation-id="selectedItem"]') ?? [])]
+              .map((item) => normalize(item.textContent)).filter(Boolean),
+            ...[...(ownedListbox(element)?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])]
+              .map((item) => normalize(item.textContent)).filter(Boolean),
+          ])];
+        }
         interaction = multiple ? "multi-select" : popupOwnerId === undefined ? "field-popup" : "owned-popup";
       } else if (element instanceof HTMLFieldSetElement) {
         const radios = [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
@@ -2319,7 +2342,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "select", element: "select", options };
         const selected = element.selectedOptions.length >= 1 ? normalize(element.selectedOptions[0]?.text) : "";
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
-        if (element.multiple) interaction = "multi-select";
+        if (element.multiple) {
+          interaction = "multi-select";
+          selectedOptions = [...element.selectedOptions].map((option) => normalize(option.text)).filter(Boolean);
+        }
       } else if (element instanceof HTMLButtonElement || element.getAttribute("role") === "button") {
         control = { kind: "button", element: "button" };
       } else if (element.getAttribute("role") === "listbox") {
@@ -2327,7 +2353,10 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         control = { kind: "select", element: "listbox", options };
         const selected = [...element.querySelectorAll("[role=option][aria-selected=true]")];
         readback = { kind: "selected", option: selected.length >= 1 ? normalize(selected[0]?.textContent) as never : null };
-        if (element.getAttribute("aria-multiselectable") === "true") interaction = "multi-select";
+        if (element.getAttribute("aria-multiselectable") === "true") {
+          interaction = "multi-select";
+          selectedOptions = selected.map((item) => normalize(item.textContent)).filter(Boolean);
+        }
       } else if (element.getAttribute("role") === "radiogroup") {
         const radios = [...element.querySelectorAll<HTMLElement>('[role="radio"]')];
         radioOptions = radios.map(nameOf).filter(Boolean);
@@ -2406,6 +2435,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         state,
         readback,
         radioOptions,
+        selectedOptions,
         interaction,
       }];
     });

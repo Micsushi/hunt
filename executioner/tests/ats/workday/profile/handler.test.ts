@@ -1018,6 +1018,13 @@ test("synthetic required file uses a bounded transient artifact and clears its b
   assert.equal(port.commits[0]?.syntheticFile?.name, "synthetic-owner-review.pdf");
   assert.equal(port.commits[0]?.syntheticFile?.mimeType, "application/pdf");
   assert.equal(port.commits[0]?.syntheticFile?.bytes.every((byte) => byte === 0), true);
+  if (result.kind === "verified") {
+    assert.equal(result.effectivePlan.fields[0]?.fieldId, "unknown.required.1");
+    assert.equal(result.effectivePlan.fields[0]?.answer.kind, "answered");
+    assert.deepEqual(result.committedFields.map(({ fieldId, uiBehavior, synthetic }) => ({
+      fieldId, uiBehavior, synthetic,
+    })), [{ fieldId: "unknown.required.1", uiBehavior: "file", synthetic: true }]);
+  }
 });
 
 test("synthetic unknown choice rebind adopts a committed option when its cached option disappears", async () => {
@@ -1092,6 +1099,13 @@ test("synthetic mode fills supported unknown controls revealed after a scalar co
   ]);
   if (result.kind === "verified") {
     assert.equal(result.verifiedFields.at(-1)?.lane, "synthetic_test_default");
+    assert.equal(result.effectivePlan.fields.some(({ fieldId }) =>
+      fieldId === "unknown.required.1"), true);
+    assert.equal(result.committedFields.at(-1)?.fieldId, "unknown.required.1");
+    assert.equal(
+      result.committedFields.at(-1)?.committedReadback,
+      "Test response pending owner review.",
+    );
   }
 });
 

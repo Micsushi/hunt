@@ -8,6 +8,7 @@ import {
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
+  CommittedProfileField,
   ProfileFieldPlan,
   ProfilePageCompletionResult,
   ProfilePagePlan,
@@ -130,7 +131,7 @@ export async function completeWorkdayProfilePage(
   const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, observed.snapshot);
   if (preflight !== undefined) return preflight;
   let snapshot = observed.snapshot;
-  const effectivePlan = routeSiteAnswers(preparedPlan, snapshot);
+  let effectivePlan = routeSiteAnswers(preparedPlan, snapshot);
   const routedPreflight = validatePlan(effectivePlan) ??
     preflightSnapshot(effectivePlan, snapshot);
   if (routedPreflight !== undefined) return routedPreflight;
@@ -226,6 +227,7 @@ export async function completeWorkdayProfilePage(
     );
     if (synthetic.kind === "blocked") return synthetic;
     snapshot = synthetic.snapshot;
+    effectivePlan = withGeneratedSyntheticFields(effectivePlan, synthetic.generatedFields);
   }
 
   const final = await inspectAndPreflight(effectivePlan, page, signal);
@@ -236,9 +238,50 @@ export async function completeWorkdayProfilePage(
   return {
     kind: "verified",
     pageType: plan.pageType,
-    verifiedFields: verified,
+    verifiedFields: Object.freeze(verified),
+    effectivePlan,
+    committedFields: committedProfileFields(effectivePlan, final.snapshot, verified),
     ownedDuplicateRows: 0,
   };
+}
+
+function committedProfileFields(
+  plan: ProfilePagePlan,
+  snapshot: ProfilePageSnapshot,
+  verified: readonly VerifiedProfileField[],
+): readonly CommittedProfileField[] {
+  const rowKeys = repeatableRowKeys(plan, snapshot.rows);
+  return Object.freeze(verified.flatMap((field) => {
+    const planned = field.rowKey === undefined
+      ? plan.fields.filter((candidate) => candidate.fieldId === field.fieldId)
+      : plan.repeatables.flatMap(({ rows }) => rows)
+        .filter(({ rowKey }) => rowKey === field.rowKey)
+        .flatMap(({ fields }) => fields)
+        .filter((candidate) => candidate.fieldId === field.fieldId);
+    const item = planned[0];
+    if (planned.length !== 1 || item === undefined || item.answer.kind !== "answered" ||
+        item.answer.lane !== "synthetic_test_default") return [];
+    const controls = field.rowKey === undefined
+      ? snapshot.controls.filter((control) => control.fieldId === field.fieldId)
+      : snapshot.rows.filter(({ rowId }) => rowKeys.get(rowId) === field.rowKey)
+        .flatMap(({ controls }) => controls)
+        .filter((control) => control.fieldId === field.fieldId);
+    const control = controls[0];
+    if (controls.length !== 1 || control === undefined || control.readback === null) {
+      throw new TypeError("profile committed readback unavailable");
+    }
+    const answer = item.answer;
+    const committedReadback = control.readback;
+    return [Object.freeze({
+      ...field,
+      label: control.label ?? field.fieldId,
+      required: control.required,
+      committedReadback,
+      allowedOptions: Object.freeze([...(control.allowedOptions ?? item.allowedOptions)]),
+      constraints: control.constraints === undefined ? null : Object.freeze({ ...control.constraints }),
+      synthetic: answer.lane === "synthetic_test_default",
+    })];
+  }));
 }
 
 function preflightRequiredControls(
@@ -444,10 +487,18 @@ async function reconcileSupportedSyntheticUnknowns(
   signal: AbortSignal,
   fallbacks: Map<string, ProfileFieldPlan>,
 ): Promise<
-  | { readonly kind: "verified"; readonly snapshot: ProfilePageSnapshot }
+  | {
+      readonly kind: "verified";
+      readonly snapshot: ProfilePageSnapshot;
+      readonly generatedFields: readonly {
+        readonly field: ProfileFieldPlan;
+        readonly rowKey?: string;
+      }[];
+    }
   | BlockedResult
 > {
   let snapshot = initial;
+  const generated = new Map<string, { field: ProfileFieldPlan; rowKey?: string }>();
   const completed = new Set(verified.map(({ fieldId, rowKey }) => `${rowKey ?? "scalar"}\u0000${fieldId}`));
   for (let pass = 0; pass < 16; pass += 1) {
     const rowKeys = repeatableRowKeys(plan, snapshot.rows);
@@ -469,7 +520,9 @@ async function reconcileSupportedSyntheticUnknowns(
     const pending = candidates.find(({ control, rowKey }) =>
       !completed.has(`${rowKey ?? "scalar"}\u0000${control.fieldId}`)
     );
-    if (pending === undefined) return { kind: "verified", snapshot };
+    if (pending === undefined) {
+      return { kind: "verified", snapshot, generatedFields: Object.freeze([...generated.values()]) };
+    }
     const fallbackKey = `${pending.rowKey ?? "scalar"}\u0000${pending.control.fieldId}`;
     const field = syntheticProfileField(pending.control, fallbacks, fallbackKey);
     if (field === undefined) {
@@ -479,6 +532,9 @@ async function reconcileSupportedSyntheticUnknowns(
         uiVariant: pending.control.uiVariant,
       });
     }
+    generated.set(fallbackKey, pending.rowKey === undefined
+      ? { field }
+      : { field, rowKey: pending.rowKey });
     page.registerSyntheticField?.(field);
     const readControls = pending.rowId === undefined
       ? () => page.inspect(signal).then(({ controls }) => controls)
@@ -492,7 +548,12 @@ async function reconcileSupportedSyntheticUnknowns(
       signal,
       (control) => {
         const rebound = syntheticProfileField(control, fallbacks, fallbackKey);
-        if (rebound !== undefined) page.registerSyntheticField?.(rebound);
+        if (rebound !== undefined) {
+          generated.set(fallbackKey, pending.rowKey === undefined
+            ? { field: rebound }
+            : { field: rebound, rowKey: pending.rowKey });
+          page.registerSyntheticField?.(rebound);
+        }
         return rebound;
       },
     );
@@ -508,6 +569,36 @@ async function reconcileSupportedSyntheticUnknowns(
     snapshot = refreshed.snapshot;
   }
   return blocked("profile_commit_unverified");
+}
+
+function withGeneratedSyntheticFields(
+  plan: ProfilePagePlan,
+  generated: readonly { readonly field: ProfileFieldPlan; readonly rowKey?: string }[],
+): ProfilePagePlan {
+  const scalars = generated.filter(({ rowKey }) => rowKey === undefined).map(({ field }) => field);
+  const scalarIds = new Set(scalars.map(({ fieldId }) => fieldId));
+  return Object.freeze({
+    ...plan,
+    fields: Object.freeze([
+      ...plan.fields.filter(({ fieldId }) => !scalarIds.has(fieldId)),
+      ...scalars,
+    ]),
+    repeatables: Object.freeze(plan.repeatables.map((repeatable) => Object.freeze({
+      ...repeatable,
+      rows: Object.freeze(repeatable.rows.map((row) => {
+        const additions = generated.filter(({ rowKey }) => rowKey === row.rowKey)
+          .map(({ field }) => field);
+        const ids = new Set(additions.map(({ fieldId }) => fieldId));
+        return Object.freeze({
+          ...row,
+          fields: Object.freeze([
+            ...row.fields.filter(({ fieldId }) => !ids.has(fieldId)),
+            ...additions,
+          ]),
+        });
+      })),
+    }))),
+  });
 }
 
 function repeatableRowKeys(

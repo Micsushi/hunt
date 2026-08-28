@@ -10,6 +10,7 @@ export {
   type PlaywrightWorkdayProfilePageOptions,
 } from "./playwright-page.ts";
 export type {
+  CommittedProfileField,
   ProfileCanonicalAnswerType,
   ProfileCommitRequest,
   ProfileControlSnapshot,

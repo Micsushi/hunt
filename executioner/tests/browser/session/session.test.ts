@@ -252,6 +252,59 @@ test("post-effect reconciliation accepts exact committed state across sibling re
       target: "target-file" as never,
       artifact: artifact.value,
     }), "committed");
+
+    const provider = new PlaywrightBrowserSession({
+      attached: { page, sessionId, pageId },
+      ids: testIds("reconcile0000001"),
+      timeoutMs: 2_000,
+    });
+    const observation = await provider.observe({ sessionId, pageId }, AbortSignal.any([]));
+    if (!observation.ok) throw new Error("production observation failed");
+    await page.locator('[data-hunt-target-token]:not([type="file"])').evaluateAll((controls) => {
+      for (const control of controls) {
+        const event = control instanceof HTMLSelectElement ||
+            control instanceof HTMLInputElement && ["checkbox", "date"].includes(control.type)
+          ? "change"
+          : "input";
+        control.addEventListener(event, () => {
+          const clone = control.cloneNode(true);
+          queueMicrotask(() => control.replaceWith(clone));
+        }, { once: true });
+      }
+    });
+    const productionMutations = [
+      { kind: "set_text", target: "target-text", text: "Grace" },
+      { kind: "set_text", target: "target-area", text: "Updated narrative" },
+      { kind: "set_text", target: "target-edit", text: "Updated editable" },
+      { kind: "set_date", target: "target-date", isoDate: "2027-01-02" },
+      { kind: "select", target: "target-select", option: "Red" },
+      { kind: "set_checked", target: "target-check", checked: false },
+      { kind: "select", target: "target-many", option: "Two" },
+    ] as const;
+    for (const [index, mutation] of productionMutations.entries()) {
+      const result = await provider.mutate(admittedMutation(
+        sessionId,
+        pageId,
+        mutation as never,
+        `recover${String(index).padStart(9, "0")}`,
+      ), AbortSignal.any([]));
+      assert.equal(result.ok, true, `${JSON.stringify(mutation)}:${JSON.stringify(result)}`);
+    }
+    assert.deepEqual(await page.locator('[data-hunt-target-token="target-many"] option:checked')
+      .allTextContents(), ["One", "Two"]);
+    const uploadBytes = new TextEncoder().encode("replacement upload");
+    const uploadDigest = createHash("sha256").update(uploadBytes).digest("hex");
+    const uploadArtifact = captureResumeArtifact({
+      resumeId: upstreamResumeId("resume-production-reconcile"),
+      sha256: uploadDigest,
+    }, uploadBytes);
+    if (!uploadArtifact.ok) throw new Error("production artifact capture failed");
+    const uploaded = await provider.mutate(admittedMutation(sessionId, pageId, {
+      kind: "upload",
+      target: "target-file" as never,
+      artifact: uploadArtifact.value,
+    }, "recoverfile00001"), AbortSignal.any([]));
+    assert.equal(uploaded.ok, true, JSON.stringify(uploaded));
   } finally {
     await page.close();
     await context.close();

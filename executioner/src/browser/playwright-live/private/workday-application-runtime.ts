@@ -10,6 +10,7 @@ import {
   completeWorkdayProfilePage,
   PlaywrightWorkdayProfilePage,
   profileInspectionTraceDetails,
+  type CommittedProfileField,
   type ProfileCleanupState,
   type ProfilePageSnapshot,
   type WorkdayProfilePagePort,
@@ -36,7 +37,11 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
-import { supportedControlSelector } from "../../../deterministic/supported-controls.ts";
+import {
+  annotateCheckboxGroups,
+  checkboxGroupKindAttribute,
+  supportedControlSelector,
+} from "../../../deterministic/supported-controls.ts";
 import {
   browserTargetToken,
   boundedText,
@@ -783,7 +788,27 @@ export class OwnedWorkdayApplicationRuntime {
           submitActivated: false,
           privacyScan: "pass",
         }));
-        this.#recordProfileReviewExpectations(request, result.verifiedFields);
+        for (const field of result.committedFields.filter(({ synthetic }) => synthetic)) {
+          request.questionLearning?.recordPendingProfile?.({
+            questionId: `question.profile.${field.fieldId}`,
+            fieldId: `profile.${field.fieldId}`,
+            exactQuestion: field.label,
+            required: field.required,
+            semanticQuestionType: "unknown",
+            answerType: profilePendingAnswerType(field.answerType),
+            controlType: profilePendingControlType(field.uiBehavior),
+            options: field.allowedOptions,
+            constraints: profilePendingConstraints(field),
+            conditionalReveal: false,
+            testDefault: field.committedReadback,
+            actualOwnerValue: null,
+            needsUserValue: true,
+            provenance: "visible_option",
+            validation: "verified",
+            committedReadback: field.committedReadback,
+          });
+        }
+        this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields);
         if (await this.#monitorPageForLane(page, "profile") !== monitorPageName) {
           throw new TypeError("profile reconciliation page drift denied");
         }
@@ -1019,19 +1044,15 @@ export class OwnedWorkdayApplicationRuntime {
     batch?: QuestionnaireReconciliationBatch,
   ): Promise<unknown> {
     let sharedBatch = batch;
-    if (sharedBatch === undefined) {
+    const questionLearning = request.questionLearning;
+    let closeBatch: () => Promise<void> = async () => undefined;
+    let semanticSessionId: BrowserSessionId | undefined;
+    let semantic: PlaywrightBrowserSession | undefined;
+    let causalError: unknown;
+    try {
+      if (sharedBatch === undefined) {
       const batchOperationId = this.#nextOperationId();
       const batchAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
-      await this.#monitor(
-        page, monitorPageName, "before_mutation", batchOperationId, batchAttempt, signal,
-      );
-      if (this.#externalMonitor !== undefined) {
-        request.questionLearning?.monitorBatchAck({
-          operationId: batchOperationId,
-          attempt: batchAttempt,
-          moment: "before_mutation",
-        });
-      }
       let closePromise: Promise<void> | undefined;
       const close = () => closePromise ??= (async () => {
         const cleanupSignal = AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000));
@@ -1047,6 +1068,17 @@ export class OwnedWorkdayApplicationRuntime {
         }
         this.#assertAuthorizationTime();
       })();
+      closeBatch = close;
+      await this.#monitor(
+        page, monitorPageName, "before_mutation", batchOperationId, batchAttempt, signal,
+      );
+      if (this.#externalMonitor !== undefined) {
+        request.questionLearning?.monitorBatchAck({
+          operationId: batchOperationId,
+          attempt: batchAttempt,
+          moment: "before_mutation",
+        });
+      }
       sharedBatch = {
         operationId: batchOperationId,
         attempt: batchAttempt,
@@ -1057,30 +1089,35 @@ export class OwnedWorkdayApplicationRuntime {
         }),
         close,
       };
-    }
-    const closeBatch = sharedBatch.close;
-    await bindQuestionnaireTargets(page, input.pageId);
-    await seedCanonicalBinaryQuestionnaireOptions(page);
-    for (const targetToken of await questionnairePopupHydrationTargets(page)) {
-      this.#assertAuthorized(signal);
-      const hydrationStartedAt = Date.now();
-      await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
-      this.#trace?.("questionnaire_popup_hydration_completed", {
-        targetToken,
-        durationMs: Date.now() - hydrationStartedAt,
+      } else {
+        closeBatch = sharedBatch.close;
+      }
+      if (sharedBatch === undefined) throw new TypeError("questionnaire batch unavailable");
+      const activeBatch = sharedBatch;
+      await bindQuestionnaireTargets(page, input.pageId);
+      await seedCanonicalBinaryQuestionnaireOptions(page);
+      for (const targetToken of await questionnairePopupHydrationTargets(page)) {
+        this.#assertAuthorized(signal);
+        const hydrationStartedAt = Date.now();
+        await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
+        this.#trace?.("questionnaire_popup_hydration_completed", {
+          targetToken,
+          durationMs: Date.now() - hydrationStartedAt,
+        });
+      }
+      const activeSemanticSessionId =
+        `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
+      const activeSemantic = new PlaywrightBrowserSession({
+        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId },
+        ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
+        timeoutMs: this.#timeoutMs,
       });
-    }
-    const semanticSessionId = `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
-    const semantic = new PlaywrightBrowserSession({
-      attached: { page, sessionId: semanticSessionId, pageId: input.pageId },
-      ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
-      timeoutMs: this.#timeoutMs,
-    });
-    const questionLearning = request.questionLearning;
-    let causalError: unknown;
-    try {
+      semanticSessionId = activeSemanticSessionId;
+      semantic = activeSemantic;
       const semanticObservationStartedAt = Date.now();
-      const observed = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
+      const observed = await activeSemantic.observe(
+        { sessionId: activeSemanticSessionId, pageId: input.pageId }, signal,
+      );
       this.#trace?.("questionnaire_semantic_observation_completed", {
         durationMs: Date.now() - semanticObservationStartedAt,
         status: observed.ok ? "succeeded" : "failed",
@@ -1091,10 +1128,14 @@ export class OwnedWorkdayApplicationRuntime {
       const snapshot = createSemanticSnapshot(
         { kind: "workday", page: "questionnaire" }, applicationFields,
       );
-      const [application, taxonomy] = await Promise.all([
-        new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal),
-        monitorTaxonomy(page, monitorPageName),
-      ]);
+      // Application observation owns the shared two-phase checkbox grouping
+      // annotation. Let it finish before the independent taxonomy reads the
+      // DOM so neither observer can see the annotation's transient gap.
+      const application = await new PlaywrightWorkdayApplicationPage(
+        page,
+        { timeoutMs: this.#timeoutMs },
+      ).observe(signal);
+      const taxonomy = await monitorTaxonomy(page, monitorPageName);
       const visibleFields = snapshot.fields.filter(({ state }) => state !== "hidden");
       const requiredFieldCount = visibleFields.filter(({ required }) => required).length;
       this.#trace?.("questionnaire_coverage_observed", {
@@ -1128,18 +1169,18 @@ export class OwnedWorkdayApplicationRuntime {
       );
       const requiredIdentities = visibleFields.filter(({ required }) => required)
         .map(({ fieldId: id }) => String(id)).sort();
-      const priorRequiredIdentities = sharedBatch.lastObservedRequiredIdentities ?? [];
+      const priorRequiredIdentities = activeBatch.lastObservedRequiredIdentities ?? [];
       const conditionalAdded = requiredIdentities.filter((id) => !priorRequiredIdentities.includes(id));
       const conditionalRemoved = priorRequiredIdentities.filter((id) => !requiredIdentities.includes(id));
-      sharedBatch.lastObservedRequiredIdentities = Object.freeze(requiredIdentities);
-      const priorRequiredFieldCount = sharedBatch.lastIncomplete?.requiredFields ??
+      activeBatch.lastObservedRequiredIdentities = Object.freeze(requiredIdentities);
+      const priorRequiredFieldCount = activeBatch.lastIncomplete?.requiredFields ??
         this.#questionnaireRequiredCounts.get(input.pageId);
       const conditionalDelta = Math.max(
         0,
         requiredFieldCount - (priorRequiredFieldCount ?? requiredFieldCount),
       );
       this.#questionnaireRequiredCounts.set(input.pageId, requiredFieldCount);
-      const reconciliationGeneration = Math.max(input.attempt, sharedBatch.pass);
+      const reconciliationGeneration = Math.max(input.attempt, activeBatch.pass);
       let reconciliationContext: {
         fieldId: FieldId | null;
         uiBehavior: FieldObservation["behavior"] | null;
@@ -1161,8 +1202,8 @@ export class OwnedWorkdayApplicationRuntime {
         operation: "resolve_answer",
         observedOptionCount: 0,
       };
-      const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
-      const semanticVerifier = createFieldVerifier(semantic);
+      const semanticDriver = createFieldDriver(activeSemantic, createSafetyGuard());
+      const semanticVerifier = createFieldVerifier(activeSemantic);
       const driver: FieldDriver = Object.freeze({
         drive: async (
           driveRequest: Parameters<FieldDriver["drive"]>[0],
@@ -1180,8 +1221,8 @@ export class OwnedWorkdayApplicationRuntime {
           // recovery point for any supported control type after a React
           // remount; uncertain effects are never replayed.
           await bindQuestionnaireTargets(page, input.pageId);
-          const rebound = await semantic.observe(
-            { sessionId: semanticSessionId, pageId: input.pageId },
+          const rebound = await activeSemantic.observe(
+            { sessionId: activeSemanticSessionId, pageId: input.pageId },
             innerSignal,
           );
           if (!rebound.ok) {
@@ -1254,7 +1295,7 @@ export class OwnedWorkdayApplicationRuntime {
             operation: "resolve_answer",
             observedOptionCount: resolutionRequest.field.options.length,
           };
-          const resolution = await sharedBatch.answerResolver.resolve({
+          const resolution = await activeBatch.answerResolver.resolve({
             ...resolutionRequest,
             committedReadback: readback,
           }, innerSignal);
@@ -1354,7 +1395,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           resumeArtifact: request.ownerSources.resumeIntent.artifact,
           page: snapshot,
-          conditionalReveal: input.attempt > 1 || sharedBatch.pass > 1,
+          conditionalReveal: input.attempt > 1 || activeBatch.pass > 1,
         }, signal);
       } catch (error) {
         causalError = error;
@@ -1457,20 +1498,20 @@ export class OwnedWorkdayApplicationRuntime {
         this.#verifiedQuestionnaireIntents,
       );
       if (completion.value.c3OwnedDuplicateRows !== 0 || verifiedFields !== requiredFields) {
-        const previous = sharedBatch.lastIncomplete;
+        const previous = activeBatch.lastIncomplete;
         const progressed = previous === undefined || fixedPointSignature !== previous.signature;
-        if (!progressed || sharedBatch.pass >= 16 ||
+        if (!progressed || activeBatch.pass >= 16 ||
             completion.value.c3OwnedDuplicateRows !== 0) {
           return applicationFailure("page_incomplete", "question_control", "required_field");
         }
-        sharedBatch.lastIncomplete = {
+        activeBatch.lastIncomplete = {
           signature: fixedPointSignature,
           requiredFields,
           verifiedFields,
         };
-        sharedBatch.pass += 1;
+        activeBatch.pass += 1;
         this.#trace?.("questionnaire_conditional_rescan_started", {
-          pass: sharedBatch.pass,
+          pass: activeBatch.pass,
           requiredFields,
           verifiedFields,
           conditionalAdded,
@@ -1484,7 +1525,7 @@ export class OwnedWorkdayApplicationRuntime {
           session,
           monitorPageName,
           signal,
-          sharedBatch,
+          activeBatch,
         );
       }
       await closeBatch();
@@ -1523,10 +1564,12 @@ export class OwnedWorkdayApplicationRuntime {
       await finalizeQuestionnaireReconciliation({
         causalError,
         closeBatch,
-        closeSemantic: () => semantic.close(
-          { sessionId: semanticSessionId },
-          AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000)),
-        ).then(() => undefined),
+        closeSemantic: () => semantic === undefined || semanticSessionId === undefined
+          ? Promise.resolve()
+          : semantic.close(
+              { sessionId: semanticSessionId },
+              AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000)),
+            ).then(() => undefined),
         writeLearning: () => questionLearning?.write() ?? null,
         trace: (details) => this.#trace?.("questionnaire_semantic_finalized", details),
       });
@@ -1534,15 +1577,15 @@ export class OwnedWorkdayApplicationRuntime {
   }
 
   #recordProfileReviewExpectations(
-    request: Stage2ApplicationWalkRuntimeBindingRequest,
+    plan: NonNullable<Stage2ApplicationWalkRuntimeBindingRequest["ownerSources"]["profilePlan"]>,
     verifiedFields: readonly {
       readonly fieldId: string;
       readonly provenance: string;
       readonly rowKey?: string;
     }[],
   ): void {
-    const scalarPlans = request.ownerSources.profilePlan.fields;
-    const repeatablePlans = request.ownerSources.profilePlan.repeatables.flatMap(({ rows }) =>
+    const scalarPlans = plan.fields;
+    const repeatablePlans = plan.repeatables.flatMap(({ rows }) =>
       rows.map(({ rowKey, fields }) => ({ rowKey, fields }))
     );
     for (const verifiedField of verifiedFields) {
@@ -1586,6 +1629,46 @@ export class OwnedWorkdayApplicationRuntime {
 
 }
 
+function profilePendingAnswerType(
+  value: string,
+): "text" | "boolean" | "single_select" | "multi_select" | "date" | "file" {
+  if (value === "boolean") return "boolean";
+  if (value === "multi_select") return "multi_select";
+  if (value === "option" || value === "single_select") return "single_select";
+  if (value === "date") return "date";
+  if (value === "file") return "file";
+  return "text";
+}
+
+function profilePendingControlType(
+  value: string,
+): "text" | "textarea" | "checkbox" | "radio" | "select" | "listbox" | "date" | "file_upload" {
+  if (value === "textarea") return "textarea";
+  if (value === "checkbox") return "checkbox";
+  if (value === "radio_group") return "radio";
+  if (value === "select") return "select";
+  if (value === "multi_select" || value === "search_select") return "listbox";
+  if (value === "date") return "date";
+  if (value === "file") return "file_upload";
+  return "text";
+}
+
+function profilePendingConstraints(
+  field: Pick<CommittedProfileField, "answerType" | "constraints">,
+) {
+  if (field.answerType === "date") return { displayFormat: "YYYY-MM-DD" as const };
+  if (field.constraints == null || profilePendingAnswerType(field.answerType) !== "text") return null;
+  return Object.freeze({
+    inputType: field.constraints.inputType,
+    min: field.constraints.min,
+    max: field.constraints.max,
+    step: field.constraints.step ?? null,
+    minLength: field.constraints.minLength ?? null,
+    maxLength: field.constraints.maxLength,
+    pattern: field.constraints.pattern,
+  });
+}
+
 export async function finalizeQuestionnaireReconciliation(input: {
   readonly causalError: unknown;
   readonly closeBatch: () => Promise<void>;
@@ -1595,6 +1678,7 @@ export async function finalizeQuestionnaireReconciliation(input: {
     readonly learningPresent: boolean;
     readonly closeFailure: boolean;
     readonly secondaryFailureCount: number;
+    readonly secondaryFailures: readonly string[];
   }) => void;
 }): Promise<void> {
   const errors: unknown[] = [];
@@ -1622,6 +1706,9 @@ export async function finalizeQuestionnaireReconciliation(input: {
     secondaryFailureCount: input.causalError === undefined
       ? Math.max(0, errors.length - 1)
       : errors.length,
+    secondaryFailures: Object.freeze(errors.map((error) =>
+      error instanceof Error ? error.name : "unknown"
+    )),
   });
   if (input.causalError === undefined && errors.length > 0) {
     throw errors.length === 1
@@ -1967,7 +2054,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
   readonly requiredFieldCount: number;
   readonly typeCounts: Readonly<Record<string, number>>;
 } | null> {
-  return page.evaluate((supportedControls) => {
+  return page.evaluate(({ supportedControls, checkboxGroupAttribute }) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -1998,12 +2085,9 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
-      const genericCheckboxes = genericCheckboxOwner === null ? [] :
-        [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-          .filter(visible);
-      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
-        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-        genericCheckboxes.length >= 2;
+      const genericGroupKind = genericCheckboxOwner?.getAttribute(checkboxGroupAttribute);
+      const isGenericCheckboxGroup = genericGroupKind === "exclusive" ||
+        genericGroupKind === "multiple";
       if (isGenericCheckboxGroup) return genericCheckboxOwner === control;
       if (control.matches(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2018,8 +2102,10 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
         '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
       );
       if (dateOwner !== null && dateOwner !== control) return false;
+      if (control.matches('[data-automation-id$="-CheckboxGroup"]') &&
+          control.getAttribute(checkboxGroupAttribute) === "independent") return false;
       const checkboxGroupOwner = control.closest(
-        '[data-automation-id$="-CheckboxGroup"]',
+        `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
       );
       if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) return false;
       if (
@@ -2064,11 +2150,9 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
             ).length === 1
           )) type = "date";
       else if (
-        control.matches('[data-automation-id$="-CheckboxGroup"]') ||
-        control.matches('[data-automation-id="formField"], [data-automation-id^="formField-"]') &&
-          control.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-          control.querySelectorAll('input[type="checkbox"]').length >= 2
-      ) type = "radio";
+        control.getAttribute(checkboxGroupAttribute) === "exclusive" ||
+        control.getAttribute(checkboxGroupAttribute) === "multiple"
+      ) type = control.getAttribute(checkboxGroupAttribute) === "multiple" ? "select" : "radio";
       else if (control instanceof HTMLSelectElement ||
           control.getAttribute("role") === "combobox" ||
           control.getAttribute("role") === "listbox" ||
@@ -2096,6 +2180,9 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
         !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(fieldLabel);
       if (
         control.hasAttribute("required") || control.getAttribute("aria-required") === "true" ||
+        (control.getAttribute(checkboxGroupAttribute) === "exclusive" ||
+          control.getAttribute(checkboxGroupAttribute) === "multiple") &&
+          control.querySelector('[required], [aria-required="true"]') !== null ||
         accessibleRequired(control) ||
         control instanceof HTMLFieldSetElement &&
           [...control.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
@@ -2105,7 +2192,10 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
       ) requiredFieldCount += 1;
     }
     return { fieldCount: controls.length, requiredFieldCount, typeCounts };
-  }, supportedControlSelector);
+  }, {
+    supportedControls: supportedControlSelector,
+    checkboxGroupAttribute: checkboxGroupKindAttribute,
+  });
 }
 
 async function monitorTaxonomy(
@@ -2839,7 +2929,10 @@ export async function bindQuestionnaireTargets(
   page: Page,
   pageId: BrowserPageId,
 ): Promise<void> {
-  const result = await page.evaluate(({ declaredPageId, selectors, supportedControls }) => {
+  await annotateCheckboxGroups(page);
+  const result = await page.evaluate(({
+    declaredPageId, selectors, supportedControls, checkboxGroupAttribute,
+  }) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -2886,34 +2979,15 @@ export async function bindQuestionnaireTargets(
       const genericCheckboxes = genericCheckboxOwner === null ? [] :
         [...genericCheckboxOwner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
           .filter(visible);
-      const genericCheckboxNames = new Set(genericCheckboxes
-        .map((checkbox) => (checkbox.getAttribute("name") ?? "")
-          .normalize("NFC").replace(/\s+/gu, " ").trim())
-        .filter(Boolean));
-      const genericGroupText = (genericCheckboxOwner?.textContent ?? "")
-        .normalize("NFC").replace(/\s+/gu, " ").trim();
-      const isGenericCheckboxGroup = genericCheckboxOwner !== null &&
-        genericCheckboxOwner.querySelector('[data-automation-id$="-CheckboxGroup"]') === null &&
-        genericCheckboxes.length >= 2 && (
-          genericCheckboxOwner.getAttribute("role") === "group" ||
-          genericCheckboxOwner.getAttribute("role") === "radiogroup" ||
-          genericCheckboxOwner.getAttribute("aria-multiselectable") === "true" ||
-          genericCheckboxNames.size === 1 ||
-          /select (?:all|any|one)|all that apply|choose (?:all|any|one)|check one|one of (?:the )?(?:boxes|options)/iu.test(genericGroupText)
-        );
+      const genericGroupKind = genericCheckboxOwner?.getAttribute(checkboxGroupAttribute);
+      const isGenericCheckboxGroup = genericGroupKind === "exclusive" ||
+        genericGroupKind === "multiple";
       if (isGenericCheckboxGroup) {
         if (genericCheckboxOwner !== control) continue;
         control.setAttribute("data-hunt-exclusive-checkbox-group", "true");
-        const explicitlyMultiple = genericCheckboxOwner.getAttribute("aria-multiselectable") === "true" ||
-          /select (?:all|any)|all that apply|choose (?:all|any)|multiple selections?/iu.test(genericGroupText);
-        const exclusive = !explicitlyMultiple && (
-          genericCheckboxOwner.getAttribute("role") === "radiogroup" ||
-          genericCheckboxNames.size === 1 ||
-          /select one|choose one|check one|one of (?:the )?(?:boxes|options)/iu.test(genericGroupText)
-        );
         control.setAttribute(
           "data-hunt-checkbox-selection-mode",
-          exclusive ? "exclusive" : "multiple",
+          genericGroupKind,
         );
       } else if (control.matches(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2922,7 +2996,11 @@ export async function bindQuestionnaireTargets(
         '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
       );
       if (dateOwner !== null && dateOwner !== control) continue;
-      const checkboxGroupOwner = control.closest('[data-automation-id$="-CheckboxGroup"]');
+      if (control.matches('[data-automation-id$="-CheckboxGroup"]') &&
+          control.getAttribute(checkboxGroupAttribute) === "independent") continue;
+      const checkboxGroupOwner = control.closest(
+        `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
+      );
       if (checkboxGroupOwner !== null && checkboxGroupOwner !== control) continue;
       if (control instanceof HTMLInputElement && control.type === "radio" &&
           control.closest("fieldset") !== null) continue;
@@ -2931,15 +3009,13 @@ export async function bindQuestionnaireTargets(
       const normalize = (value: string | null | undefined) =>
         (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
       if (control.matches(
-        '[data-automation-id$="-CheckboxGroup"], [data-hunt-exclusive-checkbox-group="true"]',
+        `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
       )) {
-        const groupText = normalize(control.textContent);
-        const multiple = control.getAttribute("aria-multiselectable") === "true" ||
-          /select (?:all|any)|all that apply|choose (?:all|any)|multiple selections?/iu.test(groupText);
+        const groupKind = control.getAttribute(checkboxGroupAttribute);
         if (!control.hasAttribute("data-hunt-checkbox-selection-mode")) {
           control.setAttribute(
             "data-hunt-checkbox-selection-mode",
-            multiple ? "multiple" : "exclusive",
+            groupKind === "multiple" ? "multiple" : "exclusive",
           );
         }
       }
@@ -3012,6 +3088,7 @@ export async function bindQuestionnaireTargets(
     declaredPageId: pageId,
     selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
     supportedControls: supportedControlSelector,
+    checkboxGroupAttribute: checkboxGroupKindAttribute,
   });
   if (!result) throw new TypeError("questionnaire control binding denied");
 }

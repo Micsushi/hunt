@@ -70,6 +70,7 @@ test("questionnaire finalization preserves causal order and always attempts lear
     learningPresent: true,
     closeFailure: true,
     secondaryFailureCount: 2,
+    secondaryFailures: ["Error", "Error"],
   }]);
 
   await assert.rejects(finalizeQuestionnaireReconciliation({
@@ -1663,9 +1664,10 @@ test("questionnaire batches external proof once while every field keeps independ
           );
           assert.equal(taxonomy.requiredFieldCount, taxonomy.fieldCount);
         } else {
-          assert.deepEqual(taxonomy.questionTypes, ["unknown"]);
-          assert.equal(taxonomy.fieldCount, 0);
-          assert.equal(taxonomy.requiredFieldCount, 0);
+          assert.equal(taxonomy.questionTypes.includes("unknown"), true);
+          assert.equal(taxonomy.questionTypes.every((value) =>
+            value === "unknown" || value === "demographic"), true);
+          assert.equal(taxonomy.requiredFieldCount, taxonomy.fieldCount);
         }
         assert.equal(taxonomy.submitPresent, false);
       },
@@ -2381,13 +2383,13 @@ test("questionnaire binding distinguishes independent, exclusive, and multi chec
         <label><input id="ack-two" name="ack-two" type="checkbox" required> Acknowledge two</label>
       </div>
       <div data-automation-id="formField-exclusive" role="group" aria-label="Choose one status">
-        <label><input id="exclusive-a" name="status" type="checkbox"> Status A</label>
-        <label><input id="exclusive-b" name="status" type="checkbox"> Status B</label>
+        <label><input id="exclusive-a" name="status" type="checkbox" required> Status A</label>
+        <label><input id="exclusive-b" name="status" type="checkbox" required> Status B</label>
       </div>
       <div data-automation-id="formField-multiple" role="group" aria-label="Select all that apply"
         aria-multiselectable="true">
-        <label><input id="multiple-a" name="skills" type="checkbox"> Skill A</label>
-        <label><input id="multiple-b" name="skills" type="checkbox"> Skill B</label>
+        <label><input id="multiple-a" name="skills" type="checkbox" required> Skill A</label>
+        <label><input id="multiple-b" name="skills" type="checkbox" required> Skill B</label>
       </div>
     </main>`);
     const pageId = "page-checkbox-semantics" as never;
@@ -2398,9 +2400,9 @@ test("questionnaire binding distinguishes independent, exclusive, and multi chec
     assert.equal(await page.locator('[data-automation-id="formField-independent"] input[data-hunt-target-token]')
       .count(), 2);
     assert.equal(await page.locator('[data-automation-id="formField-exclusive"]')
-      .getAttribute("data-hunt-checkbox-selection-mode"), "exclusive");
+      .getAttribute("data-hunt-checkbox-group-kind"), "exclusive");
     assert.equal(await page.locator('[data-automation-id="formField-multiple"]')
-      .getAttribute("data-hunt-checkbox-selection-mode"), "multiple");
+      .getAttribute("data-hunt-checkbox-group-kind"), "multiple");
 
     const inspected = await inspectPage(
       page,
@@ -2442,6 +2444,20 @@ test("questionnaire binding distinguishes independent, exclusive, and multi chec
     assert.equal(await page.locator('[data-automation-id="formField-exclusive"] input:checked').count(), 1);
     assert.equal(await page.locator('[data-automation-id="formField-multiple"] input:checked').count(), 1);
     assert.equal(await page.locator("#ack-one").isChecked(), true);
+    const application = await new PlaywrightWorkdayApplicationPage(page).observe(
+      AbortSignal.any([]),
+    );
+    assert.equal(application.ok, true);
+    if (application.ok) {
+      assert.equal(application.value.requiredFields.length, 4);
+      assert.equal(new Set(application.value.requiredFields.map(({ fieldId }) => fieldId)).size, 4);
+    }
+    const coverage = await monitorQuestionnaireCoverage(page);
+    assert.deepEqual(coverage, {
+      fieldCount: 4,
+      requiredFieldCount: 4,
+      typeCounts: { checkbox: 2, radio: 1, select: 1 },
+    });
   } finally {
     await browser.close();
   }
