@@ -595,6 +595,46 @@ test("one resolver keeps a random synthetic choice stable across conditional res
   assert.equal(selection, 1);
 });
 
+test("one resolver keeps a random synthetic choice stable across remounted option identities", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let selection = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => selection++,
+  );
+  const first = field("Unreviewed conditional choice", "listbox", [
+    { id: optionId("first-remount-yes"), label: boundedText("Yes") },
+    { id: optionId("first-remount-no"), label: boundedText("No") },
+  ]);
+  const remounted = {
+    ...first,
+    target: browserTargetToken("target-remounted-choice"),
+    options: Object.freeze([
+      { id: optionId("second-remount-no"), label: boundedText("No") },
+      { id: optionId("second-remount-yes"), label: boundedText("Yes") },
+    ]),
+  };
+
+  const initial = await resolver.resolve(syntheticRequest(first), new AbortController().signal);
+  const rescanned = await resolver.resolve(
+    syntheticRequest(remounted),
+    new AbortController().signal,
+  );
+
+  assert.equal(initial.ok && initial.value.kind, "resolved");
+  assert.equal(rescanned.ok && rescanned.value.kind, "resolved");
+  if (initial.ok && initial.value.kind === "resolved" && initial.value.intent.kind === "choice" &&
+      rescanned.ok && rescanned.value.kind === "resolved" && rescanned.value.intent.kind === "choice") {
+    assert.equal(rescanned.value.intent.expectedOption, initial.value.intent.expectedOption);
+    assert.equal(rescanned.value.intent.target, remounted.target);
+  }
+  assert.equal(selection, 1);
+});
+
 test("semantic testing defaults distinguish qualifications from sponsorship", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },

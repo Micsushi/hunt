@@ -47,6 +47,7 @@ import {
   type FieldId,
   type FieldDriver,
   type FieldIntent,
+  type FieldObservation,
   type FieldVerifier,
   type OperationId,
 } from "../../../contracts/index.ts";
@@ -307,6 +308,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
   readonly #verifiedQuestionnaireIntents = new Map<string, string>();
+  readonly #questionnaireRequiredCounts = new Map<string, number>();
   #profileMutationAttempted = false;
   #profileCleanupState: ProfileCleanupState = "not_started";
   #profilePreservationCandidate = false;
@@ -343,6 +345,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#session = undefined;
     this.#reviewExpected.clear();
     this.#verifiedQuestionnaireIntents.clear();
+    this.#questionnaireRequiredCounts.clear();
   }
 
   profilePreservationSnapshot(): {
@@ -1112,6 +1115,31 @@ export class OwnedWorkdayApplicationRuntime {
       const currentReadbacks = new Map(
         observed.value.targets.map(({ token, readback }) => [token, readback]),
       );
+      const priorRequiredFieldCount = sharedBatch.lastIncomplete?.requiredFields ??
+        this.#questionnaireRequiredCounts.get(input.pageId);
+      const conditionalDelta = Math.max(
+        0,
+        requiredFieldCount - (priorRequiredFieldCount ?? requiredFieldCount),
+      );
+      this.#questionnaireRequiredCounts.set(input.pageId, requiredFieldCount);
+      const reconciliationGeneration = Math.max(input.attempt, sharedBatch.pass);
+      let reconciliationContext: {
+        fieldId: FieldId | null;
+        uiBehavior: FieldObservation["behavior"] | null;
+        failureStage: "answer_resolution" | "committed_readback" | "record_attempt";
+        operationId: OperationId | null;
+        priorCommittedState: "verified_intent_present" | "absent";
+        observedState: BrowserReadback["kind"];
+        committedReadbackMatches: boolean;
+      } = {
+        fieldId: null,
+        uiBehavior: null,
+        failureStage: "answer_resolution",
+        operationId: null,
+        priorCommittedState: "absent",
+        observedState: "unavailable",
+        committedReadbackMatches: false,
+      };
       const semanticDriver = createFieldDriver(semantic, createSafetyGuard());
       const semanticVerifier = createFieldVerifier(semantic);
       const driver: FieldDriver = Object.freeze({
@@ -1163,9 +1191,31 @@ export class OwnedWorkdayApplicationRuntime {
         },
       });
       const questionLearning = request.questionLearning;
+      const answerResolver: ApplicationAnswerResolver = Object.freeze({
+        resolve: async (
+          resolutionRequest: Parameters<ApplicationAnswerResolver["resolve"]>[0],
+          innerSignal: AbortSignal,
+        ) => {
+          const prior = this.#verifiedQuestionnaireIntents.get(
+            questionnaireIntentKey(input.pageId, resolutionRequest.field.fieldId),
+          );
+          const readback = currentReadbacks.get(resolutionRequest.field.target) ??
+            { kind: "unavailable" as const };
+          reconciliationContext = {
+            fieldId: resolutionRequest.field.fieldId,
+            uiBehavior: resolutionRequest.field.behavior,
+            failureStage: "answer_resolution",
+            operationId: null,
+            priorCommittedState: prior === undefined ? "absent" : "verified_intent_present",
+            observedState: readback.kind,
+            committedReadbackMatches: false,
+          };
+          return await sharedBatch.answerResolver.resolve(resolutionRequest, innerSignal);
+        },
+      });
       const questionnaire = createQuestionnairePageHandler({
         profileQuery: request.ownerSources.profileQuery,
-        answerResolver: sharedBatch.answerResolver,
+        answerResolver,
         driver,
         verifier,
         narrative: request.ownerSources.narrative,
@@ -1173,15 +1223,26 @@ export class OwnedWorkdayApplicationRuntime {
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
         previouslyVerified: ({ pageId, field, intent }) => {
-          const reusable = this.#verifiedQuestionnaireIntents.get(
+          const prior = this.#verifiedQuestionnaireIntents.get(
             questionnaireIntentKey(pageId, field.fieldId),
-          ) === questionnaireIntentFingerprint(intent) &&
-            fieldIntentMatchesReadback(
-              intent,
-              currentReadbacks.get(field.target) ?? { kind: "unavailable" },
-            );
+          );
+          const readback = currentReadbacks.get(field.target) ?? { kind: "unavailable" as const };
+          const reusable = prior === questionnaireIntentFingerprint(intent) &&
+            fieldIntentMatchesReadback(intent, readback);
+          reconciliationContext = {
+            fieldId: field.fieldId,
+            uiBehavior: field.behavior,
+            failureStage: "committed_readback",
+            operationId: null,
+            priorCommittedState: prior === undefined ? "absent" : "verified_intent_present",
+            observedState: readback.kind,
+            committedReadbackMatches: reusable,
+          };
           if (reusable) this.#trace?.("questionnaire_field_verified_reused", {
             fieldId: field.fieldId,
+            uiBehavior: field.behavior,
+            remountGeneration: reconciliationGeneration,
+            committedReadbackMatches: true,
           });
           return reusable;
         },
@@ -1191,7 +1252,24 @@ export class OwnedWorkdayApplicationRuntime {
             questionnaireIntentFingerprint(intent),
           );
         },
-        recordAttempt: questionLearning?.recordAttempt,
+        recordAttempt: questionLearning === undefined ? undefined : (attempt) => {
+          const readback = currentReadbacks.get(attempt.field.target) ??
+            { kind: "unavailable" as const };
+          reconciliationContext = {
+            fieldId: attempt.field.fieldId,
+            uiBehavior: attempt.field.behavior,
+            failureStage: "record_attempt",
+            operationId: attempt.operationId,
+            priorCommittedState: this.#verifiedQuestionnaireIntents.has(
+                questionnaireIntentKey(input.pageId, attempt.field.fieldId),
+              )
+              ? "verified_intent_present"
+              : "absent",
+            observedState: readback.kind,
+            committedReadbackMatches: fieldIntentMatchesReadback(attempt.intent, readback),
+          };
+          questionLearning.recordAttempt(attempt);
+        },
         recordAnswer: questionLearning?.record,
         recordUnset: questionLearning?.recordUnset,
         recordFailure: questionLearning?.recordFailure,
@@ -1212,7 +1290,7 @@ export class OwnedWorkdayApplicationRuntime {
           },
           resumeArtifact: request.ownerSources.resumeIntent.artifact,
           page: snapshot,
-          conditionalReveal: sharedBatch.pass > 1,
+          conditionalReveal: input.attempt > 1 || sharedBatch.pass > 1,
         }, signal);
       } catch (error) {
         await closeBatch();
@@ -1220,6 +1298,22 @@ export class OwnedWorkdayApplicationRuntime {
         this.#trace?.("questionnaire_reconciliation_exception", {
           learningPresent: learningSha256 !== null,
           errorType: error instanceof Error ? error.name : "unknown",
+          ...(reconciliationContext.fieldId === null
+            ? {}
+            : { fieldId: reconciliationContext.fieldId }),
+          ...(reconciliationContext.uiBehavior === null
+            ? {}
+            : { uiBehavior: reconciliationContext.uiBehavior }),
+          failureStage: reconciliationContext.failureStage,
+          ...(reconciliationContext.operationId === null
+            ? {}
+            : { operationId: reconciliationContext.operationId }),
+          priorCommittedState: reconciliationContext.priorCommittedState,
+          observedState: reconciliationContext.observedState,
+          committedReadbackMatches: reconciliationContext.committedReadbackMatches,
+          remountGeneration: reconciliationGeneration,
+          conditionalDelta,
+          underlyingError: questionnaireReconciliationError(error),
         });
         throw error;
       }
@@ -1551,6 +1645,17 @@ function questionnaireIntentFingerprint(intent: FieldIntent): string {
     `${intent.kind}\0${intent.behavior}\0${intent.provenance}\0${desired}`,
     "utf8",
   ).digest("hex");
+}
+
+function questionnaireReconciliationError(error: unknown): string {
+  if (error instanceof TypeError && error.message === "question answer learning evidence denied") {
+    return "question_answer_learning_evidence_denied";
+  }
+  if (error instanceof TypeError && error.message === "persisted synthetic option unavailable") {
+    return "persisted_synthetic_option_unavailable";
+  }
+  if (error instanceof Error) return `${error.name.replace(/Error$/u, "").toLowerCase()}_error`;
+  return "unknown_error";
 }
 
 function normalizeReviewValue(value: string): string {

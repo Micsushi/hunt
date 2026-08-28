@@ -452,6 +452,66 @@ test("question learning retains bounded retry history without accepting a recove
   }
 });
 
+test("question learning records an idempotent remount restore of a verified answer", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-remount-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const value = {
+      ...ownerChoice(16),
+      lane: "synthetic_test_default" as const,
+      intent: {
+        ...ownerChoice(16).intent,
+        provenance: "visible_option" as const,
+      },
+      generatedDefault: true,
+    };
+    const first = operation(16);
+    capture.recordAttempt({ operationId: first, ...value });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...value });
+
+    assert.throws(() => capture.recordAttempt({
+      operationId: operation(18),
+      ...value,
+      intent: {
+        kind: "choice",
+        behavior: "listbox",
+        fieldId: value.field.fieldId,
+        target: browserTargetToken("target-remounted-owner-16"),
+        optionId: optionId("remounted-owner-no"),
+        expectedOption: boundedText("No"),
+        provenance: "visible_option",
+      },
+      conditionalReveal: true,
+    }), /question answer learning evidence denied/u);
+
+    const restored = operation(17);
+    capture.recordAttempt({
+      operationId: restored,
+      ...value,
+      conditionalReveal: true,
+    });
+    capture.monitorAck({ operationId: restored, attempt: 2, moment: "before_mutation" });
+    capture.monitorAck({ operationId: restored, attempt: 2, moment: "after_readback" });
+    capture.record({ operationId: restored, ...value });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(
+      evidence.questions[0]?.attemptHistory.map(({ outcome }) => outcome),
+      ["verified", "verified"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("question learning retains verification failure through a terminal retry", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-terminal-retry-"));
   try {

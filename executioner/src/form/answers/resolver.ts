@@ -29,6 +29,7 @@ import {
   resolveQuestion,
   type CanonicalQuestionId,
 } from "../questions/catalog.ts";
+import { normalizeCatalogText } from "../questions/normalize.ts";
 import {
   contractApprovedPrivacyChoices,
   protectedQuestionCategory,
@@ -309,19 +310,25 @@ export function createApplicationAnswerResolver(
   }
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
-  const syntheticChoiceIndexes = new Map<string, number>();
+  const syntheticChoiceLabels = new Map<string, string>();
   const stableRandomIndexFor = (field: FieldObservation) => (length: number): number => {
-    const key = JSON.stringify([
-      field.fieldId,
-      field.target,
-      field.behavior,
-      field.options.map(({ id, label }) => [id, label]),
-    ]);
-    const existing = syntheticChoiceIndexes.get(key);
-    if (existing !== undefined) return existing;
+    const resolution = resolveQuestion(field.label);
+    const key = resolution.kind === "resolved"
+      ? `catalog:${resolution.id}`
+      : `observed:${normalizeCatalogText(field.label)}`;
+    const options = field.options.filter(({ label }) =>
+      !placeholderOption.test(String(label).trim().toLowerCase())
+    );
+    if (options.length !== length) throw new TypeError("synthetic option set mismatch");
+    const existing = syntheticChoiceLabels.get(key);
+    if (existing !== undefined) {
+      const rebound = options.findIndex(({ label }) => normalizeCatalogText(label) === existing);
+      if (rebound < 0) throw new TypeError("persisted synthetic option unavailable");
+      return rebound;
+    }
     const selected = selectRandomIndex(length);
     if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
-      syntheticChoiceIndexes.set(key, selected);
+      syntheticChoiceLabels.set(key, normalizeCatalogText(options[selected]!.label));
     }
     return selected;
   };

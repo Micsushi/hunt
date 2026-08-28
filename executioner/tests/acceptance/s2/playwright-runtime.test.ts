@@ -34,6 +34,8 @@ import {
 } from "../../../src/browser/playwright-live/private/application-page-types.ts";
 import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
+import { createQuestionAnswerLearningCapture } from
+  "../../../src/live/evidence/question-answer-learning.ts";
 import {
   bindQuestionnaireTargets,
   hydrateQuestionnairePopupOptions,
@@ -1466,6 +1468,14 @@ test("questionnaire batches external proof once while every field keeps independ
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
+  const questionEvidenceRoot = mkdtempSync(join(tmpdir(), "hunt-questionnaire-remount-learning-"));
+  const questionLearning = createQuestionAnswerLearningCapture({
+    root: questionEvidenceRoot,
+    mode: "live",
+  });
+  const profilePlan = {
+    mode: "live" as "live" | "synthetic_test_non_submittable",
+  };
   await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
     <div data-automation-id="formField-authorization"><label>Are you legally authorized to work in this country? <span aria-hidden="true">*</span></label><button id="mcvf1" type="button" aria-label="Select One Required" aria-haspopup="listbox">Yes</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <div data-automation-id="formField-sponsorship"><label>Will you now or in the future require sponsorship? <span aria-hidden="true">*</span></label><button id="mcvf2" type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
@@ -1547,7 +1557,9 @@ test("questionnaire batches external proof once while every field keeps independ
           template: "Exact configured interest statement.",
         }),
         sensitiveValues: ["Exact configured interest statement."],
+        profilePlan,
       },
+      questionLearning,
     } as never,
     acceptances: { record(value) { accepted.push(value.checkpoint); } },
     nextOperationId: () => {
@@ -1675,6 +1687,65 @@ test("questionnaire batches external proof once while every field keeps independ
     assert.equal(monitored.length * 2_500 < 60_000, true);
     assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 1);
 
+    const restoreMonitorStart = monitored.length;
+    const restoreTraceStart = traces.length;
+    profilePlan.mode = "synthetic_test_non_submittable";
+    await page.locator('[data-automation-id="formField-sponsorship"] button')
+      .evaluate((button) => {
+        const owner = button.closest('[data-automation-id="formField-sponsorship"]');
+        const options = owner?.querySelector<HTMLElement>('.options');
+        button.textContent = "Select One";
+        button.removeAttribute("data-committed");
+        button.addEventListener("click", () => {
+          if (options !== null && options !== undefined) options.hidden = false;
+        });
+        options?.addEventListener("click", (event) => {
+          const option = (event.target as Element).closest('[data-automation-id="promptOption"]');
+          if (option === null) return;
+          button.textContent = option.textContent?.trim() ?? "";
+          (button as HTMLElement).dataset.committed = "true";
+          options.hidden = true;
+        });
+      });
+    const restored = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_monitor_restore_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 2, pageId: "page-questionnaire" } as never,
+    }, new AbortController().signal);
+    assert.equal((restored as { ok: boolean }).ok, true, JSON.stringify(restored));
+    profilePlan.mode = "live";
+    assert.equal(
+      await page.locator('[data-automation-id="formField-sponsorship"] button').innerText(),
+      "No",
+    );
+    const restoreTraces = traces.slice(restoreTraceStart);
+    assert.equal(
+      restoreTraces.filter(({ event }) => event === "questionnaire_field_drive_started").length,
+      1,
+    );
+    assert.equal(
+      restoreTraces.filter(({ event }) => event === "questionnaire_field_verified_reused").length,
+      4,
+    );
+    assert.equal(
+      restoreTraces.some(({ event }) => event === "questionnaire_reconciliation_exception"),
+      false,
+    );
+    assert.equal(
+      restoreTraces.filter(({ event }) => event === "questionnaire_field_verified_reused")
+        .every(({ details }) => (details as { remountGeneration?: number })?.remountGeneration === 2),
+      true,
+    );
+    const restoreOperationIds = new Set(
+      monitored.slice(restoreMonitorStart).map(({ operationId }) => operationId),
+    );
+
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-voluntary" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowVoluntaryDisclosuresPage">
       <div data-automation-id="formField-gender"><label>What is your gender?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
       <div data-automation-id="formField-hispanic"><label>Are you Hispanic or Latino?</label><button type="button" aria-haspopup="listbox">Select One</button></div>
@@ -1731,11 +1802,12 @@ test("questionnaire batches external proof once while every field keeps independ
     assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === voluntaryOperation)
         .map(({ moment, attempt }) => ({ moment, attempt })),
-      [{ moment: "state_observed", attempt: 2 }],
+      [{ moment: "state_observed", attempt: 3 }],
     );
     const voluntaryFieldEvents = monitored.filter(({ operationId }) =>
       operationId !== voluntaryOperation &&
       operationId !== runOperation &&
+      !restoreOperationIds.has(operationId) &&
       !fieldEvents.some((event) => event.operationId === operationId)
     );
     const voluntaryOperations = [...new Set(voluntaryFieldEvents.map(({ operationId }) => operationId))];
@@ -1748,7 +1820,7 @@ test("questionnaire batches external proof once while every field keeps independ
     );
     assert.deepEqual(
       [...new Set(voluntaryFieldEvents.map(({ attempt }) => attempt))],
-      [2],
+      [3],
     );
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-self-identify" data-hunt-submit-activated="false"><head><style>.visual { display: inline-block; width: 18px; height: 18px; }.date-shell { display: flex; align-items: center; }.date-opener { margin-left: 48px; }</style></head><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowSelfIdentifyPage">
@@ -1937,10 +2009,11 @@ test("questionnaire batches external proof once while every field keeps independ
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
-    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 2);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 3);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
+    rmSync(questionEvidenceRoot, { recursive: true, force: true });
     await context.close();
     await browser.close();
   }

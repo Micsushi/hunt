@@ -77,6 +77,7 @@ const STRING_KEYS = new Set([
   "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
   "profileInspectionSessionState", "profileInspectionCleanupState",
   "profileInspectionPreservationReason", "learningConversion", "executionMode",
+  "errorType", "priorCommittedState", "observedState", "underlyingError",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -113,6 +114,7 @@ const NUMBER_KEYS = new Set([
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
   "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
   "durationMs",
+  "remountGeneration", "conditionalDelta",
   "profileInspectionAttemptCount", "profileInspectionFrameCount", "profileMetadataMismatchCount",
   "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
   "profileInspectionDomOwnerCandidateCount", "profileInspectionControlCandidateCount",
@@ -127,6 +129,7 @@ const BOOLEAN_KEYS = new Set([
   "boundRightHitInput", "boundRightHitWithinSvgOwner", "boundRightHitSvgAncestor",
   "profileInspectionPreservationEligible", "profileInspectionContinueAllowed",
   "testOnly", "mutationAllowed", "defaultsGenerated",
+  "learningPresent", "committedReadbackMatches",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",

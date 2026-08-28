@@ -238,6 +238,46 @@ test("durable run trace retains ordered structural state and drops applicant val
   }
 });
 
+test("questionnaire exception trace retains value-free reconciliation context", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-value-free-reconciliation-trace-"));
+  try {
+    const trace = createValueFreeRunTrace(root);
+    trace("questionnaire_reconciliation_exception", {
+      learningPresent: true,
+      errorType: "TypeError",
+      fieldId: "field-workday-general-1",
+      uiBehavior: "listbox",
+      failureStage: "record_attempt",
+      operationId: "operation_general_restore_01",
+      priorCommittedState: "verified_intent_present",
+      observedState: "selected",
+      committedReadbackMatches: false,
+      remountGeneration: 2,
+      conditionalDelta: 1,
+      underlyingError: "question_answer_learning_evidence_denied",
+      chosenAnswer: "private answer",
+    });
+
+    const [record] = readValueFreeRunTrace(join(root, "value-free-trace.ndjson"));
+    assert.deepEqual(record?.details, {
+      learningPresent: true,
+      errorType: "TypeError",
+      fieldId: "field-workday-general-1",
+      uiBehavior: "listbox",
+      failureStage: "record_attempt",
+      operationId: "operation_general_restore_01",
+      priorCommittedState: "verified_intent_present",
+      observedState: "selected",
+      committedReadbackMatches: false,
+      remountGeneration: 2,
+      conditionalDelta: 1,
+      underlyingError: "question_answer_learning_evidence_denied",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("trace observer and invalid details never alter runtime behavior", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-value-free-trace-failure-"));
   try {

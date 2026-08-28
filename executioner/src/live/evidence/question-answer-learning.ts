@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   AnswerProvenance,
   FieldIntent,
@@ -190,6 +192,7 @@ export function createQuestionAnswerLearningCapture(input: {
 }): QuestionAnswerLearningCapture {
   const records = new Map<string, MutableQuestionRecord>();
   const operations = new Map<string, string>();
+  const intentFingerprints = new Map<string, string>();
   const batchFields = new Set<string>();
   let pendingBatch: {
     readonly operationId: string;
@@ -201,14 +204,22 @@ export function createQuestionAnswerLearningCapture(input: {
     recordAttempt(value: Parameters<QuestionAnswerLearningCapture["recordAttempt"]>[0]) {
       if (operations.has(value.operationId)) denied();
       const prior = records.get(value.field.fieldId);
-      if (prior !== undefined && (
-        prior.interactionState !== "attempted" ||
-        !["driver_failed", "verification_failed"].includes(prior.terminalDisposition) ||
-        prior.attemptHistory.length === 0
-      )) denied();
       const record = answerRecord(value, "pending");
+      const fingerprint = answerIntentFingerprint(value.intent);
+      const retryableFailure = prior !== undefined &&
+        prior.interactionState === "attempted" &&
+        ["driver_failed", "verification_failed"].includes(prior.terminalDisposition) &&
+        prior.attemptHistory.length > 0;
+      const verifiedRemountRestore = prior !== undefined &&
+        value.conditionalReveal === true &&
+        prior.interactionState === "attempted" &&
+        prior.terminalDisposition === "verified" &&
+        prior.attemptHistory.length > 0 &&
+        intentFingerprints.get(value.field.fieldId) === fingerprint;
+      if (prior !== undefined && !retryableFailure && !verifiedRemountRestore) denied();
       if (prior !== undefined) record.attemptHistory = [...prior.attemptHistory];
       records.set(value.field.fieldId, record);
+      intentFingerprints.set(value.field.fieldId, fingerprint);
       operations.set(value.operationId, value.field.fieldId);
       if (pendingBatch !== null) batchFields.add(value.field.fieldId);
     },
@@ -369,6 +380,23 @@ export function createQuestionAnswerLearningCapture(input: {
       }
     },
   });
+}
+
+function answerIntentFingerprint(intent: FieldIntent): string {
+  const desired = intent.kind === "text"
+    ? intent.value
+    : intent.kind === "choice"
+      ? intent.expectedOption
+      : intent.kind === "toggle"
+        ? String(intent.checked)
+        : intent.kind === "date"
+          ? intent.isoDate
+          : `${intent.artifact.resumeId}\0${intent.artifact.sha256}`;
+  const behavior = intent.kind === "choice" ? "choice" : intent.behavior;
+  return createHash("sha256").update(
+    `${intent.kind}\0${behavior}\0${intent.provenance}\0${desired}`,
+    "utf8",
+  ).digest("hex");
 }
 
 export function admitPendingProfileQuestionsEvidence(
