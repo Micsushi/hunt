@@ -59,6 +59,7 @@ export type QuestionAnswerLearningStrategy =
   | "needs_owner_input";
 
 export interface QuestionAnswerLearningRecordV2 {
+  readonly pageId: string;
   readonly questionId: string;
   readonly fieldId: string;
   readonly label: string;
@@ -100,8 +101,8 @@ export interface QuestionAnswerAttemptV1 {
 }
 
 export interface QuestionAnswerLearningEvidenceV2 {
-  readonly schemaVersion: 4;
-  readonly evidenceRevision: "s2-question-answer-learning-v4";
+  readonly schemaVersion: 5;
+  readonly evidenceRevision: "s2-question-answer-learning-v5";
   readonly page: "questionnaire";
   readonly executionMode: AnswerExecutionMode;
   readonly testOnly: boolean;
@@ -122,6 +123,8 @@ export type PendingQuestionConstraintsV1 =
     };
 
 export interface PendingProfileQuestionV1 {
+  readonly pageId: string;
+  readonly rowKey: string | null;
   readonly questionId: string;
   readonly fieldId: string;
   readonly exactQuestion: string;
@@ -142,14 +145,15 @@ export interface PendingProfileQuestionV1 {
 }
 
 export interface PendingProfileQuestionsEvidenceV1 {
-  readonly schemaVersion: 1;
-  readonly evidenceRevision: "s2-pending-profile-questions-v1";
+  readonly schemaVersion: 2;
+  readonly evidenceRevision: "s2-pending-profile-questions-v2";
   readonly pendingProfileQuestions: readonly PendingProfileQuestionV1[];
 }
 
 export interface QuestionAnswerLearningCapture {
   recordPendingProfile?(input: PendingProfileQuestionV1): void;
   recordAttempt(input: {
+    readonly pageId?: string;
     readonly operationId: string;
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
@@ -164,12 +168,14 @@ export interface QuestionAnswerLearningCapture {
       | "cached_option_unavailable";
   }): void;
   recordObserved(input: {
+    readonly pageId?: string;
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
     readonly conditionalReveal?: boolean;
     readonly semanticQuestionType?: TestingQuestionSemanticType;
   }): void;
   record(input: {
+    readonly pageId?: string;
     readonly operationId: string;
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
@@ -181,6 +187,7 @@ export interface QuestionAnswerLearningCapture {
     readonly semanticQuestionType?: TestingQuestionSemanticType;
   }): void;
   recordUnset(input: {
+    readonly pageId?: string;
     readonly questionId: QuestionId;
     readonly field: FieldObservation;
     readonly conditionalReveal?: boolean;
@@ -224,16 +231,18 @@ export function createQuestionAnswerLearningCapture(input: {
   return Object.freeze({
     recordPendingProfile(value: PendingProfileQuestionV1) {
       const admitted = admitPendingProfileQuestionsEvidence({
-        schemaVersion: 1,
-        evidenceRevision: "s2-pending-profile-questions-v1",
+        schemaVersion: 2,
+        evidenceRevision: "s2-pending-profile-questions-v2",
         pendingProfileQuestions: [value],
       }).pendingProfileQuestions[0]!;
-      if (records.has(admitted.fieldId) || profilePending.has(admitted.fieldId)) denied();
-      profilePending.set(admitted.fieldId, admitted);
+      const key = pendingIdentity(admitted);
+      if (records.has(key) || profilePending.has(key)) denied();
+      profilePending.set(key, admitted);
     },
     recordAttempt(value: Parameters<QuestionAnswerLearningCapture["recordAttempt"]>[0]) {
       if (operations.has(value.operationId)) denied();
-      const prior = records.get(value.field.fieldId);
+      const key = questionIdentity(evidencePageId(value.pageId), value.field.fieldId);
+      const prior = records.get(key);
       const record = answerRecord(value, "pending");
       const fingerprint = answerIntentFingerprint(value.intent);
       const retryableFailure = prior !== undefined &&
@@ -245,7 +254,7 @@ export function createQuestionAnswerLearningCapture(input: {
         prior.interactionState === "attempted" &&
         prior.terminalDisposition === "verified" &&
         retainedOrProvisionalAttempts(prior) > 0 &&
-        intentFingerprints.get(value.field.fieldId) === fingerprint;
+        intentFingerprints.get(key) === fingerprint;
       const observedOnly = prior !== undefined &&
         prior.interactionState === "not_attempted" &&
         prior.terminalDisposition === "needs_owner_input";
@@ -270,10 +279,10 @@ export function createQuestionAnswerLearningCapture(input: {
         record.attemptHistory = [...prior.attemptHistory];
         record.provisionalAttempts = [...prior.provisionalAttempts];
       }
-      records.set(value.field.fieldId, record);
-      intentFingerprints.set(value.field.fieldId, fingerprint);
-      operations.set(value.operationId, value.field.fieldId);
-      if (pendingBatch !== null) batchFields.add(value.field.fieldId);
+      records.set(key, record);
+      intentFingerprints.set(key, fingerprint);
+      operations.set(value.operationId, key);
+      if (pendingBatch !== null) batchFields.add(key);
     },
     recordObserved(value: Parameters<QuestionAnswerLearningCapture["recordObserved"]>[0]) {
       observeQuestion(records, value);
@@ -359,7 +368,7 @@ export function createQuestionAnswerLearningCapture(input: {
       batchFields.clear();
     },
     write() {
-      if (written || records.size === 0) return null;
+      if (written || records.size === 0 && profilePending.size === 0) return null;
       written = true;
       try {
         const questions = [...records.values()].map(freezeRecord);
@@ -373,8 +382,8 @@ export function createQuestionAnswerLearningCapture(input: {
             : []),
         ]);
         const pending = admitPendingProfileQuestionsEvidence({
-          schemaVersion: 1,
-          evidenceRevision: "s2-pending-profile-questions-v1",
+          schemaVersion: 2,
+          evidenceRevision: "s2-pending-profile-questions-v2",
           pendingProfileQuestions: [
             ...profilePending.values(),
             ...[...records.values()]
@@ -393,9 +402,10 @@ export function createQuestionAnswerLearningCapture(input: {
           label: "pending profile questions",
           fileName: "pending-profile-questions.json",
         });
+        if (questions.length === 0) return null;
         const evidence = admitQuestionAnswerLearningEvidence({
-          schemaVersion: 4,
-          evidenceRevision: "s2-question-answer-learning-v4",
+          schemaVersion: 5,
+          evidenceRevision: "s2-question-answer-learning-v5",
           page: "questionnaire",
           executionMode: input.mode,
           testOnly: input.mode === "synthetic_test_non_submittable",
@@ -425,9 +435,12 @@ function observeQuestion(
   records: Map<string, MutableQuestionRecord>,
   value: Parameters<QuestionAnswerLearningCapture["recordObserved"]>[0],
 ): void {
-  const prior = records.get(value.field.fieldId);
+  const pageId = evidencePageId(value.pageId);
+  const key = questionIdentity(pageId, value.field.fieldId);
+  const prior = records.get(key);
   if (prior?.interactionState === "attempted") return;
-  records.set(value.field.fieldId, {
+  records.set(key, {
+    pageId,
     questionId: value.questionId,
     fieldId: value.field.fieldId,
     label: value.field.label,
@@ -482,8 +495,8 @@ export function admitPendingProfileQuestionsEvidence(
 ): PendingProfileQuestionsEvidenceV1 {
   if (
     !exactKeys(value, ["schemaVersion", "evidenceRevision", "pendingProfileQuestions"]) ||
-    value.schemaVersion !== 1 ||
-    value.evidenceRevision !== "s2-pending-profile-questions-v1" ||
+    value.schemaVersion !== 2 ||
+    value.evidenceRevision !== "s2-pending-profile-questions-v2" ||
     !Array.isArray(value.pendingProfileQuestions) ||
     value.pendingProfileQuestions.length > 128
   ) denied();
@@ -491,13 +504,15 @@ export function admitPendingProfileQuestionsEvidence(
   for (const question of value.pendingProfileQuestions) {
     if (
       !exactKeys(question, [
-        "questionId", "fieldId", "exactQuestion", "required", "semanticQuestionType",
+        "pageId", "rowKey", "questionId", "fieldId", "exactQuestion", "required", "semanticQuestionType",
         "answerType", "controlType", "options", "constraints", "conditionalReveal",
         "testDefault", "actualOwnerValue", "needsUserValue", "provenance", "validation",
         "committedReadback",
       ]) ||
+      !identifier(question.pageId) ||
+      !(question.rowKey === null || identifier(question.rowKey)) ||
       !identifier(question.questionId) || !identifier(question.fieldId) ||
-      fields.has(question.fieldId) || !bounded(question.exactQuestion, 512) ||
+      fields.has(pendingIdentity(question)) || !bounded(question.exactQuestion, 512) ||
       typeof question.required !== "boolean" ||
       !testingQuestionTypes.has(question.semanticQuestionType) ||
       !answerTypes.has(question.answerType) || !isSupportedUiBehavior(question.controlType) ||
@@ -515,7 +530,7 @@ export function admitPendingProfileQuestionsEvidence(
         ? question.testDefault === null || question.committedReadback !== question.testDefault
         : question.committedReadback !== null)
     ) denied();
-    fields.add(question.fieldId);
+    fields.add(pendingIdentity(question));
   }
   return Object.freeze({
     ...value,
@@ -533,8 +548,8 @@ export function admitQuestionAnswerLearningEvidence(
       "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
       "liveAcceptanceEligible", "questions",
     ]) ||
-    value.schemaVersion !== 4 ||
-    value.evidenceRevision !== "s2-question-answer-learning-v4" ||
+    value.schemaVersion !== 5 ||
+    value.evidenceRevision !== "s2-question-answer-learning-v5" ||
     value.page !== "questionnaire" ||
     !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
     value.questions.length < 1 || value.questions.length > 128
@@ -543,14 +558,14 @@ export function admitQuestionAnswerLearningEvidence(
   for (const record of value.questions) {
     if (
       !exactKeys(record, [
-        "questionId", "fieldId", "label", "required", "uiType", "answerType",
+        "pageId", "questionId", "fieldId", "label", "required", "uiType", "answerType",
         "possibleAnswers", "answerState", "lane", "chosenAnswer", "strategy", "provenance",
         "replaceWithOwnerAnswer", "interactionState", "monitorBinding",
         "verificationResult", "failureCode", "retryable", "terminalDisposition",
         "attemptHistory",
       ]) ||
-      !identifier(record.questionId) || !identifier(record.fieldId) ||
-      !bounded(record.label, 512) || fields.has(record.fieldId) ||
+      !identifier(record.pageId) || !identifier(record.questionId) || !identifier(record.fieldId) ||
+      !bounded(record.label, 512) || fields.has(questionIdentity(record.pageId, record.fieldId)) ||
       typeof record.required !== "boolean" || !isSupportedUiBehavior(record.uiType) ||
       !answerTypes.has(record.answerType) || record.possibleAnswers.length > 128 ||
       record.possibleAnswers.some((answer) => !bounded(answer, 512)) ||
@@ -574,7 +589,7 @@ export function admitQuestionAnswerLearningEvidence(
       typeof record.replaceWithOwnerAnswer !== "boolean" ||
       !validAttemptOutcome(record) || !validAttemptHistory(record)
     ) denied();
-    fields.add(record.fieldId);
+    fields.add(questionIdentity(record.pageId, record.fieldId));
   }
   const eligible = value.executionMode === "live" &&
     value.questions.every(liveEligibleQuestion);
@@ -696,6 +711,7 @@ interface MutableQuestionRecord extends Omit<{
 }
 
 function answerRecord(value: {
+  readonly pageId?: string;
   readonly operationId: string;
   readonly questionId: QuestionId;
   readonly field: FieldObservation;
@@ -707,6 +723,7 @@ function answerRecord(value: {
   readonly semanticQuestionType?: TestingQuestionSemanticType;
 }, disposition: "pending"): MutableQuestionRecord {
   return {
+    pageId: evidencePageId(value.pageId),
     questionId: value.questionId,
     fieldId: value.field.fieldId,
     label: value.field.label,
@@ -749,6 +766,8 @@ function needsPendingProfileQuestion(record: MutableQuestionRecord): boolean {
 function pendingProfileQuestion(record: MutableQuestionRecord): PendingProfileQuestionV1 {
   const testDefault = record.answerState === "answered" ? record.chosenAnswer : null;
   return Object.freeze({
+    pageId: record.pageId,
+    rowKey: null,
     questionId: record.questionId,
     fieldId: record.fieldId,
     exactQuestion: record.label,
@@ -766,6 +785,18 @@ function pendingProfileQuestion(record: MutableQuestionRecord): PendingProfileQu
     validation: record.verificationResult,
     committedReadback: record.verificationResult === "verified" ? testDefault : null,
   });
+}
+
+function questionIdentity(pageId: string, fieldId: string): string {
+  return `${pageId}\u0000${fieldId}`;
+}
+
+function evidencePageId(value: string | undefined): string {
+  return value ?? "questionnaire-page-unspecified";
+}
+
+function pendingIdentity(value: Pick<PendingProfileQuestionV1, "pageId" | "rowKey" | "fieldId">): string {
+  return `${value.pageId}\u0000${value.rowKey ?? ""}\u0000${value.fieldId}`;
 }
 
 function observedQuestionConstraints(

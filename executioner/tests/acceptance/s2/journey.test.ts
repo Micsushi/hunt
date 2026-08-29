@@ -109,11 +109,15 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
   const evidenceRoot = resolve(root, "evidence");
   mkdirSync(evidenceRoot);
   const calls: string[] = [];
+  const timingEvents: string[] = [];
   let accepted: unknown;
   try {
     const result = await runStage2RealJourney(
       invocation(evidenceRoot),
-      binding(runtime(calls, evidenceRoot)),
+      binding({
+        ...runtime(calls, evidenceRoot),
+        timing: { record(event) { timingEvents.push(event); } },
+      }),
       {
         now: () => "2026-08-05T12:00:00.000Z",
         writeAcceptance: async (_root, value) => {
@@ -129,6 +133,10 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     );
 
     assert.equal(result.ok, true);
+    assert.deepEqual(timingEvents, [
+      "runtime_review_verification_completed",
+      "runtime_review_acceptance_sealing_completed",
+    ]);
     assert.deepEqual(calls, [
       "runtime.bind",
       "account.verify",
@@ -176,6 +184,40 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     assert.equal(manifest.privacyScan, "pass");
     assert.equal(manifest.retention.rawDomRetained, false);
     assert.equal(manifest.retention.screenshotsRetained, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an abort after independently verified Review cannot rewrite the committed terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-review-commit-abort-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const controller = new AbortController();
+  const calls: string[] = [];
+  const value = runtime(calls, evidenceRoot);
+  const capture = value.review.capture;
+  value.review.capture = async (signal) => {
+    const result = await capture(signal);
+    controller.abort();
+    return result;
+  };
+  let acceptanceWrites = 0;
+  try {
+    const result = await runStage2RealJourney(
+      invocation(evidenceRoot),
+      binding(value),
+      { ...ports(), writeAcceptance: async () => { acceptanceWrites += 1; } },
+      controller.signal,
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.terminal.status, "review_reached");
+    assert.equal(acceptanceWrites, 1);
+    assert.equal(calls.includes("privacy.forbiddenTokens"), true);
+    assert.equal(calls.at(-1), "cleanup.close");
+    assert.equal(JSON.parse(readFileSync(
+      join(evidenceRoot, "terminal-artifact.json"), "utf8",
+    )).resultCode, "review_reached");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

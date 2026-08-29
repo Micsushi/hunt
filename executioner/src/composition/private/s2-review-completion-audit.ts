@@ -245,8 +245,15 @@ function questionLearningDigest(
   const pendingPath = join(root, "pending-profile-questions.json");
   const expectedAnswers = questionnaires.flatMap(({ answers }) => answers);
   if (questionnaires.length === 0) {
-    if (existsSync(path) || existsSync(pendingPath)) denied();
-    return Object.freeze({ answerLearningSha256: null, pendingProfileSha256: null });
+    if (existsSync(path)) denied();
+    if (!existsSync(pendingPath)) {
+      if (syntheticProfileOccurrences(application).length !== 0) denied();
+      return Object.freeze({ answerLearningSha256: null, pendingProfileSha256: null });
+    }
+    const pendingBytes = readStableFile(pendingPath, 128 * 1024);
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(pendingBytes.toString("utf8")));
+    validatePendingProfileQuestions(null, pending, application);
+    return Object.freeze({ answerLearningSha256: null, pendingProfileSha256: digest(pendingBytes) });
   }
   const bytes = readStableFile(path, 128 * 1024);
   const learning = admitQuestionAnswerLearningEvidence(JSON.parse(bytes.toString("utf8")));
@@ -254,7 +261,7 @@ function questionLearningDigest(
   const pending = admitPendingProfileQuestionsEvidence(
     JSON.parse(pendingBytes.toString("utf8")),
   );
-  validatePendingProfileQuestions(learning, pending);
+  validatePendingProfileQuestions(learning, pending, application);
   if (expectedAnswers.length === 0) {
     const questionnaireChecks = application.pageChecks.filter(({ page }) =>
       page === "questionnaire"
@@ -289,7 +296,7 @@ function questionLearningDigest(
       pendingProfileSha256: digest(pendingBytes),
     });
   }
-  const synthetic = expectedAnswers.some(({ lane }) => lane === "synthetic_test_default");
+  const synthetic = application.executionMode === "synthetic_test_non_submittable";
   if (
     learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
     learning.testOnly !== synthetic ||
@@ -297,6 +304,7 @@ function questionLearningDigest(
     learning.questions.length !== expectedAnswers.length ||
     expectedAnswers.some((answer) => {
       const matches = learning.questions.filter((question) =>
+        question.pageId === answer.pageId &&
         question.fieldId === answer.fieldId &&
         question.questionId === answer.questionId &&
         question.provenance === answer.provenance &&
@@ -321,23 +329,30 @@ function questionLearningDigest(
 }
 
 function validatePendingProfileQuestions(
-  learning: QuestionAnswerLearningEvidenceV2,
+  learning: QuestionAnswerLearningEvidenceV2 | null,
   pending: PendingProfileQuestionsEvidenceV1,
+  application: ApplicationWalkAcceptanceV1,
 ): void {
-  const expected = learning.questions.filter(({ replaceWithOwnerAnswer, provenance }) =>
+  const expected = (learning?.questions ?? []).filter(({ replaceWithOwnerAnswer, provenance }) =>
     replaceWithOwnerAnswer && provenance !== "resume_verified"
   );
-  const profilePending = pending.pendingProfileQuestions.filter(({ fieldId }) =>
-    fieldId.startsWith("profile.unknown.")
+  const profileOccurrences = syntheticProfileOccurrences(application);
+  const profilePending = pending.pendingProfileQuestions.filter(({ pageId, rowKey, fieldId }) =>
+    profileOccurrences.some((occurrence) => occurrence.pageId === pageId &&
+      occurrence.rowKey === rowKey && occurrence.fieldId === fieldId)
   );
-  const questionnairePending = pending.pendingProfileQuestions.filter(({ fieldId }) =>
-    !fieldId.startsWith("profile.unknown.")
+  const questionnairePending = pending.pendingProfileQuestions.filter((candidate) =>
+    !profilePending.includes(candidate)
   );
   if (
     questionnairePending.length !== expected.length ||
+    profilePending.length !== profileOccurrences.length ||
+    profileOccurrences.some((occurrence) => profilePending.filter((candidate) =>
+      candidate.pageId === occurrence.pageId && candidate.rowKey === occurrence.rowKey &&
+      candidate.fieldId === occurrence.fieldId
+    ).length !== 1) ||
     profilePending.some((candidate) =>
-      !/^profile\.unknown\.(?:required|optional)\.\d+$/u.test(candidate.fieldId) ||
-      candidate.questionId !== `question.${candidate.fieldId}` ||
+      candidate.questionId !== `question.profile.${candidate.fieldId}` ||
       candidate.semanticQuestionType !== "unknown" ||
       candidate.actualOwnerValue !== null || !candidate.needsUserValue ||
       candidate.provenance !== "visible_option" || candidate.validation !== "verified" ||
@@ -345,6 +360,7 @@ function validatePendingProfileQuestions(
     ) ||
     expected.some((question) => {
       const matches = questionnairePending.filter((candidate) =>
+        candidate.pageId === question.pageId && candidate.rowKey === null &&
         candidate.questionId === question.questionId &&
         candidate.fieldId === question.fieldId &&
         candidate.exactQuestion === question.label &&
@@ -373,6 +389,22 @@ function validatePendingProfileQuestions(
               "inputType" in candidate.constraints));
     })
   ) denied();
+}
+
+function syntheticProfileOccurrences(application: ApplicationWalkAcceptanceV1): readonly {
+  readonly pageId: string;
+  readonly rowKey: string | null;
+  readonly fieldId: string;
+}[] {
+  return application.laneAcceptances.flatMap((lane) =>
+    lane.checkpoint !== "profile_verified" ? [] : lane.verifiedFields
+      .filter(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+      .map(({ fieldId, rowKey }) => Object.freeze({
+        pageId: lane.pageId,
+        rowKey: rowKey ?? null,
+        fieldId,
+      }))
+  );
 }
 
 function profileLearningDigest(
@@ -429,11 +461,7 @@ function profileLearningDigest(
     const answeredFields = learning.fields.filter(({ answerState }) =>
       answerState === "answered"
     );
-    const synthetic = profile.verifiedFields.some(({ lane }) => lane === "synthetic_test_default") ||
-      application.laneAcceptances.some((acceptance) =>
-        acceptance.checkpoint === "profile_verified" &&
-        acceptance.verifiedFields.some(({ lane }) => lane === "synthetic_test_default")
-      );
+    const synthetic = application.executionMode === "synthetic_test_non_submittable";
     const matchesVerified = (field: ProfileFieldLearningEvidenceV2["fields"][number]) =>
       profile.verifiedFields.filter((verified) =>
         field.fieldIdentity === `profile.${verified.fieldId}` &&
@@ -588,12 +616,47 @@ function uniqueMonitorBindings<T extends { readonly operationId: string; readonl
 function validateValueFreeTrace(path: string, application: ApplicationWalkAcceptanceV1): void {
   const records = readValueFreeRunTrace(path);
   const started = records.filter(({ event }) => event === "application_walk_started");
+  const progress = records.filter(({ event }) => event === "application_walk_progress");
   const terminal = records.filter(({ event }) => event === "application_walk_terminal");
+  const requiredPhases = [
+    "runtime_setup_completed",
+    "runtime_authentication_completed",
+    "runtime_review_capture_completed",
+    "runtime_review_verification_completed",
+    "runtime_review_acceptance_sealing_completed",
+    "runtime_evidence_sealing_completed",
+    "runtime_cleanup_completed",
+  ];
   if (started.length !== 1 || terminal.length !== 1 ||
+      progress.length !== application.pageChecks.length ||
       started[0]?.details.journeyId !== application.journeyId ||
+      typeof started[0]?.details.startedAt !== "string" ||
+      started[0]?.details.monotonicClock !== "performance_now" ||
       terminal[0]?.details.journeyId !== application.journeyId ||
       terminal[0]?.details.status !== "passed" ||
+      !Number.isSafeInteger(terminal[0]?.details.totalDurationMs) ||
+      terminal[0]?.details.monotonicClock !== "performance_now" ||
       terminal[0]?.details.submitActivated !== false ||
+      progress.some(({ details }) =>
+        !Number.isSafeInteger(details.pageReadinessDurationMs) ||
+        !Number.isSafeInteger(details.navigationWaitDurationMs) ||
+        !Number.isSafeInteger(details.activeFillDurationMs) ||
+        !Number.isSafeInteger(details.reconciliationDurationMs) ||
+        details.activeFillSloMs !== 60_000 ||
+        details.activeFillWithinSlo !== true ||
+        details.monotonicClock !== "performance_now" ||
+        typeof details.pageReadyAt !== "string" ||
+        typeof details.pageFillCompletedAt !== "string" ||
+        (details.reconciliationDurationMs as number) > (details.activeFillDurationMs as number)
+      ) ||
+      requiredPhases.some((event) => {
+        const phases = records.filter((record) => record.event === event);
+        return phases.length !== 1 || phases[0]?.details.phasePassed !== true ||
+          !Number.isSafeInteger(phases[0]?.details.durationMs);
+      }) ||
+      records.filter(({ event }) => event === "runtime_email_retrieval_completed")
+        .some(({ details }) => details.phasePassed !== true ||
+          !Number.isSafeInteger(details.durationMs)) ||
       records.some(({ details }) => details.submitActivated === true)) denied();
 }
 

@@ -79,6 +79,8 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly kind: "application_walk_started";
       readonly journeyId: string;
       readonly stopAfter: ApplicationCheckpoint;
+      readonly startedAt: string;
+      readonly monotonicClock: "performance_now";
       readonly submitActivated: false;
     }
   | {
@@ -95,6 +97,15 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly answerTypes: readonly string[];
       readonly uiBehaviors: readonly string[];
       readonly provenances: readonly string[];
+      readonly pageReadyAt: string;
+      readonly pageFillCompletedAt: string;
+      readonly pageReadinessDurationMs: number;
+      readonly navigationWaitDurationMs: number;
+      readonly activeFillDurationMs: number;
+      readonly reconciliationDurationMs: number;
+      readonly activeFillSloMs: 60_000;
+      readonly activeFillWithinSlo: boolean;
+      readonly monotonicClock: "performance_now";
       readonly submitActivated: false;
     }
   | {
@@ -108,27 +119,72 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly classifier?: string;
       readonly primitive?: string;
       readonly unknownLayer?: string;
+      readonly totalDurationMs: number;
+      readonly monotonicClock: "performance_now";
       readonly submitActivated: false;
     };
+
+export interface Stage2ApplicationWalkTimingClock {
+  readonly monotonicNow: () => number;
+  readonly wallNow: () => string;
+}
+
+export interface Stage2ObservedApplicationWalkOptions extends ApplicationWalkOptions {
+  readonly timingClock?: Stage2ApplicationWalkTimingClock;
+}
 
 export async function runObservedApplicationPageWalk(
   dependencies: Pick<Stage2ApplicationWalkDependencies, "walk" | "laneAcceptances" | "trace">,
   input: ApplicationWalkInput,
   signal: AbortSignal,
-  options: ApplicationWalkOptions = {},
+  options: Stage2ObservedApplicationWalkOptions = {},
 ): Promise<ApplicationWalkResult> {
+  const clock = options.timingClock ?? Object.freeze({
+    monotonicNow: () => performance.now(),
+    wallNow: () => new Date().toISOString(),
+  });
+  const totalStarted = clock.monotonicNow();
+  const startedAt = clock.wallNow();
   emitTrace(dependencies.trace, {
     kind: "application_walk_started",
     journeyId: input.journeyId,
     stopAfter: input.stopAfter ?? "pre_review",
+    startedAt,
+    monotonicClock: "performance_now",
     submitActivated: false,
   });
+  const timing = new ApplicationWalkTimingCollector(clock);
   const walk = dependencies.trace === undefined ? dependencies.walk : {
     ...dependencies.walk,
+    observer: {
+      async observe(observeSignal: AbortSignal) {
+        const began = clock.monotonicNow();
+        const result = await dependencies.walk.observer.observe(observeSignal);
+        timing.observed(result, clock.wallNow(), elapsed(clock, began));
+        return result;
+      },
+    },
+    handlers: {
+      resume: timing.handler("resume", dependencies.walk.handlers.resume),
+      profile: timing.handler("profile", dependencies.walk.handlers.profile),
+      questionnaire: timing.handler("questionnaire", dependencies.walk.handlers.questionnaire),
+    },
+    navigation: {
+      async next(
+        request: Parameters<ApplicationWalkDependencies["navigation"]["next"]>[0],
+        navigationSignal: AbortSignal,
+      ) {
+        const began = clock.monotonicNow();
+        const result = await dependencies.walk.navigation.next(request, navigationSignal);
+        timing.navigated(elapsed(clock, began));
+        return result;
+      },
+    },
     progress: {
       async record(progress: ApplicationWalkProgress, progressSignal: AbortSignal) {
+        const pageTiming = timing.complete(progress.checkpoint);
         const result = await dependencies.walk.progress.record(progress, progressSignal);
-        if (result.ok) emitProgress(dependencies, input.journeyId, progress);
+        if (result.ok) emitProgress(dependencies, input.journeyId, progress, pageTiming);
         return result;
       },
     },
@@ -142,6 +198,8 @@ export async function runObservedApplicationPageWalk(
       checkpoint: result.value.checkpoint,
       completedPages: result.value.completedPages,
       failure: null,
+      totalDurationMs: elapsed(clock, totalStarted),
+      monotonicClock: "performance_now",
       submitActivated: false,
     } : {
       kind: "application_walk_terminal",
@@ -154,6 +212,8 @@ export async function runObservedApplicationPageWalk(
       classifier: result.error.failure.classifier,
       primitive: result.error.failure.primitive,
       unknownLayer: result.error.failure.unknownLayer,
+      totalDurationMs: elapsed(clock, totalStarted),
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
     return result;
@@ -165,6 +225,8 @@ export async function runObservedApplicationPageWalk(
       checkpoint: "unknown",
       completedPages: 0,
       failure: null,
+      totalDurationMs: elapsed(clock, totalStarted),
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
     throw error;
@@ -250,11 +312,17 @@ export async function runStage2ApplicationWalk(
 
   let acceptance: ApplicationWalkAcceptanceV1;
   try {
+    const laneAcceptances = dependencies.laneAcceptances.snapshot(walk.value.checkpoint);
+    const executionMode = laneAcceptances.find((lane) =>
+      lane.checkpoint === "profile_verified"
+    )?.executionMode;
+    if (executionMode === undefined) throw new TypeError("execution mode evidence unavailable");
     acceptance = Object.freeze({
       schemaVersion: 1,
       evidenceRevision: "s2-application-walk-acceptance-v1",
       checkpoint: walk.value.checkpoint,
       status: "passed",
+      executionMode,
       sourceRevision: input.sourceRevision,
       revisionId: input.revisionId,
       approvalId: input.approvalId,
@@ -264,9 +332,7 @@ export async function runStage2ApplicationWalk(
       pageChecks: Object.freeze(walk.value.pageChecks.map((item) =>
         Object.freeze({ ...item })
       )),
-      laneAcceptances: dependencies.laneAcceptances.snapshot(
-        walk.value.checkpoint,
-      ),
+      laneAcceptances,
       submitActivated: false,
       privacyScan: "pass",
       cleanup: "pass",
@@ -282,6 +348,7 @@ function emitProgress(
   dependencies: Pick<Stage2ApplicationWalkDependencies, "laneAcceptances" | "trace">,
   journeyId: string,
   progress: ApplicationWalkProgress,
+  timing: CompletedPageTiming,
 ): void {
   try {
     const lanes = dependencies.laneAcceptances.snapshot(progress.checkpoint);
@@ -321,11 +388,118 @@ function emitProgress(
         ...profile.map(({ provenance }) => provenance),
         ...questionnaire.map(({ provenance }) => provenance),
       ]),
+      ...timing,
       submitActivated: false,
     });
   } catch {
     // Diagnostics never change application behavior.
   }
+}
+
+const ACTIVE_FILL_SLO_MS = 60_000 as const;
+
+interface CompletedPageTiming {
+  readonly pageReadyAt: string;
+  readonly pageFillCompletedAt: string;
+  readonly pageReadinessDurationMs: number;
+  readonly navigationWaitDurationMs: number;
+  readonly activeFillDurationMs: number;
+  readonly reconciliationDurationMs: number;
+  readonly activeFillSloMs: 60_000;
+  readonly activeFillWithinSlo: boolean;
+  readonly monotonicClock: "performance_now";
+}
+
+interface ActivePageTiming {
+  readonly checkpoint: ApplicationCheckpoint;
+  readonly pageId: string;
+  readonly activeStarted: number;
+  readonly pageReadyAt: string;
+  readonly pageReadinessDurationMs: number;
+  readonly navigationWaitDurationMs: number;
+  reconciliationDurationMs: number;
+}
+
+class ApplicationWalkTimingCollector {
+  readonly #clock: Stage2ApplicationWalkTimingClock;
+  readonly #ready = new Map<string, { at: string; durationMs: number }>();
+  readonly #active: ActivePageTiming[] = [];
+  #navigationWaitDurationMs = 0;
+
+  constructor(clock: Stage2ApplicationWalkTimingClock) {
+    this.#clock = clock;
+  }
+
+  observed(result: Awaited<ReturnType<ApplicationWalkDependencies["observer"]["observe"]>>, at: string, durationMs: number): void {
+    if (result.ok) this.#ready.set(result.value.pageId, { at, durationMs });
+  }
+
+  navigated(durationMs: number): void {
+    this.#navigationWaitDurationMs = durationMs;
+  }
+
+  handler<Page extends "resume" | "profile" | "questionnaire">(
+    page: Page,
+    handler: ApplicationWalkDependencies["handlers"][Page],
+  ): ApplicationWalkDependencies["handlers"][Page] {
+    return Object.freeze({
+      reconcile: async (
+        request: Parameters<ApplicationWalkDependencies["handlers"][Page]["reconcile"]>[0],
+        signal: AbortSignal,
+      ) => {
+        const checkpoint = page === "resume" ? "resume_verified"
+          : page === "profile" ? "profile_verified" : "questionnaire_verified";
+        let active = this.#active.find((item) =>
+          item.checkpoint === checkpoint && item.pageId === request.pageId
+        );
+        if (active === undefined) {
+          const ready = this.#ready.get(request.pageId) ?? {
+            at: this.#clock.wallNow(),
+            durationMs: 0,
+          };
+          active = {
+            checkpoint,
+            pageId: request.pageId,
+            activeStarted: this.#clock.monotonicNow(),
+            pageReadyAt: ready.at,
+            pageReadinessDurationMs: ready.durationMs,
+            navigationWaitDurationMs: this.#navigationWaitDurationMs,
+            reconciliationDurationMs: 0,
+          };
+          this.#active.push(active);
+          this.#navigationWaitDurationMs = 0;
+        }
+        const began = this.#clock.monotonicNow();
+        try {
+          return await handler.reconcile(request, signal);
+        } finally {
+          active.reconciliationDurationMs += elapsed(this.#clock, began);
+        }
+      },
+    }) as ApplicationWalkDependencies["handlers"][Page];
+  }
+
+  complete(checkpoint: ApplicationCheckpoint): CompletedPageTiming {
+    const index = this.#active.findIndex((item) => item.checkpoint === checkpoint);
+    const active = index === -1 ? undefined : this.#active.splice(index, 1)[0];
+    if (active === undefined) throw new TypeError("application page timing unavailable");
+    const activeFillDurationMs = elapsed(this.#clock, active.activeStarted);
+    return Object.freeze({
+      pageReadyAt: active.pageReadyAt,
+      pageFillCompletedAt: this.#clock.wallNow(),
+      pageReadinessDurationMs: active.pageReadinessDurationMs,
+      navigationWaitDurationMs: active.navigationWaitDurationMs,
+      activeFillDurationMs,
+      reconciliationDurationMs: active.reconciliationDurationMs,
+      activeFillSloMs: ACTIVE_FILL_SLO_MS,
+      activeFillWithinSlo: activeFillDurationMs <= ACTIVE_FILL_SLO_MS,
+      monotonicClock: "performance_now",
+    });
+  }
+}
+
+function elapsed(clock: Stage2ApplicationWalkTimingClock, started: number): number {
+  return Math.max(0, Math.round(clock.monotonicNow() - started));
 }
 
 function unique(values: readonly string[]): readonly string[] {

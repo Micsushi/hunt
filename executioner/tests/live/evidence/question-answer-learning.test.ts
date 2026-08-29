@@ -12,6 +12,7 @@ import {
   questionId,
 } from "../../../src/contracts/index.ts";
 import {
+  admitPendingProfileQuestionsEvidence,
   admitQuestionAnswerLearningEvidence,
   createQuestionAnswerLearningCapture,
   type QuestionAnswerLearningCapture,
@@ -64,6 +65,7 @@ test("question learning stores observed choices, fallback, provenance, and repla
       readFileSync(join(root, "question-answer-learning.json"), "utf8"),
     ));
     assert.deepEqual(evidence.questions, [{
+      pageId: "questionnaire-page-unspecified",
       questionId: "observed-question-0123456789abcdef01234567",
       fieldId: "question-gender",
       label: "Gender",
@@ -95,6 +97,8 @@ test("question learning stores observed choices, fallback, provenance, and repla
       "utf8",
     ));
     assert.deepEqual(pending.pendingProfileQuestions, [{
+      pageId: "questionnaire-page-unspecified",
+      rowKey: null,
       questionId: "observed-question-0123456789abcdef01234567",
       fieldId: "question-gender",
       exactQuestion: "Gender",
@@ -254,6 +258,7 @@ test("question learning proves explicit unset without applicant values", () => {
 
 test("question learning strictly rejects absent, invalid, extra, or synthetic live lanes", () => {
   const record = {
+    pageId: "questionnaire-page-unspecified",
     questionId: "question-owner-answer",
     fieldId: "field-owner-answer",
     label: "Owner answer",
@@ -281,8 +286,8 @@ test("question learning strictly rejects absent, invalid, extra, or synthetic li
     }],
   } as const;
   const base = {
-    schemaVersion: 4 as const,
-    evidenceRevision: "s2-question-answer-learning-v4" as const,
+    schemaVersion: 5 as const,
+    evidenceRevision: "s2-question-answer-learning-v5" as const,
     page: "questionnaire" as const,
     executionMode: "live" as const,
     testOnly: false,
@@ -302,6 +307,7 @@ test("question learning strictly rejects absent, invalid, extra, or synthetic li
 
 test("question learning rejects hostile failure codes and retryable verified attempts", () => {
   const verified = {
+    pageId: "questionnaire-page-unspecified",
     questionId: "question-owner-answer",
     fieldId: "field-owner-answer",
     label: "Owner answer",
@@ -329,8 +335,8 @@ test("question learning rejects hostile failure codes and retryable verified att
     }],
   } as const;
   const base = {
-    schemaVersion: 4 as const,
-    evidenceRevision: "s2-question-answer-learning-v4" as const,
+    schemaVersion: 5 as const,
+    evidenceRevision: "s2-question-answer-learning-v5" as const,
     page: "questionnaire" as const,
     executionMode: "live" as const,
     testOnly: false,
@@ -822,6 +828,78 @@ test("one open production batch retains and ACKs same-field synthetic option rep
     ]);
     assert.deepEqual(evidence.questions[0]?.attemptHistory.map(({ attempt }) => attempt), [1, 1]);
     assert.equal(evidence.questions[0]?.monitorBinding?.operationId, batchOperationId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one run capture retains the same field identity on two questionnaire pages", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-pages-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const value = ownerChoice(60);
+    recordVerified(capture, { ...value, pageId: "questionnaire-page-1" }, 60);
+    recordVerified(capture, { ...value, pageId: "questionnaire-page-2" }, 61);
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(evidence.questions.map(({ pageId, fieldId: id }) => ({ pageId, id })), [
+      { pageId: "questionnaire-page-1", id: "field-owner-60" },
+      { pageId: "questionnaire-page-2", id: "field-owner-60" },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Profile-only pending evidence keeps exact page row and field occurrences", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-only-pending-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    for (const value of [
+      { pageId: "profile-page-1", rowKey: null },
+      { pageId: "profile-page-2", rowKey: "experience-row-1" },
+    ] as const) capture.recordPendingProfile?.({
+      ...value,
+      questionId: questionId("question-profile-unknown-required-1"),
+      fieldId: "unknown.required.1",
+      exactQuestion: "Additional required information",
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      options: [],
+      constraints: null,
+      conditionalReveal: false,
+      testDefault: "Synthetic owner review",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "visible_option",
+      validation: "verified",
+      committedReadback: "Synthetic owner review",
+    });
+    assert.equal(capture.write(), null);
+    assert.throws(() => readFileSync(join(root, "question-answer-learning.json")));
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"), "utf8",
+    )));
+    assert.deepEqual(pending.pendingProfileQuestions.map(({ pageId, rowKey, fieldId }) => ({
+      pageId,
+      rowKey,
+      fieldId,
+    })), [
+      { pageId: "profile-page-1", rowKey: null, fieldId: "unknown.required.1" },
+      {
+        pageId: "profile-page-2",
+        rowKey: "experience-row-1",
+        fieldId: "unknown.required.1",
+      },
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

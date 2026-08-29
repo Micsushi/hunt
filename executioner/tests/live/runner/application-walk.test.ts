@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  runObservedApplicationPageWalk,
   runStage2ApplicationWalk,
   type ApplicationWalkAcceptanceWriter,
   type Stage2ApplicationWalkTraceEvent,
@@ -29,7 +30,7 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
       snapshot() {
         calls.push("snapshot");
         return [
-          { checkpoint: "profile_verified" },
+          { checkpoint: "profile_verified", executionMode: "live" },
           { checkpoint: "resume_verified" },
           { checkpoint: "questionnaire_verified" },
         ] as never;
@@ -245,6 +246,8 @@ test("traces value-free page progress with question, answer, UI, and provenance 
         return [{
           schemaVersion: 1,
           checkpoint: "profile_verified",
+          pageId: "page-profile",
+          executionMode: "live",
           pageType: "profile",
           verifiedFields: [{
             fieldId: "identity.given_name",
@@ -277,6 +280,41 @@ test("traces value-free page progress with question, answer, UI, and provenance 
   assert.equal(progress.requiredFields, 1);
   assert.equal(progress.verifiedFields, 1);
   assert.equal(progress.submitActivated, false);
+});
+
+test("retains monotonic active-fill timing separately from readiness and navigation", async () => {
+  const trace: Stage2ApplicationWalkTraceEvent[] = [];
+  let monotonic = 0;
+  let wall = 0;
+  const result = await runObservedApplicationPageWalk({
+    walk: dependenciesFor([truth("profile"), truth("profile")], []),
+    laneAcceptances: { snapshot: () => [] },
+    trace: (event) => trace.push(event),
+  }, {
+    journeyId: walkFixture.journeyId,
+    stopAfter: "profile_verified",
+  }, new AbortController().signal, {
+    timingClock: {
+      monotonicNow: () => monotonic += 10,
+      wallNow: () => new Date(Date.UTC(2026, 7, 10, 12, 0, 0, wall += 100)).toISOString(),
+    },
+  });
+
+  assert.equal(result.ok, true);
+  const progress = trace.find(({ kind }) => kind === "application_walk_progress");
+  assert.equal(progress?.kind, "application_walk_progress");
+  if (progress?.kind !== "application_walk_progress") return;
+  assert.equal(progress.activeFillSloMs, 60_000);
+  assert.equal(progress.activeFillWithinSlo, true);
+  assert.equal(progress.activeFillDurationMs >= progress.reconciliationDurationMs, true);
+  assert.equal(progress.pageReadinessDurationMs >= 0, true);
+  assert.equal(progress.navigationWaitDurationMs, 0);
+  assert.match(progress.pageReadyAt, /Z$/u);
+  const terminal = trace.at(-1);
+  assert.equal(terminal?.kind, "application_walk_terminal");
+  if (terminal?.kind === "application_walk_terminal") {
+    assert.equal(terminal.totalDurationMs > 0, true);
+  }
 });
 
 function input() {

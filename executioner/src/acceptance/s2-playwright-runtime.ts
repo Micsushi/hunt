@@ -169,6 +169,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       request: Stage2ApplicationWalkRuntimeBindingRequest,
       signal: AbortSignal,
     ) {
+      const setupStarted = performance.now();
       if (signal.aborted) throw new TypeError("Playwright runtime binding denied");
       const target = targetFor(request);
       const revisionId = request.owner.revisionId;
@@ -246,15 +247,26 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           target,
         }, signal);
       } catch (error) {
-        valueFreeTrace?.("runtime_browser_open_failed", { stage: "exception" });
+        valueFreeTrace?.("runtime_browser_open_failed", {
+          durationMs: monotonicDuration(setupStarted),
+          phasePassed: false,
+        });
         externalMonitor?.close();
         throw error;
       }
       if (!opened.ok) {
-        valueFreeTrace?.("runtime_browser_open_failed", { code: opened.error.code });
+        valueFreeTrace?.("runtime_browser_open_failed", {
+          code: opened.error.code,
+          durationMs: monotonicDuration(setupStarted),
+          phasePassed: false,
+        });
         externalMonitor?.close();
         throw new TypeError("Playwright runtime binding denied");
       }
+      valueFreeTrace?.("runtime_setup_completed", {
+        durationMs: monotonicDuration(setupStarted),
+        phasePassed: true,
+      });
 
       const session = opened.value.session;
       let accountVerification: Promise<Stage2UnsealedAccountProofResult> | undefined;
@@ -347,6 +359,13 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       });
 
       return Object.freeze({
+        ...(valueFreeTrace === undefined ? {} : {
+          timing: Object.freeze({
+            record(event: string, details: object) {
+              valueFreeTrace(event, details);
+            },
+          }),
+        }),
         walk: Object.freeze({ observer, navigation, handlers, progress }),
         laneAcceptances: acceptances,
         ...(valueFreeTrace === undefined ? {} : {
@@ -355,7 +374,20 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         account: Object.freeze({
           verify(activeSignal: AbortSignal) {
             if (accountVerification !== undefined) return accountVerification;
-            accountVerification = verifyAccount(activeSignal);
+            const started = performance.now();
+            accountVerification = verifyAccount(activeSignal).then((result) => {
+              valueFreeTrace?.("runtime_authentication_completed", {
+                durationMs: monotonicDuration(started),
+                phasePassed: result.ok,
+              });
+              return result;
+            }, (error: unknown) => {
+              valueFreeTrace?.("runtime_authentication_completed", {
+                durationMs: monotonicDuration(started),
+                phasePassed: false,
+              });
+              throw error;
+            });
             return accountVerification;
           },
         }),
@@ -398,7 +430,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         }),
         review: Object.freeze({
           async capture(activeSignal: AbortSignal) {
-            const captured = await access<{
+            const started = performance.now();
+            try {
+              const captured = await access<{
               readonly application: { readonly pageId: BrowserPageId };
               readonly structure: WorkdayReviewStructuralObservationV1;
               readonly review: {
@@ -406,9 +440,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
                 readonly verification: readonly { readonly kind: "verified"; readonly fieldId: FieldId }[];
               };
             }>({ kind: "capture_review" }, activeSignal);
-            if (!captured.ok) throw new TypeError("Review capture denied");
-            const pageId = captured.value.application.pageId;
-            return Object.freeze({
+              if (!captured.ok) throw new TypeError("Review capture denied");
+              const pageId = captured.value.application.pageId;
+              const result = Object.freeze({
               page: reviewSnapshotPage(captured.value.structure),
               request: Object.freeze({
                   state: Object.freeze({
@@ -427,7 +461,19 @@ export function createStage2PlaywrightLiveRuntimeBinding(
                     decision: Object.freeze({ kind: "stop_review" as const }),
                   }),
               }),
-            });
+              });
+              valueFreeTrace?.("runtime_review_capture_completed", {
+                durationMs: monotonicDuration(started),
+                phasePassed: true,
+              });
+              return result;
+            } catch (error) {
+              valueFreeTrace?.("runtime_review_capture_completed", {
+                durationMs: monotonicDuration(started),
+                phasePassed: false,
+              });
+              throw error;
+            }
           },
         }),
         privacy: Object.freeze({
@@ -498,6 +544,8 @@ export function createStage2PlaywrightLiveRuntimeBinding(
             return released.ok;
           },
           async close(activeSignal: AbortSignal, accepted?: boolean) {
+            const cleanupStarted = performance.now();
+            let cleanupPassed = false;
             const closeRequest = {
               schemaVersion: 1,
               journeyId: session.journeyId,
@@ -520,15 +568,31 @@ export function createStage2PlaywrightLiveRuntimeBinding(
                   activeSignal,
                   now,
                 )) return false;
+                const sealingStarted = performance.now();
                 if (!await sealAccountEvidence(
                   accountEvidenceRoot,
                   accountProof,
                   accountSensitiveValues,
-                )) return false;
+                )) {
+                  valueFreeTrace?.("runtime_evidence_sealing_completed", {
+                    durationMs: monotonicDuration(sealingStarted),
+                    phasePassed: false,
+                  });
+                  return false;
+                }
+                valueFreeTrace?.("runtime_evidence_sealing_completed", {
+                  durationMs: monotonicDuration(sealingStarted),
+                  phasePassed: true,
+                });
               }
               if (accepted === true) store.finalize();
+              cleanupPassed = true;
               return true;
             } finally {
+              valueFreeTrace?.("runtime_cleanup_completed", {
+                durationMs: monotonicDuration(cleanupStarted),
+                phasePassed: cleanupPassed,
+              });
               externalMonitor?.close();
               accountProof = undefined;
               accountSensitiveValues = undefined;
@@ -615,6 +679,10 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       }
     },
   });
+}
+
+function monotonicDuration(started: number): number {
+  return Math.max(0, Math.round(performance.now() - started));
 }
 
 interface AccountProofScope {

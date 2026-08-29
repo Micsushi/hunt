@@ -554,6 +554,7 @@ export async function runStage2AccountVerifiedInSession(
         owner: options.owner,
         secretStore,
         authorization,
+        trace: valueFreeTrace,
         create: (gmailAuthorization) => createBoundedVerificationMailboxPolling({
         clock: liveClock,
         authorizationExpiresAt: options.owner.approval.expiresAt,
@@ -792,6 +793,7 @@ export async function runStage2AccountVerifiedFromOwnerConfig(
       owner,
       secretStore,
       authorization,
+      trace: valueFreeTrace,
       create: (gmailAuthorization) => createBoundedVerificationMailboxPolling({
       clock: liveClock,
       authorizationExpiresAt: owner.approval.expiresAt,
@@ -1038,28 +1040,40 @@ export function createLazyGmailMailbox(options: {
   readonly secretStore: SecretStore;
   readonly authorization: AuthorizationRuntime;
   readonly create: (authorization: ActiveGmailSecretHandle) => MailboxProvider;
+  readonly trace?: (event: string, details?: object) => void;
 }): MailboxProvider {
   let mailbox: MailboxProvider | undefined;
   const lazy: MailboxProvider = {
     async poll(request, signal) {
-      if (mailbox === undefined) {
-        const inspected = await inspectAuthorizedSecret(options.secretStore, {
-          schemaVersion: 1,
-          journeyId: options.owner.journeyId as never,
-          handleId: options.owner.gmailAuthorization.handleId as SecretHandleId,
-          expectedPurpose: "gmail_oauth",
-          expectedConsumer: "gmail_auth_executor",
-        }, options.authorization);
-        if (!inspected.ok) return inspected;
-        if (!exactGmailMetadata(inspected.value, options.owner)) {
-          return {
-            ok: false,
-            error: { code: "secret_handle_mismatched", retryable: false },
-          } as const;
+      const started = performance.now();
+      let passed = false;
+      try {
+        if (mailbox === undefined) {
+          const inspected = await inspectAuthorizedSecret(options.secretStore, {
+            schemaVersion: 1,
+            journeyId: options.owner.journeyId as never,
+            handleId: options.owner.gmailAuthorization.handleId as SecretHandleId,
+            expectedPurpose: "gmail_oauth",
+            expectedConsumer: "gmail_auth_executor",
+          }, options.authorization);
+          if (!inspected.ok) return inspected;
+          if (!exactGmailMetadata(inspected.value, options.owner)) {
+            return {
+              ok: false,
+              error: { code: "secret_handle_mismatched", retryable: false },
+            } as const;
+          }
+          mailbox = options.create(inspected.value as ActiveGmailSecretHandle);
         }
-        mailbox = options.create(inspected.value as ActiveGmailSecretHandle);
+        const result = await mailbox.poll(request, signal);
+        passed = result.ok;
+        return result;
+      } finally {
+        options.trace?.("runtime_email_retrieval_completed", {
+          durationMs: Math.max(0, Math.round(performance.now() - started)),
+          phasePassed: passed,
+        });
       }
-      return mailbox.poll(request, signal);
     },
   };
   return Object.freeze(lazy);

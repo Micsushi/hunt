@@ -72,6 +72,13 @@ export interface Stage2ReadinessRunResult {
   readonly processCleanup: "pass" | "failed";
   readonly portCleanup: "pass" | "failed";
   readonly profileCleanup: "pass" | "failed";
+  readonly timingsMs: {
+    readonly setup: number;
+    readonly productionFlow: number;
+    readonly cleanup: number;
+    readonly total: number;
+    readonly monotonicClock: "performance_now";
+  };
   readonly submitActivated: false;
   readonly evidenceSha256?: string;
   readonly logFile: string;
@@ -206,6 +213,10 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
   readonly sourceRevision: string;
   readonly now: () => string;
 }): Promise<Stage2ReadinessRunResult> {
+  const runStarted = performance.now();
+  let setupDurationMs = 0;
+  let productionFlowDurationMs = 0;
+  let cleanupDurationMs = 0;
   const runId = `run_${new Date().toISOString().slice(0, 10).replace(/-/gu, "")}_${randomBytes(8).toString("hex")}`;
   const runRoot = join(options.storageRoot, "transient", runId);
   const evidenceRoot = join(options.storageRoot, "retained", runId, "evidence");
@@ -289,6 +300,8 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
     log(entry(options, "setup", "run_root_created", "pass"));
 
     log(entry(options, "child_spawn", "isolated_child_start", "started"));
+    setupDurationMs = readinessDuration(runStarted);
+    const productionStarted = performance.now();
     const timeout = setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
     const watchdog = setInterval(() => {
       if (monitor?.stale(WATCHDOG_STALE_MS)) {
@@ -318,6 +331,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
     } catch {
       failureClass ??= monitor.records === 0 ? "child_spawn" : "cleanup";
     } finally {
+      productionFlowDurationMs = readinessDuration(productionStarted);
       clearInterval(watchdog);
       clearTimeout(timeout);
     }
@@ -344,6 +358,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
   } catch (error) {
     failureClass ??= failureOf(error) ?? "setup";
   } finally {
+    const cleanupStarted = performance.now();
     if (!spawnAttempted) processCleanup = "pass";
     if (logger === undefined) {
       try {
@@ -391,6 +406,7 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
       failureClass,
       childPid,
     ));
+    cleanupDurationMs = readinessDuration(cleanupStarted);
   }
 
   return Object.freeze({
@@ -403,6 +419,13 @@ async function runOnce(options: Stage2SyntheticReadinessOptions & {
     processCleanup,
     portCleanup,
     profileCleanup,
+    timingsMs: Object.freeze({
+      setup: setupDurationMs,
+      productionFlow: productionFlowDurationMs,
+      cleanup: cleanupDurationMs,
+      total: readinessDuration(runStarted),
+      monotonicClock: "performance_now" as const,
+    }),
     submitActivated: false,
     ...(evidenceSha256 === undefined ? {} : { evidenceSha256 }),
     logFile: join(runId, logFile).replaceAll("\\", "/"),
@@ -604,11 +627,25 @@ function isCertificate(value: unknown): value is Stage2ReadinessCertificateV1 {
       run.runOrdinal === index + 1 && run.status === "pass" && run.failureClass === undefined &&
       run.monitorRecords === 10 && run.watchdogChecks >= 10 && run.processCleanup === "pass" &&
       run.portCleanup === "pass" && run.profileCleanup === "pass" && run.submitActivated === false &&
+      validReadinessTimings(run.timingsMs) &&
       typeof run.evidenceSha256 === "string" && /^[0-9a-f]{64}$/u.test(run.evidenceSha256)
     ) && typeof certificate.issuedAt === "string" && typeof certificate.expiresAt === "string" &&
     canonicalTimestamp(certificate.issuedAt) === certificate.issuedAt &&
     canonicalTimestamp(certificate.expiresAt) === certificate.expiresAt &&
     Date.parse(certificate.expiresAt) - Date.parse(certificate.issuedAt) === 24 * 60 * 60 * 1_000;
+}
+
+function validReadinessTimings(value: Stage2ReadinessRunResult["timingsMs"]): boolean {
+  return typeof value === "object" && value !== null &&
+    Object.keys(value).join("\0") === "setup\0productionFlow\0cleanup\0total\0monotonicClock" &&
+    value.monotonicClock === "performance_now" &&
+    [value.setup, value.productionFlow, value.cleanup, value.total].every((duration) =>
+      Number.isSafeInteger(duration) && duration >= 0 && duration <= 1_000_000
+    ) && value.total >= value.setup + value.productionFlow;
+}
+
+function readinessDuration(started: number): number {
+  return Math.max(0, Math.round(performance.now() - started));
 }
 
 function validMonitorTransition(history: readonly MonitorRecord[], record: MonitorRecord): boolean {

@@ -253,6 +253,23 @@ test("journey failure, cancellation, and Review mismatch seal retained evidence 
   }
 });
 
+test("a successful Review journey remains finalizable when cancellation arrives afterward", async () => {
+  const calls: string[] = [];
+  const dependencies = ports(calls);
+  const controller = new AbortController();
+  dependencies.journey.run = async () => {
+    calls.push("journey");
+    controller.abort();
+    return 0;
+  };
+  const result = await runStage2RealAcceptance(
+    layout("abcdefghijklmnop"), dependencies, controller.signal,
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.slice(-4), ["source", "config", "result", "finalize"]);
+  assert.equal(calls.includes("seal-failure"), false);
+});
+
 function ports(calls: string[]): Stage2AcceptanceGatePorts {
   return {
     source: {

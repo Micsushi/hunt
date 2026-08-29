@@ -27,6 +27,13 @@ test("the readiness certificate requires two clean consecutive runs and an exact
       processCleanup: "pass",
       portCleanup: "pass",
       profileCleanup: "pass",
+      timingsMs: {
+        setup: 100,
+        productionFlow: 500,
+        cleanup: 50,
+        total: 700,
+        monotonicClock: "performance_now",
+      },
       submitActivated: false,
       evidenceSha256: digest,
       logFile: `run_${runOrdinal}/value-free.ndjson`,

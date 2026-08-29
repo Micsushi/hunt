@@ -210,6 +210,7 @@ test("required narrative and fixed choices resolve canonically and independently
       kind: "verified",
       answers: [
         {
+          pageId: "page-questionnaire",
           fieldId: narrativeField.fieldId,
           questionId: "s1-question-configured-narrative",
           provenance: "configured_template",
@@ -219,6 +220,7 @@ test("required narrative and fixed choices resolve canonically and independently
           verification: "independent",
         },
         {
+          pageId: "page-questionnaire",
           fieldId: authorizationField.fieldId,
           questionId: "s1-question-work-authorization",
           provenance: "owner_provided",
@@ -228,6 +230,7 @@ test("required narrative and fixed choices resolve canonically and independently
           verification: "independent",
         },
         {
+          pageId: "page-questionnaire",
           fieldId: countryField.fieldId,
           questionId: "s1-question-country",
           provenance: "owner_provided",
@@ -609,6 +612,7 @@ test("an unresolved narrative requires owner input while other owner facts remai
     value: {
       kind: "verified",
       answers: [{
+        pageId: "page-questionnaire",
         fieldId: countryField.fieldId,
         questionId: "s1-question-country",
         provenance: "owner_provided",

@@ -2373,6 +2373,95 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
+test("canonical questionnaire binding survives an identity-losing React remount", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField">
+          <label for="react-control-17">Unseen required detail*</label>
+          <input id="react-control-17" name="react-name-17" required>
+        </div>
+      </main>
+    `);
+    const pageId = "page-react-canonical-remount" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const original = await page.locator("input").getAttribute("data-hunt-target-token");
+
+    await page.locator('[data-automation-id="formField"]').evaluate((owner) => {
+      owner.innerHTML = `
+        <label for="react-control-204">Unseen required detail*</label>
+        <input id="react-control-204" name="react-name-204" required value="committed">
+      `;
+    });
+    assert.equal(await page.locator('[data-hunt-target-token]').count(), 0);
+    await bindQuestionnaireTargets(page, pageId);
+
+    assert.equal(await page.locator("input").getAttribute("data-hunt-target-token"), original);
+    const observed = await inspectPage(
+      page,
+      "live_session_react_canonical_remount" as never,
+      pageId,
+      new Map(),
+    );
+    assert.equal([...observed.targets.values()].flat()[0]?.readback.kind, "text");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical discovery survives reorder, delayed reveal, and duplicate-label occurrences", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-slot="alpha" data-automation-id="formField"><label for="generated-1">Independent alpha*</label><input id="generated-1" required></div>
+      <div data-slot="beta" data-automation-id="formField"><label for="generated-2">Independent beta*</label><input id="generated-2" required></div>
+      <div data-slot="delayed" data-automation-id="formField" hidden><label for="generated-3">Conditional detail*</label><input id="generated-3" required></div>
+      <div data-slot="duplicate-1" data-automation-id="formField"><label for="generated-4">Repeated detail*</label><input id="generated-4" required></div>
+      <div data-slot="duplicate-2" data-automation-id="formField"><label for="generated-5">Repeated detail*</label><input id="generated-5" required></div>
+    </main>`);
+    const pageId = "page-perturbed-canonical-discovery" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const original = new Map<string, string | null>();
+    for (const slot of ["alpha", "beta"]) {
+      original.set(slot, await page.locator(`[data-slot="${slot}"] input`)
+        .getAttribute("data-hunt-target-token"));
+    }
+    const duplicateTokens = await page.locator('[data-slot^="duplicate-"] input')
+      .evaluateAll((inputs) => inputs.map((input) => input.getAttribute("data-hunt-target-token")));
+    assert.equal(new Set(duplicateTokens).size, 2);
+
+    await page.locator("main").evaluate((main) => {
+      const alpha = main.querySelector('[data-slot="alpha"]')!;
+      const beta = main.querySelector('[data-slot="beta"]')!;
+      main.insertBefore(beta, alpha);
+      for (const [index, input] of [...main.querySelectorAll("input")].entries()) {
+        input.removeAttribute("data-hunt-target-token");
+        const label = input.labels?.[0];
+        input.id = `react-remount-${100 + index}`;
+        input.setAttribute("name", `react-name-${100 + index}`);
+        label?.setAttribute("for", input.id);
+      }
+      (main.querySelector('[data-slot="delayed"]') as HTMLElement).hidden = false;
+    });
+    await bindQuestionnaireTargets(page, pageId);
+
+    assert.equal(await page.locator('[data-slot="alpha"] input')
+      .getAttribute("data-hunt-target-token"), original.get("alpha"));
+    assert.equal(await page.locator('[data-slot="beta"] input')
+      .getAttribute("data-hunt-target-token"), original.get("beta"));
+    assert.match(await page.locator('[data-slot="delayed"] input')
+      .getAttribute("data-hunt-target-token") ?? "", /^target-workday-/u);
+    const reboundDuplicates = await page.locator('[data-slot^="duplicate-"] input')
+      .evaluateAll((inputs) => inputs.map((input) => input.getAttribute("data-hunt-target-token")));
+    assert.equal(new Set(reboundDuplicates).size, 2);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("questionnaire binding distinguishes independent, exclusive, and multi checkbox semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

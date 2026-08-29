@@ -181,10 +181,41 @@ test("Review completion admits an observed unknown optional control left unset",
     writeFileSync(learningPath, learningBytes);
     const applicationPath = join(layout.evidenceRoot, "application-walk-acceptance.json");
     const application = JSON.parse(readFileSync(applicationPath, "utf8"));
+    application.executionMode = "synthetic_test_non_submittable";
+    application.laneAcceptances[0].executionMode = "synthetic_test_non_submittable";
     application.laneAcceptances[0].verifiedFields[0].provenance = "generated_default";
     application.laneAcceptances[0].verifiedFields[0].lane = "synthetic_test_default";
     application.laneAcceptances[0].profileFieldLearningSha256 = digest(learningBytes);
     writeFileSync(applicationPath, `${JSON.stringify(application)}\n`);
+    const questionPath = join(layout.evidenceRoot, "question-answer-learning.json");
+    const questionLearning = JSON.parse(readFileSync(questionPath, "utf8"));
+    questionLearning.executionMode = "synthetic_test_non_submittable";
+    questionLearning.testOnly = true;
+    questionLearning.liveAcceptanceEligible = false;
+    writeFileSync(questionPath, `${JSON.stringify(questionLearning)}\n`);
+    const pendingPath = join(layout.evidenceRoot, "pending-profile-questions.json");
+    const pending = JSON.parse(readFileSync(pendingPath, "utf8"));
+    pending.pendingProfileQuestions.push({
+      pageId: "profile-page-1",
+      rowKey: null,
+      questionId: "question.profile.identity.given_name",
+      fieldId: "identity.given_name",
+      exactQuestion: "First Name",
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      options: [],
+      constraints: null,
+      conditionalReveal: false,
+      testDefault: "Synthetic owner review",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "visible_option",
+      validation: "verified",
+      committedReadback: "Synthetic owner review",
+    });
+    writeFileSync(pendingPath, `${JSON.stringify(pending)}\n`);
 
     assert.equal(
       (await auditStage2Completion(layout.evidenceRoot) as { readonly status: string }).status,
@@ -208,13 +239,21 @@ test("Review completion admits one exact value-free application trace and reject
     trace("application_walk_started", {
       journeyId,
       stopAfter: "pre_review",
+      startedAt: "2026-08-10T12:00:00.000Z",
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
+    for (let ordinal = 1; ordinal <= 3; ordinal += 1) {
+      trace("application_walk_progress", timingDetails(ordinal));
+    }
+    writePhaseTimings(trace);
     trace("application_walk_terminal", {
       journeyId,
       status: "passed",
       checkpoint: "pre_review",
       completedPages: 3,
+      totalDurationMs: 3_000,
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
     assert.equal(
@@ -223,7 +262,11 @@ test("Review completion admits one exact value-free application trace and reject
     );
 
     const path = join(layout.evidenceRoot, "value-free-trace.ndjson");
-    const text = readFileSync(path, "utf8").replace('"status":"passed"', '"status":"failed"');
+    const original = readFileSync(path, "utf8");
+    writeFileSync(path, original.replace('"activeFillDurationMs":500', '"activeFillDurationMs":60001'));
+    await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+    writeFileSync(path, original);
+    const text = original.replace('"status":"passed"', '"status":"failed"');
     writeFileSync(path, text);
     await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
   } finally {
@@ -1118,12 +1161,12 @@ async function writeReviewEvidence(
       },
     }],
   }, null, 2)}\n`, "utf8");
-  if (combinedResumeProfile) {
+  if (combinedResumeProfile || syntheticQuestionnaire) {
     const learning = JSON.parse(learningBytes.toString("utf8"));
     learning.executionMode = "synthetic_test_non_submittable";
     learning.testOnly = true;
     learning.liveAcceptanceEligible = false;
-    learning.fields[0].lane = "synthetic_test_default";
+    if (combinedResumeProfile) learning.fields[0].lane = "synthetic_test_default";
     learningBytes = Buffer.from(`${JSON.stringify(learning, null, 2)}\n`, "utf8");
   }
   if (!directReview) {
@@ -1216,14 +1259,16 @@ async function writeReviewEvidence(
     combinedProfileFieldLearningSha256 = digest(combinedBytes);
   }
   if (!directReview) {
+    const syntheticRun = syntheticQuestionnaire || combinedResumeProfile;
     writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
-      schemaVersion: 4,
-      evidenceRevision: "s2-question-answer-learning-v4",
+      schemaVersion: 5,
+      evidenceRevision: "s2-question-answer-learning-v5",
       page: "questionnaire",
-      executionMode: syntheticQuestionnaire ? "synthetic_test_non_submittable" : "live",
-      testOnly: syntheticQuestionnaire,
-      liveAcceptanceEligible: !syntheticQuestionnaire,
+      executionMode: syntheticRun ? "synthetic_test_non_submittable" : "live",
+      testOnly: syntheticRun,
+      liveAcceptanceEligible: !syntheticRun,
       questions: [{
+        pageId: "questionnaire-page-1",
         questionId: "s1-question-work-authorization",
         fieldId: "authorization-answer",
         label: "Are you authorized to work in this location?",
@@ -1258,6 +1303,7 @@ async function writeReviewEvidence(
           retryable: false,
         }],
       }, ...(repeatedQuestionnaire ? [{
+        pageId: "questionnaire-page-2",
         questionId: "observed-question-0123456789abcdef01234567",
         fieldId: "privacy-answer",
         label: "Voluntary disclosure preference",
@@ -1294,9 +1340,11 @@ async function writeReviewEvidence(
       }] : [])],
     }, null, 2)}\n`);
     writeFileSync(join(root, "pending-profile-questions.json"), `${JSON.stringify({
-      schemaVersion: 1,
-      evidenceRevision: "s2-pending-profile-questions-v1",
-      pendingProfileQuestions: syntheticQuestionnaire ? [{
+      schemaVersion: 2,
+      evidenceRevision: "s2-pending-profile-questions-v2",
+      pendingProfileQuestions: [...(syntheticQuestionnaire ? [{
+        pageId: "questionnaire-page-1",
+        rowKey: null,
         questionId: "s1-question-work-authorization",
         fieldId: "authorization-answer",
         exactQuestion: "Are you authorized to work in this location?",
@@ -1313,7 +1361,26 @@ async function writeReviewEvidence(
         provenance: "reviewed_catalog",
         validation: "verified",
         committedReadback: "Yes",
-      }] : [],
+      }] : []), ...(combinedResumeProfile ? [{
+        pageId: "profile-page-1",
+        rowKey: null,
+        questionId: "question.profile.identity.given_name",
+        fieldId: "identity.given_name",
+        exactQuestion: "First Name",
+        required: true,
+        semanticQuestionType: "unknown",
+        answerType: "text",
+        controlType: "text",
+        options: [],
+        constraints: null,
+        conditionalReveal: false,
+        testDefault: "Synthetic owner review",
+        actualOwnerValue: null,
+        needsUserValue: true,
+        provenance: "visible_option",
+        validation: "verified",
+        committedReadback: "Synthetic owner review",
+      }] : [])],
     }, null, 2)}\n`);
   }
   await writeAccountVerifiedEvidence({
@@ -1448,11 +1515,25 @@ async function writeReviewEvidence(
   });
   if (writeTrace) {
     const trace = createValueFreeRunTrace(root, () => undefined);
+    const walk = applicationWalk(
+      "a".repeat(64),
+      skipResume,
+      directReview,
+      repeatedQuestionnaire,
+      false,
+      combinedResumeProfile ? "b".repeat(64) : undefined,
+    );
     trace("application_walk_started", {
       journeyId,
       stopAfter: "pre_review",
+      startedAt: "2026-08-10T12:00:00.000Z",
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
+    for (let ordinal = 1; ordinal <= walk.pageChecks.length; ordinal += 1) {
+      trace("application_walk_progress", timingDetails(ordinal));
+    }
+    writePhaseTimings(trace);
     trace("application_walk_terminal", {
       journeyId,
       status: "passed",
@@ -1460,9 +1541,39 @@ async function writeReviewEvidence(
       completedPages: directReview ? 1 : repeatedQuestionnaire || combinedResumeProfile
         ? 4
         : skipResume ? 2 : 3,
+      totalDurationMs: Math.max(1, walk.pageChecks.length) * 1_000,
+      monotonicClock: "performance_now",
       submitActivated: false,
     });
   }
+}
+
+function timingDetails(ordinal: number) {
+  return {
+    ordinal,
+    pageReadyAt: `2026-08-10T12:00:0${Math.min(ordinal, 9)}.000Z`,
+    pageFillCompletedAt: `2026-08-10T12:00:0${Math.min(ordinal, 9)}.500Z`,
+    pageReadinessDurationMs: 100,
+    navigationWaitDurationMs: ordinal === 1 ? 0 : 200,
+    activeFillDurationMs: 500,
+    reconciliationDurationMs: 400,
+    activeFillSloMs: 60_000,
+    activeFillWithinSlo: true,
+    monotonicClock: "performance_now",
+    submitActivated: false,
+  };
+}
+
+function writePhaseTimings(trace: (event: string, details?: object) => void): void {
+  for (const event of [
+    "runtime_setup_completed",
+    "runtime_authentication_completed",
+    "runtime_review_capture_completed",
+    "runtime_review_verification_completed",
+    "runtime_review_acceptance_sealing_completed",
+    "runtime_evidence_sealing_completed",
+    "runtime_cleanup_completed",
+  ]) trace(event, { durationMs: 100, phasePassed: true });
 }
 
 function writeProcessAudit(root: string, checkedAt: string, configSha256: string): void {
@@ -1828,7 +1939,12 @@ function applicationWalk(
   ];
   const questionnaire = questionnaireAcceptance();
   const laneAcceptances = [
-    profileAcceptance(profileFieldLearningSha256, combinedProfileFieldLearningSha256 !== undefined),
+    profileAcceptance(
+      profileFieldLearningSha256,
+      syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined,
+      "identity.given_name",
+      combinedProfileFieldLearningSha256 !== undefined,
+    ),
     resumeAcceptance(),
     syntheticQuestionnaire ? { ...questionnaire, answers: [] } : questionnaire,
   ];
@@ -1836,8 +1952,9 @@ function applicationWalk(
     pageChecks.splice(2, 0, pageCheck("profile", "profile_verified", 0));
     laneAcceptances.splice(2, 0, profileAcceptance(
       combinedProfileFieldLearningSha256,
-      false,
+      true,
       "social.linkedin",
+      false,
     ));
   }
   if (repeatedQuestionnaire) {
@@ -1862,6 +1979,9 @@ function applicationWalk(
     evidenceRevision: "s2-application-walk-acceptance-v1" as const,
     checkpoint: "pre_review" as const,
     status: "passed" as const,
+    executionMode: syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined
+      ? "synthetic_test_non_submittable" as const
+      : "live" as const,
     sourceRevision,
     revisionId,
     approvalId,
@@ -1887,12 +2007,15 @@ function applicationWalk(
 
 function profileAcceptance(
   profileFieldLearningSha256: string,
-  synthetic = false,
+  syntheticMode = false,
   field = "identity.given_name",
+  generated = false,
 ) {
   return {
     schemaVersion: 1 as const,
     checkpoint: "profile_verified" as const,
+    pageId: field === "social.linkedin" ? "profile-page-2" as never : "profile-page-1" as never,
+    executionMode: syntheticMode ? "synthetic_test_non_submittable" as const : "live" as const,
     pageType: "profile" as const,
     verifiedFields: [{
       fieldId: field,
@@ -1900,8 +2023,8 @@ function profileAcceptance(
       answerType: field === "social.linkedin" ? "url" as const : "text" as const,
       uiBehavior: "text" as const,
       uiVariant: "workday_text_v2",
-      provenance: synthetic ? "generated_default" as const : "owner_provided" as const,
-      lane: synthetic ? "synthetic_test_default" as const : "live_owner_fact" as const,
+      provenance: generated ? "generated_default" as const : "owner_provided" as const,
+      lane: generated ? "synthetic_test_default" as const : "live_owner_fact" as const,
     }],
     ownedDuplicateRows: 0 as const,
     independentlyVerified: true as const,
@@ -1944,6 +2067,9 @@ function questionnaireAcceptance(
     schemaVersion: 1 as const,
     checkpoint: "questionnaire_verified" as const,
     answers: [{
+      pageId: answerFieldId === "privacy-answer"
+        ? "questionnaire-page-2" as never
+        : "questionnaire-page-1" as never,
       fieldId: fieldId(answerFieldId),
       questionId: questionId(answerQuestionId),
       provenance,

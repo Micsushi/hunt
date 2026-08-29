@@ -778,6 +778,8 @@ export class OwnedWorkdayApplicationRuntime {
         this.#acceptances.record(Object.freeze({
           schemaVersion: 1,
           checkpoint: "profile_verified",
+          pageId: input.pageId,
+          executionMode: request.ownerSources.profilePlan.mode,
           pageType: result.pageType,
           verifiedFields: result.verifiedFields,
           ownedDuplicateRows: 0,
@@ -790,8 +792,10 @@ export class OwnedWorkdayApplicationRuntime {
         }));
         for (const field of result.committedFields.filter(({ synthetic }) => synthetic)) {
           request.questionLearning?.recordPendingProfile?.({
+            pageId: input.pageId,
+            rowKey: field.rowKey ?? null,
             questionId: `question.profile.${field.fieldId}`,
-            fieldId: `profile.${field.fieldId}`,
+            fieldId: field.fieldId,
             exactQuestion: field.label,
             required: field.required,
             semanticQuestionType: "unknown",
@@ -1372,11 +1376,14 @@ export class OwnedWorkdayApplicationRuntime {
             operation: attempt.intent.kind,
             observedOptionCount: attempt.field.options.length,
           };
-          questionLearning.recordAttempt(attempt);
+          questionLearning.recordAttempt({ ...attempt, pageId: input.pageId });
         },
-        recordObserved: questionLearning?.recordObserved,
-        recordAnswer: questionLearning?.record,
-        recordUnset: questionLearning?.recordUnset,
+        recordObserved: questionLearning === undefined ? undefined : (value) =>
+          questionLearning.recordObserved({ ...value, pageId: input.pageId }),
+        recordAnswer: questionLearning === undefined ? undefined : (value) =>
+          questionLearning.record({ ...value, pageId: input.pageId }),
+        recordUnset: questionLearning === undefined ? undefined : (value) =>
+          questionLearning.recordUnset({ ...value, pageId: input.pageId }),
         recordFailure: questionLearning?.recordFailure,
       });
       let completed: Awaited<ReturnType<typeof questionnaire.complete>>;
@@ -1570,7 +1577,7 @@ export class OwnedWorkdayApplicationRuntime {
               { sessionId: semanticSessionId },
               AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000)),
             ).then(() => undefined),
-        writeLearning: () => questionLearning?.write() ?? null,
+        writeLearning: () => causalError === undefined ? null : questionLearning?.write() ?? null,
         trace: (details) => this.#trace?.("questionnaire_semantic_finalized", details),
       });
     }
@@ -3044,12 +3051,6 @@ export async function bindQuestionnaireTargets(
       }
       if (label === "") label = normalize(control.getAttribute("placeholder"));
       const fieldIdentity = field?.getAttribute("data-automation-id") ?? "";
-      // Workday regenerates ids such as mcvf1 whenever React remounts a field.
-      // A target remains the same question across that remount, so bind it to
-      // the stable form-field owner and label instead of the ephemeral id.
-      const stableControlId = /^mcvf\d+$/iu.test(control.id)
-        ? fieldIdentity
-        : control.id;
       const reviewed: Record<string, string> = {
         "Given name": "target-s1-field-given-name",
         "Family name": "target-s1-field-family-name",
@@ -3068,8 +3069,6 @@ export async function bindQuestionnaireTargets(
         control.getAttribute("role") ?? "",
         control.getAttribute("data-automation-id") ?? "",
         fieldIdentity,
-        stableControlId,
-        control.getAttribute("name") ?? "",
         ...(isConditionalApplicationDate
           ? [field?.getAttribute("data-automation-id") ?? field?.id ?? ""]
           : []),

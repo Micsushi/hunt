@@ -21,7 +21,7 @@ export interface Stage2RealJourneyLiveRuntimeBinding {
     signal: AbortSignal,
   ): Promise<
     Omit<Stage2ApplicationWalkDependencies, "evidence"> &
-    Pick<Stage2RealJourneyRuntime, "account" | "recovery" | "review" | "privacy">
+    Pick<Stage2RealJourneyRuntime, "account" | "recovery" | "review" | "privacy" | "timing">
   >;
 }
 
@@ -73,6 +73,7 @@ export function createStage2RealJourneyProductionBinding(
       let applicationAcceptance:
         Parameters<Stage2ApplicationWalkDependencies["evidence"]["write"]>[0] | undefined;
       return Object.freeze({
+        ...(bound.timing === undefined ? {} : { timing: bound.timing }),
         account: bound.account,
         recovery: bound.recovery,
         application: Object.freeze({
@@ -87,11 +88,21 @@ export function createStage2RealJourneyProductionBinding(
               { resume },
             );
             if (walk.ok) {
+              const laneAcceptances = resolved.dependencies.laneAcceptances.snapshot(
+                walk.value.checkpoint,
+              );
+              const executionMode = laneAcceptances.find((lane) =>
+                lane.checkpoint === "profile_verified"
+              )?.executionMode;
+              if (executionMode === undefined) {
+                throw new TypeError("execution mode evidence unavailable");
+              }
               applicationAcceptance = Object.freeze({
                 schemaVersion: 1,
                 evidenceRevision: "s2-application-walk-acceptance-v1",
                 checkpoint: walk.value.checkpoint,
                 status: "passed",
+                executionMode,
                 sourceRevision: resolved.input.sourceRevision,
                 revisionId: resolved.input.revisionId,
                 approvalId: resolved.input.approvalId,
@@ -99,7 +110,7 @@ export function createStage2RealJourneyProductionBinding(
                 targetHandleId: resolved.input.targetHandleId,
                 completedPages: walk.value.completedPages,
                 pageChecks: Object.freeze(walk.value.pageChecks.map((item) => Object.freeze({ ...item }))),
-                laneAcceptances: resolved.dependencies.laneAcceptances.snapshot(walk.value.checkpoint),
+                laneAcceptances,
                 submitActivated: false,
                 privacyScan: "pass",
                 cleanup: "pass",

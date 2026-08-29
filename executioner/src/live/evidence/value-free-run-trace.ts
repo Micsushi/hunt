@@ -79,6 +79,7 @@ const STRING_KEYS = new Set([
   "profileInspectionPreservationReason", "learningConversion", "executionMode",
   "errorType", "priorCommittedState", "observedState", "underlyingError",
   "operation", "replacementReason",
+  "monotonicClock",
 ]);
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
@@ -115,6 +116,8 @@ const NUMBER_KEYS = new Set([
   "reboundDateDistinctSvgCount", "reboundDateJointOwnerCount",
   "profileInspectionRetryCount", "profileInspectionDeadlineMs", "profileInspectionElapsedMs",
   "durationMs",
+  "totalDurationMs", "pageReadinessDurationMs", "navigationWaitDurationMs",
+  "activeFillDurationMs", "reconciliationDurationMs", "activeFillSloMs",
   "remountGeneration", "conditionalDelta", "observedOptionCount",
   "profileInspectionAttemptCount", "profileInspectionFrameCount", "profileMetadataMismatchCount",
   "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
@@ -131,6 +134,11 @@ const BOOLEAN_KEYS = new Set([
   "profileInspectionPreservationEligible", "profileInspectionContinueAllowed",
   "testOnly", "mutationAllowed", "defaultsGenerated",
   "learningPresent", "committedReadbackMatches",
+  "activeFillWithinSlo",
+  "phasePassed",
+]);
+const TIMESTAMP_KEYS = new Set([
+  "startedAt", "pageReadyAt", "pageFillCompletedAt",
 ]);
 const ARRAY_KEYS = new Set([
   "controlTypes", "questionTypes", "answerTypes", "browserLanes", "uiBehaviors", "provenances",
@@ -161,7 +169,10 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
   if (value === undefined || value === null || Array.isArray(value)) return Object.freeze({});
   const output: Record<string, boolean | number | string | readonly string[] | readonly number[]> = {};
   for (const [key, candidate] of Object.entries(value)) {
-    if (PROFILE_INSPECTION_DIGEST_KEYS.has(key) && typeof candidate === "string" &&
+    if (TIMESTAMP_KEYS.has(key) && typeof candidate === "string" &&
+        canonicalTimestamp(candidate)) {
+      output[key] = candidate;
+    } else if (PROFILE_INSPECTION_DIGEST_KEYS.has(key) && typeof candidate === "string" &&
         /^[0-9a-f]{64}$/u.test(candidate)) {
       output[key] = candidate;
     } else if (STRING_KEYS.has(key) && typeof candidate === "string" &&
@@ -190,6 +201,11 @@ function sanitize(value: object | undefined): Readonly<Record<string, boolean | 
     }
   }
   return Object.freeze(output);
+}
+
+function canonicalTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value) &&
+    new Date(Date.parse(value)).toISOString() === value;
 }
 
 function profileInspectionIdentifier(key: string, value: string): boolean {

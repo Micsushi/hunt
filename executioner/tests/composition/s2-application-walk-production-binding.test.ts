@@ -52,8 +52,10 @@ test("production binding resolves opaque owner sources without value leakage", a
         assert.equal(request.ownerSources.profilePlan.fields[0]?.answer.kind, "answered");
         assert.equal(request.ownerSources.profileId, "profile-owner-approved");
         collector.record({
-          schemaVersion: 1,
-          checkpoint: "profile_verified",
+        schemaVersion: 1,
+        checkpoint: "profile_verified",
+        pageId: "profile-page-1" as never,
+        executionMode: "live",
           pageType: "profile",
           verifiedFields: [],
           ownedDuplicateRows: 0,
@@ -320,6 +322,8 @@ test("production application graph routes approval expiry through release cleanu
     collector.record({
       schemaVersion: 1,
       checkpoint: "profile_verified",
+      pageId: "profile-page-1" as never,
+      executionMode: "live",
       pageType: "profile",
       verifiedFields: [],
       ownedDuplicateRows: 0,
@@ -686,8 +690,10 @@ test("outer Review binding resolves owner sources and retains only live browser 
       async bind(request) {
         calls.push("live.bind");
         collector.record({
-          schemaVersion: 1,
-          checkpoint: "profile_verified",
+        schemaVersion: 1,
+        checkpoint: "profile_verified",
+        pageId: "profile-page-1" as never,
+        executionMode: "live",
           pageType: "profile",
           verifiedFields: [],
           ownedDuplicateRows: 0,

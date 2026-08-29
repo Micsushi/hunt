@@ -50,6 +50,9 @@ export interface Stage2RealJourneyRecoveryPlan {
 }
 
 export interface Stage2RealJourneyRuntime {
+  readonly timing?: {
+    record(event: string, details: object): void;
+  };
   readonly account: {
     verify(signal: AbortSignal): Promise<Stage2UnsealedAccountProofResult>;
   };
@@ -161,10 +164,19 @@ export async function runStage2RealJourney(
 
   const pending = await executeBoundJourney(invocation, runtime, ports, signal);
   let result: Stage2RealJourneyResult | undefined;
-  if (pending.ok && !signal.aborted) {
+  if (pending.ok) {
+    const evidenceStarted = performance.now();
     try {
       await ports.writeAcceptance(invocation.args.evidenceRoot, pending.acceptance);
+      runtime.timing?.record("runtime_review_acceptance_sealing_completed", {
+        durationMs: journeyDuration(evidenceStarted),
+        phasePassed: true,
+      });
     } catch {
+      runtime.timing?.record("runtime_review_acceptance_sealing_completed", {
+        durationMs: journeyDuration(evidenceStarted),
+        phasePassed: false,
+      });
       const retained = await closeRuntime(runtime, false);
       result = retained
         ? errorFailure(invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3)
@@ -180,10 +192,6 @@ export async function runStage2RealJourney(
           invocation.config.journeyId, "cleanup_failed", "browser_profile_cleanup_failed", 3,
         ));
     }
-  } else if (pending.ok) {
-    const outcome = cancelled(invocation.config.journeyId, pending.terminal.completedPages);
-    const cleaned = await closeRuntime(runtime, false);
-    result = cleaned ? outcome : withCleanupFailure(outcome);
   } else {
     const outcome = signal.aborted
       ? cancelled(invocation.config.journeyId, pending.terminal.completedPages)
@@ -417,11 +425,20 @@ async function executeBoundJourney(
   const completedPages = application.value.completedPages;
   if (signal.aborted) return cancelled(invocation.config.journeyId, completedPages);
   let review: ReturnType<typeof stopAtVerifiedReview>;
+  const reviewStarted = performance.now();
   try {
     const captured = await runtime.review.capture(signal);
     const structure = await inspectWorkdayReview(captured.page);
     review = stopAtVerifiedReview({ ...captured.request, structure });
+    runtime.timing?.record("runtime_review_verification_completed", {
+      durationMs: journeyDuration(reviewStarted),
+      phasePassed: review.kind === "review_confirmed",
+    });
   } catch {
+    runtime.timing?.record("runtime_review_verification_completed", {
+      durationMs: journeyDuration(reviewStarted),
+      phasePassed: false,
+    });
     return signal.aborted
       ? cancelled(invocation.config.journeyId, completedPages)
       : errorFailure(
@@ -446,9 +463,11 @@ async function executeBoundJourney(
     );
   }
 
-  if (signal.aborted) return cancelled(invocation.config.journeyId, completedPages);
+  // Review is the terminal commit point. Cancellation observed after the
+  // independently verified Review proof must not rewrite that fact.
+  const finalizationSignal = AbortSignal.timeout(10_000);
   try {
-    const forbiddenTokens = await runtime.privacy.forbiddenTokens(signal);
+    const forbiddenTokens = await runtime.privacy.forbiddenTokens(finalizationSignal);
     if (forbiddenTokens.length === 0) {
       return errorFailure(
         invocation.config.journeyId,
@@ -522,14 +541,12 @@ async function executeBoundJourney(
       forbiddenTokens,
     });
   } catch {
-    return signal.aborted
-      ? cancelled(invocation.config.journeyId, completedPages)
-      : errorFailure(
-          invocation.config.journeyId,
-          "evidence_failed",
-          "mcp_internal_error",
-          completedPages,
-        );
+    return errorFailure(
+      invocation.config.journeyId,
+      "evidence_failed",
+      "mcp_internal_error",
+      completedPages,
+    );
   }
 
   return {
@@ -660,6 +677,10 @@ function reviewTerminal(journeyId: string, completedPages: number): TerminalResu
     status: "review_reached",
     completedPages: boundedPages(completedPages),
   };
+}
+
+function journeyDuration(started: number): number {
+  return Math.max(0, Math.round(performance.now() - started));
 }
 
 function boundedPages(value: number): number {

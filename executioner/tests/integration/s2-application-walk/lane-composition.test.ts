@@ -145,12 +145,14 @@ test("adapts T1-T3 lane ports into independently verified walk checkpoints", asy
 test("collector retains cumulative answers across consecutive questionnaire pages", () => {
   const collector = createApplicationLaneAcceptanceCollector();
   const proof = (
+    page: string,
     answerFieldId: string,
     answerQuestionId: string,
   ) => ({
     schemaVersion: 1 as const,
     checkpoint: "questionnaire_verified" as const,
     answers: [{
+      pageId: page as never,
       fieldId: fieldId(answerFieldId),
       questionId: questionId(answerQuestionId),
       provenance: "owner_provided" as const,
@@ -164,9 +166,9 @@ test("collector retains cumulative answers across consecutive questionnaire page
     submitActivated: false as const,
     privacyScan: "pass" as const,
   });
-  collector.record(proof("first-answer", "first-question"));
-  collector.record(proof("second-answer", "second-question"));
-  collector.record({ ...proof("second-answer", "second-question"), answers: [] });
+  collector.record(proof("questionnaire-page-1", "same-answer", "same-question"));
+  collector.record(proof("questionnaire-page-2", "same-answer", "same-question"));
+  collector.record({ ...proof("questionnaire-page-2", "same-answer", "same-question"), answers: [] });
 
   const snapshot = collector.snapshot("questionnaire_verified");
   assert.equal(snapshot.length, 1);
@@ -174,9 +176,9 @@ test("collector retains cumulative answers across consecutive questionnaire page
   assert.equal(questionnaire?.checkpoint, "questionnaire_verified");
   assert.deepEqual(
     questionnaire?.checkpoint === "questionnaire_verified"
-      ? questionnaire.answers.map(({ fieldId: id }) => id)
+      ? questionnaire.answers.map(({ pageId }) => pageId)
       : [],
-    ["first-answer", "second-answer"],
+    ["questionnaire-page-1", "questionnaire-page-2"],
   );
 });
 

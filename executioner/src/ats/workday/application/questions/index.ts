@@ -105,6 +105,7 @@ export interface QuestionnairePageRequest {
 }
 
 export interface VerifiedQuestionnaireAnswer {
+  readonly pageId: BrowserPageId;
   readonly fieldId: FieldId;
   readonly questionId: QuestionId;
   readonly provenance: AnswerProvenance;
@@ -423,6 +424,7 @@ export function createQuestionnairePageHandler(
         }) === true) {
           if (mode === "live") {
             answers.push(Object.freeze({
+              pageId: request.pageId,
               fieldId: field.fieldId,
               questionId: resolvedQuestionId,
               provenance: answer.value.intent.provenance,
@@ -518,6 +520,7 @@ export function createQuestionnairePageHandler(
 
         if (mode === "live") {
           answers.push(Object.freeze({
+            pageId: request.pageId,
             fieldId: field.fieldId,
             questionId: resolvedQuestionId,
             provenance: answer.value.intent.provenance,

@@ -148,7 +148,7 @@ export async function runStage2RealAcceptance(
   if (drift !== undefined) return failed(drift);
 
   const journey = await runBounded(() => ports.journey.run(args, signal));
-  if (signal?.aborted || journey === 130) {
+  if (journey === 130) {
     return await failedAfterJourney(args, ports, "operation_cancelled", {
       source: initialSource,
       config: initialConfig,
@@ -185,10 +185,6 @@ export async function runStage2RealAcceptance(
       config: initialConfig,
     });
   }
-  if (signal?.aborted) return await failedAfterJourney(args, ports, "operation_cancelled", {
-    source: initialSource,
-    config: initialConfig,
-  });
   const manifest = acceptanceManifest(acceptance);
   try {
     await ports.cleanup.finalize(args, manifest);

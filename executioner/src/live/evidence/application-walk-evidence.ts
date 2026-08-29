@@ -17,6 +17,7 @@ export interface ApplicationWalkAcceptanceV1 {
   readonly evidenceRevision: "s2-application-walk-acceptance-v1";
   readonly checkpoint: ApplicationCheckpoint;
   readonly status: "passed";
+  readonly executionMode: "live" | "synthetic_test_non_submittable";
   readonly sourceRevision: string;
   readonly revisionId: string;
   readonly approvalId: string;
@@ -54,7 +55,7 @@ export function admitApplicationWalkAcceptance(
   value: ApplicationWalkAcceptanceV1,
 ): ApplicationWalkAcceptanceV1 {
   const expected = [
-    "schemaVersion", "evidenceRevision", "checkpoint", "status",
+    "schemaVersion", "evidenceRevision", "checkpoint", "status", "executionMode",
     "sourceRevision", "revisionId", "approvalId", "journeyId",
     "targetHandleId", "completedPages", "pageChecks", "laneAcceptances",
     "submitActivated", "privacyScan", "cleanup",
@@ -65,6 +66,7 @@ export function admitApplicationWalkAcceptance(
     value.schemaVersion !== 1 ||
     value.evidenceRevision !== "s2-application-walk-acceptance-v1" ||
     value.status !== "passed" ||
+    !validExecutionMode(value.executionMode, value.laneAcceptances) ||
     (value.checkpoint !== "pre_review" &&
       value.pageChecks.at(-1)?.checkpoint !== value.checkpoint) ||
     !/^[0-9a-f]{40}$/u.test(value.sourceRevision) ||
@@ -169,12 +171,12 @@ function validProfile(
   value: Extract<ApplicationLaneAcceptance, { checkpoint: "profile_verified" }>,
 ): boolean {
   const requiredKeys = [
-    "schemaVersion", "checkpoint", "pageType", "verifiedFields",
+    "schemaVersion", "checkpoint", "pageId", "executionMode", "pageType", "verifiedFields",
     "ownedDuplicateRows", "independentlyVerified", "submitActivated",
     "privacyScan",
   ];
   const learningKeys = [
-    "schemaVersion", "checkpoint", "pageType", "verifiedFields",
+    "schemaVersion", "checkpoint", "pageId", "executionMode", "pageType", "verifiedFields",
     "ownedDuplicateRows", "independentlyVerified", "profileFieldLearningSha256",
     "submitActivated", "privacyScan",
   ];
@@ -188,6 +190,8 @@ function validProfile(
       /^[0-9a-f]{64}$/u.test(value.profileFieldLearningSha256)
     : exactKeys(value, requiredKeys)) &&
     value.schemaVersion === 1 &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value.pageId) &&
+    (value.executionMode === "live" || value.executionMode === "synthetic_test_non_submittable") &&
     (value.pageType === "profile" || value.pageType === "contact") &&
     (!hasSyntheticDefault || hasLearningDigest) &&
     value.verifiedFields.every((field) => {
@@ -240,6 +244,21 @@ function validProfile(
     value.submitActivated === false && value.privacyScan === "pass";
 }
 
+function validExecutionMode(
+  mode: ApplicationWalkAcceptanceV1["executionMode"],
+  lanes: readonly ApplicationLaneAcceptance[],
+): boolean {
+  const profiles = lanes.filter((lane) => lane.checkpoint === "profile_verified");
+  return (profiles.length === 0 ? mode === "live" :
+    profiles.every((profile) => profile.executionMode === mode)) &&
+    (mode === "synthetic_test_non_submittable" || !lanes.some((lane) =>
+      lane.checkpoint === "profile_verified"
+        ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+        : lane.checkpoint === "questionnaire_verified" &&
+          lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+    ));
+}
+
 function validQuestionnaire(
   value: Extract<ApplicationLaneAcceptance, { checkpoint: "questionnaire_verified" }>,
 ): boolean {
@@ -249,9 +268,10 @@ function validQuestionnaire(
   ]) && value.schemaVersion === 1 &&
     value.answers.every((answer) =>
       exactKeys(answer, [
-        "fieldId", "questionId", "provenance", "lane", "protectedCategory",
+        "pageId", "fieldId", "questionId", "provenance", "lane", "protectedCategory",
         "templateRevision", "verification",
       ]) &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.pageId) &&
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.fieldId) &&
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(answer.questionId) &&
       new Set([

@@ -1,4 +1,5 @@
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
+import type { BrowserPageId } from "../../../contracts/index.ts";
 import {
   completeWorkdayProfilePage,
   type ProfilePageCompletionResult,
@@ -96,6 +97,8 @@ export type ApplicationLaneAcceptance =
   | {
       readonly schemaVersion: 1;
       readonly checkpoint: "profile_verified";
+      readonly pageId: BrowserPageId;
+      readonly executionMode: "live" | "synthetic_test_non_submittable";
       readonly pageType: VerifiedProfilePage["pageType"];
       readonly verifiedFields: VerifiedProfilePage["verifiedFields"];
       readonly ownedDuplicateRows: 0;
@@ -190,7 +193,8 @@ function mergeQuestionnaireAcceptances(
   const answers = [...previous.answers];
   for (const answer of current.answers) {
     const index = answers.findIndex((candidate) =>
-      candidate.fieldId === answer.fieldId && candidate.questionId === answer.questionId
+      candidate.pageId === answer.pageId && candidate.fieldId === answer.fieldId &&
+      candidate.questionId === answer.questionId
     );
     if (index === -1) answers.push(answer);
     else answers[index] = answer;
@@ -254,6 +258,8 @@ function profileHandler(
       if (!recordAcceptance(dependencies.acceptanceSink, {
         schemaVersion: 1,
         checkpoint: "profile_verified",
+        pageId: request.pageId,
+        executionMode: dependencies.sources.profilePlan().mode,
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
         ownedDuplicateRows: 0,
