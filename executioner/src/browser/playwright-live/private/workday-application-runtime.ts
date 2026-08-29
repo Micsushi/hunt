@@ -1112,7 +1112,10 @@ export class OwnedWorkdayApplicationRuntime {
       const activeBatch = sharedBatch;
       await bindQuestionnaireTargets(page, input.pageId);
       await seedCanonicalBinaryQuestionnaireOptions(page);
-      for (const targetToken of await questionnairePopupHydrationTargets(page)) {
+      await bindQuestionnaireTargets(page, input.pageId);
+      for (let hydration = 0; hydration < 128; hydration += 1) {
+        const targetToken = (await questionnairePopupHydrationTargets(page))[0];
+        if (targetToken === undefined) break;
         this.#assertAuthorized(signal);
         const hydrationStartedAt = Date.now();
         await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
@@ -1120,6 +1123,9 @@ export class OwnedWorkdayApplicationRuntime {
           targetToken,
           durationMs: Date.now() - hydrationStartedAt,
         });
+      }
+      if ((await questionnairePopupHydrationTargets(page)).length !== 0) {
+        throw new TypeError("questionnaire popup hydration limit exceeded");
       }
       const activeSemanticSessionId =
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
@@ -3107,11 +3113,90 @@ export async function bindQuestionnaireTargets(
         "Country": "target-s1-field-country",
         "Available start date": "target-s1-field-start-date",
       };
+      const leaf = control.matches("input, textarea, select, [contenteditable=true]")
+        ? control
+        : control.querySelector<HTMLElement>(
+          "input:not([type=hidden]), textarea, select, [contenteditable=true], " +
+            "[role=combobox], [role=listbox], [role=radiogroup], [role=checkbox]",
+        ) ?? control;
+      const numericConstraint = (value: string | null): string => {
+        const normalized = normalize(value);
+        if (normalized === "") return "";
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? String(parsed) : normalized;
+      };
+      const formattedDate = leaf instanceof HTMLInputElement &&
+        (leaf.type === "text" || leaf.type === "tel") &&
+        (/^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(normalize(leaf.placeholder)) ||
+          /^date(?:\s*\*)?$/iu.test(label));
+      const behavior = dateOwner === control ||
+          leaf instanceof HTMLInputElement && (leaf.type === "date" || formattedDate)
+        ? "date"
+        : leaf instanceof HTMLTextAreaElement ? "textarea"
+        : leaf instanceof HTMLInputElement && leaf.type === "file" ? "file_upload"
+        : leaf instanceof HTMLSelectElement ? "select"
+        : control.getAttribute("aria-haspopup") === "listbox" ||
+            leaf.getAttribute("role") === "combobox" || leaf.getAttribute("role") === "listbox"
+          ? "listbox"
+          : control instanceof HTMLFieldSetElement || leaf.getAttribute("role") === "radiogroup" ||
+              control.getAttribute("data-hunt-checkbox-selection-mode") === "exclusive"
+            ? "radio"
+            : leaf instanceof HTMLInputElement && leaf.type === "checkbox" ||
+                leaf.getAttribute("role") === "checkbox"
+              ? "checkbox"
+              : "text";
+      const selectionMode = control.getAttribute("data-hunt-checkbox-selection-mode") === "multiple" ||
+          leaf instanceof HTMLSelectElement && leaf.multiple ||
+          leaf.getAttribute("aria-multiselectable") === "true"
+        ? "multiple"
+        : "single";
+      const optionLabels = (() => {
+        if (leaf instanceof HTMLSelectElement) {
+          return [...leaf.options].map((option) => normalize(option.text));
+        }
+        const encoded = control.getAttribute("data-hunt-popup-options") ??
+          control.getAttribute("data-hunt-deferred-options");
+        if (encoded !== null) {
+          try {
+            const parsed: unknown = JSON.parse(encoded);
+            if (Array.isArray(parsed) && parsed.every((option) => typeof option === "string")) {
+              return parsed.map((option) => normalize(option));
+            }
+          } catch {}
+        }
+        const optionSelector = behavior === "radio" || selectionMode === "multiple"
+          ? 'input[type="radio"], input[type="checkbox"], [role="radio"], [role="option"]'
+          : '[role="option"]';
+        return [...control.querySelectorAll<HTMLElement>(optionSelector)].map((option) =>
+          normalize(option.getAttribute("data-hunt-option-label")) ||
+            normalize(option.getAttribute("aria-label")) ||
+            normalize(option instanceof HTMLInputElement ? option.labels?.[0]?.textContent : option.textContent)
+        );
+      })().filter(Boolean).sort();
+      const maxLength = leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement
+        ? leaf.maxLength
+        : Number(leaf.getAttribute("maxlength") ?? -1);
+      const minLength = leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement
+        ? leaf.minLength
+        : Number(leaf.getAttribute("minlength") ?? -1);
+      const constraints = [
+        leaf instanceof HTMLInputElement ? leaf.type : "",
+        numericConstraint(leaf.getAttribute("min")),
+        numericConstraint(leaf.getAttribute("max")),
+        numericConstraint(leaf.getAttribute("step")),
+        Number.isSafeInteger(minLength) && minLength >= 0 ? String(minLength) : "",
+        Number.isSafeInteger(maxLength) && maxLength >= 0 ? String(maxLength) : "",
+        normalize(leaf.getAttribute("pattern")),
+        leaf.hasAttribute("readonly") || leaf.getAttribute("aria-readonly") === "true" ? "readonly" : "editable",
+        normalize(leaf.getAttribute("accept")),
+      ].join("\u001f");
       const identity = [
         label,
+        behavior,
+        selectionMode,
+        constraints,
+        optionLabels.join("\u001e"),
         control.tagName,
-        control.getAttribute("type") ?? "",
-        control.getAttribute("role") ?? "",
         control.getAttribute("data-automation-id") ?? "",
         fieldIdentity,
         semanticAncestorContext,
@@ -3377,6 +3462,7 @@ export async function hydrateQuestionnairePopupOptions(
     .evaluateAll((elements) => elements.forEach((element) =>
       element.removeAttribute("data-hunt-popup-hydration-owner")
     ));
+  await bindQuestionnaireTargets(page, pageId);
 }
 
 async function ownedHydrationPopupOpen(page: Page, targetToken: string): Promise<boolean> {

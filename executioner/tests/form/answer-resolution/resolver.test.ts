@@ -772,6 +772,50 @@ test("identical physical choice occurrences share one stable synthetic class ans
   assert.equal(selections, 1);
 });
 
+test("same field slot rejects a cached choice from a different option class", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  const picks = [0, 1];
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => picks.shift() ?? 0,
+  );
+  const firstClass = field("Repeated choice", "select", [
+    { id: optionId("first-shared"), label: boundedText("Shared") },
+    { id: optionId("first-only"), label: boundedText("First only") },
+  ]);
+  const secondClass = Object.freeze({
+    ...field("Repeated choice", "select", [
+      { id: optionId("second-shared"), label: boundedText("Shared") },
+      { id: optionId("second-only"), label: boundedText("Second only") },
+    ]),
+    fieldId: fieldId("field-repeated-choice-second-class"),
+    target: browserTargetToken("target-repeated-choice-second-class"),
+  });
+  const remountedSecondClass = Object.freeze({
+    ...secondClass,
+    fieldId: firstClass.fieldId,
+    target: firstClass.target,
+  });
+
+  await resolver.resolve(syntheticRequest(firstClass), new AbortController().signal);
+  await resolver.resolve(syntheticRequest(secondClass), new AbortController().signal);
+  const remounted = await resolver.resolve(
+    syntheticRequest(remountedSecondClass),
+    new AbortController().signal,
+  );
+
+  assert.equal(remounted.ok && remounted.value.kind, "resolved");
+  if (remounted.ok && remounted.value.kind === "resolved" &&
+      remounted.value.intent.kind === "choice") {
+    assert.equal(remounted.value.intent.expectedOption, "Second only");
+  }
+  assert.deepEqual(picks, []);
+});
+
 test("same-field option disappearance adopts a current committed site-valid selection", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },

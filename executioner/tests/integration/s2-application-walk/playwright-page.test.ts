@@ -299,10 +299,19 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
           replacement.dataset.automationId = 'applyFlowApplicationQuestionsPage';
           if (phase === 0) {
             replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated-remounted">Repeated question*</label><input id="repeated-remounted" required value="committed"></div><div data-automation-id="formField"><label for="conditional">Conditional detail*</label><input id="conditional" required></div>';
+            oldRoot.replaceWith(replacement);
           } else {
-            replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated">Repeated question*</label><input id="repeated" required value="committed"></div>';
+            const loading = document.createElement('div');
+            loading.dataset.automationId = 'applyFlowLoadingPage';
+            loading.textContent = 'Loading';
+            document.body.append(loading);
+            const repeated = oldRoot.querySelector('#repeated-remounted');
+            const repeatedLabel = oldRoot.querySelector('label[for="repeated-remounted"]');
+            repeated.id = 'repeated';
+            repeatedLabel.htmlFor = 'repeated';
+            oldRoot.querySelector('[data-automation-id="formField"] + [data-automation-id="formField"]').remove();
+            setTimeout(() => loading.remove(), 75);
           }
-          oldRoot.replaceWith(replacement);
           phase += 1;
         });
       </script>
@@ -367,6 +376,51 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
     assert.equal(await page.locator('main[data-automation-id="applyFlowApplicationQuestionsPage"]')
       .count(), 1);
     assert.equal(await page.locator('label[for="repeated"]').innerText(), "Repeated question*");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("does not advance a questionnaire occurrence for a same-count remount and reorder", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <div data-automation-id="progressBarActiveStep">Application Questions</div>
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label for="one">Repeated question*</label>
+          <input id="one" required value="committed"></div>
+        <div data-automation-id="formField"><label for="two">Repeated question*</label>
+          <input id="two" required value="committed"></div>
+      </main>
+      <button id="next" type="button">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const root = document.querySelector('main');
+          const replacement = root.cloneNode(true);
+          replacement.prepend(replacement.children[1]);
+          root.replaceWith(replacement);
+        });
+      </script>
+    `);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 600,
+      navigationSettleTimeoutMs: 600,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
   } finally {
     await browser.close();
   }

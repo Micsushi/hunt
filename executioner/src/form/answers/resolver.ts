@@ -315,7 +315,10 @@ export function createApplicationAnswerResolver(
   }
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
-  const syntheticChoiceLabelsByField = new Map<string, string>();
+  const syntheticChoiceLabelsByField = new Map<string, {
+    readonly classKey: string;
+    readonly label: string;
+  }>();
   const syntheticChoiceLabelsByClass = new Map<string, string>();
   const syntheticReplacementReasons = new Map<
     string,
@@ -337,14 +340,27 @@ export function createApplicationAnswerResolver(
     const classKey = [
       normalizeCatalogText(field.label),
       field.behavior,
+      field.selectionMode ?? "single",
+      JSON.stringify({
+        inputType: field.constraints?.inputType ?? null,
+        min: field.constraints?.min ?? null,
+        max: field.constraints?.max ?? null,
+        step: field.constraints?.step ?? null,
+        minLength: field.constraints?.minLength ?? null,
+        maxLength: field.constraints?.maxLength ?? null,
+        pattern: field.constraints?.pattern ?? null,
+        readOnly: field.constraints?.readOnly ?? false,
+      }),
       ...options.map(({ label }) => normalizeCatalogText(label)).sort(),
     ].join("\u0000");
     const remember = (label: string) => {
-      syntheticChoiceLabelsByField.set(fieldKey, label);
+      syntheticChoiceLabelsByField.set(fieldKey, { classKey, label });
       syntheticChoiceLabelsByClass.set(classKey, label);
     };
-    const existing = syntheticChoiceLabelsByField.get(fieldKey) ??
-      syntheticChoiceLabelsByClass.get(classKey);
+    const fieldChoice = syntheticChoiceLabelsByField.get(fieldKey);
+    const existing = (fieldChoice?.classKey === classKey ? fieldChoice.label : undefined) ??
+      syntheticChoiceLabelsByClass.get(classKey) ??
+      (fieldChoice === undefined ? undefined : "");
     if (existing !== undefined) {
       const rebound = options.findIndex(({ label }) => normalizeCatalogText(label) === existing);
       if (rebound >= 0) return rebound;

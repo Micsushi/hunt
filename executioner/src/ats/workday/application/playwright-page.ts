@@ -83,6 +83,7 @@ interface BrowserApplicationSnapshot {
   readonly transitionKey: string;
   readonly physicalPageOccurrenceKey: string;
   readonly physicalDomKey: string;
+  readonly navigationWitness: string;
   readonly validationKeys: readonly string[];
   readonly validationOwners: readonly string[];
 }
@@ -255,7 +256,7 @@ export class PlaywrightWorkdayApplicationPage {
         after.value.page === before.value.page &&
         after.value.rootSelector === before.value.rootSelector &&
         after.value.transitionKey === before.value.transitionKey &&
-        after.value.physicalDomKey === before.value.physicalDomKey &&
+        after.value.navigationWitness === before.value.navigationWitness &&
         after.value.requiredFields.length <= before.value.requiredFields.length
       ) {
         navigationDiagnostic("semantic_guard_failed", {
@@ -335,8 +336,7 @@ export class PlaywrightWorkdayApplicationPage {
           (after.value.page !== before.page ||
             after.value.rootSelector !== before.rootSelector ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
-              (after.value.transitionKey !== before.transitionKey ||
-                after.value.physicalDomKey !== before.physicalDomKey)) ||
+              after.value.navigationWitness !== before.navigationWitness) ||
             after.value.requiredFields.length > before.requiredFields.length ||
             hasValidationDowngrade(before, after.value))
         ) {
@@ -397,7 +397,8 @@ export class PlaywrightWorkdayApplicationPage {
         !observed.ok ||
         observed.value.page !== candidate.page ||
         observed.value.rootSelector !== candidate.rootSelector ||
-        observed.value.transitionKey !== candidate.transitionKey
+        observed.value.transitionKey !== candidate.transitionKey ||
+        observed.value.navigationWitness !== candidate.navigationWitness
       ) return undefined;
       confirmed = observed.value;
     }
@@ -508,11 +509,7 @@ function advancesQuestionnaireOccurrence(
   const afterRequired = counts(after.requiredFields);
   const conditionalReveal = after.requiredFields.length > before.requiredFields.length &&
     [...beforeRequired].every(([item, count]) => (afterRequired.get(item) ?? 0) >= count);
-  return !conditionalReveal && (
-    before.rootSelector !== after.rootSelector ||
-    before.transitionKey !== after.transitionKey ||
-    before.physicalDomKey !== after.physicalDomKey
-  );
+  return !conditionalReveal && before.navigationWitness !== after.navigationWitness;
 }
 function navigationDiagnostic(
   event: string,
@@ -589,6 +586,19 @@ function readApplicationSnapshot(
   };
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const controllerBusy = [...document.querySelectorAll<HTMLElement>(
+    '[data-automation-id="applyFlowLoadingPage"], [data-automation-id="applyFlowPage"][aria-busy="true"]',
+  )].some(visible);
+  const priorControllerBusy = globalState.__huntWorkdayControllerBusy === true;
+  let controllerGeneration = Number(globalState.__huntWorkdayControllerGeneration ?? 0);
+  if (!Number.isSafeInteger(controllerGeneration) || controllerGeneration < 0) {
+    controllerGeneration = 0;
+  }
+  if (priorControllerBusy && !controllerBusy) controllerGeneration += 1;
+  globalState.__huntWorkdayControllerBusy = controllerBusy;
+  globalState.__huntWorkdayControllerGeneration = controllerGeneration;
+  const navigationWitness = `workday-controller-${controllerGeneration}`;
   const semanticHash = (value: string): string => {
     let state = 2166136261;
     for (let index = 0; index < value.length; index += 1) {
@@ -1229,7 +1239,6 @@ function readApplicationSnapshot(
   const labels = [...root.querySelectorAll<HTMLElement>("label, legend, h1, h2")]
     .filter(visible)
     .map((item) => text(item.textContent));
-  const globalState = globalThis as unknown as Record<string, unknown>;
   if (typeof globalState.__huntPhysicalQuestionnaireContext !== "string") {
     const nonce = new Uint32Array(2);
     globalThis.crypto.getRandomValues(nonce);
@@ -1273,6 +1282,7 @@ function readApplicationSnapshot(
     labels.join("\u001f"),
     validationKeys.join("\u001f"),
     physicalDomKey,
+    navigationWitness,
   ].join("\u0000");
   const transitionKey = [
     page,
@@ -1293,6 +1303,7 @@ function readApplicationSnapshot(
     transitionKey,
     physicalPageOccurrenceKey,
     physicalDomKey,
+    navigationWitness,
     validationKeys,
     validationOwners,
   };
