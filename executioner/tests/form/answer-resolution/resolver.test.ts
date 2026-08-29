@@ -738,6 +738,40 @@ test("synthetic choices are isolated by stable field slot for equal normalized l
   assert.equal(distinct.ok && distinct.value.kind, "resolved");
 });
 
+test("identical physical choice occurrences share one stable synthetic class answer", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let selections = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => selections++,
+  );
+  const first = field("Repeated unknown choice", "select", [
+    { id: optionId("first-yes"), label: boundedText("Yes") },
+    { id: optionId("first-no"), label: boundedText("No") },
+  ]);
+  const second = Object.freeze({
+    ...field("Repeated unknown choice", "select", [
+      { id: optionId("second-no"), label: boundedText("No") },
+      { id: optionId("second-yes"), label: boundedText("Yes") },
+    ]),
+    fieldId: fieldId("field-repeated-choice-second"),
+    target: browserTargetToken("target-repeated-choice-second"),
+  });
+  const initial = await resolver.resolve(syntheticRequest(first), new AbortController().signal);
+  const duplicate = await resolver.resolve(syntheticRequest(second), new AbortController().signal);
+  assert.equal(initial.ok && initial.value.kind, "resolved");
+  assert.equal(duplicate.ok && duplicate.value.kind, "resolved");
+  if (initial.ok && initial.value.kind === "resolved" && initial.value.intent.kind === "choice" &&
+      duplicate.ok && duplicate.value.kind === "resolved" && duplicate.value.intent.kind === "choice") {
+    assert.equal(duplicate.value.intent.expectedOption, initial.value.intent.expectedOption);
+  }
+  assert.equal(selections, 1);
+});
+
 test("same-field option disappearance adopts a current committed site-valid selection", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },

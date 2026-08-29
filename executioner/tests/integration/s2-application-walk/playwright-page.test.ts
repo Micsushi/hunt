@@ -279,6 +279,99 @@ test("derives distinct stable questionnaire occurrences from physical Workday st
   }
 });
 
+test("advances same-semantic questionnaire occurrence only after a proven Next transition", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <div data-automation-id="progressBarActiveStep">Application Questions</div>
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label for="repeated">Repeated question*</label>
+          <input id="repeated" required value="committed"></div>
+      </main>
+      <button id="next" type="button">Save and Continue</button>
+      <script>
+        let phase = 0;
+        document.addEventListener('click', event => {
+          if (!(event.target instanceof HTMLButtonElement) || event.target.id !== 'next') return;
+          const oldRoot = document.querySelector('main');
+          const replacement = document.createElement('main');
+          replacement.dataset.automationId = 'applyFlowApplicationQuestionsPage';
+          if (phase === 0) {
+            replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated-remounted">Repeated question*</label><input id="repeated-remounted" required value="committed"></div><div data-automation-id="formField"><label for="conditional">Conditional detail*</label><input id="conditional" required></div>';
+          } else {
+            replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated">Repeated question*</label><input id="repeated" required value="committed"></div>';
+          }
+          oldRoot.replaceWith(replacement);
+          phase += 1;
+        });
+      </script>
+    `);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 4_000,
+      navigationSettleTimeoutMs: 4_000,
+    });
+    const initial = await application.observe(new AbortController().signal);
+    assert.equal(initial.ok, true, JSON.stringify(initial));
+    if (!initial.ok) return;
+    const revealed = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: initial.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.deepEqual(revealed, { ok: true, value: { advanced: true } });
+    const conditional = await application.observe(new AbortController().signal);
+    assert.equal(conditional.ok, true, JSON.stringify(conditional));
+    if (!conditional.ok) return;
+    assert.equal(conditional.value.pageId, initial.value.pageId);
+    await page.locator("#conditional").fill("committed");
+    const advanced = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: initial.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.deepEqual(advanced, { ok: true, value: { advanced: true } });
+    const second = await application.observe(new AbortController().signal);
+    assert.equal(second.ok, true, JSON.stringify(second));
+    if (!second.ok) return;
+    assert.notEqual(second.value.pageId, initial.value.pageId);
+    const collector = createApplicationLaneAcceptanceCollector();
+    for (const pageIdValue of [initial.value.pageId, second.value.pageId]) {
+      collector.record({
+        schemaVersion: 1,
+        checkpoint: "questionnaire_verified",
+        answers: [{
+          pageId: pageIdValue,
+          fieldId: "repeated-question" as never,
+          questionId: "observed-question-fedcba9876543210fedcba98" as never,
+          provenance: "visible_option",
+          lane: "synthetic_test_default",
+          protectedCategory: null,
+          templateRevision: null,
+          verification: "independent",
+        }],
+        protectedPlaceholderCount: 0,
+        independentlyVerified: true,
+        submitActivated: false,
+        privacyScan: "pass",
+      });
+    }
+    const accepted = collector.snapshot("pre_review");
+    assert.equal(accepted.length, 1);
+    assert.equal(accepted[0]?.checkpoint === "questionnaire_verified" &&
+      accepted[0].answers.length, 2);
+    assert.equal(await page.locator('[data-automation-id="progressBarActiveStep"]').innerText(),
+      "Application Questions");
+    assert.equal(await page.locator('main[data-automation-id="applyFlowApplicationQuestionsPage"]')
+      .count(), 1);
+    assert.equal(await page.locator('label[for="repeated"]').innerText(), "Repeated question*");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("combined detection includes optional profile controls and keeps tenant files in Profile", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

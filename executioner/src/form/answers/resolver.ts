@@ -315,7 +315,8 @@ export function createApplicationAnswerResolver(
   }
   if (!isIsoDate(generatedDate)) throw new TypeError("generated date must be an ISO date");
 
-  const syntheticChoiceLabels = new Map<string, string>();
+  const syntheticChoiceLabelsByField = new Map<string, string>();
+  const syntheticChoiceLabelsByClass = new Map<string, string>();
   const syntheticReplacementReasons = new Map<
     string,
     "committed_value_adopted" | "cached_option_unavailable"
@@ -324,16 +325,26 @@ export function createApplicationAnswerResolver(
     request: ApplicationAnswerResolutionRequest,
   ) => (length: number): number => {
     const { field } = request;
-    // The resolver instance is page-batch scoped, so the deterministic field ID
-    // is the stable page-local slot. Semantic question classes and labels are
-    // deliberately not identities: two controls may ask the same kind of
-    // question while exposing disjoint option catalogs.
-    const key = String(field.fieldId);
     const options = field.options.filter(({ label }) =>
       !placeholderOption.test(String(label).trim().toLowerCase())
     );
     if (options.length !== length) throw new TypeError("synthetic option set mismatch");
-    const existing = syntheticChoiceLabels.get(key);
+    // Identical physical occurrences must receive one class intent so a
+    // tokenless reorder cannot swap answers. Including behavior and the exact
+    // option catalog keeps same-labelled questions with different choices
+    // independent.
+    const fieldKey = String(field.fieldId);
+    const classKey = [
+      normalizeCatalogText(field.label),
+      field.behavior,
+      ...options.map(({ label }) => normalizeCatalogText(label)).sort(),
+    ].join("\u0000");
+    const remember = (label: string) => {
+      syntheticChoiceLabelsByField.set(fieldKey, label);
+      syntheticChoiceLabelsByClass.set(classKey, label);
+    };
+    const existing = syntheticChoiceLabelsByField.get(fieldKey) ??
+      syntheticChoiceLabelsByClass.get(classKey);
     if (existing !== undefined) {
       const rebound = options.findIndex(({ label }) => normalizeCatalogText(label) === existing);
       if (rebound >= 0) return rebound;
@@ -346,20 +357,20 @@ export function createApplicationAnswerResolver(
           normalizeCatalogText(label) === normalizeCatalogText(committed)
         );
       if (adopted >= 0) {
-        syntheticChoiceLabels.set(key, normalizeCatalogText(options[adopted]!.label));
-        syntheticReplacementReasons.set(key, "committed_value_adopted");
+        remember(normalizeCatalogText(options[adopted]!.label));
+        syntheticReplacementReasons.set(fieldKey, "committed_value_adopted");
         return adopted;
       }
       const selected = selectRandomIndex(length);
       if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
-        syntheticChoiceLabels.set(key, normalizeCatalogText(options[selected]!.label));
-        syntheticReplacementReasons.set(key, "cached_option_unavailable");
+        remember(normalizeCatalogText(options[selected]!.label));
+        syntheticReplacementReasons.set(fieldKey, "cached_option_unavailable");
       }
       return selected;
     }
     const selected = selectRandomIndex(length);
     if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
-      syntheticChoiceLabels.set(key, normalizeCatalogText(options[selected]!.label));
+      remember(normalizeCatalogText(options[selected]!.label));
     }
     return selected;
   };

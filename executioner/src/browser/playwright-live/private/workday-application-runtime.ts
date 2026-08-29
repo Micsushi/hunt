@@ -3124,23 +3124,33 @@ export async function bindQuestionnaireTargets(
       index += 1;
     }
     const reviewedCounts = new Map<string, number>();
+    const identityCounts = new Map<string, number>();
     for (const binding of bindings) {
       if (binding.reviewedToken !== undefined) {
         reviewedCounts.set(binding.reviewedToken, (reviewedCounts.get(binding.reviewedToken) ?? 0) + 1);
       }
+      identityCounts.set(binding.identityHash, (identityCounts.get(binding.identityHash) ?? 0) + 1);
     }
+    const identityOccurrences = new Map<string, number>();
     for (const binding of bindings) {
       const uniqueReviewed = binding.reviewedToken !== undefined &&
         reviewedCounts.get(binding.reviewedToken) === 1;
-      // Truly indistinguishable controls intentionally share an ambiguous token.
-      // The deterministic adapter will reject the equivalence class instead of
-      // attaching a prior intent to whichever member happens to be first today.
+      const occurrence = (identityOccurrences.get(binding.identityHash) ?? 0) + 1;
+      identityOccurrences.set(binding.identityHash, occurrence);
+      // Distinguishable controls retain their semantic identity. A truly
+      // indistinguishable group is a deterministic equivalence class: every
+      // physical member gets an occurrence coordinate and the answer resolver
+      // intentionally gives the whole class one site-valid intent. Remount or
+      // reorder can therefore never attach a different prior intent to a member.
       binding.control.setAttribute(
         "data-hunt-target-token",
         uniqueReviewed
           ? binding.reviewedToken!
-          : `target-workday-${binding.identityHash}-1`,
+          : `target-workday-${binding.identityHash}-${
+            identityCounts.get(binding.identityHash) === 1 ? "1" : `occurrence-${occurrence}`
+          }`,
       );
+      binding.control.setAttribute("data-hunt-physical-occurrence", occurrence.toString());
     }
     return index <= 128;
   }, {

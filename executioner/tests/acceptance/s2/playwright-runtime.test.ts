@@ -2519,7 +2519,7 @@ test("canonical discovery survives reorder, delayed reveal, and duplicate-label 
   }
 });
 
-test("indistinguishable duplicate remounts reconcile as one deterministic answer class", async () => {
+test("indistinguishable duplicate remounts preserve every physical answer occurrence", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2532,18 +2532,19 @@ test("indistinguishable duplicate remounts reconcile as one deterministic answer
     const tokens = await page.locator("input").evaluateAll((inputs) =>
       inputs.map((input) => input.getAttribute("data-hunt-target-token"))
     );
-    assert.equal(tokens[0], tokens[1]);
+    assert.equal(new Set(tokens).size, 2);
+    assert.ok(tokens.every((token) => /^target-workday-[a-f0-9]{8}-occurrence-[12]$/u.test(token ?? "")));
     const initial = await inspectPage(
       page, "live_session_equivalent_duplicate_01" as never, pageId, new Map(),
     );
-    assert.equal(initial.observation.targets.length, 1);
-    const target = [...initial.targets.values()][0]?.[0];
-    assert.ok(target !== undefined);
-    assert.equal(await applyMutation(page, target, {
-      kind: "set_text",
-      target: target.token,
-      text: "Stable synthetic answer",
-    }, undefined, 1_000), "applied");
+    assert.equal(initial.observation.targets.length, 2);
+    for (const target of [...initial.targets.values()].flat()) {
+      assert.equal(await applyMutation(page, target, {
+        kind: "set_text",
+        target: target.token,
+        text: "Stable synthetic answer",
+      }, undefined, 1_000), "applied");
+    }
     assert.deepEqual(await page.locator("input").evaluateAll((inputs) =>
       inputs.map((input) => (input as HTMLInputElement).value)
     ), ["Stable synthetic answer", "Stable synthetic answer"]);
@@ -2565,11 +2566,196 @@ test("indistinguishable duplicate remounts reconcile as one deterministic answer
     const rebound = await inspectPage(
       page, "live_session_equivalent_duplicate_01" as never, pageId, new Map(),
     );
-    assert.equal(rebound.observation.targets.length, 1);
-    const readback = [...rebound.targets.values()][0]?.[0]?.readback;
-    assert.equal(readback?.kind === "text" ? readback.value : undefined,
-      "Stable synthetic answer");
+    assert.equal(rebound.observation.targets.length, 2);
+    assert.deepEqual([...rebound.targets.values()].flat().map(({ readback }) =>
+      readback.kind === "text" ? readback.value : undefined
+    ), ["Stable synthetic answer", "Stable synthetic answer"]);
   } finally {
+    await browser.close();
+  }
+});
+
+test("duplicate tokenless select, popup, date, and multiselect members mutate independently", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField"><label>Native choice*<select required><option>Select One</option><option>Yes</option><option>No</option></select></label></div>
+      <div data-automation-id="formField"><label>Native choice*<select required><option>Select One</option><option>Yes</option><option>No</option></select></label></div>
+      <div data-automation-id="formField"><label>Popup choice*</label><button type="button" aria-haspopup="listbox" aria-required="true">Select One</button></div>
+      <div data-automation-id="formField"><label>Popup choice*</label><button type="button" aria-haspopup="listbox" aria-required="true">Select One</button></div>
+      <div data-automation-id="formField"><label>Available date*<input type="date" required></label></div>
+      <div data-automation-id="formField"><label>Available date*<input type="date" required></label></div>
+      <div data-automation-id="formField"><label>Skills*<select multiple required><option>Assembly</option><option>Quality</option></select></label></div>
+      <div data-automation-id="formField"><label>Skills*<select multiple required><option>Assembly</option><option>Quality</option></select></label></div>
+      <div id="duplicate-popup" data-automation-id="promptMenu" hidden>
+        <div data-automation-id="promptOption">Yes</div><div data-automation-id="promptOption">No</div>
+      </div>
+      <script>
+        let activeButton;
+        const popup = document.querySelector('#duplicate-popup');
+        document.querySelectorAll('button[aria-haspopup="listbox"]').forEach(button => {
+          button.addEventListener('click', () => { activeButton = button; popup.hidden = false; });
+        });
+        popup.addEventListener('click', event => {
+          const option = event.target.closest('[data-automation-id="promptOption"]');
+          if (option === null || activeButton === undefined) return;
+          activeButton.textContent = option.textContent.trim();
+          popup.hidden = true;
+        });
+      </script>
+    </main>`);
+    const pageId = "page-equivalent-supported-controls" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const inspection = await inspectPage(
+      page, "live_session_equivalent_supported_01" as never, pageId, new Map(),
+    );
+    const groups = new Map<string, typeof inspection.observation.targets>();
+    for (const target of inspection.observation.targets) {
+      const values = groups.get(target.name) ?? [];
+      groups.set(target.name, [...values, target]);
+    }
+    for (const [name, expected] of [["Native choice*", 2], ["Popup choice*", 2],
+      ["Available date*", 2], ["Skills*", 2]] as const) {
+      assert.equal(groups.get(name)?.length, expected, name);
+    }
+    for (const observation of inspection.observation.targets) {
+      const target = inspection.targets.get(observation.token)?.[0];
+      assert.ok(target !== undefined);
+      const mutation = observation.name === "Available date*"
+        ? { kind: "set_date" as const, target: observation.token, isoDate: "2026-09-15" }
+        : { kind: "select" as const, target: observation.token,
+          option: (observation.name === "Skills*" ? "Quality" : "No") as never };
+      assert.equal(await applyMutation(page, target, mutation, undefined, 2_000), "applied",
+        `${observation.name}:${target.interaction ?? target.control.kind}`);
+    }
+    assert.deepEqual(await page.locator('select:not([multiple])').evaluateAll((controls) =>
+      controls.map((control) => (control as HTMLSelectElement).value)
+    ), ["No", "No"]);
+    assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').allInnerTexts(), ["No", "No"]);
+    assert.deepEqual(await page.locator('input[type="date"]').evaluateAll((controls) =>
+      controls.map((control) => (control as HTMLInputElement).value)
+    ), ["2026-09-15", "2026-09-15"]);
+    assert.deepEqual(await page.locator('select[multiple]').evaluateAll((controls) =>
+      controls.map((control) => [...(control as HTMLSelectElement).selectedOptions]
+        .map((option) => option.textContent))
+    ), [["Quality"], ["Quality"]]);
+    const verified = await inspectPage(
+      page, "live_session_equivalent_supported_01" as never, pageId, new Map(),
+    );
+    assert.equal(verified.observation.targets.length, 8);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("full questionnaire reconciliation retains duplicate physical occurrences through remount", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-duplicate-question-learning-"));
+  const learning = createQuestionAnswerLearningCapture({
+    root: evidenceRoot,
+    mode: "synthetic_test_non_submittable",
+  });
+  const artifact = resumeArtifact();
+  const resumeIntent = createWorkdayResumeFileIntent({
+    artifactId: artifact.resumeId,
+    artifact,
+    fileType: "pdf",
+  });
+  if (!resumeIntent.ok) throw new Error("resume fixture invalid");
+  await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+    <div data-automation-id="formField"><label for="duplicate-a">Unseen physical detail*</label><input id="duplicate-a" required></div>
+    <div data-automation-id="formField"><label for="duplicate-b">Unseen physical detail*</label><input id="duplicate-b" required></div>
+  </main>`);
+  let operation = 0;
+  const acceptances: { readonly checkpoint: string; readonly answers?: readonly unknown[] }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      owner: { revisionId: "revision_duplicate_physical_occurrences" },
+      ownerSources: {
+        resumeIntent: resumeIntent.value,
+        profileId: upstreamProfileId("profile-duplicate-physical-occurrences"),
+        profileRevision: 1,
+        profileQuery: {
+          async query() {
+            return { ok: true as const, value: { kind: "profile_answer_missing" as const } };
+          },
+        },
+        narrative: createConfiguredNarrativeProvider({
+          revision: "narrative-duplicate-physical-v1",
+          template: "Synthetic duplicate fixture narrative.",
+        }),
+        sensitiveValues: [],
+        profilePlan: { mode: "synthetic_test_non_submittable" },
+      },
+      questionLearning: learning,
+    } as never,
+    acceptances: { record(value) { acceptances.push(value); } },
+    nextOperationId: () => generatedOperationId(
+      `operation_duplicate_physical_${(++operation).toString().padStart(8, "0")}`,
+    ),
+    timeoutMs: 3_000,
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-09-01T12:30:00.000Z",
+    now: () => "2026-09-01T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_duplicate_physical_01"),
+    sessionId: "live_session_duplicate_physical_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_duplicate_physical_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-09-01T13:00:00.000Z",
+  });
+  try {
+    const reconcile = (attempt: number) => runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_duplicate_physical_01"),
+      operationId: generatedOperationId(`operation_duplicate_run_${attempt.toString().padStart(8, "0")}`),
+      sessionId: "live_session_duplicate_physical_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-09-01T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt, pageId: "page-duplicate-physical" } as never,
+    }, new AbortController().signal);
+    const first = await reconcile(1);
+    assert.equal((first as { ok: boolean }).ok, true, JSON.stringify(first));
+    assert.deepEqual(await page.locator("input").evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value)
+    ), ["Test response pending owner review.", "Test response pending owner review."]);
+    assert.equal(acceptances.at(-1)?.checkpoint, "questionnaire_verified",
+      JSON.stringify(acceptances));
+    learning.write();
+    const pending = JSON.parse(readFileSync(
+      join(evidenceRoot, "pending-profile-questions.json"), "utf8",
+    )) as { pendingProfileQuestions: readonly { fieldId: string; committedReadback: string }[] };
+    assert.equal(pending.pendingProfileQuestions.length, 2);
+    assert.equal(new Set(pending.pendingProfileQuestions.map(({ fieldId: occurrence }) => occurrence)).size, 2);
+    assert.deepEqual(pending.pendingProfileQuestions.map(({ committedReadback }) => committedReadback),
+      ["Test response pending owner review.", "Test response pending owner review."]);
+
+    await page.locator("main").evaluate((main) => {
+      const replacement = main.cloneNode(true) as HTMLElement;
+      replacement.prepend(replacement.children[1]!);
+      replacement.querySelectorAll("[data-hunt-target-token]").forEach((control) =>
+        control.removeAttribute("data-hunt-target-token")
+      );
+      main.replaceWith(replacement);
+    });
+    const rebound = await reconcile(2);
+    assert.equal((rebound as { ok: boolean }).ok, true, JSON.stringify(rebound));
+    assert.deepEqual(await page.locator("input").evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value)
+    ), ["Test response pending owner review.", "Test response pending owner review."]);
+  } finally {
+    runtime.dispose();
+    disposeResumeArtifact(artifact);
+    rmSync(evidenceRoot, { recursive: true, force: true });
+    await context.close();
     await browser.close();
   }
 });

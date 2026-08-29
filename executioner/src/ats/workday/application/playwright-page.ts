@@ -24,6 +24,7 @@ interface BrowserApplicationSnapshot {
   readonly pageId: string | null;
   readonly requiredFields: readonly {
     readonly fieldId: string;
+    readonly semanticKey: string;
     readonly page?: ApplicationHandlerPage;
     readonly verification: "verified" | "unverified";
     readonly diagnostic: {
@@ -81,6 +82,7 @@ interface BrowserApplicationSnapshot {
   readonly signature: string;
   readonly transitionKey: string;
   readonly physicalPageOccurrenceKey: string;
+  readonly physicalDomKey: string;
   readonly validationKeys: readonly string[];
   readonly validationOwners: readonly string[];
 }
@@ -95,6 +97,7 @@ interface BrowserApplicationAmbiguity {
   }[];
 }
 const destinationStabilityWindowMs = 3_000;
+const questionnaireOccurrences = new WeakMap<Page, { epoch: number }>();
 export class PlaywrightWorkdayApplicationPage {
   readonly #page: Page;
   readonly #timeoutMs: number;
@@ -105,6 +108,7 @@ export class PlaywrightWorkdayApplicationPage {
     this.#timeoutMs = options.timeoutMs ?? 5_000;
     this.#navigationSettleTimeoutMs = options.navigationSettleTimeoutMs ?? this.#timeoutMs;
     this.#pageIds = options.pageIds ?? {};
+    if (!questionnaireOccurrences.has(page)) questionnaireOccurrences.set(page, { epoch: 0 });
   }
   async observe(signal: AbortSignal): Promise<ApplicationPortResult<ApplicationPageTruth>> {
     const snapshot = await this.#readSnapshot(signal);
@@ -251,6 +255,7 @@ export class PlaywrightWorkdayApplicationPage {
         after.value.page === before.value.page &&
         after.value.rootSelector === before.value.rootSelector &&
         after.value.transitionKey === before.value.transitionKey &&
+        after.value.physicalDomKey === before.value.physicalDomKey &&
         after.value.requiredFields.length <= before.value.requiredFields.length
       ) {
         navigationDiagnostic("semantic_guard_failed", {
@@ -262,6 +267,9 @@ export class PlaywrightWorkdayApplicationPage {
           afterRequiredCount: after.value.requiredFields.length,
         });
         return failure("browser_effect_uncertain", "navigation");
+      }
+      if (advancesQuestionnaireOccurrence(before.value, after.value)) {
+        questionnaireOccurrences.get(this.#page)!.epoch += 1;
       }
       navigationDiagnostic("navigation_advanced", {
         beforePage: before.value.page,
@@ -327,7 +335,8 @@ export class PlaywrightWorkdayApplicationPage {
           (after.value.page !== before.page ||
             after.value.rootSelector !== before.rootSelector ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
-              after.value.transitionKey !== before.transitionKey) ||
+              (after.value.transitionKey !== before.transitionKey ||
+                after.value.physicalDomKey !== before.physicalDomKey)) ||
             after.value.requiredFields.length > before.requiredFields.length ||
             hasValidationDowngrade(before, after.value))
         ) {
@@ -461,7 +470,9 @@ export class PlaywrightWorkdayApplicationPage {
     const configuredPageId = this.#pageIds[snapshot.page];
     const physicalQuestionnairePageId = snapshot.page === "questionnaire"
       ? browserPageId(`s2-questionnaire-${createHash("sha256")
-        .update(snapshot.physicalPageOccurrenceKey, "utf8").digest("hex").slice(0, 24)}`)
+        .update(`${snapshot.physicalPageOccurrenceKey}\u0000${
+          questionnaireOccurrences.get(this.#page)?.epoch ?? 0
+        }`, "utf8").digest("hex").slice(0, 24)}`)
       : undefined;
     return Object.freeze({
       page: snapshot.page,
@@ -482,6 +493,26 @@ export class PlaywrightWorkdayApplicationPage {
       submitActivated: snapshot.submitActivated,
     });
   }
+}
+function advancesQuestionnaireOccurrence(
+  before: BrowserApplicationSnapshot,
+  after: BrowserApplicationSnapshot,
+): boolean {
+  if (before.page !== "questionnaire" || after.page !== "questionnaire") return false;
+  const counts = (items: BrowserApplicationSnapshot["requiredFields"]) => {
+    const result = new Map<string, number>();
+    for (const { semanticKey } of items) result.set(semanticKey, (result.get(semanticKey) ?? 0) + 1);
+    return result;
+  };
+  const beforeRequired = counts(before.requiredFields);
+  const afterRequired = counts(after.requiredFields);
+  const conditionalReveal = after.requiredFields.length > before.requiredFields.length &&
+    [...beforeRequired].every(([item, count]) => (afterRequired.get(item) ?? 0) >= count);
+  return !conditionalReveal && (
+    before.rootSelector !== after.rootSelector ||
+    before.transitionKey !== after.transitionKey ||
+    before.physicalDomKey !== after.physicalDomKey
+  );
 }
 function navigationDiagnostic(
   event: string,
@@ -558,6 +589,14 @@ function readApplicationSnapshot(
   };
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+  const semanticHash = (value: string): string => {
+    let state = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      state ^= value.charCodeAt(index);
+      state = Math.imul(state, 16777619);
+    }
+    return (state >>> 0).toString(16).padStart(8, "0");
+  };
   const validDateValue = (rawValue: string): boolean => {
     const value = rawValue.replace(
       /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
@@ -1100,6 +1139,17 @@ function readApplicationSnapshot(
           : undefined;
     requiredFields.push({
       fieldId: safeId,
+      semanticKey: semanticHash([
+        text(fieldOwner?.querySelector("label, legend")?.textContent) ||
+          text(control.getAttribute("aria-label")) ||
+          (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
+              control instanceof HTMLSelectElement
+            ? text(control.labels?.[0]?.textContent)
+            : ""),
+        control.tagName,
+        input?.type ?? "",
+        role ?? "",
+      ].join("\u0000")),
       ...(fieldPage === undefined ? {} : { page: fieldPage }),
       verification: verified ? "verified" : "unverified",
       diagnostic: {
@@ -1179,6 +1229,33 @@ function readApplicationSnapshot(
   const labels = [...root.querySelectorAll<HTMLElement>("label, legend, h1, h2")]
     .filter(visible)
     .map((item) => text(item.textContent));
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  if (typeof globalState.__huntPhysicalQuestionnaireContext !== "string") {
+    const nonce = new Uint32Array(2);
+    globalThis.crypto.getRandomValues(nonce);
+    globalState.__huntPhysicalQuestionnaireContext = [...nonce]
+      .map((value) => value.toString(16).padStart(8, "0")).join("");
+  }
+  let physicalNodes = globalState.__huntPhysicalQuestionnaireNodes;
+  if (!(physicalNodes instanceof WeakMap)) {
+    physicalNodes = new WeakMap<Element, number>();
+    globalState.__huntPhysicalQuestionnaireNodes = physicalNodes;
+    globalState.__huntPhysicalQuestionnaireNodeSequence = 0;
+  }
+  const instanceId = (element: Element): number => {
+    const nodes = physicalNodes as WeakMap<Element, number>;
+    const existing = nodes.get(element);
+    if (existing !== undefined) return existing;
+    const sequence = Number(globalState.__huntPhysicalQuestionnaireNodeSequence ?? 0) + 1;
+    globalState.__huntPhysicalQuestionnaireNodeSequence = sequence;
+    nodes.set(element, sequence);
+    return sequence;
+  };
+  const physicalDomKey = [
+    globalState.__huntPhysicalQuestionnaireContext,
+    instanceId(root),
+    ...requiredControls.map(instanceId),
+  ].join(":");
   const physicalPageOccurrenceKey = [
     page,
     rootSelector,
@@ -1195,6 +1272,7 @@ function readApplicationSnapshot(
     controlSignature.join("\u001f"),
     labels.join("\u001f"),
     validationKeys.join("\u001f"),
+    physicalDomKey,
   ].join("\u0000");
   const transitionKey = [
     page,
@@ -1214,6 +1292,7 @@ function readApplicationSnapshot(
     signature,
     transitionKey,
     physicalPageOccurrenceKey,
+    physicalDomKey,
     validationKeys,
     validationOwners,
   };
