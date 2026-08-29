@@ -1001,6 +1001,11 @@ test("repeated questionnaire navigation distinguishes the destination by exact f
     leaseExpiresAt: "2026-08-05T13:00:00.000Z",
   });
   try {
+    const sourceTruth = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+    assert.equal(sourceTruth.ok, true, JSON.stringify(sourceTruth));
+    if (!sourceTruth.ok) return;
     const result = await runtime.run(page as never, {
       schemaVersion: 1,
       journeyId: journeyId("journey_repeated_questionnaire_01"),
@@ -1013,7 +1018,7 @@ test("repeated questionnaire navigation distinguishes the destination by exact f
       input: {
         journeyId: journeyId("journey_repeated_questionnaire_01"),
         from: "questionnaire",
-        fromPageId: "s2-questionnaire",
+        fromPageId: sourceTruth.value.pageId,
         allowed: ["questionnaire", "pre_review"],
       },
     }, new AbortController().signal) as {
@@ -2419,8 +2424,12 @@ test("canonical discovery survives reorder, delayed reveal, and duplicate-label 
       <div data-slot="alpha" data-automation-id="formField"><label for="generated-1">Independent alpha*</label><input id="generated-1" required></div>
       <div data-slot="beta" data-automation-id="formField"><label for="generated-2">Independent beta*</label><input id="generated-2" required></div>
       <div data-slot="delayed" data-automation-id="formField" hidden><label for="generated-3">Conditional detail*</label><input id="generated-3" required></div>
-      <div data-slot="duplicate-1" data-automation-id="formField"><label for="generated-4">Repeated detail*</label><input id="generated-4" required></div>
-      <div data-slot="duplicate-2" data-automation-id="formField"><label for="generated-5">Repeated detail*</label><input id="generated-5" required></div>
+      <section data-slot="duplicate-section-1" aria-label="Primary location">
+        <div data-slot="duplicate-1" data-automation-id="formField"><label for="generated-4">Country</label><input id="generated-4" required></div>
+      </section>
+      <section data-slot="duplicate-section-2" aria-label="Secondary location">
+        <div data-slot="duplicate-2" data-automation-id="formField"><label for="generated-5">Country</label><input id="generated-5" required></div>
+      </section>
     </main>`);
     const pageId = "page-perturbed-canonical-discovery" as never;
     await bindQuestionnaireTargets(page, pageId);
@@ -2432,11 +2441,30 @@ test("canonical discovery survives reorder, delayed reveal, and duplicate-label 
     const duplicateTokens = await page.locator('[data-slot^="duplicate-"] input')
       .evaluateAll((inputs) => inputs.map((input) => input.getAttribute("data-hunt-target-token")));
     assert.equal(new Set(duplicateTokens).size, 2);
+    const beforeMutation = await inspectPage(
+      page,
+      "live_session_duplicate_label_mutation_01" as never,
+      pageId,
+      new Map(),
+    );
+    for (const [index, token] of duplicateTokens.entries()) {
+      assert.ok(token !== null);
+      const target = beforeMutation.targets.get(token)?.[0];
+      assert.ok(target !== undefined);
+      assert.equal(await applyMutation(page, target, {
+        kind: "set_text",
+        target: target.token,
+        text: index === 0 ? "Primary answer" : "Secondary answer",
+      }, undefined, 1_000), "applied");
+    }
 
     await page.locator("main").evaluate((main) => {
       const alpha = main.querySelector('[data-slot="alpha"]')!;
       const beta = main.querySelector('[data-slot="beta"]')!;
       main.insertBefore(beta, alpha);
+      const primary = main.querySelector('[data-slot="duplicate-section-1"]')!;
+      const secondary = main.querySelector('[data-slot="duplicate-section-2"]')!;
+      main.insertBefore(secondary, primary);
       for (const [index, input] of [...main.querySelectorAll("input")].entries()) {
         input.removeAttribute("data-hunt-target-token");
         const label = input.labels?.[0];
@@ -2457,6 +2485,90 @@ test("canonical discovery survives reorder, delayed reveal, and duplicate-label 
     const reboundDuplicates = await page.locator('[data-slot^="duplicate-"] input')
       .evaluateAll((inputs) => inputs.map((input) => input.getAttribute("data-hunt-target-token")));
     assert.equal(new Set(reboundDuplicates).size, 2);
+    assert.equal(await page.locator('[data-slot="duplicate-1"] input')
+      .getAttribute("data-hunt-target-token"), duplicateTokens[0]);
+    assert.equal(await page.locator('[data-slot="duplicate-2"] input')
+      .getAttribute("data-hunt-target-token"), duplicateTokens[1]);
+    const afterMutation = await inspectPage(
+      page,
+      "live_session_duplicate_label_mutation_01" as never,
+      pageId,
+      new Map(),
+    );
+    assert.deepEqual(duplicateTokens.map((token) => {
+      const readback = token === null ? undefined : afterMutation.targets.get(token)?.[0]?.readback;
+      return readback?.kind === "text" ? readback.value : undefined;
+    }), ["Primary answer", "Secondary answer"]);
+    const rebound = await inspectPage(
+      page,
+      "live_session_duplicate_reviewed_remount" as never,
+      pageId,
+      new Map(),
+    );
+    const primary = rebound.observation.targets.find(({ token }) => token === duplicateTokens[0]);
+    const primaryTarget = primary === undefined ? undefined : rebound.targets.get(primary.token)?.[0];
+    assert.equal(await applyMutation(page, primaryTarget!, {
+      kind: "set_text",
+      target: primary!.token,
+      text: "Primary committed",
+    }, undefined, 1_000), "applied");
+    assert.equal(await page.locator('[data-slot="duplicate-1"] input').inputValue(), "Primary committed");
+    assert.equal(await page.locator('[data-slot="duplicate-2"] input').inputValue(), "Secondary answer");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("indistinguishable duplicate remounts reconcile as one deterministic answer class", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField"><label for="member-a">Unseen detail*</label><input id="member-a" required></div>
+      <div data-automation-id="formField"><label for="member-b">Unseen detail*</label><input id="member-b" required></div>
+    </main>`);
+    const pageId = "page-equivalent-duplicate-remount" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const tokens = await page.locator("input").evaluateAll((inputs) =>
+      inputs.map((input) => input.getAttribute("data-hunt-target-token"))
+    );
+    assert.equal(tokens[0], tokens[1]);
+    const initial = await inspectPage(
+      page, "live_session_equivalent_duplicate_01" as never, pageId, new Map(),
+    );
+    assert.equal(initial.observation.targets.length, 1);
+    const target = [...initial.targets.values()][0]?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(page, target, {
+      kind: "set_text",
+      target: target.token,
+      text: "Stable synthetic answer",
+    }, undefined, 1_000), "applied");
+    assert.deepEqual(await page.locator("input").evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value)
+    ), ["Stable synthetic answer", "Stable synthetic answer"]);
+
+    await page.locator("main").evaluate((main) => {
+      const members = [...main.children];
+      main.prepend(members[1]!);
+      for (const [index, input] of [...main.querySelectorAll("input")].entries()) {
+        input.removeAttribute("data-hunt-target-token");
+        const label = input.labels?.[0];
+        input.id = `remounted-member-${index + 20}`;
+        label?.setAttribute("for", input.id);
+      }
+    });
+    await bindQuestionnaireTargets(page, pageId);
+    assert.deepEqual(await page.locator("input").evaluateAll((inputs) =>
+      inputs.map((input) => input.getAttribute("data-hunt-target-token"))
+    ), tokens);
+    const rebound = await inspectPage(
+      page, "live_session_equivalent_duplicate_01" as never, pageId, new Map(),
+    );
+    assert.equal(rebound.observation.targets.length, 1);
+    const readback = [...rebound.targets.values()][0]?.[0]?.readback;
+    assert.equal(readback?.kind === "text" ? readback.value : undefined,
+      "Stable synthetic answer");
   } finally {
     await browser.close();
   }

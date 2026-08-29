@@ -163,6 +163,55 @@ test("production binding resolves opaque owner sources without value leakage", a
   }
 });
 
+test("production binding carries admitted synthetic mode without requiring a Profile lane", async () => {
+  const fixture = liveFixture();
+  try {
+    const sourcePath = join(dirname(fixture.configPath), "runtime", "application-profile.json");
+    const source = JSON.parse(readFileSync(sourcePath, "utf8"));
+    source.profilePlan.mode = "synthetic_test_non_submittable";
+    source.profilePlan.fields = [];
+    writeFileSync(sourcePath, JSON.stringify(source));
+    let admittedMode: string | undefined;
+    const binding = createStage2ApplicationWalkProductionBinding({
+      runtime: {
+        async bind(request) {
+          admittedMode = request.ownerSources.profilePlan.mode;
+          return {
+            walk: {
+              observer: { async observe() { throw new Error("offline binding only"); } },
+              handlers: {
+                resume: verifiedHandler("resume", "resume_verified"),
+                profile: neverHandler("profile", "profile_verified"),
+                questionnaire: verifiedHandler("questionnaire", "questionnaire_verified"),
+              },
+              navigation: { async next() { throw new Error("offline binding only"); } },
+              progress: { async record() { throw new Error("offline binding only"); } },
+            },
+            laneAcceptances: createApplicationLaneAcceptanceCollector(),
+            cleanup: { async close() { return true; } },
+          };
+        },
+      },
+      inspectSource: () => ({
+        repositoryRoot: resolve(".."),
+        sourceRevision: "1111111111111111111111111111111111111111",
+      }),
+      now: () => fixture.now,
+      aclAdmission: { admit: () => ({ ok: true as const }) },
+    });
+    const resolved = await binding.bind({
+      configPath: fixture.configPath,
+      evidenceRoot: fixture.evidenceRoot,
+      checkpoint: "pre_review",
+    }, AbortSignal.any([]));
+    assert.equal(admittedMode, "synthetic_test_non_submittable");
+    assert.equal(resolved.input.executionMode, "synthetic_test_non_submittable");
+    assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([])), true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("application slice preserves a posting-unavailable account fact", async () => {
   const fixture = liveFixture();
   let cleanupCalls = 0;

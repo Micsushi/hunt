@@ -30,6 +30,8 @@ import { admitProfileFieldLearningEvidence } from
 import { createValueFreeRunTrace } from
   "../../../src/live/evidence/value-free-run-trace.ts";
 import { retainedIntakeTextSha256 } from "../../../src/form/questions/catalog.ts";
+import type { ProfileSyntheticFieldEvidence } from
+  "../../../src/ats/workday/application/lane-composition.ts";
 
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 const revisionId = "revision_abcdefghijklmnop";
@@ -158,11 +160,15 @@ test("Review completion admits an observed unknown optional control left unset",
     const configSha256 = writeOwnerConfig(layout);
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     const learningPath = join(layout.evidenceRoot, "profile-field-learning.json");
-    const learning = JSON.parse(readFileSync(learningPath, "utf8"));
+    let learning = JSON.parse(readFileSync(learningPath, "utf8"));
     learning.executionMode = "synthetic_test_non_submittable";
     learning.testOnly = true;
     learning.liveAcceptanceEligible = false;
     learning.fields[0].lane = "synthetic_test_default";
+    const syntheticFields = [syntheticProfileField(
+      "profile-page-1", "identity.given_name", "First Name", "Synthetic owner review",
+    )];
+    learning = bindSyntheticProfileLearning(learning, syntheticFields);
     learning.fields[1] = {
       ...learning.fields[1],
       fieldIdentity: "profile.unknown.optional.2",
@@ -185,6 +191,7 @@ test("Review completion admits an observed unknown optional control left unset",
     application.laneAcceptances[0].executionMode = "synthetic_test_non_submittable";
     application.laneAcceptances[0].verifiedFields[0].provenance = "generated_default";
     application.laneAcceptances[0].verifiedFields[0].lane = "synthetic_test_default";
+    application.laneAcceptances[0].syntheticFields = syntheticFields;
     application.laneAcceptances[0].profileFieldLearningSha256 = digest(learningBytes);
     writeFileSync(applicationPath, `${JSON.stringify(application)}\n`);
     const questionPath = join(layout.evidenceRoot, "question-answer-learning.json");
@@ -211,7 +218,7 @@ test("Review completion admits an observed unknown optional control left unset",
       testDefault: "Synthetic owner review",
       actualOwnerValue: null,
       needsUserValue: true,
-      provenance: "visible_option",
+      provenance: "generated_default",
       validation: "verified",
       committedReadback: "Synthetic owner review",
     });
@@ -408,6 +415,52 @@ test("Review completion admits bound non-submittable synthetic questionnaire lea
   }
 });
 
+test("Review completion independently rejects freshly sealed inconsistent active-fill SLO facts", async () => {
+  const cases = [
+    { activeFillDurationMs: 60_001, activeFillSloMs: 60_000, activeFillWithinSlo: true },
+    { activeFillDurationMs: 500, activeFillSloMs: 60_001, activeFillWithinSlo: true },
+    { activeFillDurationMs: 500, activeFillSloMs: 60_000, activeFillWithinSlo: false },
+  ];
+  for (const [index, inconsistent] of cases.entries()) {
+    const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-review-slo-${index}-`));
+    try {
+      const layout = await prepareStage2RunStorage({
+        storageRoot,
+        runKey: `run_20260810_sloinconsistent${index}`,
+      }, noProtection);
+      const configSha256 = writeOwnerConfig(layout);
+      await writeReviewEvidence(layout.evidenceRoot, configSha256);
+      const trace = createValueFreeRunTrace(layout.evidenceRoot, () => undefined);
+      trace("application_walk_started", {
+        journeyId,
+        stopAfter: "pre_review",
+        startedAt: "2026-08-10T12:00:00.000Z",
+        monotonicClock: "performance_now",
+        submitActivated: false,
+      });
+      for (let ordinal = 1; ordinal <= 3; ordinal += 1) {
+        trace("application_walk_progress", {
+          ...timingDetails(ordinal),
+          ...(ordinal === 1 ? inconsistent : {}),
+        } as never);
+      }
+      writePhaseTimings(trace);
+      trace("application_walk_terminal", {
+        journeyId,
+        status: "passed",
+        checkpoint: "pre_review",
+        completedPages: 3,
+        totalDurationMs: 3_000,
+        monotonicClock: "performance_now",
+        submitActivated: false,
+      });
+      await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+    } finally {
+      rmSync(storageRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 test("Review completion requires exact pending profile questions for synthetic answers", async () => {
   for (const mutation of ["missing", "mismatched"] as const) {
     const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-review-pending-${mutation}-`));
@@ -439,6 +492,44 @@ test("Review completion requires exact pending profile questions for synthetic a
         pending.pendingProfileQuestions[0].committedReadback = "No";
         writeFileSync(path, `${JSON.stringify(pending)}\n`);
       }
+      await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
+    } finally {
+      rmSync(storageRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("fresh Review evidence rejects every altered Profile pending-owner binding dimension", async () => {
+  const mutations: Record<string, (record: Record<string, unknown>, pending: Record<string, unknown>[]) => void> = {
+    extra: (record, pending) => pending.push({ ...record, fieldId: "unknown.required.9", questionId: "question.profile.unknown.required.9" }),
+    occurrence: (record) => { record.pageId = "profile-page-other"; },
+    label: (record) => { record.exactQuestion = "Altered label"; },
+    required_semantic: (record) => { record.required = false; record.semanticQuestionType = "qualification"; },
+    answer_control: (record) => { record.answerType = "single_select"; record.controlType = "select"; },
+    options_constraints: (record) => { record.options = ["Altered"]; record.constraints = { displayFormat: "YYYY-MM-DD" }; },
+    readback_provenance: (record) => {
+      record.testDefault = "Altered";
+      record.committedReadback = "Altered";
+      record.provenance = "visible_option";
+    },
+  };
+  for (const [index, [name, mutate]] of Object.entries(mutations).entries()) {
+    const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-profile-pending-${name}-`));
+    try {
+      const layout = await prepareStage2RunStorage({
+        storageRoot,
+        runKey: `run_20260810_profilebind${String(index).padStart(5, "0")}`,
+      }, noProtection);
+      const configSha256 = writeOwnerConfig(layout);
+      await writeReviewEvidence(
+        layout.evidenceRoot, configSha256, journeyId, false, false, true,
+        false, 1, false, true,
+      );
+      const path = join(layout.evidenceRoot, "pending-profile-questions.json");
+      const evidence = JSON.parse(readFileSync(path, "utf8"));
+      const record = evidence.pendingProfileQuestions[0] as Record<string, unknown>;
+      mutate(record, evidence.pendingProfileQuestions);
+      writeFileSync(path, `${JSON.stringify(evidence)}\n`);
       await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
     } finally {
       rmSync(storageRoot, { recursive: true, force: true });
@@ -1162,11 +1253,18 @@ async function writeReviewEvidence(
     }],
   }, null, 2)}\n`, "utf8");
   if (combinedResumeProfile || syntheticQuestionnaire) {
-    const learning = JSON.parse(learningBytes.toString("utf8"));
+    let learning = JSON.parse(learningBytes.toString("utf8"));
     learning.executionMode = "synthetic_test_non_submittable";
     learning.testOnly = true;
     learning.liveAcceptanceEligible = false;
-    if (combinedResumeProfile) learning.fields[0].lane = "synthetic_test_default";
+    if (combinedResumeProfile) {
+      learning.fields[0].lane = "synthetic_test_default";
+      learning = bindSyntheticProfileLearning(learning, [
+        syntheticProfileField(
+          "profile-page-1", "identity.given_name", "First Name", "Synthetic owner review",
+        ),
+      ]);
+    }
     learningBytes = Buffer.from(`${JSON.stringify(learning, null, 2)}\n`, "utf8");
   }
   if (!directReview) {
@@ -1176,6 +1274,7 @@ async function writeReviewEvidence(
   let combinedProfileFieldLearningSha256: string | undefined;
   if (combinedResumeProfile) {
     const template = JSON.parse(learningBytes.toString("utf8"));
+    delete template.syntheticFieldsSha256;
     const linkedIn = {
       ...template.fields[0],
       fieldIdentity: "profile.social.linkedin",
@@ -1377,7 +1476,7 @@ async function writeReviewEvidence(
         testDefault: "Synthetic owner review",
         actualOwnerValue: null,
         needsUserValue: true,
-        provenance: "visible_option",
+        provenance: "generated_default",
         validation: "verified",
         committedReadback: "Synthetic owner review",
       }] : [])],
@@ -2026,11 +2125,55 @@ function profileAcceptance(
       provenance: generated ? "generated_default" as const : "owner_provided" as const,
       lane: generated ? "synthetic_test_default" as const : "live_owner_fact" as const,
     }],
+    ...(generated ? { syntheticFields: [syntheticProfileField(
+      field === "social.linkedin" ? "profile-page-2" : "profile-page-1",
+      field,
+      field === "social.linkedin" ? "LinkedIn" : "First Name",
+      "Synthetic owner review",
+    )] } : {}),
     ownedDuplicateRows: 0 as const,
     independentlyVerified: true as const,
     profileFieldLearningSha256,
     submitActivated: false as const,
     privacyScan: "pass" as const,
+  };
+}
+
+function syntheticProfileField(
+  pageId: string,
+  fieldId: string,
+  label: string,
+  readback: string,
+): ProfileSyntheticFieldEvidence {
+  const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+  return {
+    occurrenceId: hash(`${pageId}\0\0${fieldId}`),
+    questionId: `question.profile.${fieldId}`,
+    fieldId,
+    rowKey: null,
+    labelSha256: hash(label),
+    required: true,
+    semanticQuestionType: "unknown" as const,
+    answerType: "text" as const,
+    controlType: "text" as const,
+    uiVariant: "workday_text_v2",
+    optionsSha256: hash("[]"),
+    constraintsSha256: hash("null"),
+    committedReadbackSha256: hash(readback),
+    provenance: "generated_default" as const,
+  } as const;
+}
+
+function bindSyntheticProfileLearning(
+  learning: Record<string, unknown>,
+  syntheticFields: readonly ProfileSyntheticFieldEvidence[],
+): Record<string, unknown> {
+  const { visibleControlCount, fields, syntheticFieldsSha256: _old, ...prefix } = learning;
+  return {
+    ...prefix,
+    syntheticFieldsSha256: digest(Buffer.from(JSON.stringify(syntheticFields))),
+    visibleControlCount,
+    fields,
   };
 }
 

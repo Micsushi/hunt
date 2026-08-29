@@ -98,8 +98,16 @@ export async function inspectPage(
       selectedOptions: item.selectedOptions?.map(bounded),
     };
     const matches = targets.get(token);
-    if (matches === undefined) targets.set(token, [target]);
-    else matches.push(target);
+    if (matches === undefined) {
+      targets.set(token, [target]);
+    } else if (equivalentClassMember(matches[0]!, target)) {
+      // Tokenless, semantically indistinguishable remounts are one logical
+      // question class. The mutation adapter applies the same answer to every
+      // physical member, so DOM order never becomes identity.
+      continue;
+    } else {
+      matches.push(target);
+    }
 
     observations.push({
       token,
@@ -125,6 +133,16 @@ export async function inspectPage(
     },
     targets,
   };
+}
+
+function equivalentClassMember(
+  left: ResolvedBrowserTarget,
+  right: ResolvedBrowserTarget,
+): boolean {
+  return left.token.startsWith("target-workday-") && left.token === right.token &&
+    left.name === right.name && left.required === right.required &&
+    JSON.stringify(left.control) === JSON.stringify(right.control) &&
+    left.interaction === right.interaction;
 }
 
 async function inspectUploadReadback(
@@ -259,11 +277,17 @@ export async function applyMutation(
   }
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
-  if (await locator.count() !== 1 && !mayRebindExclusiveChoice) return "invalid";
+  const locatorCount = await locator.count();
+  const deterministicClass = locatorCount > 1 &&
+    target.declaredToken.startsWith("target-workday-") && target.interaction === undefined;
+  if (locatorCount !== 1 && !mayRebindExclusiveChoice && !deterministicClass) return "invalid";
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
-    await locator.fill(mutation.text, { timeout: timeoutMs });
-    await locator.blur({ timeout: timeoutMs });
+    for (let index = 0; index < locatorCount; index += 1) {
+      const member = locator.nth(index);
+      await member.fill(mutation.text, { timeout: timeoutMs });
+      await member.blur({ timeout: timeoutMs });
+    }
     return "applied";
   }
   if (mutation.kind === "set_date") {
@@ -806,7 +830,9 @@ export async function applyMutation(
     ) {
       return "invalid";
     }
-    await locator.setChecked(mutation.checked, { timeout: timeoutMs });
+    for (let index = 0; index < locatorCount; index += 1) {
+      await locator.nth(index).setChecked(mutation.checked, { timeout: timeoutMs });
+    }
     return "applied";
   }
   if (mutation.kind === "select") {

@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 
 import {
   createApplicationLaneHandlers,
+  createApplicationLaneAcceptanceCollector,
   createImmutableApplicationLaneSources,
 } from "../../../src/ats/workday/application/lane-composition.ts";
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
@@ -218,6 +219,63 @@ test("walks a real combined Resume/Profile page through both verified lanes", as
     await new Promise<void>((resolve, reject) => server.close((error) =>
       error === undefined ? resolve() : reject(error)
     ));
+  }
+});
+
+test("derives distinct stable questionnaire occurrences from physical Workday steps", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const render = async (step: string) => page.setContent(`
+      <div data-automation-id="progressBarActiveStep">${step}</div>
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <h2>Application Questions</h2>
+        <div data-automation-id="formField"><label for="shared">Repeated question*</label>
+          <input id="shared" required value="committed"></div>
+      </main>
+    `);
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    await render("Step 2 of 4");
+    const first = await application.observe(new AbortController().signal);
+    await render("Step 3 of 4");
+    const second = await application.observe(new AbortController().signal);
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(second.ok, true, JSON.stringify(second));
+    if (!first.ok || !second.ok) return;
+    assert.notEqual(first.value.pageId, second.value.pageId);
+    assert.match(first.value.pageId, /^s2-questionnaire-[0-9a-f]{24}$/u);
+    assert.match(second.value.pageId, /^s2-questionnaire-[0-9a-f]{24}$/u);
+    const collector = createApplicationLaneAcceptanceCollector();
+    for (const pageIdValue of [first.value.pageId, second.value.pageId]) {
+      collector.record({
+        schemaVersion: 1,
+        checkpoint: "questionnaire_verified",
+        answers: [{
+          pageId: pageIdValue,
+          fieldId: "repeated-question" as never,
+          questionId: "observed-question-0123456789abcdef01234567" as never,
+          provenance: "owner_provided",
+          lane: "live_owner_fact",
+          protectedCategory: null,
+          templateRevision: null,
+          verification: "independent",
+        }],
+        protectedPlaceholderCount: 0,
+        independentlyVerified: true,
+        submitActivated: false,
+        privacyScan: "pass",
+      });
+    }
+    const cumulative = collector.snapshot("pre_review");
+    assert.equal(cumulative.length, 1);
+    assert.equal(cumulative[0]?.checkpoint === "questionnaire_verified" &&
+      cumulative[0].answers.length, 2);
+    await render("Step 2 of 4");
+    const rebound = await application.observe(new AbortController().signal);
+    assert.equal(rebound.ok, true, JSON.stringify(rebound));
+    if (rebound.ok) assert.equal(rebound.value.pageId, first.value.pageId);
+  } finally {
+    await browser.close();
   }
 });
 

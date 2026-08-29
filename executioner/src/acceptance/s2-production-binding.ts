@@ -91,12 +91,7 @@ export function createStage2RealJourneyProductionBinding(
               const laneAcceptances = resolved.dependencies.laneAcceptances.snapshot(
                 walk.value.checkpoint,
               );
-              const executionMode = laneAcceptances.find((lane) =>
-                lane.checkpoint === "profile_verified"
-              )?.executionMode;
-              if (executionMode === undefined) {
-                throw new TypeError("execution mode evidence unavailable");
-              }
+              const executionMode = resolved.input.executionMode;
               applicationAcceptance = Object.freeze({
                 schemaVersion: 1,
                 evidenceRevision: "s2-application-walk-acceptance-v1",

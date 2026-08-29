@@ -181,19 +181,25 @@ function validProfile(
     "submitActivated", "privacyScan",
   ];
   const hasLearningDigest = Object.hasOwn(value, "profileFieldLearningSha256");
+  const hasSyntheticEvidence = Object.hasOwn(value, "syntheticFields");
   const hasSyntheticDefault = value.verifiedFields.some((field) =>
     field.lane === "synthetic_test_default"
   );
-  return (hasLearningDigest
-    ? exactKeys(value, learningKeys) &&
+  const shape = hasLearningDigest
+    ? exactKeys(value, hasSyntheticEvidence
+      ? [...learningKeys.slice(0, 6), "syntheticFields", ...learningKeys.slice(6)]
+      : learningKeys) &&
       typeof value.profileFieldLearningSha256 === "string" &&
       /^[0-9a-f]{64}$/u.test(value.profileFieldLearningSha256)
-    : exactKeys(value, requiredKeys)) &&
+    : exactKeys(value, hasSyntheticEvidence
+      ? [...requiredKeys.slice(0, 6), "syntheticFields", ...requiredKeys.slice(6)]
+      : requiredKeys);
+  return shape &&
     value.schemaVersion === 1 &&
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value.pageId) &&
     (value.executionMode === "live" || value.executionMode === "synthetic_test_non_submittable") &&
     (value.pageType === "profile" || value.pageType === "contact") &&
-    (!hasSyntheticDefault || hasLearningDigest) &&
+    (!hasSyntheticDefault || hasLearningDigest && hasSyntheticEvidence) &&
     value.verifiedFields.every((field) => {
       const keys = Object.keys(field);
       const required = [
@@ -208,16 +214,16 @@ function validProfile(
         new Set([
           "identity", "address", "phone", "application_source", "prior_employment",
           "employment", "experience", "education", "skill", "language", "website",
-          "social_network",
+          "social_network", "unknown",
         ])
           .has(field.questionType) &&
         new Set([
           "text", "phone", "date", "month", "year", "number", "url", "boolean",
-          "option", "single_select", "multi_select",
+          "option", "single_select", "multi_select", "file",
         ]).has(field.answerType) &&
         new Set([
           "text", "textarea", "phone", "date", "month", "year", "number", "url",
-          "checkbox", "select", "multi_select", "search_select", "radio_group",
+          "checkbox", "file", "select", "multi_select", "search_select", "radio_group",
         ])
           .has(field.uiBehavior) &&
         new Set([
@@ -227,6 +233,7 @@ function validProfile(
           "workday_textarea_v1", "workday_select_v1", "workday_multi_select_v1",
           "workday_search_select_v2",
           "workday_source_select_v1", "workday_previous_worker_radio_v1",
+          "workday_unknown_required_v1",
         ]).has(field.uiVariant) &&
         new Set([
           "owner_provided", "resume_verified", "configured_template", "journey_derived",
@@ -239,9 +246,40 @@ function validProfile(
           field.optionMappingProvenance === "visible_option") &&
         (field.rowKey === undefined ||
           /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(field.rowKey));
-    }) &&
+    }) && validSyntheticProfileFields(value) &&
     value.ownedDuplicateRows === 0 && value.independentlyVerified === true &&
     value.submitActivated === false && value.privacyScan === "pass";
+}
+
+function validSyntheticProfileFields(
+  value: Extract<ApplicationLaneAcceptance, { checkpoint: "profile_verified" }>,
+): boolean {
+  const expected = value.verifiedFields.filter(({ lane }) => lane === "synthetic_test_default");
+  const fields = value.syntheticFields ?? [];
+  const sha256 = /^[0-9a-f]{64}$/u;
+  return fields.length === expected.length && new Set(fields.map(({ occurrenceId }) =>
+    occurrenceId
+  )).size === fields.length && fields.every((field) =>
+    exactKeys(field, [
+      "occurrenceId", "questionId", "fieldId", "rowKey", "labelSha256", "required",
+      "semanticQuestionType", "answerType", "controlType", "uiVariant", "optionsSha256",
+      "constraintsSha256", "committedReadbackSha256", "provenance",
+    ]) && sha256.test(field.occurrenceId) && sha256.test(field.labelSha256) &&
+    sha256.test(field.optionsSha256) && sha256.test(field.constraintsSha256) &&
+    sha256.test(field.committedReadbackSha256) &&
+    field.questionId === `question.profile.${field.fieldId}` &&
+    (field.rowKey === null || /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(field.rowKey)) &&
+    typeof field.required === "boolean" && field.provenance === "generated_default" &&
+    field.semanticQuestionType === "unknown" &&
+    new Set(["text", "boolean", "single_select", "multi_select", "date", "file"])
+      .has(field.answerType) &&
+    new Set(["text", "textarea", "checkbox", "radio", "select", "listbox", "date", "file_upload"])
+      .has(field.controlType) &&
+    expected.filter((candidate) => candidate.fieldId === field.fieldId &&
+      (candidate.rowKey ?? null) === field.rowKey && candidate.uiVariant === field.uiVariant &&
+      candidate.provenance === field.provenance
+    ).length === 1
+  );
 }
 
 function validExecutionMode(
@@ -249,8 +287,7 @@ function validExecutionMode(
   lanes: readonly ApplicationLaneAcceptance[],
 ): boolean {
   const profiles = lanes.filter((lane) => lane.checkpoint === "profile_verified");
-  return (profiles.length === 0 ? mode === "live" :
-    profiles.every((profile) => profile.executionMode === mode)) &&
+  return profiles.every((profile) => profile.executionMode === mode) &&
     (mode === "synthetic_test_non_submittable" || !lanes.some((lane) =>
       lane.checkpoint === "profile_verified"
         ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
@@ -297,7 +334,7 @@ function validQuestionnaire(
 function exactKeys(value: object, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.length &&
-    expected.every((key, index) => keys[index] === key);
+    expected.every((key) => keys.includes(key));
 }
 
 function denied(reason = "invalid"): never {

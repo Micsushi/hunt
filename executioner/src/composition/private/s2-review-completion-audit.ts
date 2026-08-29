@@ -99,8 +99,11 @@ export async function auditStage2ReviewCompletion(
       fileName: "completion-audit.json",
     });
     return inspection.audit;
-  } catch {
-    return denied();
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("review completion audit denied")) {
+      throw error;
+    }
+    return denied(error instanceof Error ? error.message : "unexpected_error");
   }
 }
 
@@ -225,8 +228,11 @@ export function inspectStage2ReviewCompletion(
       realEvidenceFiles: REAL_EVIDENCE_FILES,
       monitorFiles: Object.freeze(monitorFiles),
     });
-  } catch {
-    return denied();
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("review completion audit denied")) {
+      throw error;
+    }
+    return denied(error instanceof Error ? error.message : "unexpected_error");
   }
 }
 
@@ -314,7 +320,7 @@ function questionLearningDigest(
       );
       return matches.length !== 1;
     })
-  ) denied();
+  ) denied("question_learning_binding");
   validateControlMonitorBindings(
     learning.questions.flatMap(({ monitorBinding }) =>
       monitorBinding === null ? [] : [monitorBinding]
@@ -351,13 +357,30 @@ function validatePendingProfileQuestions(
       candidate.pageId === occurrence.pageId && candidate.rowKey === occurrence.rowKey &&
       candidate.fieldId === occurrence.fieldId
     ).length !== 1) ||
-    profilePending.some((candidate) =>
-      candidate.questionId !== `question.profile.${candidate.fieldId}` ||
-      candidate.semanticQuestionType !== "unknown" ||
-      candidate.actualOwnerValue !== null || !candidate.needsUserValue ||
-      candidate.provenance !== "visible_option" || candidate.validation !== "verified" ||
-      candidate.testDefault === null || candidate.committedReadback !== candidate.testDefault
-    ) ||
+    profileOccurrences.some((occurrence) => {
+      const matches = profilePending.filter((candidate) =>
+        candidate.pageId === occurrence.pageId && candidate.rowKey === occurrence.rowKey &&
+        candidate.fieldId === occurrence.fieldId
+      );
+      if (matches.length !== 1) return true;
+      const candidate = matches[0]!;
+      return occurrence.evidence.occurrenceId !== digestText(
+        `${candidate.pageId}\0${candidate.rowKey ?? ""}\0${candidate.fieldId}`,
+      ) || candidate.questionId !== occurrence.evidence.questionId ||
+        occurrence.evidence.labelSha256 !== digestText(candidate.exactQuestion.normalize("NFC")) ||
+        candidate.required !== occurrence.evidence.required ||
+        candidate.semanticQuestionType !== occurrence.evidence.semanticQuestionType ||
+        candidate.answerType !== occurrence.evidence.answerType ||
+        candidate.controlType !== occurrence.evidence.controlType ||
+        occurrence.evidence.optionsSha256 !== digestText(JSON.stringify(candidate.options)) ||
+        occurrence.evidence.constraintsSha256 !== digestText(JSON.stringify(candidate.constraints)) ||
+        candidate.testDefault === null || candidate.committedReadback !== candidate.testDefault ||
+        occurrence.evidence.committedReadbackSha256 !==
+          digestText(candidate.committedReadback.normalize("NFC")) ||
+        candidate.actualOwnerValue !== null || !candidate.needsUserValue ||
+        candidate.provenance !== occurrence.evidence.provenance ||
+        candidate.validation !== "verified";
+    }) ||
     expected.some((question) => {
       const matches = questionnairePending.filter((candidate) =>
         candidate.pageId === question.pageId && candidate.rowKey === null &&
@@ -388,23 +411,31 @@ function validatePendingProfileQuestions(
               (question.uiType === "text" || question.uiType === "textarea") &&
               "inputType" in candidate.constraints));
     })
-  ) denied();
+  ) denied("pending_profile_bijection");
 }
 
 function syntheticProfileOccurrences(application: ApplicationWalkAcceptanceV1): readonly {
   readonly pageId: string;
   readonly rowKey: string | null;
   readonly fieldId: string;
+  readonly evidence: NonNullable<Extract<
+    ApplicationWalkAcceptanceV1["laneAcceptances"][number],
+    { readonly checkpoint: "profile_verified" }
+  >["syntheticFields"]>[number];
 }[] {
   return application.laneAcceptances.flatMap((lane) =>
-    lane.checkpoint !== "profile_verified" ? [] : lane.verifiedFields
-      .filter(({ lane: answerLane }) => answerLane === "synthetic_test_default")
-      .map(({ fieldId, rowKey }) => Object.freeze({
+    lane.checkpoint !== "profile_verified" ? [] : (lane.syntheticFields ?? [])
+      .map((evidence) => Object.freeze({
         pageId: lane.pageId,
-        rowKey: rowKey ?? null,
-        fieldId,
+        rowKey: evidence.rowKey,
+        fieldId: evidence.fieldId,
+        evidence,
       }))
   );
+}
+
+function digestText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function profileLearningDigest(
@@ -471,6 +502,9 @@ function profileLearningDigest(
       learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
       learning.testOnly !== synthetic ||
       learning.liveAcceptanceEligible !== !synthetic ||
+      learning.syntheticFieldsSha256 !== (profile.syntheticFields === undefined
+        ? undefined
+        : digestText(JSON.stringify(profile.syntheticFields))) ||
       pageCheck === undefined || monitoredState === undefined ||
       (learning.visibleControlCount !== monitoredState.fieldCount &&
         (!combinedResumeProfile || learning.visibleControlCount + 1 !== monitoredState.fieldCount)) ||
@@ -518,7 +552,7 @@ function profileLearningDigest(
           field.mechanics.persistentReadback === "not_attempted"
         ))
       )
-    ) denied();
+    ) denied("profile_learning_binding");
     const monitorPage = monitoredState.page;
     if (monitorPage !== "profile" && monitorPage !== "resume") denied();
     const monitorGroup = monitorGroups.get(monitorPage) ?? { observations: [], mutations: [] };
@@ -642,7 +676,17 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
         !Number.isSafeInteger(details.navigationWaitDurationMs) ||
         !Number.isSafeInteger(details.activeFillDurationMs) ||
         !Number.isSafeInteger(details.reconciliationDurationMs) ||
+        !Number.isSafeInteger(details.activeFillSloMs) ||
+        (details.pageReadinessDurationMs as number) < 0 ||
+        (details.navigationWaitDurationMs as number) < 0 ||
+        (details.activeFillDurationMs as number) < 0 ||
+        (details.reconciliationDurationMs as number) < 0 ||
+        (details.activeFillSloMs as number) <= 0 ||
         details.activeFillSloMs !== 60_000 ||
+        (details.activeFillDurationMs as number) > (details.activeFillSloMs as number) ||
+        (details.activeFillDurationMs as number) > 60_000 ||
+        details.activeFillWithinSlo !==
+          ((details.activeFillDurationMs as number) <= (details.activeFillSloMs as number)) ||
         details.activeFillWithinSlo !== true ||
         details.monotonicClock !== "performance_now" ||
         typeof details.pageReadyAt !== "string" ||
@@ -941,6 +985,6 @@ function comparable(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function denied(): never {
-  throw new Error("review completion audit denied");
+function denied(reason = "unspecified"): never {
+  throw new Error(`review completion audit denied: ${reason}`);
 }

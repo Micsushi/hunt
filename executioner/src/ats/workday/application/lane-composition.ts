@@ -25,6 +25,13 @@ import {
   type ApplicationPortFailure,
   type ApplicationWalkDependencies,
 } from "./page-walk-contract.ts";
+import {
+  profileSyntheticFieldEvidence,
+  type ProfileSyntheticFieldEvidence,
+} from "./profile-synthetic-evidence.ts";
+
+export { profileSyntheticFieldEvidence } from "./profile-synthetic-evidence.ts";
+export type { ProfileSyntheticFieldEvidence } from "./profile-synthetic-evidence.ts";
 
 export interface ImmutableApplicationLaneSources {
   resumeIntent(): WorkdayResumeFileIntent;
@@ -101,6 +108,7 @@ export type ApplicationLaneAcceptance =
       readonly executionMode: "live" | "synthetic_test_non_submittable";
       readonly pageType: VerifiedProfilePage["pageType"];
       readonly verifiedFields: VerifiedProfilePage["verifiedFields"];
+      readonly syntheticFields?: readonly ProfileSyntheticFieldEvidence[];
       readonly ownedDuplicateRows: 0;
       readonly independentlyVerified: true;
       readonly profileFieldLearningSha256?: string;
@@ -262,6 +270,11 @@ function profileHandler(
         executionMode: dependencies.sources.profilePlan().mode,
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
+        ...(result.committedFields.length === 0 ? {} : {
+          syntheticFields: result.committedFields.map((field) =>
+            profileSyntheticFieldEvidence(request.pageId, field)
+          ),
+        }),
         ownedDuplicateRows: 0,
         independentlyVerified: true,
         submitActivated: false,
@@ -281,11 +294,12 @@ function questionnaireHandler(
       signal: AbortSignal,
     ) {
       const source = dependencies.sources.questionnaireRequest();
-      if (
-        source.journeyId !== request.journeyId ||
-        source.pageId !== request.pageId
-      ) return laneFailure("questionnaire", undefined);
-      const result = await dependencies.questionnaire.complete(source, signal);
+      if (source.journeyId !== request.journeyId) return laneFailure("questionnaire", undefined);
+      const effectiveSource = source.pageId === request.pageId ? source : Object.freeze({
+        ...source,
+        pageId: request.pageId,
+      });
+      const result = await dependencies.questionnaire.complete(effectiveSource, signal);
       if (
         !result.ok ||
         result.value.kind !== "verified" ||

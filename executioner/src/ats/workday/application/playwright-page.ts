@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { browserPageId, fieldId } from "../../../contracts/index.ts";
 import {
@@ -79,6 +80,7 @@ interface BrowserApplicationSnapshot {
   readonly submitActivated: boolean;
   readonly signature: string;
   readonly transitionKey: string;
+  readonly physicalPageOccurrenceKey: string;
   readonly validationKeys: readonly string[];
   readonly validationOwners: readonly string[];
 }
@@ -133,7 +135,18 @@ export class PlaywrightWorkdayApplicationPage {
       beforeTruth.requiredFields.some(({ verification }) =>
         verification !== "verified"
       )
-    ) return failure("navigation_illegal", "navigation");
+    ) {
+      navigationDiagnostic("source_guard_failed", {
+        pageMatched: beforeTruth.page === request.from,
+        pageIdMatched: beforeTruth.pageId === request.fromPageId,
+        submitActivated: beforeTruth.submitActivated,
+        duplicateRows: beforeTruth.c3OwnedDuplicateRows,
+        unverifiedRequiredCount: beforeTruth.requiredFields.filter(({ verification }) =>
+          verification !== "verified"
+        ).length,
+      });
+      return failure("navigation_illegal", "navigation");
+    }
     let clicked = false;
     try {
       const action = await this.#waitForActionableNext(before.value.rootSelector, signal);
@@ -445,13 +458,19 @@ export class PlaywrightWorkdayApplicationPage {
     return undefined;
   }
   #toTruth(snapshot: BrowserApplicationSnapshot): ApplicationPageTruth {
+    const configuredPageId = this.#pageIds[snapshot.page];
+    const physicalQuestionnairePageId = snapshot.page === "questionnaire"
+      ? browserPageId(`s2-questionnaire-${createHash("sha256")
+        .update(snapshot.physicalPageOccurrenceKey, "utf8").digest("hex").slice(0, 24)}`)
+      : undefined;
     return Object.freeze({
       page: snapshot.page,
       lanes: Object.freeze([...snapshot.lanes]),
-      pageId: snapshot.pageId === null
-        ? this.#pageIds[snapshot.page] ??
-          browserPageId(`s2-${snapshot.page.replace("_", "-")}`)
-        : browserPageId(snapshot.pageId),
+      pageId: physicalQuestionnairePageId ?? configuredPageId ?? (
+        snapshot.pageId === null
+          ? browserPageId(`s2-${snapshot.page.replace("_", "-")}`)
+          : browserPageId(snapshot.pageId)
+      ),
       requiredFields: Object.freeze(snapshot.requiredFields.map((item) =>
         Object.freeze({
           fieldId: fieldId(item.fieldId),
@@ -1160,10 +1179,18 @@ function readApplicationSnapshot(
   const labels = [...root.querySelectorAll<HTMLElement>("label, legend, h1, h2")]
     .filter(visible)
     .map((item) => text(item.textContent));
+  const physicalPageOccurrenceKey = [
+    page,
+    rootSelector,
+    location.pathname,
+    location.search,
+    root.getAttribute("data-automation-id") ?? "",
+    text(activeStep?.textContent),
+  ].join("\u0000");
   const signature = [
     location.href,
     root.getAttribute("data-automation-id") ?? "",
-    document.body.getAttribute("data-hunt-page-id") ?? "",
+    physicalPageOccurrenceKey,
     text(activeStep?.textContent),
     controlSignature.join("\u001f"),
     labels.join("\u001f"),
@@ -1173,22 +1200,24 @@ function readApplicationSnapshot(
     page,
     rootSelector,
     location.href,
-    document.body.getAttribute("data-hunt-page-id") ?? "",
+    physicalPageOccurrenceKey,
     text(activeStep?.textContent),
   ].join("\u0000");
   return {
     page,
     lanes,
     rootSelector,
-    pageId: document.body.getAttribute("data-hunt-page-id"),
+    pageId: page === "questionnaire" ? null : document.body.getAttribute("data-hunt-page-id"),
     requiredFields,
     c3OwnedDuplicateRows: duplicateRows,
     submitActivated: document.documentElement.getAttribute("data-hunt-submit-activated") === "true",
     signature,
     transitionKey,
+    physicalPageOccurrenceKey,
     validationKeys,
     validationOwners,
   };
+
 }
 function failure(code: ApplicationPortFailure["code"],
   unknownLayer: ApplicationPortFailure["unknownLayer"]):

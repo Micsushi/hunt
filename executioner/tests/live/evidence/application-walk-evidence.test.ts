@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { writeApplicationWalkEvidence } from "../../../src/live/evidence/application-walk-evidence.ts";
+import type { ProfileSyntheticFieldEvidence } from
+  "../../../src/ats/workday/application/lane-composition.ts";
 import {
   fieldId,
   questionId,
@@ -247,6 +250,86 @@ test("rejects synthetic defaults from live Workday v2 acceptance", async () => {
       /application-walk evidence denied/u,
     );
     assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("admits every supported synthetic unknown Profile control shape", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-unknown-evidence-"));
+  try {
+    const baseline = packet();
+    const shapes = [
+      ["unknown.required.1", "text", "text"],
+      ["unknown.required.2", "single_select", "select"],
+      ["unknown.required.3", "multi_select", "multi_select"],
+      ["unknown.required.4", "file", "file"],
+    ] as const;
+    const profile = baseline.laneAcceptances[0];
+    if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture missing");
+    const verifiedFields = shapes.map(([fieldIdValue, answerType, uiBehavior]) => ({
+      fieldId: fieldIdValue,
+      questionType: "unknown" as const,
+      answerType,
+      uiBehavior,
+      uiVariant: "workday_unknown_required_v1",
+      provenance: "generated_default" as const,
+      lane: "synthetic_test_default" as const,
+    }));
+    const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+    const syntheticFields: readonly ProfileSyntheticFieldEvidence[] = shapes.map(
+      ([fieldIdValue, answerType, uiBehavior]): ProfileSyntheticFieldEvidence => {
+      const pendingAnswer: "text" | "single_select" | "multi_select" | "file" =
+        answerType === "single_select" ? "single_select" : answerType;
+      const controlType: "text" | "select" | "listbox" | "file_upload" =
+        uiBehavior === "multi_select" ? "listbox" :
+        uiBehavior === "file" ? "file_upload" : uiBehavior;
+      return {
+        occurrenceId: hash(`profile-page-1\0\0${fieldIdValue}`),
+        questionId: `question.profile.${fieldIdValue}`,
+        fieldId: fieldIdValue,
+        rowKey: null,
+        labelSha256: hash(`Unknown ${fieldIdValue}`),
+        required: true,
+        semanticQuestionType: "unknown" as const,
+        answerType: pendingAnswer,
+        controlType,
+        uiVariant: "workday_unknown_required_v1",
+        optionsSha256: hash(JSON.stringify(answerType.includes("select") ? ["One", "Two"] : [])),
+        constraintsSha256: hash("null"),
+        committedReadbackSha256: hash("Synthetic owner review"),
+        provenance: "generated_default" as const,
+      };
+    });
+    await writeApplicationWalkEvidence({
+      root,
+      acceptance: {
+        ...baseline,
+        executionMode: "synthetic_test_non_submittable",
+        laneAcceptances: [{
+          schemaVersion: profile.schemaVersion,
+          checkpoint: profile.checkpoint,
+          pageId: profile.pageId,
+          executionMode: "synthetic_test_non_submittable",
+          pageType: profile.pageType,
+          verifiedFields,
+          syntheticFields,
+          ownedDuplicateRows: profile.ownedDuplicateRows,
+          independentlyVerified: profile.independentlyVerified,
+          profileFieldLearningSha256: "a".repeat(64),
+          submitActivated: profile.submitActivated,
+          privacyScan: profile.privacyScan,
+        }, ...baseline.laneAcceptances.slice(1)],
+      },
+      sensitiveValues: [],
+    });
+    const admitted = JSON.parse(readFileSync(
+      join(root, "application-walk-acceptance.json"), "utf8",
+    ));
+    assert.deepEqual(admitted.laneAcceptances[0].syntheticFields.map(
+      ({ answerType, controlType }: { answerType: string; controlType: string }) =>
+        [answerType, controlType]
+    ), [["text", "text"], ["single_select", "select"], ["multi_select", "listbox"], ["file", "file_upload"]]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

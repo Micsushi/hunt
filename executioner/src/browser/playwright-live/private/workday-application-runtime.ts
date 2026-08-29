@@ -2,8 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { Page } from "playwright";
 
-import type { ApplicationLaneAcceptance } from
-  "../../../ats/workday/application/lane-composition.ts";
+import {
+  profileSyntheticFieldEvidence,
+  type ApplicationLaneAcceptance,
+} from "../../../ats/workday/application/lane-composition.ts";
 import { PlaywrightWorkdayApplicationPage } from
   "../../../ats/workday/application/playwright-page.ts";
 import {
@@ -679,6 +681,9 @@ export class OwnedWorkdayApplicationRuntime {
           }),
         });
         let learningSha256: string | null = null;
+        let syntheticFields = Object.freeze([]) as readonly ReturnType<
+          typeof profileSyntheticFieldEvidence
+        >[];
         let result;
         let reconciliationError: unknown;
         try {
@@ -687,6 +692,12 @@ export class OwnedWorkdayApplicationRuntime {
             learning.page,
             signal,
           );
+          if (result.kind === "verified" && result.committedFields.length > 0) {
+            syntheticFields = Object.freeze(result.committedFields.map((field) =>
+              profileSyntheticFieldEvidence(input.pageId, field)
+            ));
+            learning.bindSyntheticFields(syntheticFields);
+          }
         } catch (error) {
           reconciliationError = error;
           throw error;
@@ -782,6 +793,7 @@ export class OwnedWorkdayApplicationRuntime {
           executionMode: request.ownerSources.profilePlan.mode,
           pageType: result.pageType,
           verifiedFields: result.verifiedFields,
+          ...(syntheticFields.length === 0 ? {} : { syntheticFields }),
           ownedDuplicateRows: 0,
           independentlyVerified: true,
           ...(learningSha256 === null
@@ -807,7 +819,7 @@ export class OwnedWorkdayApplicationRuntime {
             testDefault: field.committedReadback,
             actualOwnerValue: null,
             needsUserValue: true,
-            provenance: "visible_option",
+            provenance: "generated_default",
             validation: "verified",
             committedReadback: field.committedReadback,
           });
@@ -1664,6 +1676,10 @@ function profilePendingConstraints(
   field: Pick<CommittedProfileField, "answerType" | "constraints">,
 ) {
   if (field.answerType === "date") return { displayFormat: "YYYY-MM-DD" as const };
+  if (field.answerType === "file") return Object.freeze({
+    acceptedExtensions: Object.freeze([...(field.constraints?.acceptedExtensions ?? [])]),
+    maxFileBytes: field.constraints?.maxFileBytes ?? null,
+  });
   if (field.constraints == null || profilePendingAnswerType(field.answerType) !== "text") return null;
   return Object.freeze({
     inputType: field.constraints.inputType,
@@ -2968,7 +2984,12 @@ export async function bindQuestionnaireTargets(
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
          `fieldset, ${supportedControls}`,
     );
-    const identities = new Map<string, number>();
+    const bindings: {
+      control: HTMLElement;
+      label: string;
+      reviewedToken: string | undefined;
+      identityHash: string;
+    }[] = [];
     const hash = (value: string) => {
       let state = 2166136261;
       for (let index = 0; index < value.length; index += 1) {
@@ -3035,7 +3056,7 @@ export async function bindQuestionnaireTargets(
         selectors.applicationQuestions,
       ].join(", "));
       let label = control instanceof HTMLInputElement && control.type === "checkbox"
-        ? normalize(field?.textContent)
+        ? normalize(control.labels?.[0]?.textContent) || normalize(field?.textContent)
         : isConditionalApplicationDate
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : control.getAttribute("aria-haspopup") === "listbox"
@@ -3051,6 +3072,30 @@ export async function bindQuestionnaireTargets(
       }
       if (label === "") label = normalize(control.getAttribute("placeholder"));
       const fieldIdentity = field?.getAttribute("data-automation-id") ?? "";
+      const semanticAncestorContext = (() => {
+        const values: string[] = [];
+        let ancestor = (field ?? control).parentElement;
+        for (let depth = 0; ancestor !== null && depth < 6; depth += 1) {
+          const role = normalize(ancestor.getAttribute("role"));
+          const ariaLabel = normalize(ancestor.getAttribute("aria-label"));
+          const labelledBy = normalize(ancestor.getAttribute("aria-labelledby"))
+            .split(" ").filter(Boolean).map((id) =>
+              normalize(document.getElementById(id)?.textContent)
+            ).filter(Boolean).join("|");
+          const heading = normalize(ancestor.querySelector(
+            ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
+          )?.textContent);
+          const automationId = normalize(ancestor.getAttribute("data-automation-id"));
+          const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
+            ? ""
+            : automationId;
+          const part = [ancestor.tagName, role, ariaLabel, labelledBy, heading, stableAutomationId]
+            .join("\u001f");
+          if (part.replace(/[\u001f]/gu, "") !== ancestor.tagName) values.push(part);
+          ancestor = ancestor.parentElement;
+        }
+        return values.join("\u001e");
+      })();
       const reviewed: Record<string, string> = {
         "Given name": "target-s1-field-given-name",
         "Family name": "target-s1-field-family-name",
@@ -3069,18 +3114,33 @@ export async function bindQuestionnaireTargets(
         control.getAttribute("role") ?? "",
         control.getAttribute("data-automation-id") ?? "",
         fieldIdentity,
+        semanticAncestorContext,
         ...(isConditionalApplicationDate
           ? [field?.getAttribute("data-automation-id") ?? field?.id ?? ""]
           : []),
       ].join("\u0000");
       const identityHash = hash(identity);
-      const occurrence = (identities.get(identityHash) ?? 0) + 1;
-      identities.set(identityHash, occurrence);
-      control.setAttribute(
-        "data-hunt-target-token",
-        reviewed[label] ?? `target-workday-${identityHash}-${occurrence}`,
-      );
+      bindings.push({ control, label, reviewedToken: reviewed[label], identityHash });
       index += 1;
+    }
+    const reviewedCounts = new Map<string, number>();
+    for (const binding of bindings) {
+      if (binding.reviewedToken !== undefined) {
+        reviewedCounts.set(binding.reviewedToken, (reviewedCounts.get(binding.reviewedToken) ?? 0) + 1);
+      }
+    }
+    for (const binding of bindings) {
+      const uniqueReviewed = binding.reviewedToken !== undefined &&
+        reviewedCounts.get(binding.reviewedToken) === 1;
+      // Truly indistinguishable controls intentionally share an ambiguous token.
+      // The deterministic adapter will reject the equivalence class instead of
+      // attaching a prior intent to whichever member happens to be first today.
+      binding.control.setAttribute(
+        "data-hunt-target-token",
+        uniqueReviewed
+          ? binding.reviewedToken!
+          : `target-workday-${binding.identityHash}-1`,
+      );
     }
     return index <= 128;
   }, {

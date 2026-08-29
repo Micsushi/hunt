@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -46,7 +48,7 @@ const questionCategories = new Set([
 ]);
 const answerCategories = new Set([
   "text", "phone", "date", "month", "year", "number", "url", "boolean",
-  "option", "single_select", "multi_select", "unknown",
+  "option", "single_select", "multi_select", "file", "unknown",
 ]);
 const optionMappings = new Set([
   "not_applicable", "owner_visible_option", "unresolved", "visible_exact", "approved_alias",
@@ -56,7 +58,7 @@ const prefillDispositions = new Set([
 ]);
 const driverAttempts = new Set([
   "none", "text", "textarea", "phone", "date", "month", "year", "number", "url",
-  "checkbox", "select", "multi_select", "search_select", "radio_group",
+  "checkbox", "file", "select", "multi_select", "search_select", "radio_group",
 ]);
 const mechanicStatuses = new Set(["not_applicable", "not_observed", "observed"]);
 const persistentReadbacks = new Set([
@@ -166,6 +168,7 @@ export interface ProfileFieldLearningEvidenceV2 {
   readonly testOnly: boolean;
   readonly liveAcceptanceEligible: boolean;
   readonly learningConversion?: ProfileLearningConversion;
+  readonly syntheticFieldsSha256?: string;
   readonly visibleControlCount: number;
   readonly fields: readonly ProfileFieldLearningRecordV2[];
 }
@@ -182,6 +185,7 @@ export interface ProfileFieldLearningCapture {
     readonly operationId: string;
     readonly attempt: number;
   }): void;
+  bindSyntheticFields(fields: readonly object[]): void;
   write(): string | null;
 }
 
@@ -209,6 +213,7 @@ export function createProfileFieldLearningCapture(input: {
   let written = false;
   let metadataFailure: ProfileMetadataReconciliationFailure | undefined;
   let inspectionFailure: ProfileInspectionFailure | undefined;
+  let syntheticFieldsSha256: string | undefined;
 
   const page: WorkdayProfilePagePort = {
     registerSyntheticField(field) {
@@ -364,6 +369,13 @@ export function createProfileFieldLearningCapture(input: {
         record.monitorBinding = shared;
       }
     },
+    bindSyntheticFields(fields: readonly object[]) {
+      if (written || syntheticFieldsSha256 !== undefined || fields.length === 0) {
+        throw new TypeError("profile synthetic evidence binding denied");
+      }
+      syntheticFieldsSha256 = createHash("sha256")
+        .update(JSON.stringify(fields), "utf8").digest("hex");
+    },
     write() {
       if (written || records.size === 0) return null;
       written = true;
@@ -386,6 +398,7 @@ export function createProfileFieldLearningCapture(input: {
           ...(metadataFailure === undefined ? {} : {
             learningConversion: conversion(metadataFailure),
           }),
+          ...(syntheticFieldsSha256 === undefined ? {} : { syntheticFieldsSha256 }),
           visibleControlCount: fields.length,
           fields: metadataFailure === undefined
             ? fields
@@ -527,12 +540,15 @@ export function admitProfileFieldLearningEvidence(
       "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
       "liveAcceptanceEligible",
       ...(value.learningConversion === undefined ? [] : ["learningConversion"]),
+      ...(value.syntheticFieldsSha256 === undefined ? [] : ["syntheticFieldsSha256"]),
       "visibleControlCount", "fields",
     ]) ||
     value.schemaVersion !== 5 ||
     value.evidenceRevision !== "s2-profile-field-learning-v5" ||
     value.page !== "profile" ||
     !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
+    (value.syntheticFieldsSha256 !== undefined &&
+      !/^[0-9a-f]{64}$/u.test(value.syntheticFieldsSha256)) ||
     value.fields.length < 1 || value.fields.length > 128 ||
     value.visibleControlCount !== value.fields.length
   ) denied();
@@ -1379,7 +1395,7 @@ function normalize(value: string): string {
 
 function exactKeys(value: object, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
-  return keys.length === expected.length && expected.every((key, index) => keys[index] === key);
+  return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
 function denied(reason?: string): never {

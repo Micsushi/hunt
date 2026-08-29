@@ -19,6 +19,7 @@ import type {
 import type { AccountVerifiedFact } from "./account-verified.ts";
 
 export interface Stage2ApplicationWalkInput {
+  readonly executionMode: "live" | "synthetic_test_non_submittable";
   readonly sourceRevision: string;
   readonly configSha256: string;
   readonly revisionId: string;
@@ -182,9 +183,15 @@ export async function runObservedApplicationPageWalk(
     },
     progress: {
       async record(progress: ApplicationWalkProgress, progressSignal: AbortSignal) {
-        const pageTiming = timing.complete(progress.checkpoint);
         const result = await dependencies.walk.progress.record(progress, progressSignal);
-        if (result.ok) emitProgress(dependencies, input.journeyId, progress, pageTiming);
+        if (result.ok && progress.checkpoint !== "pre_review") {
+          emitProgress(
+            dependencies,
+            input.journeyId,
+            progress,
+            timing.complete(progress.checkpoint),
+          );
+        }
         return result;
       },
     },
@@ -313,10 +320,7 @@ export async function runStage2ApplicationWalk(
   let acceptance: ApplicationWalkAcceptanceV1;
   try {
     const laneAcceptances = dependencies.laneAcceptances.snapshot(walk.value.checkpoint);
-    const executionMode = laneAcceptances.find((lane) =>
-      lane.checkpoint === "profile_verified"
-    )?.executionMode;
-    if (executionMode === undefined) throw new TypeError("execution mode evidence unavailable");
+    const executionMode = input.executionMode;
     acceptance = Object.freeze({
       schemaVersion: 1,
       evidenceRevision: "s2-application-walk-acceptance-v1",

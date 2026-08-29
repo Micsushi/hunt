@@ -169,6 +169,7 @@ export function createStage2ApplicationWalkProductionBinding(
       const { account, ...walkRuntime } = runtime;
       return Object.freeze({
         input: Object.freeze({
+          executionMode: resolvedOwnerSources.profilePlan.mode,
           sourceRevision: source.sourceRevision,
           configSha256,
           revisionId: owner.revisionId,

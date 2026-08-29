@@ -461,8 +461,8 @@ test("same-page conditional reveals remain admissible and independently observab
       </script>
     `);
     const adapter = application(page);
-    const result = await adapter.next(request(
-      "questionnaire",
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
       ["questionnaire", "pre_review"],
     ), signal());
     assert.deepEqual(result, { ok: true, value: { advanced: true } });
@@ -495,8 +495,8 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
       </script>
     `);
     const adapter = application(page);
-    const result = await adapter.next(request(
-      "questionnaire",
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
       ["questionnaire", "pre_review"],
     ), signal());
     assert.deepEqual(result, { ok: true, value: { advanced: true } });
@@ -657,8 +657,9 @@ test("navigation reports a validation downgrade instead of claiming a transition
         });
       </script>
     `);
-    const result = await application(page).next(request(
-      "questionnaire",
+    const adapter = application(page);
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
       ["questionnaire", "pre_review"],
     ), signal());
     assert.equal(result.ok, false);
@@ -698,8 +699,9 @@ test("hidden DOM churn is not accepted as transition evidence", async () => {
         });
       </script>
     `);
-    const result = await application(page, 100).next(request(
-      "questionnaire",
+    const adapter = application(page, 100);
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
       ["questionnaire", "pre_review"],
     ), signal());
     assert.equal(result.ok, false);
@@ -722,8 +724,9 @@ test("visible optional churn is not accepted as semantic transition evidence", a
         });
       </script>
     `);
-    const result = await application(page, 100).next(request(
-      "questionnaire",
+    const adapter = application(page, 100);
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
       ["questionnaire", "pre_review"],
     ), signal());
     assert.equal(result.ok, false);
@@ -909,6 +912,21 @@ function request(
     journeyId: testJourney,
     from,
     fromPageId: browserPageId(`s2-${from}`),
+    allowed,
+  };
+}
+
+async function questionnaireRequest(
+  applicationPage: PlaywrightWorkdayApplicationPage,
+  allowed: readonly ("profile" | "resume" | "questionnaire" | "pre_review")[],
+) {
+  const observed = await applicationPage.observe(signal());
+  assert.equal(observed.ok, true, JSON.stringify(observed));
+  if (!observed.ok) throw new Error("questionnaire observation failed");
+  return {
+    journeyId: testJourney,
+    from: "questionnaire" as const,
+    fromPageId: observed.value.pageId,
     allowed,
   };
 }

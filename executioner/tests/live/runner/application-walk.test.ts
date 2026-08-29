@@ -317,8 +317,66 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   }
 });
 
+test("traced pre_review is a non-page transition without a timing completion", async () => {
+  const trace: Stage2ApplicationWalkTraceEvent[] = [];
+  const result = await runObservedApplicationPageWalk({
+    walk: dependenciesFor([
+      truth("profile"), truth("profile"), truth("resume"), truth("resume"),
+      truth("questionnaire"), truth("questionnaire"), truth("pre_review"),
+    ], []),
+    laneAcceptances: { snapshot: () => [] },
+    trace: (event) => trace.push(event),
+  }, { journeyId: walkFixture.journeyId, stopAfter: "pre_review" },
+  new AbortController().signal);
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(trace.filter(({ kind }) => kind === "application_walk_progress").length, 3);
+  const terminal = trace.at(-1);
+  assert.equal(terminal?.kind, "application_walk_terminal");
+  assert.equal(terminal?.kind === "application_walk_terminal" && terminal.checkpoint, "pre_review");
+});
+
+test("admitted execution mode supports profile-less live and synthetic questionnaire walks", async () => {
+  for (const executionMode of ["live", "synthetic_test_non_submittable"] as const) {
+    const synthetic = executionMode === "synthetic_test_non_submittable";
+    const result = await runStage2ApplicationWalk({
+      ...input(),
+      executionMode,
+    }, {
+      walk: dependenciesFor([
+        truth("questionnaire"), truth("questionnaire"), truth("pre_review"),
+      ], []),
+      laneAcceptances: {
+        snapshot: () => [{
+          schemaVersion: 1,
+          checkpoint: "questionnaire_verified",
+          answers: [{
+            pageId: "questionnaire-page-mode" as never,
+            fieldId: "mode-answer" as never,
+            questionId: "observed-question-0123456789abcdef01234567" as never,
+            provenance: synthetic ? "visible_option" : "owner_provided",
+            lane: synthetic ? "synthetic_test_default" : "live_owner_fact",
+            protectedCategory: null,
+            templateRevision: null,
+            verification: "independent",
+          }],
+          protectedPlaceholderCount: 0,
+          independentlyVerified: true,
+          submitActivated: false,
+          privacyScan: "pass",
+        }],
+      },
+      cleanup: { async close() { return true; } },
+      evidence: { async write() {} },
+    }, new AbortController().signal);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    if (result.ok) assert.equal(result.acceptance.executionMode, executionMode);
+  }
+});
+
 function input() {
   return {
+    executionMode: "live" as const,
     sourceRevision: "0123456789abcdef0123456789abcdef01234567",
     configSha256: "a".repeat(64),
     revisionId: "revision_abcdefghijklmnop",

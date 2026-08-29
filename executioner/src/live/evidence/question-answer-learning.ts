@@ -113,6 +113,10 @@ export interface QuestionAnswerLearningEvidenceV2 {
 export type PendingQuestionConstraintsV1 =
   | { readonly displayFormat: "YYYY-MM-DD" }
   | {
+      readonly acceptedExtensions: readonly string[];
+      readonly maxFileBytes: number | null;
+    }
+  | {
       readonly inputType: "text" | "email" | "url" | "number";
       readonly min: number | null;
       readonly max: number | null;
@@ -138,7 +142,7 @@ export interface PendingProfileQuestionV1 {
   readonly testDefault: string | null;
   readonly actualOwnerValue: null;
   readonly needsUserValue: true;
-  readonly provenance: AnswerProvenance | null;
+  readonly provenance: AnswerProvenance | "generated_default" | null;
   readonly validation:
     | "not_attempted" | "verified" | "driver_failed" | "verification_failed";
   readonly committedReadback: string | null;
@@ -522,7 +526,8 @@ export function admitPendingProfileQuestionsEvidence(
       typeof question.conditionalReveal !== "boolean" ||
       !(question.testDefault === null || bounded(question.testDefault, 512)) ||
       question.actualOwnerValue !== null || question.needsUserValue !== true ||
-      (question.provenance !== null && !provenances.has(question.provenance)) ||
+      (question.provenance !== null && question.provenance !== "generated_default" &&
+        !provenances.has(question.provenance)) ||
       !["not_attempted", "verified", "driver_failed", "verification_failed"]
         .includes(question.validation) ||
       !(question.committedReadback === null || bounded(question.committedReadback, 512)) ||
@@ -823,6 +828,18 @@ function validPendingConstraints(value: unknown): value is PendingQuestionConstr
   if (typeof value !== "object" || value === null) return false;
   if (exactKeys(value, ["displayFormat"])) {
     return (value as { readonly displayFormat?: unknown }).displayFormat === "YYYY-MM-DD";
+  }
+  if (exactKeys(value, ["acceptedExtensions", "maxFileBytes"])) {
+    const file = value as {
+      readonly acceptedExtensions?: unknown;
+      readonly maxFileBytes?: unknown;
+    };
+    return Array.isArray(file.acceptedExtensions) && file.acceptedExtensions.length <= 32 &&
+      file.acceptedExtensions.every((extension) =>
+        typeof extension === "string" && /^\.[A-Za-z0-9]{1,16}$/u.test(extension)
+      ) && new Set(file.acceptedExtensions).size === file.acceptedExtensions.length &&
+      (file.maxFileBytes === null || typeof file.maxFileBytes === "number" &&
+        Number.isSafeInteger(file.maxFileBytes) && file.maxFileBytes > 0);
   }
   if (!exactKeys(value, ["inputType", "min", "max", "step", "minLength", "maxLength", "pattern"])) return false;
   const constraints = value as {
