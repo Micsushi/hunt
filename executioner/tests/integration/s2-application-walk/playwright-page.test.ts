@@ -301,16 +301,13 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
             replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated-remounted">Repeated question*</label><input id="repeated-remounted" required value="committed"></div><div data-automation-id="formField"><label for="conditional">Conditional detail*</label><input id="conditional" required></div>';
             oldRoot.replaceWith(replacement);
           } else {
-            const loading = document.createElement('div');
-            loading.dataset.automationId = 'applyFlowLoadingPage';
-            loading.textContent = 'Loading';
-            document.body.append(loading);
+            oldRoot.setAttribute('aria-busy', 'true');
             const repeated = oldRoot.querySelector('#repeated-remounted');
             const repeatedLabel = oldRoot.querySelector('label[for="repeated-remounted"]');
             repeated.id = 'repeated';
             repeatedLabel.htmlFor = 'repeated';
-            oldRoot.querySelector('[data-automation-id="formField"] + [data-automation-id="formField"]').remove();
-            setTimeout(() => loading.remove(), 75);
+            oldRoot.insertAdjacentHTML('beforeend', '<div data-automation-id="formField"><label for="destination-detail">Destination detail*</label><input id="destination-detail" required value="committed"></div>');
+            oldRoot.setAttribute('aria-busy', 'false');
           }
           phase += 1;
         });
@@ -400,6 +397,10 @@ test("does not advance a questionnaire occurrence for a same-count remount and r
           const replacement = root.cloneNode(true);
           replacement.prepend(replacement.children[1]);
           root.replaceWith(replacement);
+          const unrelated = document.createElement('div');
+          unrelated.dataset.automationId = 'applyFlowLoadingPage';
+          document.body.append(unrelated);
+          unrelated.remove();
         });
       </script>
     `);
@@ -421,6 +422,71 @@ test("does not advance a questionnaire occurrence for a same-count remount and r
     const after = await application.observe(new AbortController().signal);
     assert.equal(after.ok, true, JSON.stringify(after));
     if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an owned-loading reload cannot replay a prior questionnaire transition witness", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      if (window.name !== "reload-same-questionnaire") return;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+            <div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>
+          </main><button>Save and Continue</button></div>`;
+      });
+    });
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+      </main><button id="next">Save and Continue</button>
+      <script>
+        let phase = 0;
+        document.querySelector('#next').addEventListener('click', () => {
+          const shell = document.querySelector('[data-automation-id="applyFlowPage"]');
+          const root = document.querySelector('main');
+          if (phase === 0) {
+            shell.setAttribute('aria-busy', 'true');
+            root.insertAdjacentHTML('beforeend', '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
+            shell.setAttribute('aria-busy', 'false');
+          } else {
+            window.name = 'reload-same-questionnaire';
+            root.remove();
+            shell.insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage"></main>');
+          }
+          phase += 1;
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 100,
+      navigationSettleTimeoutMs: 250,
+    });
+    const first = await application.observe(new AbortController().signal);
+    assert.equal(first.ok, true, JSON.stringify(first));
+    if (!first.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: first.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    const destination = await application.observe(new AbortController().signal);
+    assert.equal(destination.ok, true, JSON.stringify(destination));
+    if (!destination.ok) return;
+    assert.notEqual(destination.value.pageId, first.value.pageId);
+    const replay = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: destination.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(replay.ok, false, JSON.stringify(replay));
+    if (!replay.ok) assert.equal(replay.error.code, "browser_effect_uncertain");
   } finally {
     await browser.close();
   }

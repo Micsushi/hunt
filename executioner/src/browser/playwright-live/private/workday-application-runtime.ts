@@ -319,6 +319,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #mutationMonitorAttempts = new Map<string, number>();
   readonly #verifiedQuestionnaireIntents = new Map<string, string>();
   readonly #questionnaireRequiredCounts = new Map<string, number>();
+  #questionnaireAnswerResolver: ApplicationAnswerResolver | undefined;
   #profileMutationAttempted = false;
   #profileCleanupState: ProfileCleanupState = "not_started";
   #profilePreservationCandidate = false;
@@ -356,6 +357,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#reviewExpected.clear();
     this.#verifiedQuestionnaireIntents.clear();
     this.#questionnaireRequiredCounts.clear();
+    this.#questionnaireAnswerResolver = undefined;
   }
 
   profilePreservationSnapshot(): {
@@ -1095,14 +1097,16 @@ export class OwnedWorkdayApplicationRuntime {
           moment: "before_mutation",
         });
       }
+      const runResolver = this.#questionnaireAnswerResolver ??=
+        createQuestionnaireAnswerResolver({
+          profileQuery: request.ownerSources.profileQuery,
+          narrative: request.ownerSources.narrative,
+        });
       sharedBatch = {
         operationId: batchOperationId,
         attempt: batchAttempt,
         pass: 1,
-        answerResolver: createQuestionnaireAnswerResolver({
-          profileQuery: request.ownerSources.profileQuery,
-          narrative: request.ownerSources.narrative,
-        }),
+        answerResolver: runResolver,
         close,
       };
       } else {
@@ -1110,23 +1114,10 @@ export class OwnedWorkdayApplicationRuntime {
       }
       if (sharedBatch === undefined) throw new TypeError("questionnaire batch unavailable");
       const activeBatch = sharedBatch;
-      await bindQuestionnaireTargets(page, input.pageId);
-      await seedCanonicalBinaryQuestionnaireOptions(page);
-      await bindQuestionnaireTargets(page, input.pageId);
-      for (let hydration = 0; hydration < 128; hydration += 1) {
-        const targetToken = (await questionnairePopupHydrationTargets(page))[0];
-        if (targetToken === undefined) break;
-        this.#assertAuthorized(signal);
-        const hydrationStartedAt = Date.now();
-        await hydrateQuestionnairePopupOptions(page, input.pageId, targetToken, this.#timeoutMs);
-        this.#trace?.("questionnaire_popup_hydration_completed", {
-          targetToken,
-          durationMs: Date.now() - hydrationStartedAt,
-        });
-      }
-      if ((await questionnairePopupHydrationTargets(page)).length !== 0) {
-        throw new TypeError("questionnaire popup hydration limit exceeded");
-      }
+      await prepareQuestionnaireTargets(
+        page, input.pageId, this.#timeoutMs,
+        () => this.#assertAuthorized(signal), this.#trace,
+      );
       const activeSemanticSessionId =
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
       const activeSemantic = new PlaywrightBrowserSession({
@@ -1242,7 +1233,10 @@ export class OwnedWorkdayApplicationRuntime {
           // admitted field effect. This is the single bounded pre-effect
           // recovery point for any supported control type after a React
           // remount; uncertain effects are never replayed.
-          await bindQuestionnaireTargets(page, input.pageId);
+          await prepareQuestionnaireTargets(
+            page, input.pageId, this.#timeoutMs,
+            () => this.#assertAuthorized(innerSignal), this.#trace,
+          );
           const rebound = await activeSemantic.observe(
             { sessionId: activeSemanticSessionId, pageId: input.pageId },
             innerSignal,
@@ -1282,7 +1276,10 @@ export class OwnedWorkdayApplicationRuntime {
           // after blur/selection. Restore the deterministic semantic bindings
           // before the independent readback so the original intent can still
           // be verified against the newly rendered control.
-          await bindQuestionnaireTargets(page, input.pageId);
+          await prepareQuestionnaireTargets(
+            page, input.pageId, this.#timeoutMs,
+            () => this.#assertAuthorized(innerSignal), this.#trace,
+          );
           const verified = await semanticVerifier.verify(verificationRequest, innerSignal);
           this.#trace?.("questionnaire_field_verification_completed", {
             fieldId: verificationRequest.intent.fieldId,
@@ -3273,34 +3270,69 @@ export async function questionnairePopupHydrationTargets(
           control.getAttribute("aria-disabled") === "true" ||
           control.hasAttribute("data-hunt-popup-options") ||
           control.hasAttribute("data-hunt-deferred-options")) return false;
-      const normalize = (value: string | null | undefined) =>
-        (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
-      const placeholder = /^(?:select|select one|choose|choose one)$/iu;
-      const declared = normalize(control.getAttribute("aria-valuetext"));
-      const buttonText = normalize(control.textContent);
-      const field = control.closest(
-        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
-      );
-      const selectedItems = field === null ? [] : [...field.querySelectorAll(
-        '[data-automation-id="selectedItem"]',
-      )].filter(visible).map((item) => normalize(item.textContent)).filter(Boolean);
-      if ((declared !== "" && !placeholder.test(declared)) ||
-          (buttonText !== "" && !placeholder.test(buttonText)) ||
-          selectedItems.length === 1) return false;
-      const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
-        .flatMap((value) => value?.split(/\s+/u) ?? []);
-      const ownedOptions = ownedIds.flatMap((id) =>
-        [...(document.getElementById(id)?.querySelectorAll(
-          '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
-        ) ?? [])]
-      );
-      const fieldOptions = field === null ? [] : [...field.querySelectorAll(
-        '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
-      )];
-      return ownedOptions.length === 0 && fieldOptions.length === 0;
+      return true;
     }).map((control) => control.getAttribute("data-hunt-target-token") ?? "")
       .filter(Boolean);
   }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS }));
+}
+
+async function prepareQuestionnaireTargets(
+  page: Page,
+  pageId: BrowserPageId,
+  timeoutMs: number,
+  assertAuthorized: () => void,
+  trace?: (event: string, details?: object) => void,
+): Promise<void> {
+  await bindQuestionnaireTargets(page, pageId);
+  await seedRenderedQuestionnairePopupOptions(page);
+  await seedCanonicalBinaryQuestionnaireOptions(page);
+  await bindQuestionnaireTargets(page, pageId);
+  for (let hydration = 0; hydration < 128; hydration += 1) {
+    const targetToken = (await questionnairePopupHydrationTargets(page))[0];
+    if (targetToken === undefined) break;
+    assertAuthorized();
+    const startedAt = Date.now();
+    await hydrateQuestionnairePopupOptions(page, pageId, targetToken, timeoutMs);
+    trace?.("questionnaire_popup_hydration_completed", {
+      targetToken,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+  if ((await questionnairePopupHydrationTargets(page)).length !== 0) {
+    throw new TypeError("questionnaire popup hydration limit exceeded");
+  }
+  await bindQuestionnaireTargets(page, pageId);
+}
+
+async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> {
+  await page.locator(
+    'button[aria-haspopup="listbox"]:not([data-hunt-popup-options])' +
+      ':not([data-hunt-deferred-options])',
+  ).evaluateAll((controls) => {
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    for (const control of controls) {
+      const field = control.closest(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      );
+      const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
+        .flatMap((value) => value?.split(/\s+/u) ?? []);
+      const owners = [field, ...ownedIds.map((id) => document.getElementById(id))]
+        .filter((owner): owner is Element => owner !== null);
+      const labels = [...new Set(owners.flatMap((owner) => {
+        const leaves = [...owner.querySelectorAll<HTMLElement>(
+          '[data-automation-id="promptLeafNode"], [role="option"]',
+        )];
+        const options = leaves.length > 0 ? leaves : [...owner.querySelectorAll<HTMLElement>(
+          '[data-automation-id="promptOption"]',
+        )];
+        return options.map((option) => normalize(option.textContent)).filter(Boolean);
+      }))];
+      if (labels.length > 0 && labels.length <= 128 && labels.every((label) => label.length <= 512)) {
+        control.setAttribute("data-hunt-popup-options", JSON.stringify(labels));
+      }
+    }
+  });
 }
 
 export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promise<void> {

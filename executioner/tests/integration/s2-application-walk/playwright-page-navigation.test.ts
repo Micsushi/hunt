@@ -488,15 +488,11 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
       <script>
         document.querySelector('#next').addEventListener('click', () => {
           const main = document.querySelector('main');
-          const loading = document.createElement('div');
-          loading.dataset.automationId = 'applyFlowLoadingPage';
-          main.before(loading);
-          setTimeout(() => {
-            main.dataset.automationId = 'applyFlowSelfIdentifyPage';
-            document.querySelector('[data-automation-id="progressBarActiveStep"]').textContent = 'Self Identify';
-            document.querySelector('label').innerHTML = '<input required value="ready" data-hunt-field-id="self-identify">';
-            loading.remove();
-          }, 75);
+          main.setAttribute('aria-busy', 'true');
+          main.dataset.automationId = 'applyFlowSelfIdentifyPage';
+          document.querySelector('[data-automation-id="progressBarActiveStep"]').textContent = 'Self Identify';
+          document.querySelector('label').innerHTML = '<input required value="ready" data-hunt-field-id="self-identify">';
+          main.setAttribute('aria-busy', 'false');
         });
       </script>
     `);

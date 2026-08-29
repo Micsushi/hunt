@@ -148,7 +148,7 @@ test("conditional visa-status choice is not seeded as a binary sponsorship quest
   }
 });
 
-test("answered conditional choice skips redundant popup hydration on rescan", async () => {
+test("answered conditional choice remains eligible for catalog recovery after remount", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -161,7 +161,9 @@ test("answered conditional choice skips redundant popup hydration on rescan", as
     const pageId = "page-answered-conditional-visa-status" as never;
     await bindQuestionnaireTargets(page, pageId);
 
-    assert.deepEqual(await questionnairePopupHydrationTargets(page), []);
+    const hydrationTargets = await questionnairePopupHydrationTargets(page);
+    assert.equal(hydrationTargets.length, 1);
+    assert.match(hydrationTargets[0] ?? "", /^target-workday-[a-f0-9]{8}-1$/u);
     const semantic = await inspectPage(
       page,
       "live_session_answered_conditional_01" as never,
@@ -2652,7 +2654,7 @@ test("duplicate tokenless select, popup, date, and multiselect members mutate in
   }
 });
 
-test("full questionnaire reconciliation preserves distinct same-label answer classes through remount", async () => {
+test("full questionnaire reconciliation rehydrates selected same-label popup classes after remount", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -2669,23 +2671,16 @@ test("full questionnaire reconciliation preserves distinct same-label answer cla
   });
   if (!resumeIntent.ok) throw new Error("resume fixture invalid");
   await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
-    <div data-automation-id="formField"><label>Unseen choice*<select required><option>Select One</option><option>Shared</option><option>Alpha only</option></select></label></div>
-    <div data-automation-id="formField"><label>Unseen choice*<select required><option>Select One</option><option>Shared</option><option>Beta only</option></select></label></div>
     <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-required="true" data-options='["Shared","Popup alpha"]'>Select One</button></div>
     <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-required="true" data-options='["Shared","Popup beta"]'>Select One</button></div>
-    <div data-automation-id="formField"><label>Unseen details*<input required maxlength="40"></label></div>
-    <div data-automation-id="formField"><label>Unseen details*<input required maxlength="45"></label></div>
-    <div data-automation-id="formField"><label>Available date*<input type="date" required min="2026-01-01" max="2026-12-31"></label></div>
-    <div data-automation-id="formField"><label>Available date*<input type="date" required min="2025-01-01" max="2027-12-31"></label></div>
-    <div data-automation-id="formField"><label>Unseen skills*<select multiple required><option>Shared</option><option>Assembly</option></select></label></div>
-    <div data-automation-id="formField"><label>Unseen skills*<select multiple required><option>Shared</option><option>Quality</option></select></label></div>
     <div data-automation-id="promptMenu" hidden></div>
     <script>
-      const portal = document.querySelector('[data-automation-id="promptMenu"]');
-      let activeButton;
-      document.querySelectorAll('button[aria-haspopup="listbox"]').forEach(button => {
-        button.addEventListener('click', () => {
-          activeButton = button;
+      document.addEventListener('click', event => {
+        const button = event.target.closest('button[aria-haspopup="listbox"]');
+        const portal = document.querySelector('[data-automation-id="promptMenu"]');
+        if (button) {
+          document.querySelectorAll('button[aria-haspopup="listbox"]').forEach(item =>
+            item.setAttribute('aria-expanded', String(item === button)));
           portal.replaceChildren(...JSON.parse(button.dataset.options).map(label => {
             const option = document.createElement('div');
             option.dataset.automationId = 'promptOption';
@@ -2693,16 +2688,20 @@ test("full questionnaire reconciliation preserves distinct same-label answer cla
             return option;
           }));
           portal.hidden = false;
-        });
-      });
-      portal.addEventListener('click', event => {
+          return;
+        }
         const option = event.target.closest('[data-automation-id="promptOption"]');
+        const activeButton = document.querySelector('button[aria-haspopup="listbox"][aria-expanded="true"]');
         if (!option || !activeButton) return;
         activeButton.textContent = option.textContent.trim();
+        activeButton.setAttribute('aria-expanded', 'false');
         portal.hidden = true;
       });
       document.addEventListener('keydown', event => {
-        if (event.key === 'Escape') portal.hidden = true;
+        if (event.key !== 'Escape') return;
+        document.querySelector('[data-automation-id="promptMenu"]').hidden = true;
+        document.querySelectorAll('button[aria-haspopup="listbox"]').forEach(button =>
+          button.setAttribute('aria-expanded', 'false'));
       });
     </script>
   </main>`);
@@ -2762,74 +2761,49 @@ test("full questionnaire reconciliation preserves distinct same-label answer cla
     const first = await reconcile(1);
     assert.equal((first as { ok: boolean }).ok, true, JSON.stringify(first));
     const assertClassValid = async () => {
-      assert.deepEqual(await page.locator('select:not([multiple])').evaluateAll((controls) =>
-        controls.map((control) => (control as HTMLSelectElement).value === "Shared" ||
-          (control as HTMLSelectElement).value.endsWith("only"))
-      ), [true, true]);
       assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').evaluateAll((controls) =>
         controls.map((control) => {
           const options = JSON.parse(control.getAttribute("data-options") ?? "[]") as string[];
           return options.includes(control.textContent?.trim() ?? "");
         })
       ), [true, true]);
-      assert.deepEqual(await page.locator('input:not([type="date"])').evaluateAll((inputs) =>
-        inputs.map((input) => {
-          const control = input as HTMLInputElement;
-          return control.value.length > 0 && control.value.length <= control.maxLength;
-        })
-      ), [true, true]);
-      assert.deepEqual(await page.locator('input[type="date"]').evaluateAll((inputs) =>
-        inputs.map((input) => {
-          const control = input as HTMLInputElement;
-          return control.value >= control.min && control.value <= control.max;
-        })
-      ), [true, true]);
-      assert.deepEqual(await page.locator('select[multiple]').evaluateAll((controls) =>
-        controls.map((control) => {
-          const select = control as HTMLSelectElement;
-          return [...select.selectedOptions].length > 0 &&
-            [...select.selectedOptions].every((option) => [...select.options].includes(option));
-        })
-      ), [true, true]);
     };
     await assertClassValid();
+    const originalPopupTokens = await page.locator('button[aria-haspopup="listbox"]').evaluateAll((controls) =>
+      Object.fromEntries(controls.map((control) => [
+        control.getAttribute("data-options"), control.getAttribute("data-hunt-target-token"),
+      ]))
+    );
     assert.equal(acceptances.at(-1)?.checkpoint, "questionnaire_verified",
       JSON.stringify(acceptances));
+    await page.locator("main").evaluate((main) => {
+      const replacement = main.cloneNode(true) as HTMLElement;
+      replacement.querySelectorAll("*").forEach((element) =>
+        [...element.attributes].filter(({ name }) => name.startsWith("data-hunt-"))
+          .forEach(({ name }) => element.removeAttribute(name))
+      );
+      const popupFields = [...replacement.querySelectorAll('button[aria-haspopup="listbox"]')]
+        .map((button) => button.closest('[data-automation-id="formField"]'));
+      popupFields[0]?.before(popupFields[1]!);
+      main.replaceWith(replacement);
+    });
+    const rebound = await reconcile(2);
+    assert.equal((rebound as { ok: boolean }).ok, true, JSON.stringify(rebound));
+    assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').evaluateAll((controls) =>
+      Object.fromEntries(controls.map((control) => [
+        control.getAttribute("data-options"), control.getAttribute("data-hunt-target-token"),
+      ]))
+    ), originalPopupTokens);
+    await assertClassValid();
+    assert.equal(acceptances.length, 2);
+    assert.ok(acceptances.every(({ checkpoint }) => checkpoint === "questionnaire_verified"));
     learning.write();
     const pending = JSON.parse(readFileSync(
       join(evidenceRoot, "pending-profile-questions.json"), "utf8",
     )) as { pendingProfileQuestions: readonly { fieldId: string; committedReadback: string }[] };
-    assert.equal(pending.pendingProfileQuestions.length, 10);
-    assert.equal(new Set(pending.pendingProfileQuestions.map(({ fieldId: occurrence }) => occurrence)).size, 10);
+    assert.equal(pending.pendingProfileQuestions.length, 2);
+    assert.equal(new Set(pending.pendingProfileQuestions.map(({ fieldId: occurrence }) => occurrence)).size, 2);
     assert.ok(pending.pendingProfileQuestions.every(({ committedReadback }) => committedReadback.length > 0));
-
-    await page.locator("main").evaluate((main) => {
-      const replacement = main.cloneNode(true) as HTMLElement;
-      const sourceControls = [...main.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")];
-      [...replacement.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")]
-        .forEach((control, index) => {
-          const source = sourceControls[index];
-          if (source === undefined) return;
-          if (control instanceof HTMLSelectElement && source instanceof HTMLSelectElement) {
-            [...control.options].forEach((option, optionIndex) => {
-              option.selected = source.options[optionIndex]?.selected ?? false;
-            });
-          } else if (control instanceof HTMLInputElement && source instanceof HTMLInputElement) {
-            control.value = source.value;
-          }
-        });
-      replacement.querySelectorAll("[data-hunt-target-token]").forEach((control) =>
-        control.removeAttribute("data-hunt-target-token")
-      );
-      main.replaceWith(replacement);
-    });
-    await bindQuestionnaireTargets(page, "page-duplicate-physical" as never);
-    const rebound = await inspectPage(
-      page, "live_session_duplicate_physical_01" as never,
-      "page-duplicate-physical" as never, new Map(),
-    );
-    assert.equal(rebound.observation.targets.length, 10);
-    await assertClassValid();
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);

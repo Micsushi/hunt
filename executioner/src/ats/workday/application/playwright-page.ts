@@ -98,7 +98,7 @@ interface BrowserApplicationAmbiguity {
   }[];
 }
 const destinationStabilityWindowMs = 3_000;
-const questionnaireOccurrences = new WeakMap<Page, { epoch: number }>();
+const questionnaireOccurrences = new WeakMap<Page, { epoch: number; nextAction: number }>();
 export class PlaywrightWorkdayApplicationPage {
   readonly #page: Page;
   readonly #timeoutMs: number;
@@ -109,7 +109,9 @@ export class PlaywrightWorkdayApplicationPage {
     this.#timeoutMs = options.timeoutMs ?? 5_000;
     this.#navigationSettleTimeoutMs = options.navigationSettleTimeoutMs ?? this.#timeoutMs;
     this.#pageIds = options.pageIds ?? {};
-    if (!questionnaireOccurrences.has(page)) questionnaireOccurrences.set(page, { epoch: 0 });
+    if (!questionnaireOccurrences.has(page)) {
+      questionnaireOccurrences.set(page, { epoch: 0, nextAction: 0 });
+    }
   }
   async observe(signal: AbortSignal): Promise<ApplicationPortResult<ApplicationPageTruth>> {
     const snapshot = await this.#readSnapshot(signal);
@@ -153,6 +155,7 @@ export class PlaywrightWorkdayApplicationPage {
       return failure("navigation_illegal", "navigation");
     }
     let clicked = false;
+    let navigationActionId: string | undefined;
     try {
       const action = await this.#waitForActionableNext(before.value.rootSelector, signal);
       if (action === undefined) return failure("navigation_uncertain", "navigation");
@@ -177,6 +180,7 @@ export class PlaywrightWorkdayApplicationPage {
           return /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label);
         });
         if (!activated) throw new Error("navigation control activation denied");
+        navigationActionId = await this.#armNavigationWitness(before.value.rootSelector);
         await handle.click({ timeout: this.#navigationSettleTimeoutMs });
         navigationDiagnostic("admitted_control_activated");
       } catch {
@@ -187,6 +191,7 @@ export class PlaywrightWorkdayApplicationPage {
       let after = await this.#waitForChangedSnapshot(
         before.value,
         signal,
+        navigationActionId,
       );
       if (
         !after.ok && after.error.code === "browser_effect_uncertain" &&
@@ -210,12 +215,13 @@ export class PlaywrightWorkdayApplicationPage {
               return /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu.test(label);
             });
             if (!admitted) throw new Error("navigation control activation denied");
+            navigationActionId = await this.#armNavigationWitness(before.value.rootSelector);
             await handle.click({ timeout: this.#navigationSettleTimeoutMs });
             navigationDiagnostic("unchanged_source_retry_activated");
           } catch {
             navigationDiagnostic("unchanged_source_retry_activation_failed");
           }
-          after = await this.#waitForChangedSnapshot(before.value, signal);
+          after = await this.#waitForChangedSnapshot(before.value, signal, navigationActionId);
         }
       }
       navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
@@ -256,7 +262,7 @@ export class PlaywrightWorkdayApplicationPage {
         after.value.page === before.value.page &&
         after.value.rootSelector === before.value.rootSelector &&
         after.value.transitionKey === before.value.transitionKey &&
-        after.value.navigationWitness === before.value.navigationWitness &&
+        after.value.navigationWitness !== navigationActionId &&
         after.value.requiredFields.length <= before.value.requiredFields.length
       ) {
         navigationDiagnostic("semantic_guard_failed", {
@@ -269,7 +275,7 @@ export class PlaywrightWorkdayApplicationPage {
         });
         return failure("browser_effect_uncertain", "navigation");
       }
-      if (advancesQuestionnaireOccurrence(before.value, after.value)) {
+      if (advancesQuestionnaireOccurrence(before.value, after.value, navigationActionId)) {
         questionnaireOccurrences.get(this.#page)!.epoch += 1;
       }
       navigationDiagnostic("navigation_advanced", {
@@ -325,6 +331,7 @@ export class PlaywrightWorkdayApplicationPage {
   async #waitForChangedSnapshot(
     before: BrowserApplicationSnapshot,
     signal: AbortSignal,
+    navigationActionId: string | undefined,
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     for (let pass = 0; pass < 2; pass += 1) {
       const deadline = Date.now() + this.#navigationSettleTimeoutMs;
@@ -336,7 +343,7 @@ export class PlaywrightWorkdayApplicationPage {
           (after.value.page !== before.page ||
             after.value.rootSelector !== before.rootSelector ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
-              after.value.navigationWitness !== before.navigationWitness) ||
+              after.value.navigationWitness === navigationActionId) ||
             after.value.requiredFields.length > before.requiredFields.length ||
             hasValidationDowngrade(before, after.value))
         ) {
@@ -377,6 +384,15 @@ export class PlaywrightWorkdayApplicationPage {
       }
     }
     return failure("browser_effect_uncertain", "navigation");
+  }
+  async #armNavigationWitness(rootSelector: string): Promise<string> {
+    const occurrence = questionnaireOccurrences.get(this.#page)!;
+    occurrence.nextAction += 1;
+    const actionId = `navigation-${occurrence.nextAction}`;
+    const armed = await this.#page.evaluate(armNavigationWitness, { rootSelector, actionId });
+    if (!armed) throw new TypeError("navigation witness controller unavailable");
+    await this.#page.evaluate(markNavigationWitnessClicked, actionId);
+    return actionId;
   }
   async #confirmStableDestination(
     candidate: BrowserApplicationSnapshot,
@@ -498,18 +514,10 @@ export class PlaywrightWorkdayApplicationPage {
 function advancesQuestionnaireOccurrence(
   before: BrowserApplicationSnapshot,
   after: BrowserApplicationSnapshot,
+  navigationActionId: string | undefined,
 ): boolean {
   if (before.page !== "questionnaire" || after.page !== "questionnaire") return false;
-  const counts = (items: BrowserApplicationSnapshot["requiredFields"]) => {
-    const result = new Map<string, number>();
-    for (const { semanticKey } of items) result.set(semanticKey, (result.get(semanticKey) ?? 0) + 1);
-    return result;
-  };
-  const beforeRequired = counts(before.requiredFields);
-  const afterRequired = counts(after.requiredFields);
-  const conditionalReveal = after.requiredFields.length > before.requiredFields.length &&
-    [...beforeRequired].every(([item, count]) => (afterRequired.get(item) ?? 0) >= count);
-  return !conditionalReveal && before.navigationWitness !== after.navigationWitness;
+  return navigationActionId !== undefined && after.navigationWitness === navigationActionId;
 }
 function navigationDiagnostic(
   event: string,
@@ -570,6 +578,62 @@ function hasValidationDowngrade(
   const priorValidation = new Set(before.validationKeys);
   return !newField && after.validationKeys.some((key) => !priorValidation.has(key));
 }
+function armNavigationWitness(input: { readonly rootSelector: string; readonly actionId: string }): boolean {
+  const root = document.querySelector<HTMLElement>(input.rootSelector);
+  if (root === null) return false;
+  const controller = root.closest<HTMLElement>('[data-automation-id="applyFlowPage"]') ?? root;
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const prior = globalState.__huntWorkdayNavigationAction as { observer?: MutationObserver } | undefined;
+  prior?.observer?.disconnect();
+  const state = {
+    actionId: input.actionId,
+    controller,
+    clicked: false,
+    busySeen: false,
+    settled: false,
+    observer: undefined as MutationObserver | undefined,
+  };
+  const loading = (node: Node): boolean => node instanceof Element && (
+    node.matches('[data-automation-id="applyFlowLoadingPage"]') ||
+    node.querySelector('[data-automation-id="applyFlowLoadingPage"]') !== null
+  );
+  state.observer = new MutationObserver((records) => {
+    if (!state.clicked || state.settled) return;
+    for (const record of records) {
+      if (record.type === "attributes" && record.target === controller) {
+        if (record.oldValue === "true") {
+          state.settled = state.busySeen;
+        } else {
+          state.busySeen = true;
+        }
+      }
+      if (record.type === "childList") {
+        if ([...record.addedNodes].some(loading)) state.busySeen = true;
+        if (state.busySeen && [...record.removedNodes].some(loading)) state.settled = true;
+      }
+    }
+    if (state.settled && controller.isConnected) {
+      globalState.__huntWorkdayNavigationWitness = state.actionId;
+    }
+  });
+  state.observer.observe(controller, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["aria-busy"],
+    attributeOldValue: true,
+  });
+  globalState.__huntWorkdayNavigationAction = state;
+  return true;
+}
+function markNavigationWitnessClicked(actionId: string): void {
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const state = globalState.__huntWorkdayNavigationAction as {
+    actionId?: string;
+    clicked?: boolean;
+  } | undefined;
+  if (state?.actionId === actionId) state.clicked = true;
+}
 function readApplicationSnapshot(
   input: {
     readonly selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS;
@@ -587,18 +651,16 @@ function readApplicationSnapshot(
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
   const globalState = globalThis as unknown as Record<string, unknown>;
-  const controllerBusy = [...document.querySelectorAll<HTMLElement>(
-    '[data-automation-id="applyFlowLoadingPage"], [data-automation-id="applyFlowPage"][aria-busy="true"]',
-  )].some(visible);
-  const priorControllerBusy = globalState.__huntWorkdayControllerBusy === true;
-  let controllerGeneration = Number(globalState.__huntWorkdayControllerGeneration ?? 0);
-  if (!Number.isSafeInteger(controllerGeneration) || controllerGeneration < 0) {
-    controllerGeneration = 0;
-  }
-  if (priorControllerBusy && !controllerBusy) controllerGeneration += 1;
-  globalState.__huntWorkdayControllerBusy = controllerBusy;
-  globalState.__huntWorkdayControllerGeneration = controllerGeneration;
-  const navigationWitness = `workday-controller-${controllerGeneration}`;
+  const navigationAction = globalState.__huntWorkdayNavigationAction as {
+    readonly actionId?: string;
+    readonly controller?: HTMLElement;
+    readonly settled?: boolean;
+  } | undefined;
+  const navigationWitness = navigationAction?.settled === true &&
+      navigationAction.controller?.isConnected === true &&
+      globalState.__huntWorkdayNavigationWitness === navigationAction.actionId
+    ? navigationAction.actionId ?? "none"
+    : "none";
   const semanticHash = (value: string): string => {
     let state = 2166136261;
     for (let index = 0; index < value.length; index += 1) {
