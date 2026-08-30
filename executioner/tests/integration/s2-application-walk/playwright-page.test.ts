@@ -626,30 +626,91 @@ test("historical loader class visibility is measured at the exact structural pos
       {
         name: "positional-visible",
         css: ".loader-hidden { display:none } .loader-visible:only-child { display:block }",
+        extra: "",
         contextMutation: "",
         expectedAdvance: true,
       },
       {
         name: "positional-hidden",
         css: ".loader-hidden { display:none } .loader-visible:only-child { display:none } .loader-visible:not(:only-child) { display:block }",
+        extra: "",
         contextMutation: "",
         expectedAdvance: false,
       },
       {
         name: "changed-ancestor",
         css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
         contextMutation: "loader.parentElement.className = 'changed-context'",
         expectedAdvance: false,
       },
       {
         name: "changed-stylesheet",
         css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
         contextMutation: "document.querySelector('#loader-style').textContent += ' .unrelated { color: blue }'",
+        expectedAdvance: false,
+      },
+      {
+        name: "remote-has-state",
+        css: ".loader-hidden { display:none } body:has(.remote-active) .loader-visible { display:block }",
+        extra: '<div id="remote-state"></div>',
+        contextMutation: "document.querySelector('#remote-state').className = 'remote-active'",
+        expectedAdvance: false,
+      },
+      {
+        name: "remote-has-structure",
+        css: ".loader-hidden { display:none } body:has(#remote-state > .remote-active) .loader-visible { display:block }",
+        extra: '<div id="remote-state"></div>',
+        contextMutation: "document.querySelector('#remote-state').insertAdjacentHTML('beforeend', '<span class=\"remote-active\"></span>')",
+        expectedAdvance: false,
+      },
+      {
+        name: "ancestor-id-data",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "loader.parentElement.id = 'changed-owner'; loader.parentElement.dataset.mode = 'changed'",
+        expectedAdvance: false,
+      },
+      {
+        name: "style-media-attribute",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "document.querySelector('#loader-style').setAttribute('media', 'all')",
+        expectedAdvance: false,
+      },
+      {
+        name: "link-attribute",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: '<link id="style-link" rel="stylesheet" href="data:text/css,.unused%7Bcolor:red%7D">',
+        contextMutation: "document.querySelector('#style-link').disabled = true",
+        expectedAdvance: false,
+      },
+      {
+        name: "cssom-insert-rule",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "document.querySelector('#loader-style').sheet.insertRule('.inserted { color: red }')",
+        expectedAdvance: false,
+      },
+      {
+        name: "cssom-delete-rule",
+        css: ".loader-hidden { display:none } .loader-visible { display:block } .throwaway { color:red }",
+        extra: "",
+        contextMutation: "document.querySelector('#loader-style').sheet.deleteRule(2)",
+        expectedAdvance: false,
+      },
+      {
+        name: "adopted-stylesheet",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const adopted = new CSSStyleSheet(); adopted.replaceSync('.adopted { color:red }'); document.adoptedStyleSheets = [...document.adoptedStyleSheets, adopted]",
         expectedAdvance: false,
       },
     ] as const) {
       const page = await browser.newPage();
       await page.setContent(`<style id="loader-style">${variant.css}</style>
+        ${variant.extra}
         <div data-automation-id="applyFlowPage">
           <main data-automation-id="applyFlowApplicationQuestionsPage">
             <label>Repeated question*<input required value="committed"></label>
@@ -877,6 +938,60 @@ test("post-click popup hydration busy cycles cannot authorize unchanged-page adv
   }
 });
 
+test("a revealed required popup may hydrate without turning its loading cycle into page advancement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <label>Stable question*<input required value="committed"></label>
+        <div id="conditional" data-automation-id="formField-popup" hidden>
+          <label for="revealed-popup">Revealed popup*</label>
+          <button id="revealed-popup" required aria-required="true" aria-haspopup="listbox"
+            aria-controls="revealed-portal" aria-valuetext="Shared" data-selected-label="Shared">Shared</button>
+        </div>
+      </main><div id="revealed-portal" role="listbox" hidden>
+        <div role="option">Shared</div><div role="option">Other</div></div>
+      <button id="next">Save and Continue</button></div><script>
+        window.hydrationClicks = 0;
+        const popup = document.querySelector('#revealed-popup');
+        const portal = document.querySelector('#revealed-portal');
+        popup.addEventListener('click', () => {
+          window.hydrationClicks += 1;
+          const controller = document.querySelector('[data-automation-id="applyFlowPage"]');
+          controller.setAttribute('aria-busy', 'true');
+          portal.hidden = false;
+          popup.setAttribute('aria-expanded', 'true');
+          controller.removeAttribute('aria-busy');
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key !== 'Escape') return;
+          portal.hidden = true;
+          popup.setAttribute('aria-expanded', 'false');
+        });
+        document.querySelector('#next').addEventListener('click', () => {
+          document.querySelector('#conditional').hidden = false;
+        });
+      </script>`);
+    const application = popupPreparedApplication(page, 1_000);
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    assert.equal(await page.evaluate(() => (window as unknown as { hydrationClicks: number }).hydrationClicks), 1);
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("owned reload accepts a stable same-label destination with changed answer semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -1060,6 +1175,66 @@ test("the supported-control semantic registry detects only answer-affecting chan
           document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
         });
       </script>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 150,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      assert.equal(result.ok, variant.advanced, `${variant.name}:${JSON.stringify(result)}`);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
+        variant.advanced, variant.name);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio semantics follow form ownership across harmless Workday wrappers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const source = `<label><input type="radio" name="status" required checked value="shared">Shared</label>
+      <label><input type="radio" name="status" required value="source">Source only</label>`;
+    for (const variant of [
+      {
+        name: "wrapper-equivalent",
+        destination: `<div data-automation-id="formField-second"><label><input type="radio" name="status" required value="source">Source only</label></div>
+          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div>`,
+        advanced: false,
+      },
+      {
+        name: "non-first-option-changed",
+        destination: `<div data-automation-id="formField-second"><label><input type="radio" name="status" required value="destination">Destination only</label></div>
+          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div>`,
+        advanced: true,
+      },
+    ] as const) {
+      const page = await browser.newPage();
+      await page.addInitScript(({ name, destination }) => {
+        if (window.name !== `native-radio-${name}`) return;
+        document.addEventListener("DOMContentLoaded", () => {
+          document.body.innerHTML = `<form id="application-form"><div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${destination}</main><button type="button">Save and Continue</button></div></form>`;
+        });
+      }, variant);
+      await page.setContent(`<form id="application-form"><div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${source}</main>
+        <button id="next" type="button">Save and Continue</button></div></form><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            window.name = 'native-radio-${variant.name}';
+            document.querySelector('main').remove();
+            document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+          });
+        </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
         timeoutMs: 150,
         navigationSettleTimeoutMs: 750,

@@ -308,10 +308,16 @@ export class PlaywrightWorkdayApplicationPage {
   async #readSnapshot(
     signal: AbortSignal,
     prepareQuestionnaire = true,
+    navigationActionId?: string,
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     if (signal.aborted) return failure("operation_cancelled", "none");
     try {
-      if (prepareQuestionnaire) await this.#prepareQuestionnaireSnapshot?.(signal);
+      if (prepareQuestionnaire) {
+        if (navigationActionId !== undefined) {
+          await this.#freezeNavigationWitness(navigationActionId);
+        }
+        await this.#prepareQuestionnaireSnapshot?.(signal);
+      }
       if (signal.aborted) return failure("operation_cancelled", "none");
       await annotateCheckboxGroups(this.#page);
       const snapshot = await this.#page.evaluate(
@@ -355,19 +361,25 @@ export class PlaywrightWorkdayApplicationPage {
           currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
         }
         const rawAfter = await this.#readSnapshot(signal, false);
-        const rawCurrentActionWitness = navigationActionId !== undefined && rawAfter.ok &&
+        let rawCurrentActionWitness = navigationActionId !== undefined && rawAfter.ok &&
           rawAfter.value.navigationWitness === navigationActionId;
-        const preparationAdmitted = rawAfter.ok && navigationActionId !== undefined && (
-          rawCurrentActionWitness || persistedNavigationActionId === navigationActionId ||
+        const rawCandidateChanged = rawAfter.ok && (
           rawAfter.value.page !== before.page ||
           rawAfter.value.rootSelector !== before.rootSelector ||
-          rawAfter.value.transitionKey !== before.transitionKey
+          rawAfter.value.transitionKey !== before.transitionKey ||
+          rawAfter.value.requiredFields.length > before.requiredFields.length ||
+          hasValidationDowngrade(before, rawAfter.value)
         );
-        if (preparationAdmitted && persistedNavigationActionId === undefined) {
-          await this.#freezeNavigationWitness(navigationActionId);
+        const preparationAdmitted = rawAfter.ok && navigationActionId !== undefined && (
+          rawCurrentActionWitness || persistedNavigationActionId === navigationActionId ||
+          rawCandidateChanged && !currentActionBusySeen
+        );
+        if (preparationAdmitted) {
+          rawCurrentActionWitness = (await this.#freezeNavigationWitness(navigationActionId)) ||
+            rawCurrentActionWitness;
         }
         const after = preparationAdmitted
-          ? await this.#readSnapshot(signal)
+          ? await this.#readSnapshot(signal, true, navigationActionId)
           : rawAfter;
         const persistedDestinationProven = navigationActionId !== undefined &&
           persistedNavigationActionId === navigationActionId && after.ok &&
@@ -393,6 +405,7 @@ export class PlaywrightWorkdayApplicationPage {
             signal,
             persistedDestinationProven ? persistedNavigationActionId : undefined,
             persistedDestinationProven ? before.semanticDestinationFingerprint : undefined,
+            navigationActionId,
           );
           if (stable !== undefined) return { ok: true, value: stable };
           navigationDiagnostic("destination_candidate_unstable", {
@@ -446,10 +459,12 @@ export class PlaywrightWorkdayApplicationPage {
       return false;
     }
   }
-  async #freezeNavigationWitness(actionId: string): Promise<void> {
+  async #freezeNavigationWitness(actionId: string): Promise<boolean> {
     try {
-      await this.#page.evaluate(freezeNavigationWitness, actionId);
-    } catch {}
+      return await this.#page.evaluate(freezeNavigationWitness, actionId);
+    } catch {
+      return false;
+    }
   }
   async #armNavigationWitness(rootSelector: string): Promise<string> {
     const occurrence = questionnaireOccurrences.get(this.#page)!;
@@ -465,6 +480,7 @@ export class PlaywrightWorkdayApplicationPage {
     signal: AbortSignal,
     persistedNavigationActionId?: string,
     sourceSemanticDestinationFingerprint?: string,
+    navigationActionId?: string,
   ): Promise<BrowserApplicationSnapshot | undefined> {
     if (sourceSemanticDestinationFingerprint !== undefined &&
         candidate.semanticDestinationFingerprint === sourceSemanticDestinationFingerprint) {
@@ -480,7 +496,7 @@ export class PlaywrightWorkdayApplicationPage {
       if (signal.aborted || await this.#page.locator(
         '[data-automation-id="applyFlowLoadingPage"]:visible',
       ).count() !== 0) return undefined;
-      const observed = await this.#readSnapshot(signal);
+      const observed = await this.#readSnapshot(signal, true, navigationActionId);
       const observedWitness = persistedNavigationActionId === candidate.navigationWitness &&
           observed.ok && observed.value.navigationWitness === "none"
         ? persistedNavigationActionId
@@ -678,8 +694,12 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   if (root === null) return false;
   const controller = root.closest<HTMLElement>('[data-automation-id="applyFlowPage"]') ?? root;
   const globalState = globalThis as unknown as Record<string, unknown>;
-  const prior = globalState.__huntWorkdayNavigationAction as { observer?: MutationObserver } | undefined;
+  const prior = globalState.__huntWorkdayNavigationAction as {
+    observer?: MutationObserver;
+    restoreInstrumentation?: () => void;
+  } | undefined;
   prior?.observer?.disconnect();
+  prior?.restoreInstrumentation?.();
   const state = {
     actionId: input.actionId,
     controller,
@@ -687,6 +707,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     busySeen: false,
     settled: false,
     frozen: false,
+    contextMutationSeen: false,
+    styleContextMutated: false,
+    instrumentationComplete: true,
+    restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
   type LoaderAttributes = {
@@ -744,33 +768,100 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     childList: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ["aria-busy", "hidden", "aria-hidden", "style", "class"],
     attributeOldValue: true,
+  };
+  const sheetIds = new WeakMap<CSSStyleSheet, number>();
+  let nextSheetId = 0;
+  const sheetId = (sheet: CSSStyleSheet): number => {
+    const existing = sheetIds.get(sheet);
+    if (existing !== undefined) return existing;
+    nextSheetId += 1;
+    sheetIds.set(sheet, nextSheetId);
+    return nextSheetId;
+  };
+  const styleContextToken = (): string => JSON.stringify([
+    ...[...document.styleSheets].map((sheet) => sheet as CSSStyleSheet),
+    ...("adoptedStyleSheets" in document ? [...document.adoptedStyleSheets] : []),
+  ].map((sheet) => {
+    let rules = "inaccessible";
+    try {
+      rules = [...sheet.cssRules].map((rule) => rule.cssText).join("\n");
+    } catch {}
+    const owner = sheet.ownerNode instanceof Element ? sheet.ownerNode : null;
+    return {
+      id: sheetId(sheet),
+      rules,
+      href: sheet.href ?? "",
+      disabled: sheet.disabled,
+      media: sheet.media.mediaText,
+      owner: owner === null ? "" : [...owner.attributes]
+        .map(({ name, value }) => `${name}=${value}`).sort().join("|"),
+    };
+  }));
+  const initialStyleContextToken = styleContextToken();
+  const restorers: (() => void)[] = [];
+  const instrumentMethod = (name: "deleteRule" | "insertRule" | "replace" | "replaceSync") => {
+    const descriptor = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, name);
+    if (descriptor?.value === undefined || typeof descriptor.value !== "function" ||
+        descriptor.configurable !== true) {
+      if (name in CSSStyleSheet.prototype) state.instrumentationComplete = false;
+      return;
+    }
+    const original = descriptor.value as (...args: unknown[]) => unknown;
+    const wrapped = function(this: CSSStyleSheet, ...args: unknown[]) {
+      if (state.clicked && !state.frozen) state.styleContextMutated = true;
+      return original.apply(this, args);
+    };
+    Object.defineProperty(CSSStyleSheet.prototype, name, { ...descriptor, value: wrapped });
+    restorers.push(() => {
+      if ((CSSStyleSheet.prototype as unknown as Record<string, unknown>)[name] === wrapped) {
+        Object.defineProperty(CSSStyleSheet.prototype, name, descriptor);
+      }
+    });
+  };
+  for (const name of ["insertRule", "deleteRule", "replace", "replaceSync"] as const) {
+    instrumentMethod(name);
+  }
+  if ("adoptedStyleSheets" in document) {
+    let owner: object | null = document;
+    let descriptor: PropertyDescriptor | undefined;
+    while (owner !== null && descriptor === undefined) {
+      descriptor = Object.getOwnPropertyDescriptor(owner, "adoptedStyleSheets");
+      owner = Object.getPrototypeOf(owner) as object | null;
+    }
+    if (descriptor?.get === undefined || descriptor.set === undefined ||
+        !Object.isExtensible(document)) {
+      state.instrumentationComplete = false;
+    } else {
+      const getter = descriptor.get;
+      const setter = descriptor.set;
+      try {
+        Object.defineProperty(document, "adoptedStyleSheets", {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? true,
+          get() { return getter.call(document) as CSSStyleSheet[]; },
+          set(value: CSSStyleSheet[]) {
+            if (state.clicked && !state.frozen) state.styleContextMutated = true;
+            setter.call(document, value);
+          },
+        });
+        restorers.push(() => { delete (document as unknown as Record<string, unknown>).adoptedStyleSheets; });
+      } catch {
+        state.instrumentationComplete = false;
+      }
+    }
+  }
+  state.restoreInstrumentation = () => {
+    while (restorers.length > 0) restorers.pop()?.();
   };
   const observe = () => {
     if (!state.frozen && !state.settled) state.observer?.observe(document.documentElement, observerOptions);
   };
   const classContextStable = (records: readonly MutationRecord[], loader: Element): boolean =>
-    records.every((record) => {
-      if (record.type === "attributes" && record.target === loader &&
-          record.attributeName === "class") return true;
-      if (record.type === "attributes" && record.target instanceof Element &&
-          (record.target === controller || record.target.contains(loader))) return false;
-      if (record.type === "characterData" && record.target.parentElement?.closest("style") !== null) {
-        return false;
-      }
-      if (record.type === "childList") {
-        if (record.target instanceof Element &&
-            (record.target === controller || record.target.contains(loader) ||
-             record.target.closest("style, head") !== null)) return false;
-        const styled = [...record.addedNodes, ...record.removedNodes].some((node) =>
-          node instanceof Element && (node.matches("style, link[rel=stylesheet]") ||
-            node.querySelector("style, link[rel=stylesheet]") !== null)
-        );
-        if (styled) return false;
-      }
-      return true;
-    });
+    state.instrumentationComplete && !state.styleContextMutated && !state.contextMutationSeen &&
+    styleContextToken() === initialStyleContextToken && records.every((record) =>
+      record.type === "attributes" && record.target === loader && record.attributeName === "class"
+    );
   const reconstructedVisible = (
     loader: Element,
     value: LoaderAttributes,
@@ -874,6 +965,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     if (state.settled && controller.isConnected) {
       globalState.__huntWorkdayNavigationWitness = state.actionId;
     }
+    if (records.some((record) =>
+      record.type !== "attributes" || record.target !== controller.querySelector(loaderSelector) ||
+      record.attributeName !== "class"
+    )) state.contextMutationSeen = true;
   });
   observe();
   globalState.__huntWorkdayNavigationAction = state;
@@ -890,16 +985,20 @@ function readNavigationActionBusySeen(actionId: string): boolean {
   return state?.actionId === actionId && state.clicked === true &&
     state.busySeen === true && state.controller?.isConnected === true;
 }
-function freezeNavigationWitness(actionId: string): void {
+function freezeNavigationWitness(actionId: string): boolean {
   const globalState = globalThis as unknown as Record<string, unknown>;
   const state = globalState.__huntWorkdayNavigationAction as {
     actionId?: string;
     observer?: MutationObserver;
     frozen?: boolean;
   } | undefined;
-  if (state?.actionId !== actionId) return;
+  if (state?.actionId !== actionId) return false;
+  const witnessed = (state as { settled?: boolean }).settled === true &&
+    globalState.__huntWorkdayNavigationWitness === actionId;
   state.observer?.disconnect();
+  (state as { restoreInstrumentation?: () => void }).restoreInstrumentation?.();
   state.frozen = true;
+  return witnessed;
 }
 function markNavigationWitnessClicked(actionId: string): void {
   const globalState = globalThis as unknown as Record<string, unknown>;
@@ -932,7 +1031,11 @@ async function readApplicationSnapshot(
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" "),
   );
-  const accessibleName = (element: Element, fallbackText = true): string => {
+  const accessibleName = (
+    element: Element,
+    fallbackText = true,
+    includeDirectLabel = true,
+  ): string => {
     const referenced = referencedText(element);
     if (referenced !== "") return referenced;
     const ariaLabel = text(element.getAttribute("aria-label"));
@@ -943,7 +1046,9 @@ async function readApplicationSnapshot(
       if (native !== "") return native;
     }
     const owned = text(element.querySelector(
-      ":scope > legend, :scope > label, :scope > [role=heading], :scope > h1, :scope > h2, :scope > h3",
+      includeDirectLabel
+        ? ":scope > legend, :scope > label, :scope > [role=heading], :scope > h1, :scope > h2, :scope > h3"
+        : ":scope > legend, :scope > [role=heading], :scope > h1, :scope > h2, :scope > h3",
     )?.textContent);
     return owned || (fallbackText ? text(element.textContent) : "");
   };
@@ -1207,9 +1312,9 @@ async function readApplicationSnapshot(
   const requiredControlSet = new Set(requiredControls);
   const promotedGroupOwnerSet = new Set(promotedGroupOwners);
   const seenRadioGroups = new Set<string>();
-  const radioOwnerIds = new WeakMap<Element, number>();
+  const radioOwnerIds = new WeakMap<object, number>();
   let radioOwnerSequence = 0;
-  const radioOwnerId = (owner: Element): number => {
+  const radioOwnerId = (owner: object): number => {
     const existing = radioOwnerIds.get(owner);
     if (existing !== undefined) return existing;
     radioOwnerSequence += 1;
@@ -1222,32 +1327,40 @@ async function readApplicationSnapshot(
     const fieldOwner = control.closest<HTMLElement>(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
-    const ownsRadioGroup = control.matches('fieldset, [role="radiogroup"]') &&
+    const ownsAriaRadioGroup = control.matches('fieldset, [role="radiogroup"]') &&
       control.querySelector('input[type="radio"], [role="radio"]') !== null;
-    const structuredRadioOwner = ownsRadioGroup
-      ? control
-      : control.closest<HTMLElement>('fieldset, [role="radiogroup"]') ??
-        (input?.type === "radio" || role === "radio" ? fieldOwner : null);
-    const radioGroupOwner = ownsRadioGroup
-      ? control
-      : input?.type === "radio" || role === "radio"
-        ? structuredRadioOwner ?? control
-        : undefined;
     const nativeRadioName = input?.type === "radio" ? text(input.name) : "";
-    const radioGroupKey = radioGroupOwner === undefined
+    const nativeMembershipOwner = input?.type === "radio" && nativeRadioName !== ""
+      ? input.form ?? input.getRootNode()
+      : undefined;
+    const ariaRadioOwner = ownsAriaRadioGroup
+      ? control
+      : role === "radio"
+        ? control.closest<HTMLElement>('[role="radiogroup"], fieldset') ?? control
+        : input?.type === "radio" && nativeRadioName === ""
+          ? control.closest<HTMLElement>("fieldset") ?? control
+          : undefined;
+    const radioMembershipOwner = nativeMembershipOwner ?? ariaRadioOwner;
+    const radioQuestionOwner = nativeMembershipOwner === undefined
+      ? ariaRadioOwner
+      : nativeMembershipOwner instanceof HTMLElement ? nativeMembershipOwner : root;
+    const radioGroupKey = radioMembershipOwner === undefined
       ? undefined
-      : `${radioOwnerId(radioGroupOwner)}:${nativeRadioName || "aria"}`;
-    const radioMembers = radioGroupOwner === undefined
+      : `${radioOwnerId(radioMembershipOwner)}:${nativeRadioName || "aria"}`;
+    const nativeRadioScope = input?.form?.ownerDocument ?? input?.getRootNode();
+    const radioMembers = radioMembershipOwner === undefined
       ? []
-      : [...radioGroupOwner.querySelectorAll<HTMLElement>(
-        'input[type="radio"], [role="radio"]',
-      )].filter((member) => visible(member) && (
-        nativeRadioName === "" || !(member instanceof HTMLInputElement) ||
-        text(member.name) === nativeRadioName
-      ));
+      : nativeMembershipOwner !== undefined
+        ? [...(nativeRadioScope as Document | ShadowRoot)
+          .querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+          .filter((member) => visible(member) && member.form === input?.form &&
+            member.getRootNode() === input?.getRootNode() && text(member.name) === nativeRadioName)
+        : [...(ariaRadioOwner ?? control).querySelectorAll<HTMLElement>(
+          'input[type="radio"], [role="radio"]',
+        )].filter(visible);
     if (radioGroupKey !== undefined && seenRadioGroups.has(radioGroupKey)) continue;
     if (radioGroupKey !== undefined) seenRadioGroups.add(radioGroupKey);
-    const fingerprintControl = radioGroupOwner ?? control;
+    const fingerprintControl = radioQuestionOwner ?? control;
     const completionRequired = requiredControlSet.has(control) ||
       radioMembers.some((member) => requiredControlSet.has(member));
     const requiredIndex = requiredControls.findIndex((candidate) =>
@@ -1263,7 +1376,9 @@ async function readApplicationSnapshot(
     const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(rawId)
       ? rawId
       : completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`;
-    const questionLabel = accessibleName(fingerprintControl) ||
+    const questionLabel = nativeMembershipOwner !== undefined
+      ? accessibleName(fingerprintControl, false, false)
+      : accessibleName(fingerprintControl) ||
       (fieldOwner === null ? "" : accessibleName(fieldOwner));
     const semanticOwnerContext: {
       tag: string;
@@ -1272,7 +1387,7 @@ async function readApplicationSnapshot(
       accessibleName: string;
       heading: string;
     }[] = [];
-    let semanticOwner: Element | null = fieldOwner ?? fingerprintControl;
+    let semanticOwner: Element | null = radioQuestionOwner ?? fieldOwner ?? fingerprintControl;
     for (let depth = 0;
       semanticOwner !== null && root.contains(semanticOwner) && depth < 8;
       depth += 1
@@ -1282,7 +1397,7 @@ async function readApplicationSnapshot(
       const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
         ? ""
         : automationId;
-      const ownerAccessibleName = accessibleName(semanticOwner, false);
+      const ownerAccessibleName = accessibleName(semanticOwner, false, false);
       const heading = text(semanticOwner.querySelector(
         ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
       )?.textContent);
@@ -1300,7 +1415,7 @@ async function readApplicationSnapshot(
       semanticOwner = semanticOwner.parentElement;
     }
     semanticOwnerContext.reverse();
-    const semanticControls = radioGroupOwner !== undefined
+    const semanticControls = radioMembershipOwner !== undefined
       ? [fingerprintControl, ...radioMembers.filter((member) => member !== fingerprintControl)]
       : control.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
@@ -1349,7 +1464,7 @@ async function readApplicationSnapshot(
       (semanticLeaf.type === "text" || semanticLeaf.type === "tel") &&
       (/^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(text(semanticLeaf.placeholder)) ||
         /^date(?:\s*\*)?$/iu.test(questionLabel));
-    const supportedBehavior = radioGroupOwner !== undefined
+    const supportedBehavior = radioMembershipOwner !== undefined
       ? "radio"
       : fingerprintControl.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
