@@ -2762,6 +2762,9 @@ test("My Experience reconciles a committed skill after its prompt activation tar
               <ul data-automation-id="selectedItemList" hidden></ul>
             </div>
             <div data-automation-id="errorMessage">Choose a skill</div>
+            <div data-automation-id="formField-nested">
+              <div data-automation-id="errorMessage">Nested field error</div>
+            </div>
           </div>
         </main>
         <div id="skills-options" role="listbox" hidden>
@@ -2809,7 +2812,9 @@ test("My Experience reconciles a committed skill after its prompt activation tar
     assert.equal(await page.evaluate(() =>
       (window as unknown as { readonly skillSearches: number }).skillSearches
     ), 1);
-    await page.locator('[data-automation-id="errorMessage"]').evaluate((element) => {
+    await page.locator(
+      '[data-automation-id="formField-skills"] > [data-automation-id="errorMessage"]',
+    ).evaluate((element) => {
       (element as HTMLElement).hidden = true;
     });
     const started = performance.now();

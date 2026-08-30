@@ -2674,13 +2674,24 @@ async function required(
 
 async function validationCleared(locator: Locator): Promise<boolean> {
   if (await locator.getAttribute("aria-invalid") === "true") return false;
+  const validationSelector = '[data-automation-id="errorMessage"], [role="alert"]';
   const field = locator.locator(
     'xpath=ancestor::*[@data-automation-id="formField" or starts-with(@data-automation-id,"formField-")][1]',
   );
-  const root = await field.count() === 1 ? field : locator;
-  return (await visibleLocators(root.locator(
-    '[data-automation-id="errorMessage"], [role="alert"]',
-  ))).length === 0;
+  if (await field.count() !== 1) {
+    return (await visibleLocators(locator.locator(validationSelector))).length === 0;
+  }
+  const directIndexes = await field.evaluate((owner, selector) => {
+    const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
+    return [...owner.querySelectorAll(selector)].flatMap((candidate, index) =>
+      candidate.closest(fieldSelector) === owner ? [index] : []
+    );
+  }, validationSelector);
+  const candidates = field.locator(validationSelector);
+  for (const index of directIndexes) {
+    if (await candidates.nth(index).isVisible()) return false;
+  }
+  return true;
 }
 
 async function visibleLocators(locator: Locator): Promise<Locator[]> {
