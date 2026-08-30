@@ -80,6 +80,7 @@ interface BrowserApplicationSnapshot {
   readonly c3OwnedDuplicateRows: number;
   readonly submitActivated: boolean;
   readonly signature: string;
+  readonly semanticDestinationFingerprint: string;
   readonly transitionKey: string;
   readonly physicalPageOccurrenceKey: string;
   readonly physicalDomKey: string;
@@ -366,6 +367,7 @@ export class PlaywrightWorkdayApplicationPage {
             candidate,
             signal,
             persistedDestinationProven ? persistedNavigationActionId : undefined,
+            persistedDestinationProven ? before.semanticDestinationFingerprint : undefined,
           );
           if (stable !== undefined) return { ok: true, value: stable };
           navigationDiagnostic("destination_candidate_unstable", {
@@ -432,7 +434,12 @@ export class PlaywrightWorkdayApplicationPage {
     candidate: BrowserApplicationSnapshot,
     signal: AbortSignal,
     persistedNavigationActionId?: string,
+    sourceSemanticDestinationFingerprint?: string,
   ): Promise<BrowserApplicationSnapshot | undefined> {
+    if (sourceSemanticDestinationFingerprint !== undefined &&
+        candidate.semanticDestinationFingerprint === sourceSemanticDestinationFingerprint) {
+      return undefined;
+    }
     const deadline = Date.now() + Math.min(
       destinationStabilityWindowMs,
       this.#navigationSettleTimeoutMs,
@@ -453,6 +460,11 @@ export class PlaywrightWorkdayApplicationPage {
         observed.value.page !== candidate.page ||
         observed.value.rootSelector !== candidate.rootSelector ||
         observed.value.transitionKey !== candidate.transitionKey ||
+        observed.value.semanticDestinationFingerprint !==
+          candidate.semanticDestinationFingerprint ||
+        (sourceSemanticDestinationFingerprint !== undefined &&
+          observed.value.semanticDestinationFingerprint ===
+            sourceSemanticDestinationFingerprint) ||
         observedWitness !== candidate.navigationWitness
       ) return undefined;
       confirmed = observedWitness === observed.value.navigationWitness
@@ -625,10 +637,7 @@ function hasIndependentDestinationEvidence(
 ): boolean {
   if (after.page !== before.page || after.rootSelector !== before.rootSelector ||
       after.transitionKey !== before.transitionKey) return true;
-  const semanticFields = (snapshot: BrowserApplicationSnapshot): string =>
-    snapshot.requiredFields.map(({ page, semanticKey }) => `${page ?? ""}:${semanticKey}`)
-      .sort().join("\u001f");
-  return semanticFields(after) !== semanticFields(before);
+  return after.semanticDestinationFingerprint !== before.semanticDestinationFingerprint;
 }
 function armNavigationWitness(input: { readonly rootSelector: string; readonly actionId: string }): boolean {
   const root = document.querySelector<HTMLElement>(input.rootSelector);
@@ -755,9 +764,14 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           : later.oldValue;
         known.attributes = { ...known.attributes, [key]: nextValue };
         const finalState = later === undefined;
+        // Mutation records expose old class strings, but the browser cannot
+        // reconstruct computed style for an intermediate class once a later
+        // same-batch mutation has already replaced it. Treat that state as
+        // unproven instead of guessing that an unfamiliar class was visible.
+        const intermediateVisibilityProvable = name !== "class" || finalState;
         const nextVisible = loader.isConnected && controller.contains(loader) &&
           ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
-          (!finalState || visible(loader));
+          intermediateVisibilityProvable && (!finalState || visible(loader));
         recordLoaderTransition(known.visible, nextVisible);
         known.visible = nextVisible;
         loaderStates.set(loader, known);
@@ -796,12 +810,12 @@ function markNavigationWitnessClicked(actionId: string): void {
   } | undefined;
   if (state?.actionId === actionId) state.clicked = true;
 }
-function readApplicationSnapshot(
+async function readApplicationSnapshot(
   input: {
     readonly selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS;
     readonly checkboxGroupAttribute: string;
   },
-): BrowserApplicationSnapshot | BrowserApplicationAmbiguity {
+): Promise<BrowserApplicationSnapshot | BrowserApplicationAmbiguity> {
   const { selectors, checkboxGroupAttribute } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
@@ -830,6 +844,72 @@ function readApplicationSnapshot(
       state = Math.imul(state, 16777619);
     }
     return (state >>> 0).toString(16).padStart(8, "0");
+  };
+  const collisionResistantHash = async (value: string): Promise<string> => {
+    const encoded = new TextEncoder().encode(value);
+    if (globalThis.crypto.subtle !== undefined) {
+      const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", encoded));
+      return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    // Workday is a secure origin in production, but Playwright's setContent
+    // fixtures are not. Keep the identical SHA-256 contract in that context.
+    const constants = new Uint32Array([
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+      0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+      0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+      0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+      0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ]);
+    const paddedLength = Math.ceil((encoded.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(encoded);
+    padded[encoded.length] = 0x80;
+    const bitLength = encoded.length * 8;
+    const view = new DataView(padded.buffer);
+    view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x1_0000_0000));
+    view.setUint32(paddedLength - 4, bitLength >>> 0);
+    const state = new Uint32Array([
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    const words = new Uint32Array(64);
+    const rotateRight = (word: number, count: number): number =>
+      word >>> count | word << (32 - count);
+    for (let offset = 0; offset < paddedLength; offset += 64) {
+      for (let index = 0; index < 16; index += 1) {
+        words[index] = view.getUint32(offset + index * 4);
+      }
+      for (let index = 16; index < 64; index += 1) {
+        const left = words[index - 15]!;
+        const right = words[index - 2]!;
+        const sigma0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ left >>> 3;
+        const sigma1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ right >>> 10;
+        words[index] = (words[index - 16]! + sigma0 + words[index - 7]! + sigma1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = state;
+      for (let index = 0; index < 64; index += 1) {
+        const sum1 = rotateRight(e!, 6) ^ rotateRight(e!, 11) ^ rotateRight(e!, 25);
+        const choice = e! & f! ^ ~e! & g!;
+        const temporary1 = (h! + sum1 + choice + constants[index]! + words[index]!) >>> 0;
+        const sum0 = rotateRight(a!, 2) ^ rotateRight(a!, 13) ^ rotateRight(a!, 22);
+        const majority = a! & b! ^ a! & c! ^ b! & c!;
+        const temporary2 = (sum0 + majority) >>> 0;
+        [a, b, c, d, e, f, g, h] = [
+          (temporary1 + temporary2) >>> 0, a, b, c,
+          (d! + temporary1) >>> 0, e, f, g,
+        ];
+      }
+      for (const [index, word] of [a, b, c, d, e, f, g, h].entries()) {
+        state[index] = (state[index]! + word!) >>> 0;
+      }
+    }
+    return [...state].map((word) => word.toString(16).padStart(8, "0")).join("");
   };
   const validDateValue = (rawValue: string): boolean => {
     const value = rawValue.replace(
@@ -996,6 +1076,7 @@ function readApplicationSnapshot(
     ) !== null;
   });
   const requiredFields: BrowserApplicationSnapshot["requiredFields"][number][] = [];
+  const semanticDestinationFields: string[] = [];
   const seenRadioGroups = new Set<string>();
   for (const [index, control] of requiredControls.entries()) {
     const input = control instanceof HTMLInputElement ? control : undefined;
@@ -1018,6 +1099,177 @@ function readApplicationSnapshot(
       : undefined;
     if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
     if (radioKey !== undefined) seenRadioGroups.add(radioKey);
+    const questionLabel = text(fieldOwner?.querySelector("label, legend")?.textContent) ||
+      text(control.getAttribute("aria-label")) ||
+      (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
+          control instanceof HTMLSelectElement
+        ? text(control.labels?.[0]?.textContent)
+        : "");
+    const semanticOwnerContext: {
+      tag: string;
+      automationId: string;
+      role: string;
+      ariaLabel: string;
+      labelledBy: string;
+      heading: string;
+    }[] = [];
+    let semanticOwner: Element | null = fieldOwner ?? control.parentElement;
+    for (let depth = 0;
+      semanticOwner !== null && root.contains(semanticOwner) && depth < 8;
+      depth += 1
+    ) {
+      const automationId = semanticOwner.getAttribute("data-automation-id") ?? "";
+      const ownerRole = semanticOwner.getAttribute("role") ?? "";
+      const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
+        ? ""
+        : automationId;
+      const ariaLabel = text(semanticOwner.getAttribute("aria-label"));
+      const labelledBy = text(semanticOwner.getAttribute("aria-labelledby"))
+        .split(" ").filter(Boolean).map((id) => text(document.getElementById(id)?.textContent))
+        .filter(Boolean).join("|");
+      const heading = text(semanticOwner.querySelector(
+        ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
+      )?.textContent);
+      if (stableAutomationId !== "" || ownerRole !== "" || ariaLabel !== "" ||
+          labelledBy !== "" || heading !== "" || semanticOwner === root) {
+        semanticOwnerContext.push({
+          tag: semanticOwner.tagName.toLocaleLowerCase("en-US"),
+          automationId: stableAutomationId,
+          role: ownerRole,
+          ariaLabel,
+          labelledBy,
+          heading,
+        });
+      }
+      if (semanticOwner === root) break;
+      semanticOwner = semanticOwner.parentElement;
+    }
+    semanticOwnerContext.reverse();
+    const semanticControls = control.matches(
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
+        '[data-automation-id$="-CheckboxGroup"], ' +
+        `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
+    )
+      ? [control, ...control.querySelectorAll<HTMLElement>(
+        'input:not([type="hidden"]), textarea, select, [role="radio"], [role="checkbox"], ' +
+          '[role="combobox"], button[aria-haspopup="listbox"]',
+      )]
+      : [control];
+    const constraints = semanticControls.map((item) => ({
+      tag: item.tagName.toLocaleLowerCase("en-US"),
+      automationId: (() => {
+        const value = text(item.getAttribute("data-automation-id"));
+        return /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(value) ? "" : value;
+      })(),
+      type: item instanceof HTMLInputElement ? item.type : "",
+      role: item.getAttribute("role") ?? "",
+      required: item.hasAttribute("required"),
+      ariaRequired: item.getAttribute("aria-required") ?? "",
+      min: item.getAttribute("min") ?? "",
+      max: item.getAttribute("max") ?? "",
+      step: item.getAttribute("step") ?? "",
+      minLength: item.getAttribute("minlength") ?? "",
+      maxLength: item.getAttribute("maxlength") ?? "",
+      pattern: item.getAttribute("pattern") ?? "",
+      accept: item.getAttribute("accept") ?? "",
+      inputMode: item.getAttribute("inputmode") ?? "",
+      placeholder: text(item.getAttribute("placeholder")),
+      multiple: item.hasAttribute("multiple"),
+      readOnly: item.hasAttribute("readonly") || item.getAttribute("aria-readonly") === "true",
+    })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    const semanticLeaf = control.matches("input, textarea, select, [contenteditable=true]")
+      ? control
+      : control.querySelector<HTMLElement>(
+        "input:not([type=hidden]), textarea, select, [contenteditable=true], " +
+          "[role=combobox], [role=listbox], [role=radiogroup], [role=checkbox]",
+      ) ?? control;
+    const formattedDate = semanticLeaf instanceof HTMLInputElement &&
+      (semanticLeaf.type === "text" || semanticLeaf.type === "tel") &&
+      (/^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(text(semanticLeaf.placeholder)) ||
+        /^date(?:\s*\*)?$/iu.test(questionLabel));
+    const supportedBehavior = control.matches(
+      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
+    ) || semanticLeaf instanceof HTMLInputElement &&
+        (semanticLeaf.type === "date" || formattedDate)
+      ? "date"
+      : semanticLeaf instanceof HTMLTextAreaElement ? "textarea"
+      : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "file" ? "file_upload"
+      : semanticLeaf instanceof HTMLSelectElement ? "select"
+      : control.getAttribute("aria-haspopup") === "listbox" ||
+          semanticLeaf.getAttribute("role") === "combobox" ||
+          semanticLeaf.getAttribute("role") === "listbox"
+        ? "listbox"
+        : control instanceof HTMLFieldSetElement ||
+            semanticLeaf.getAttribute("role") === "radiogroup" ||
+            control.getAttribute("data-hunt-checkbox-selection-mode") === "exclusive"
+          ? "radio"
+          : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "checkbox" ||
+              semanticLeaf.getAttribute("role") === "checkbox"
+            ? "checkbox"
+            : semanticLeaf.getAttribute("contenteditable") === "true"
+              ? "contenteditable"
+              : "text";
+    const catalog: { label: string; value: string; disabled: boolean }[] = [];
+    const appendEncodedCatalog = (element: Element) => {
+      const encoded = element.getAttribute("data-hunt-popup-options") ??
+        element.getAttribute("data-hunt-deferred-options");
+      if (encoded === null) return;
+      try {
+        const decoded = JSON.parse(encoded) as unknown;
+        if (!Array.isArray(decoded)) return;
+        for (const option of decoded) {
+          if (typeof option === "string") {
+            catalog.push({ label: text(option), value: text(option), disabled: false });
+          }
+        }
+      } catch {
+        // A malformed catalog is still represented by its absence; snapshot
+        // observation must never expose the raw attribute outside the browser.
+      }
+    };
+    for (const item of semanticControls) {
+      if (item instanceof HTMLSelectElement) {
+        catalog.push(...[...item.options].map((option) => ({
+          label: text(option.label || option.textContent),
+          value: text(option.value),
+          disabled: option.disabled,
+        })));
+      }
+      appendEncodedCatalog(item);
+      if (item instanceof HTMLInputElement && ["radio", "checkbox"].includes(item.type) ||
+          item.getAttribute("role") === "radio" || item.getAttribute("role") === "checkbox") {
+        const itemInput = item instanceof HTMLInputElement ? item : undefined;
+        catalog.push({
+          label: text(item.getAttribute("aria-label")) ||
+            text(itemInput?.labels?.[0]?.textContent) || text(item.textContent),
+          value: text(itemInput?.value ?? item.getAttribute("data-value")),
+          disabled: item.matches(":disabled") ||
+            item.getAttribute("aria-disabled") === "true",
+        });
+      }
+    }
+    catalog.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    semanticDestinationFields.push(JSON.stringify({
+      questionLabel,
+      behavior: {
+        supported: supportedBehavior,
+        tag: control.tagName.toLocaleLowerCase("en-US"),
+        type: input?.type ?? "",
+        role: role ?? "",
+        popup: control.getAttribute("aria-haspopup") ?? "",
+        contentEditable: control.getAttribute("contenteditable") ?? "",
+      },
+      selectionMode: control.getAttribute("data-hunt-checkbox-selection-mode") ??
+        control.getAttribute(checkboxGroupAttribute) ??
+        (control instanceof HTMLSelectElement && control.multiple
+          ? "multiple"
+          : control.getAttribute("aria-multiselectable") === "true"
+            ? "multiple"
+            : input?.type ?? role ?? "single"),
+      constraints,
+      catalog,
+      ownerContext: semanticOwnerContext,
+    }));
     const nativeInvalid = (
       control instanceof HTMLInputElement ||
       control instanceof HTMLTextAreaElement ||
@@ -1374,12 +1626,7 @@ function readApplicationSnapshot(
     requiredFields.push({
       fieldId: safeId,
       semanticKey: semanticHash([
-        text(fieldOwner?.querySelector("label, legend")?.textContent) ||
-          text(control.getAttribute("aria-label")) ||
-          (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
-              control instanceof HTMLSelectElement
-            ? text(control.labels?.[0]?.textContent)
-            : ""),
+        questionLabel,
         control.tagName,
         input?.type ?? "",
         role ?? "",
@@ -1415,6 +1662,21 @@ function readApplicationSnapshot(
       },
     });
   }
+  const semanticDestinationMultiplicity = new Map<string, number>();
+  for (const field of semanticDestinationFields) {
+    semanticDestinationMultiplicity.set(
+      field,
+      (semanticDestinationMultiplicity.get(field) ?? 0) + 1,
+    );
+  }
+  const semanticDestinationCanonical = JSON.stringify(
+    [...semanticDestinationMultiplicity.entries()].sort(([left], [right]) =>
+      left.localeCompare(right)
+    ),
+  );
+  const semanticDestinationFingerprint = await collisionResistantHash(
+    semanticDestinationCanonical,
+  );
   const fingerprints = new Map<string, number>();
   let duplicateRows = 0;
   for (const row of [...root.querySelectorAll<HTMLElement>(
@@ -1506,6 +1768,7 @@ function readApplicationSnapshot(
     labels.join("\u001f"),
     validationKeys.join("\u001f"),
     physicalDomKey,
+    semanticDestinationFingerprint,
     navigationWitness,
   ].join("\u0000");
   const transitionKey = [
@@ -1524,6 +1787,7 @@ function readApplicationSnapshot(
     c3OwnedDuplicateRows: duplicateRows,
     submitActivated: document.documentElement.getAttribute("data-hunt-submit-activated") === "true",
     signature,
+    semanticDestinationFingerprint,
     transitionKey,
     physicalPageOccurrenceKey,
     physicalDomKey,

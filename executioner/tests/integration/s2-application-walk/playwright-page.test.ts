@@ -437,18 +437,21 @@ test("pre-mounted loader aria, style, and class cycles prove same-page advanceme
         initial: 'aria-hidden="true"',
         show: "loader.removeAttribute('aria-hidden')",
         hide: "loader.setAttribute('aria-hidden', 'true')",
+        deferred: false,
       },
       {
         name: "style",
         initial: 'style="display:none"',
         show: "loader.removeAttribute('style')",
         hide: "loader.setAttribute('style', 'display:none')",
+        deferred: false,
       },
       {
         name: "class",
         initial: 'class="hidden"',
         show: "loader.removeAttribute('class')",
         hide: "loader.setAttribute('class', 'hidden')",
+        deferred: true,
       },
     ]) {
       const page = await browser.newPage();
@@ -464,9 +467,13 @@ test("pre-mounted loader aria, style, and class cycles prove same-page advanceme
           document.querySelector('#next').addEventListener('click', () => {
             const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
             ${variant.show};
-            document.querySelector('main').insertAdjacentHTML('beforeend',
-              '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
-            ${variant.hide};
+            const finish = () => {
+              document.querySelector('main').insertAdjacentHTML('beforeend',
+                '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
+              ${variant.hide};
+            };
+            if (${variant.deferred}) setTimeout(finish, 0);
+            else finish();
           });
         </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
@@ -533,6 +540,47 @@ test("an always-hidden loader ancestor cannot advance a conditional semantic sup
   }
 });
 
+test("two computed-hidden loader classes cannot advance a conditional semantic superset", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<style>.loader-a, .loader-b { display: none; }</style>
+      <div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+      </main>
+      <div data-automation-id="applyFlowLoadingPage" class="loader-a">Loading</div>
+      <button id="next">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+          loader.className = 'loader-b';
+          document.querySelector('main').insertAdjacentHTML('beforeend',
+            '<div data-automation-id="formField"><label>Conditional detail*<input required value="committed"></label></div>');
+          loader.className = 'loader-a';
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 4_000,
+      navigationSettleTimeoutMs: 4_000,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("owned loading plus an unchanged reload cannot synthesize questionnaire advancement", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -561,6 +609,119 @@ test("owned loading plus an unchanged reload cannot synthesize questionnaire adv
     const application = new PlaywrightWorkdayApplicationPage(page, {
       timeoutMs: 100,
       navigationSettleTimeoutMs: 250,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("owned reload accepts a stable same-label destination with changed answer semantics", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      if (window.name !== "reload-answer-semantics") return;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <div data-automation-id="formField"><label for="choice">Repeated question*</label>
+              <select id="choice" required multiple><option value="shared">Shared</option>
+                <option value="destination" selected>Destination only</option></select></div>
+            <div data-automation-id="formField"><label for="detail">Repeated detail*</label>
+              <input id="detail" required minlength="5" maxlength="12" pattern="[a-z]+"
+                value="committed"></div>
+          </main><button>Save and Continue</button></div>`;
+      });
+    });
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label for="choice">Repeated question*</label>
+          <select id="choice" required><option value="shared" selected>Shared</option>
+            <option value="source">Source only</option></select></div>
+        <div data-automation-id="formField"><label for="detail">Repeated detail*</label>
+          <input id="detail" required minlength="2" maxlength="4" value="done"></div>
+      </main><button id="next">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'reload-answer-semantics';
+          document.querySelector('main').remove();
+          document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+            'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 150,
+      navigationSettleTimeoutMs: 750,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("owned reload rejects a transient semantic destination that falls back to source", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      if (window.name !== "reload-transient-semantics") return;
+      const source = `<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <div data-automation-id="formField"><label for="choice">Repeated question*</label>
+            <select id="choice" required><option selected>Shared</option><option>Source</option></select></div>
+        </main><button>Save and Continue</button></div>`;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <div data-automation-id="formField"><label for="choice">Repeated question*</label>
+              <select id="choice" required multiple><option>Shared</option>
+                <option selected>Transient</option></select></div>
+          </main><button>Save and Continue</button></div>`;
+        setTimeout(() => { document.body.innerHTML = source; }, 150);
+      });
+    });
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label for="choice">Repeated question*</label>
+          <select id="choice" required><option selected>Shared</option><option>Source</option></select></div>
+      </main><button id="next">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'reload-transient-semantics';
+          document.querySelector('main').remove();
+          document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+            'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 100,
+      navigationSettleTimeoutMs: 600,
     });
     const before = await application.observe(new AbortController().signal);
     assert.equal(before.ok, true, JSON.stringify(before));
