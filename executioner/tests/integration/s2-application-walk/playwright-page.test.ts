@@ -469,6 +469,7 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
         initial: 'aria-hidden="true"',
         show: "loader.removeAttribute('aria-hidden')",
         hide: "loader.setAttribute('aria-hidden', 'true')",
+        hideDeferred: false,
         destinationDeferred: false,
       },
       {
@@ -476,6 +477,7 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
         initial: 'style="display:none"',
         show: "loader.removeAttribute('style')",
         hide: "loader.setAttribute('style', 'display:none')",
+        hideDeferred: false,
         destinationDeferred: false,
       },
       {
@@ -483,6 +485,31 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
         initial: 'class="loader-a"',
         show: "loader.className = 'loader-visible'",
         hide: "loader.className = 'loader-b'",
+        hideDeferred: false,
+        destinationDeferred: true,
+      },
+      {
+        name: "nonclass-show-class-hide",
+        initial: 'hidden class="loader-visible"',
+        show: "loader.removeAttribute('hidden')",
+        hide: "loader.className = 'loader-b'",
+        hideDeferred: false,
+        destinationDeferred: true,
+      },
+      {
+        name: "class-list-value",
+        initial: 'class="loader-a"',
+        show: "loader.classList.value = 'loader-visible'",
+        hide: "loader.classList.value = 'loader-b'",
+        hideDeferred: false,
+        destinationDeferred: true,
+      },
+      {
+        name: "attribute-node-value",
+        initial: 'class="loader-a"',
+        show: "const nextClass = document.createAttribute('class'); nextClass.value = 'loader-visible'; loader.setAttributeNode(nextClass)",
+        hide: "loader.getAttributeNode('class').value = 'loader-b'",
+        hideDeferred: false,
         destinationDeferred: true,
       },
     ]) {
@@ -508,10 +535,11 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
             };
             const finish = () => {
               ${variant.hide};
-              if (${variant.destinationDeferred}) setTimeout(destination, 0);
+              if (${variant.destinationDeferred}) setTimeout(destination, 100);
               else destination();
             };
-            finish();
+            if (${variant.hideDeferred}) setTimeout(finish, 0);
+            else finish();
           });
         </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
@@ -529,9 +557,67 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
       }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
       const after = await application.observe(new AbortController().signal);
       assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
-      if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId, variant.name);
+      const witnessState = await page.evaluate(() => {
+        const state = (globalThis as unknown as Record<string, unknown>).__huntWorkdayNavigationAction;
+        return JSON.parse(JSON.stringify(state, (key, value) =>
+          ["controller", "observer", "restoreInstrumentation"].includes(key) ? undefined : value
+        ));
+      });
+      if (after.ok) assert.notEqual(
+        after.value.pageId,
+        before.value.pageId,
+        `${variant.name}:${JSON.stringify(witnessState)}`,
+      );
       await page.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a mixed loader pair is revoked when its class-show context later changes", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<style id="loader-style">
+        .loader-hidden { display:none } .loader-visible { display:block }
+      </style><div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <label>Repeated question*<input required value="committed"></label>
+      </main><div data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div>
+      <button id="next">Save and Continue</button><script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+          loader.className = 'loader-visible';
+          setTimeout(() => {
+            loader.hidden = true;
+            setTimeout(() => {
+              const declaration = document.querySelector('#loader-style').sheet.cssRules[1].style;
+              declaration.setProperty('color', 'red');
+              declaration.removeProperty('color');
+              document.querySelector('main').insertAdjacentHTML('beforeend',
+                '<label>Conditional detail*<input required value="committed"></label>');
+            }, 0);
+          }, 0);
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 1_000,
+      navigationSettleTimeoutMs: 1_000,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
   } finally {
     await browser.close();
   }
@@ -722,10 +808,24 @@ test("historical loader class visibility is measured at the exact structural pos
         expectedAdvance: false,
       },
       {
+        name: "direct-declaration-property-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const declaration = document.querySelector('#loader-style').sheet.cssRules[1].style; declaration.color = 'red'; declaration.color = ''",
+        expectedAdvance: false,
+      },
+      {
         name: "disabled-restored",
         css: ".loader-hidden { display:none } .loader-visible { display:block }",
         extra: "",
         contextMutation: "const sheet = document.querySelector('#loader-style').sheet; sheet.disabled = true; sheet.disabled = false",
+        expectedAdvance: false,
+      },
+      {
+        name: "link-disabled-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: '<link id="disabled-link" rel="stylesheet" href="data:text/css,.unused%7Bcolor:red%7D">',
+        contextMutation: "const link = document.querySelector('#disabled-link'); link.disabled = true; link.disabled = false",
         expectedAdvance: false,
       },
       {
@@ -740,6 +840,13 @@ test("historical loader class visibility is measured at the exact structural pos
         css: ".loader-hidden { display:none } .loader-visible { display:block }",
         extra: "",
         contextMutation: "const rule = document.querySelector('#loader-style').sheet.cssRules[1]; rule.selectorText = '.temporary-visible'; rule.selectorText = '.loader-visible'",
+        expectedAdvance: false,
+      },
+      {
+        name: "keyframe-rule-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block } @keyframes pulse { from { opacity: 0 } to { opacity: 1 } }",
+        extra: "",
+        contextMutation: "const keyframes = document.querySelector('#loader-style').sheet.cssRules[2]; const frame = keyframes.cssRules[0]; frame.keyText = '25%'; frame.keyText = 'from'",
         expectedAdvance: false,
       },
       {
@@ -1406,6 +1513,120 @@ test("native radio completion and identity use the exact browser-owned member se
       "verified",
     ]);
     assert.equal(new Set(observed.value.requiredFields.map(({ fieldId }) => fieldId)).size, 2);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio completion includes hidden external required members and stable owner identity", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const checked of [true, false]) {
+      const page = await browser.newPage();
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <form id="first-form"><fieldset><legend>First status</legend>
+            <label><input type="radio" name="status" value="first-local">First local</label>
+          </fieldset></form>
+          <input hidden form="first-form" type="radio" name="status" required
+            value="first-external" ${checked ? "checked" : ""}>
+          <form id="second-form"><div role="radiogroup" aria-label="Second status">
+            <label><input type="radio" name="status" required checked value="second-one">Second one</label>
+            <label><input type="radio" name="status" required value="second-two">Second two</label>
+          </div></form>
+        </main><button type="button">Save and Continue</button></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page);
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, JSON.stringify(before));
+      if (!before.ok) continue;
+      assert.equal(before.value.requiredFields.length, 2);
+      assert.deepEqual(
+        before.value.requiredFields.map(({ verification }) => verification).sort(),
+        checked ? ["verified", "verified"] : ["unverified", "verified"],
+      );
+      const beforeIdentity = before.value.requiredFields.map((field) => field.fieldId).sort();
+      await page.locator('main').evaluate((main) => {
+        const forms = [...main.querySelectorAll("form")];
+        main.append(forms[1]!, forms[0]!);
+        const first = main.querySelector<HTMLInputElement>('#first-form input[name="status"]');
+        first?.closest("fieldset")?.setAttribute("data-remounted", "true");
+      });
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, JSON.stringify(after));
+      if (after.ok) assert.deepEqual(
+        after.value.requiredFields.map((field) => field.fieldId).sort(),
+        beforeIdentity,
+      );
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio semantic owners survive an external member and dedupe ARIA wrappers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      {
+        name: "external-legend-change",
+        source: `<form id="application-form"><fieldset><legend>Source status</legend>
+          <label><input type="radio" name="status" required checked value="shared">Shared</label>
+          <label><input type="radio" name="status" required value="other">Other</label></fieldset></form>
+          <input hidden form="application-form" type="radio" name="status" value="external">`,
+        destination: `<form id="application-form"><fieldset><legend>Destination status</legend>
+          <label><input type="radio" name="status" required checked value="shared">Shared</label>
+          <label><input type="radio" name="status" required value="other">Other</label></fieldset></form>
+          <input hidden form="application-form" type="radio" name="status" value="external">`,
+      },
+      {
+        name: "native-aria-dedupe",
+        source: `<form id="application-form"><div role="radiogroup" aria-label="Source status">
+          <label><input type="radio" name="status" required checked value="shared">Shared</label>
+          <label><input type="radio" name="status" required value="other">Other</label></div></form>`,
+        destination: `<form id="application-form"><div role="radiogroup" aria-label="Destination status">
+          <label><input type="radio" name="status" required checked value="shared">Shared</label>
+          <label><input type="radio" name="status" required value="other">Other</label></div></form>`,
+      },
+    ]) {
+      const page = await browser.newPage();
+      await page.addInitScript(({ name, destination }) => {
+        if (window.name !== `radio-owner-${name}`) return;
+        document.addEventListener("DOMContentLoaded", () => {
+          document.body.innerHTML = `<div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${destination}</main><button type="button">Save and Continue</button></div>`;
+        });
+      }, variant);
+      await page.setContent(`<div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${variant.source}</main>
+        <button id="next" type="button">Save and Continue</button></div><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            window.name = 'radio-owner-${variant.name}';
+            document.querySelector('main').remove();
+            document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+              'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+          });
+        </script>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 150,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      assert.equal(before.value.requiredFields.length, 1, variant.name);
+      assert.deepEqual(await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) {
+        assert.equal(after.value.requiredFields.length, 1, variant.name);
+        assert.notEqual(after.value.pageId, before.value.pageId, variant.name);
+      }
+      await page.close();
+    }
   } finally {
     await browser.close();
   }

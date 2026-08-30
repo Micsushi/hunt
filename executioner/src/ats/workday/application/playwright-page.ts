@@ -709,10 +709,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     frozen: false,
     styleContextMutated: false,
     instrumentationComplete: true,
-    classBusySeen: false,
-    classSettled: false,
-    nonClassBusySeen: false,
-    nonClassSettled: false,
+    activeBusy: undefined as { readonly source: "class" | "other" } | undefined,
+    settledPairs: [] as { readonly classDependent: boolean }[],
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -773,10 +771,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
   };
   const syncWitnessState = () => {
-    state.busySeen = state.nonClassBusySeen ||
-      !state.styleContextMutated && state.classBusySeen;
-    state.settled = state.nonClassSettled ||
-      !state.styleContextMutated && state.classSettled;
+    state.busySeen = state.activeBusy !== undefined || state.settledPairs.length > 0;
+    state.settled = state.settledPairs.length > 0;
     if (state.settled && controller.isConnected) {
       globalState.__huntWorkdayNavigationWitness = state.actionId;
     } else if (globalState.__huntWorkdayNavigationWitness === state.actionId) {
@@ -786,8 +782,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   const invalidateClassContext = () => {
     if (!state.clicked || state.frozen) return;
     state.styleContextMutated = true;
-    state.classBusySeen = false;
-    state.classSettled = false;
+    if (state.activeBusy?.source === "class") state.activeBusy = undefined;
+    state.settledPairs = state.settledPairs.filter((pair) => !pair.classDependent);
     syncWitnessState();
   };
   const recordLoaderTransition = (
@@ -796,18 +792,20 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     source: "class" | "other",
   ) => {
     if (!state.clicked || wasVisible === isVisible) return;
-    if (source === "class") {
-      if (!state.instrumentationComplete || state.styleContextMutated) return;
-      if (isVisible) state.classBusySeen = true;
-      else if (state.classBusySeen) state.classSettled = true;
-    } else if (isVisible) {
-      state.nonClassBusySeen = true;
-    } else if (state.nonClassBusySeen || state.classBusySeen) {
-      state.nonClassSettled = true;
+    if (source === "class" && (!state.instrumentationComplete || state.styleContextMutated)) {
+      return;
+    }
+    if (isVisible) {
+      state.activeBusy = { source };
+    } else if (state.activeBusy !== undefined) {
+      state.settledPairs.push({
+        classDependent: state.activeBusy.source === "class" || source === "class",
+      });
+      state.activeBusy = undefined;
     }
     syncWitnessState();
   };
-  const captureExactClassState = (element: Element) => {
+  const captureExactLoaderState = (element: Element, source: "class" | "other") => {
     if (!element.matches(loaderSelector) || !controller.contains(element) ||
         element.hasAttribute("data-hunt-render-probe")) return;
     const nextVisible = visible(element);
@@ -815,7 +813,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       attributes: attributes(element),
       visible: nextVisible,
     };
-    recordLoaderTransition(known.visible, nextVisible, "class");
+    recordLoaderTransition(known.visible, nextVisible, source);
     known.visible = nextVisible;
     known.attributes = attributes(element);
     loaderStates.set(element, known);
@@ -860,6 +858,66 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   }));
   const initialStyleContextToken = styleContextToken();
   const restorers: (() => void)[] = [];
+  const nativeDeclarationSetProperty = CSSStyleDeclaration.prototype.setProperty;
+  const nativeDeclarationRemoveProperty = CSSStyleDeclaration.prototype.removeProperty;
+  const nativeDeclarationGetPropertyValue = CSSStyleDeclaration.prototype.getPropertyValue;
+  const instrumentDeclarationInstance = (declaration: CSSStyleDeclaration) => {
+    for (const name of Object.getOwnPropertyNames(declaration)) {
+      if (/^\d+$/u.test(name)) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(declaration, name);
+      if (descriptor === undefined || descriptor.configurable !== true ||
+          !("value" in descriptor) || descriptor.writable !== true) continue;
+      const cssName = name === "cssFloat" ? "float" : name
+        .replace(/^ms/u, "-ms")
+        .replace(/[A-Z]/gu, (letter) => `-${letter.toLocaleLowerCase("en-US")}`);
+      const getter = () => nativeDeclarationGetPropertyValue.call(declaration, cssName);
+      const setter = (value: unknown) => {
+        invalidateClassContext();
+        const normalized = String(value);
+        if (normalized === "") nativeDeclarationRemoveProperty.call(declaration, cssName);
+        else nativeDeclarationSetProperty.call(declaration, cssName, normalized);
+      };
+      try {
+        Object.defineProperty(declaration, name, {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? true,
+          get: getter,
+          set: setter,
+        });
+        restorers.push(() => {
+          const current = Object.getOwnPropertyDescriptor(declaration, name);
+          if (current?.get === getter && current.set === setter) {
+            Object.defineProperty(declaration, name, {
+              ...descriptor,
+              value: nativeDeclarationGetPropertyValue.call(declaration, cssName),
+            });
+          }
+        });
+      } catch {
+        state.instrumentationComplete = false;
+      }
+    }
+  };
+  const instrumentRuleDeclarations = (rules: CSSRuleList) => {
+    for (const rule of [...rules]) {
+      if ("style" in rule && (rule as { style?: unknown }).style instanceof CSSStyleDeclaration) {
+        instrumentDeclarationInstance((rule as unknown as { style: CSSStyleDeclaration }).style);
+      }
+      if ("cssRules" in rule && (rule as { cssRules?: unknown }).cssRules instanceof CSSRuleList) {
+        instrumentRuleDeclarations((rule as unknown as { cssRules: CSSRuleList }).cssRules);
+      }
+    }
+  };
+  for (const sheet of [
+    ...[...document.styleSheets].map((candidate) => candidate as CSSStyleSheet),
+    ...("adoptedStyleSheets" in document ? [...document.adoptedStyleSheets] : []),
+  ]) {
+    try {
+      instrumentRuleDeclarations(sheet.cssRules);
+    } catch {
+      state.instrumentationComplete = false;
+    }
+  }
   const instrumentMethod = (
     requestedPrototype: object | undefined,
     name: string,
@@ -900,6 +958,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     requestedPrototype: object | undefined,
     name: string,
     affectsStyle: (receiver: unknown) => boolean = () => true,
+    after?: (receiver: unknown, value: unknown) => void,
   ) => {
     if (requestedPrototype === undefined) return;
     let prototype: object | null = requestedPrototype;
@@ -920,6 +979,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     const wrapped = function(this: unknown, value: unknown) {
       if (affectsStyle(this)) invalidateClassContext();
       original.call(this, value);
+      after?.(this, value);
     };
     Object.defineProperty(prototype, name, { ...descriptor, set: wrapped });
     restorers.push(() => {
@@ -940,15 +1000,50 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   for (const name of ["insertRule", "deleteRule"]) {
     instrumentMethod(groupingPrototype ?? mediaRulePrototype, name);
   }
+  const ownedLoaderForStyle = (receiver: unknown): HTMLElement | undefined =>
+    [...controller.querySelectorAll<HTMLElement>(loaderSelector)]
+      .find((loader) => loader.style === receiver);
+  const styleDeclarationAffectsClassContext = (receiver: unknown): boolean =>
+    !internalStyleParse && ownedLoaderForStyle(receiver) === undefined;
+  const captureOwnedLoaderStyle = (receiver: unknown) => {
+    if (internalStyleParse) return;
+    const loader = ownedLoaderForStyle(receiver);
+    if (loader !== undefined) captureExactLoaderState(loader, "other");
+  };
   for (const name of ["setProperty", "removeProperty"]) {
-    instrumentMethod(CSSStyleDeclaration.prototype, name, () => !internalStyleParse);
+    instrumentMethod(
+      CSSStyleDeclaration.prototype,
+      name,
+      styleDeclarationAffectsClassContext,
+      captureOwnedLoaderStyle,
+    );
   }
-  instrumentSetter(CSSStyleDeclaration.prototype, "cssText", () => !internalStyleParse);
+  instrumentSetter(
+    CSSStyleDeclaration.prototype,
+    "cssText",
+    styleDeclarationAffectsClassContext,
+    captureOwnedLoaderStyle,
+  );
+  for (const name of Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)) {
+    if (name === "cssText" || /^[-_]/u.test(name)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, name);
+    if (descriptor?.set === undefined) continue;
+    instrumentSetter(
+      CSSStyleDeclaration.prototype,
+      name,
+      styleDeclarationAffectsClassContext,
+      captureOwnedLoaderStyle,
+    );
+  }
   instrumentSetter(CSSStyleSheet.prototype, "disabled");
   const styleRulePrototype = (globalThis as unknown as {
     CSSStyleRule?: { prototype: object };
   }).CSSStyleRule?.prototype;
   instrumentSetter(styleRulePrototype, "selectorText");
+  const keyframeRulePrototype = (globalThis as unknown as {
+    CSSKeyframeRule?: { prototype: object };
+  }).CSSKeyframeRule?.prototype;
+  instrumentSetter(keyframeRulePrototype, "keyText");
   const mediaListPrototype = (globalThis as unknown as {
     MediaList?: { prototype: object };
   }).MediaList?.prototype;
@@ -964,7 +1059,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     const original = classDescriptor.set;
     const wrapped = function(this: Element, value: string) {
       original.call(this, value);
-      captureExactClassState(this);
+      captureExactLoaderState(this, "class");
     };
     Object.defineProperty(elementPrototype, "className", { ...classDescriptor, set: wrapped });
     restorers.push(() => {
@@ -973,15 +1068,35 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       }
     });
   }
+  const captureAttributeState = (receiver: unknown, rawName: unknown) => {
+    if (!(receiver instanceof Element) || typeof rawName !== "string") return;
+    const name = rawName.toLocaleLowerCase("en-US");
+    if (name === "class") captureExactLoaderState(receiver, "class");
+    else if (["hidden", "aria-hidden", "style"].includes(name)) {
+      captureExactLoaderState(receiver, "other");
+    }
+  };
   for (const name of ["setAttribute", "removeAttribute"]) {
     instrumentMethod(elementPrototype, name, () => false, (receiver, args) => {
-      if (receiver instanceof Element && typeof args[0] === "string" &&
-          args[0].toLocaleLowerCase("en-US") === "class") captureExactClassState(receiver);
+      captureAttributeState(receiver, args[0]);
     });
   }
   instrumentMethod(elementPrototype, "setAttributeNS", () => false, (receiver, args) => {
-    if (receiver instanceof Element && typeof args[1] === "string" &&
-        args[1].toLocaleLowerCase("en-US") === "class") captureExactClassState(receiver);
+    captureAttributeState(receiver, args[1]);
+  });
+  for (const name of ["setAttributeNode", "setAttributeNodeNS"]) {
+    instrumentMethod(elementPrototype, name, () => false, (receiver, args) => {
+      const attribute = args[0];
+      captureAttributeState(receiver, attribute instanceof Attr ? attribute.name : undefined);
+    });
+  }
+  const attrPrototype = Attr.prototype;
+  instrumentSetter(attrPrototype, "value", () => false, (receiver) => {
+    if (receiver instanceof Attr) captureAttributeState(receiver.ownerElement, receiver.name);
+  });
+  const htmlElementPrototype = HTMLElement.prototype;
+  instrumentSetter(htmlElementPrototype, "hidden", () => false, (receiver) => {
+    if (receiver instanceof Element) captureExactLoaderState(receiver, "other");
   });
   const tokenListPrototype = DOMTokenList.prototype;
   const isOwnedLoaderTokenList = (receiver: unknown): boolean =>
@@ -991,8 +1106,20 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       if (!isOwnedLoaderTokenList(receiver)) return;
       const loader = [...controller.querySelectorAll(loaderSelector)]
         .find((candidate) => candidate.classList === receiver);
-      if (loader !== undefined) captureExactClassState(loader);
+      if (loader !== undefined) captureExactLoaderState(loader, "class");
     });
+  }
+  instrumentSetter(tokenListPrototype, "value", () => false, (receiver) => {
+    if (!isOwnedLoaderTokenList(receiver)) return;
+    const loader = [...controller.querySelectorAll(loaderSelector)]
+      .find((candidate) => candidate.classList === receiver);
+    if (loader !== undefined) captureExactLoaderState(loader, "class");
+  });
+  const linkPrototype = (globalThis as unknown as {
+    HTMLLinkElement?: { prototype: object };
+  }).HTMLLinkElement?.prototype;
+  for (const name of ["disabled", "href", "media", "rel"]) {
+    instrumentSetter(linkPrototype, name);
   }
   if ("adoptedStyleSheets" in document) {
     const priorOwnDescriptor = Object.getOwnPropertyDescriptor(document, "adoptedStyleSheets");
@@ -1064,15 +1191,14 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller) {
         if (record.oldValue === "true") {
-          state.nonClassSettled = state.nonClassBusySeen || state.classBusySeen;
+          recordLoaderTransition(true, false, "other");
         } else if (controller.getAttribute("aria-busy") === "true" ||
             records.slice(recordIndex + 1).some((later) =>
               later.type === "attributes" && later.target === controller &&
               later.attributeName === "aria-busy" && later.oldValue === "true"
             )) {
-          state.nonClassBusySeen = true;
+          recordLoaderTransition(false, true, "other");
         }
-        syncWitnessState();
       }
       if (record.type === "childList") {
         for (const node of record.addedNodes) {
@@ -1083,8 +1209,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           for (const loader of added) {
             register(loader);
             if (visible(loader)) {
-              state.nonClassBusySeen = true;
-              syncWitnessState();
+              recordLoaderTransition(false, true, "other");
             }
           }
         }
@@ -1093,10 +1218,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           const removed = [node, ...node.querySelectorAll(loaderSelector)]
             .filter((element) => element.matches(loaderSelector) &&
               !element.hasAttribute("data-hunt-render-probe"));
-          if ((state.nonClassBusySeen || state.classBusySeen) &&
-              removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
-            state.nonClassSettled = true;
-            syncWitnessState();
+          if (removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
+            recordLoaderTransition(true, false, "other");
           }
           removed.forEach((loader) => loaderStates.delete(loader));
         }
@@ -1473,15 +1596,139 @@ async function readApplicationSnapshot(
   const requiredControlSet = new Set(requiredControls);
   const promotedGroupOwnerSet = new Set(promotedGroupOwners);
   const seenRadioGroups = new Set<string>();
-  const radioOwnerIds = new WeakMap<object, number>();
-  let radioOwnerSequence = 0;
-  const radioOwnerId = (owner: object): number => {
-    const existing = radioOwnerIds.get(owner);
-    if (existing !== undefined) return existing;
-    radioOwnerSequence += 1;
-    radioOwnerIds.set(owner, radioOwnerSequence);
-    return radioOwnerSequence;
+  type NativeRadioModel = {
+    readonly members: readonly HTMLInputElement[];
+    readonly questionLabel: string;
+    readonly required: boolean;
+    readonly groupKey: string;
+    readonly fieldId: string;
+    readonly ownerContext: {
+      readonly tag: string;
+      readonly automationId: string;
+      readonly role: string;
+      readonly accessibleName: string;
+      readonly heading: string;
+    };
   };
+  type PendingNativeRadioModel = Omit<NativeRadioModel, "groupKey" | "fieldId"> & {
+    readonly canonical: string;
+    readonly stableOwnerCoordinate: string;
+  };
+  const nativeRadioModelByMember = new Map<HTMLInputElement, NativeRadioModel>();
+  const pendingNativeRadioModels: PendingNativeRadioModel[] = [];
+  const nativeRadioGroups = new Map<object, Map<string, HTMLInputElement[]>>();
+  for (const anchor of candidates) {
+    if (!(anchor instanceof HTMLInputElement) || anchor.type !== "radio") continue;
+    const name = text(anchor.name);
+    if (name === "") continue;
+    const owner = anchor.form ?? anchor.getRootNode();
+    const ownerGroups = nativeRadioGroups.get(owner) ?? new Map<string, HTMLInputElement[]>();
+    if (ownerGroups.has(name)) continue;
+    const scope = anchor.form?.ownerDocument ?? anchor.getRootNode();
+    const members = [...(scope as Document | ShadowRoot)
+      .querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+      .filter((member) => member.form === anchor.form &&
+        member.getRootNode() === anchor.getRootNode() && text(member.name) === name &&
+        !member.disabled && member.getAttribute("aria-disabled") !== "true");
+    ownerGroups.set(name, members);
+    nativeRadioGroups.set(owner, ownerGroups);
+
+    const structuredOwners = [...new Set(members.flatMap((member) => {
+      const memberOwners: HTMLElement[] = [];
+      const fieldset = member.closest<HTMLElement>("fieldset");
+      const ariaGroup = member.closest<HTMLElement>('[role="radiogroup"]');
+      if (fieldset !== null) memberOwners.push(fieldset);
+      if (ariaGroup !== null && ariaGroup !== fieldset) memberOwners.push(ariaGroup);
+      return memberOwners;
+    }))];
+    const structuredNames = structuredOwners.map((candidate) => accessibleName(candidate, false))
+      .filter(Boolean).sort();
+    const referencedIdSets = members.map((member) =>
+      (member.getAttribute("aria-labelledby") ?? "").split(/\s+/u).filter(Boolean)
+    ).filter((ids) => ids.length > 0);
+    const sharedReferenceIds = referencedIdSets.length === 0 ? [] :
+      referencedIdSets[0]!.filter((id) => referencedIdSets.every((ids) => ids.includes(id)));
+    const sharedReferenceNames = sharedReferenceIds.map((id) =>
+      text(document.getElementById(id)?.textContent)
+    ).filter(Boolean).sort();
+    const questionNames = [...new Set([...structuredNames, ...sharedReferenceNames])].sort();
+    const questionLabel = text(questionNames.join(" ")) || accessibleName(anchor);
+    const memberCatalog = members.map((member) => ({
+      label: accessibleName(member),
+      value: text(member.value),
+      required: member.required || member.getAttribute("aria-required") === "true",
+    })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    const required = members.some((member) =>
+      member.required || member.getAttribute("aria-required") === "true"
+    ) || structuredOwners.some((candidate) =>
+      candidate.hasAttribute("required") || candidate.getAttribute("aria-required") === "true" ||
+      candidate.querySelector(
+        '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+      ) !== null
+    );
+    const nativeOwner = anchor.form;
+    const ownerContext = nativeOwner === null ? {
+      tag: owner instanceof ShadowRoot ? "shadow-root" : "document",
+      automationId: "",
+      role: "",
+      accessibleName: owner instanceof ShadowRoot && owner.host instanceof Element
+        ? accessibleName(owner.host, false)
+        : "",
+      heading: "",
+    } : {
+      tag: "form",
+      automationId: text(nativeOwner.getAttribute("data-automation-id")),
+      role: nativeOwner.getAttribute("role") ?? "",
+      accessibleName: accessibleName(nativeOwner, false, false),
+      heading: "",
+    };
+    const stableOwnerCoordinate = JSON.stringify({
+      tag: ownerContext.tag,
+      id: nativeOwner?.id ?? "",
+      name: nativeOwner?.getAttribute("name") ?? "",
+      action: nativeOwner?.getAttribute("action") ?? "",
+      method: nativeOwner?.getAttribute("method") ?? "",
+      ownerContext,
+    });
+    const canonical = JSON.stringify({
+      owner: stableOwnerCoordinate,
+      name,
+      questionNames,
+      memberCatalog,
+    });
+    pendingNativeRadioModels.push({
+      members,
+      questionLabel,
+      required,
+      canonical,
+      stableOwnerCoordinate,
+      ownerContext,
+    });
+  }
+  const nativeRadioEquivalence = new Map<string, PendingNativeRadioModel[]>();
+  for (const pending of pendingNativeRadioModels) {
+    const equivalent = nativeRadioEquivalence.get(pending.canonical) ?? [];
+    equivalent.push(pending);
+    nativeRadioEquivalence.set(pending.canonical, equivalent);
+  }
+  for (const [canonical, equivalent] of nativeRadioEquivalence) {
+    equivalent.sort((left, right) => left.stableOwnerCoordinate.localeCompare(
+      right.stableOwnerCoordinate,
+    ));
+    const digest = await collisionResistantHash(canonical);
+    equivalent.forEach((pending, occurrence) => {
+      const groupKey = `${digest}:${occurrence}`;
+      const model: NativeRadioModel = {
+        members: pending.members,
+        questionLabel: pending.questionLabel,
+        required: pending.required,
+        groupKey,
+        fieldId: `native-radio-${digest.slice(0, 32)}-${occurrence}`,
+        ownerContext: pending.ownerContext,
+      };
+      pending.members.forEach((member) => nativeRadioModelByMember.set(member, model));
+    });
+  }
   for (const [index, control] of candidates.entries()) {
     const input = control instanceof HTMLInputElement ? control : undefined;
     const role = control.getAttribute("role");
@@ -1498,9 +1745,12 @@ async function readApplicationSnapshot(
     // the shared radiogroup/fieldset prompt without fabricating a second group.
     if (ownsNamedNativeRadio) continue;
     const nativeRadioName = input?.type === "radio" ? text(input.name) : "";
-    const nativeMembershipOwner = input?.type === "radio" && nativeRadioName !== ""
-      ? input.form ?? input.getRootNode()
+    const nativeRadioModel = input?.type === "radio" && nativeRadioName !== ""
+      ? nativeRadioModelByMember.get(input)
       : undefined;
+    const nativeMembershipOwner = nativeRadioModel === undefined
+      ? undefined
+      : input?.form ?? input?.getRootNode();
     const ariaRadioOwner = ownsAriaRadioGroup
       ? control
       : role === "radio"
@@ -1512,17 +1762,13 @@ async function readApplicationSnapshot(
     const radioQuestionOwner = nativeMembershipOwner === undefined
       ? ariaRadioOwner
       : nativeMembershipOwner instanceof HTMLElement ? nativeMembershipOwner : root;
-    const radioGroupKey = radioMembershipOwner === undefined
+    const radioGroupKey = nativeRadioModel?.groupKey ?? (radioMembershipOwner === undefined
       ? undefined
-      : `${radioOwnerId(radioMembershipOwner)}:${nativeRadioName || "aria"}`;
-    const nativeRadioScope = input?.form?.ownerDocument ?? input?.getRootNode();
+      : `aria:${semanticHash(accessibleName(radioMembershipOwner as Element))}`);
     const radioMembers = radioMembershipOwner === undefined
       ? []
       : nativeMembershipOwner !== undefined
-        ? [...(nativeRadioScope as Document | ShadowRoot)
-          .querySelectorAll<HTMLInputElement>('input[type="radio"]')]
-          .filter((member) => visible(member) && member.form === input?.form &&
-            member.getRootNode() === input?.getRootNode() && text(member.name) === nativeRadioName)
+        ? [...nativeRadioModel?.members ?? []]
         : [...(ariaRadioOwner ?? control).querySelectorAll<HTMLElement>(
           'input[type="radio"], [role="radio"]',
         )].filter(visible);
@@ -1546,15 +1792,19 @@ async function readApplicationSnapshot(
     ).join(" "));
     if (radioGroupKey !== undefined && seenRadioGroups.has(radioGroupKey)) continue;
     if (radioGroupKey !== undefined) seenRadioGroups.add(radioGroupKey);
-    const fingerprintControl = sharedQuestionOwner ?? radioQuestionOwner ?? control;
-    const completionRequired = requiredControlSet.has(control) ||
-      radioMembers.some((member) => requiredControlSet.has(member));
+    const fingerprintControl = nativeRadioModel === undefined
+      ? sharedQuestionOwner ?? radioQuestionOwner ?? control
+      : control;
+    const completionRequired = nativeRadioModel?.required ?? (
+      requiredControlSet.has(control) ||
+      radioMembers.some((member) => requiredControlSet.has(member))
+    );
     const requiredIndex = requiredControls.findIndex((candidate) =>
       candidate === control || radioMembers.includes(candidate)
     );
     const nativeRadioFieldId = nativeMembershipOwner === undefined
       ? undefined
-      : `native-radio-${radioOwnerId(nativeMembershipOwner)}-${semanticHash(nativeRadioName)}`;
+      : nativeRadioModel?.fieldId;
     const rawId = [
       nativeRadioFieldId,
       control.getAttribute("data-hunt-field-id"),
@@ -1567,7 +1817,7 @@ async function readApplicationSnapshot(
       ? rawId
       : completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`;
     const questionLabel = nativeMembershipOwner !== undefined
-      ? text([...new Set([
+      ? nativeRadioModel?.questionLabel ?? text([...new Set([
         accessibleName(fingerprintControl, false),
         sharedQuestionReference,
       ].filter(Boolean))].join(" "))
@@ -1608,6 +1858,9 @@ async function readApplicationSnapshot(
       semanticOwner = semanticOwner.parentElement;
     }
     semanticOwnerContext.reverse();
+    if (nativeRadioModel !== undefined) {
+      semanticOwnerContext.splice(0, semanticOwnerContext.length, nativeRadioModel.ownerContext);
+    }
     const semanticControls = radioMembershipOwner !== undefined
       ? [fingerprintControl, ...radioMembers.filter((member) => member !== fingerprintControl)]
       : control.matches(
