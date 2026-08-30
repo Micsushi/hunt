@@ -1196,6 +1196,151 @@ test("exact loader captures reject direct adopted stylesheet index and length dr
   }
 });
 
+test("freezing a style-dependent witness resamples direct adopted stylesheet drift", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["unchanged", "index", "length"] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>.loader-hidden { display:none } .loader-visible { display:block }</style>
+        <script>
+          const base = new CSSStyleSheet(); base.replaceSync('.base { color: black }');
+          const second = new CSSStyleSheet(); second.replaceSync('.second { color: blue }');
+          const replacement = new CSSStyleSheet(); replacement.replaceSync('.replacement { color: red }');
+          const adoptedList = [base, second];
+          Object.defineProperty(document, 'adoptedStyleSheets', {
+            configurable: true,
+            get() { return adoptedList; },
+            set(value) { adoptedList.splice(0, adoptedList.length, ...value); },
+          });
+        </script><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            loader.className = 'loader-visible';
+            loader.className = 'loader-hidden';
+            queueMicrotask(() => {
+              if ('${variant}' === 'index') adoptedList[0] = replacement;
+              if ('${variant}' === 'length') adoptedList.length = 1;
+            });
+          }, { once: true });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 750,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      assert.equal(result.ok, variant === "unchanged", `${variant}:${JSON.stringify(result)}`);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
+        variant === "unchanged", variant);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unrelated controller attributes cannot settle an aria-busy interval", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage" data-state="true">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <label>Repeated question*<input required value="committed"></label>
+      </main><button id="next">Save and Continue</button><script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const controller = document.querySelector('[data-automation-id="applyFlowPage"]');
+          controller.setAttribute('aria-busy', 'true');
+          controller.setAttribute('data-state', 'false');
+        }, { once: true });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 750,
+      navigationSettleTimeoutMs: 750,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("remote sibling selector mutations revoke style-dependent loader evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      { name: "adjacent", selector: "+", mutate: true, expectedAdvance: false },
+      { name: "general-sibling", selector: "~", mutate: true, expectedAdvance: false },
+      { name: "unchanged-context", selector: "+", mutate: false, expectedAdvance: true },
+    ] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>
+          .loader-hidden { display:none }
+          .remote-active ${variant.selector} .loader-owner .loader-visible { display:block }
+        </style><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div id="remote" class="remote-active"></div><div class="loader-owner">
+          <div id="loader" data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div>
+        </div><button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('#loader');
+            loader.className = 'loader-visible';
+            loader.className = 'loader-hidden';
+            if (${variant.mutate}) document.querySelector('#remote').className = '';
+          }, { once: true });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 750,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      assert.equal(result.ok, variant.expectedAdvance, `${variant.name}:${JSON.stringify(result)}`);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
+        variant.expectedAdvance, variant.name);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("owned loading plus an unchanged reload cannot synthesize questionnaire advancement", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -717,8 +717,11 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     settledPairs: [] as {
       readonly key: object;
       readonly styleDependent: boolean;
+      readonly styleContextToken?: string;
     }[],
     styleContextVersion: 0,
+    armedStyleContextToken: undefined as string | undefined,
+    sampleStyleContext: undefined as (() => string | undefined) | undefined,
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -820,6 +823,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       state.settledPairs.push({
         key,
         styleDependent: pairStyleDependent,
+        styleContextToken: pairStyleDependent ? active.styleContextToken : undefined,
       });
     }
     syncWitnessState();
@@ -893,13 +897,38 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         .map(({ name, value }) => `${name}=${value}`).sort().join("|"),
     };
   }));
+  const selectorCanDependOnRemoteStructure = (selector: string): boolean =>
+    /[+~]|:(?:has|first-child|last-child|only-child|nth-child|nth-last-child|first-of-type|last-of-type|only-of-type|nth-of-type|nth-last-of-type|empty)\b/iu.test(selector);
+  const rulesCanDependOnRemoteStructure = (rules: CSSRuleList): boolean => {
+    for (const rule of [...rules]) {
+      if ("selectorText" in rule && typeof (rule as CSSStyleRule).selectorText === "string" &&
+          selectorCanDependOnRemoteStructure((rule as CSSStyleRule).selectorText)) return true;
+      if ("cssRules" in rule && (rule as { cssRules?: unknown }).cssRules instanceof CSSRuleList &&
+          rulesCanDependOnRemoteStructure((rule as unknown as { cssRules: CSSRuleList }).cssRules)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const remoteStructureCanAffectLoader = [
+    ...[...document.styleSheets].map((candidate) => candidate as CSSStyleSheet),
+    ...("adoptedStyleSheets" in document ? [...document.adoptedStyleSheets] : []),
+  ].some((sheet) => {
+    try {
+      return rulesCanDependOnRemoteStructure(sheet.cssRules);
+    } catch {
+      state.instrumentationComplete = false;
+      return true;
+    }
+  });
   const initialStyleContextToken = styleContextToken();
-  const remoteStructureCanAffectLoader = initialStyleContextToken.includes(":has(");
   armedStyleContextToken = state.instrumentationComplete ? initialStyleContextToken : undefined;
   sampleStyleContext = () => {
     const token = styleContextToken();
     return state.instrumentationComplete ? token : undefined;
   };
+  state.armedStyleContextToken = armedStyleContextToken;
+  state.sampleStyleContext = sampleStyleContext;
   const restorers: (() => void)[] = [];
   const nativeDeclarationSetProperty = CSSStyleDeclaration.prototype.setProperty;
   const nativeDeclarationRemoveProperty = CSSStyleDeclaration.prototype.removeProperty;
@@ -1247,7 +1276,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       if (captures?.length === 0) exactAttributeCaptures.delete(record.target);
       consumedExactRecords.add(record);
     }
-    const styleContextChanged = records.some((record) => {
+    const hasStyleDependentEvidence = [...state.activeBusy.values()].some(
+      (active) => active.styleDependent,
+    ) || state.settledPairs.some((pair) => pair.styleDependent);
+    const styleContextChanged = hasStyleDependentEvidence && records.some((record) => {
       const target = record.target instanceof Element
         ? record.target
         : record.target.parentElement;
@@ -1270,7 +1302,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     }
     if (sampleStyleContext() !== armedStyleContextToken) invalidateStyleContext();
     for (const [recordIndex, record] of records.entries()) {
-      if (record.type === "attributes" && record.target === controller) {
+      if (record.type === "attributes" && record.target === controller &&
+          record.attributeName === "aria-busy") {
         if (record.oldValue === "true") {
           recordLoaderTransition(controller, true, false, "other");
         } else if (controller.getAttribute("aria-busy") === "true" ||
@@ -1379,10 +1412,35 @@ function freezeNavigationWitness(actionId: string): boolean {
     observer?: MutationObserver;
     frozen?: boolean;
     activeBusy?: Map<object, unknown>;
+    settledPairs?: readonly {
+      readonly styleDependent?: boolean;
+      readonly styleContextToken?: string;
+    }[];
+    armedStyleContextToken?: string;
+    sampleStyleContext?: () => string | undefined;
   } | undefined;
   if (state?.actionId !== actionId) return false;
+  const styleDependentPairs = state.settledPairs?.filter(
+    (pair) => pair.styleDependent === true,
+  ) ?? [];
+  const freezeStyleContextToken = styleDependentPairs.length === 0
+    ? undefined
+    : state.sampleStyleContext?.();
+  const styleContextValid = styleDependentPairs.length === 0 || (
+    freezeStyleContextToken !== undefined &&
+    state.armedStyleContextToken !== undefined &&
+    freezeStyleContextToken === state.armedStyleContextToken &&
+    styleDependentPairs.every((pair) =>
+      pair.styleContextToken !== undefined &&
+      pair.styleContextToken === freezeStyleContextToken
+    )
+  );
+  if (!styleContextValid && globalState.__huntWorkdayNavigationWitness === actionId) {
+    delete globalState.__huntWorkdayNavigationWitness;
+  }
   const witnessed = (state as { settled?: boolean }).settled === true &&
     state.activeBusy?.size === 0 &&
+    styleContextValid &&
     globalState.__huntWorkdayNavigationWitness === actionId;
   state.observer?.disconnect();
   (state as { restoreInstrumentation?: () => void }).restoreInstrumentation?.();
