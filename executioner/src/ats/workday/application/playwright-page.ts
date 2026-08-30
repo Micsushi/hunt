@@ -707,17 +707,18 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     busySeen: false,
     settled: false,
     frozen: false,
-    styleContextMutated: false,
     instrumentationComplete: true,
     activeBusy: new Map<object, {
       readonly source: "class" | "other";
       readonly styleDependent: boolean;
       readonly styleContextToken?: string;
+      readonly styleContextVersion: number;
     }>(),
     settledPairs: [] as {
       readonly key: object;
-      readonly classDependent: boolean;
+      readonly styleDependent: boolean;
     }[],
+    styleContextVersion: 0,
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -757,20 +758,20 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   controller.querySelectorAll(loaderSelector).forEach(register);
   const syncWitnessState = () => {
     state.busySeen = state.activeBusy.size > 0 || state.settledPairs.length > 0;
-    state.settled = state.settledPairs.length > 0;
+    state.settled = state.settledPairs.length > 0 && state.activeBusy.size === 0;
     if (state.settled && controller.isConnected) {
       globalState.__huntWorkdayNavigationWitness = state.actionId;
     } else if (globalState.__huntWorkdayNavigationWitness === state.actionId) {
       delete globalState.__huntWorkdayNavigationWitness;
     }
   };
-  const invalidateClassContext = () => {
+  const invalidateStyleContext = () => {
     if (!state.clicked || state.frozen) return;
-    state.styleContextMutated = true;
+    state.styleContextVersion += 1;
     for (const [key, active] of state.activeBusy) {
-      if (active.source === "class") state.activeBusy.delete(key);
+      if (active.styleDependent) state.activeBusy.delete(key);
     }
-    state.settledPairs = state.settledPairs.filter((pair) => !pair.classDependent);
+    state.settledPairs = state.settledPairs.filter((pair) => !pair.styleDependent);
     syncWitnessState();
   };
   const recordLoaderTransition = (
@@ -785,34 +786,40 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     if (styleToken !== undefined && (
       armedStyleContextToken === undefined || styleToken !== armedStyleContextToken
     )) {
-      invalidateClassContext();
+      invalidateStyleContext();
       return;
     }
-    if ((source === "class" || styleDependent) && (
-      !state.instrumentationComplete || state.styleContextMutated ||
-      styleToken === undefined
+    const transitionStyleDependent = source === "class" || styleDependent;
+    if (transitionStyleDependent && (
+      !state.instrumentationComplete || styleToken === undefined
     )) {
-      invalidateClassContext();
+      invalidateStyleContext();
       return;
     }
     if (isVisible) {
-      state.activeBusy.set(key, { source, styleDependent, styleContextToken: styleToken });
+      state.activeBusy.set(key, {
+        source,
+        styleDependent: transitionStyleDependent,
+        styleContextToken: styleToken,
+        styleContextVersion: state.styleContextVersion,
+      });
     } else {
       const active = state.activeBusy.get(key);
       if (active === undefined) return;
-      const classDependent = active.source === "class" || source === "class";
+      const pairStyleDependent = active.styleDependent || transitionStyleDependent;
       state.activeBusy.delete(key);
-      if ((active.styleDependent || styleDependent) && (
+      if (pairStyleDependent && (
         armedStyleContextToken === undefined ||
+        active.styleContextVersion !== state.styleContextVersion ||
         active.styleContextToken !== armedStyleContextToken ||
         styleToken !== armedStyleContextToken
       )) {
-        invalidateClassContext();
+        invalidateStyleContext();
         return;
       }
       state.settledPairs.push({
         key,
-        classDependent,
+        styleDependent: pairStyleDependent,
       });
     }
     syncWitnessState();
@@ -840,7 +847,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     }
     const styleToken = sampleStyleContext();
     if (styleToken === undefined || styleToken !== armedStyleContextToken) {
-      invalidateClassContext();
+      invalidateStyleContext();
     }
     const nextVisible = visible(element);
     recordLoaderTransition(element, known.visible, nextVisible, source, styleToken, true);
@@ -887,6 +894,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     };
   }));
   const initialStyleContextToken = styleContextToken();
+  const remoteStructureCanAffectLoader = initialStyleContextToken.includes(":has(");
   armedStyleContextToken = state.instrumentationComplete ? initialStyleContextToken : undefined;
   sampleStyleContext = () => {
     const token = styleContextToken();
@@ -910,7 +918,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         .replace(/[A-Z]/gu, (letter) => `-${letter.toLocaleLowerCase("en-US")}`);
       const getter = () => nativeDeclarationGetPropertyValue.call(declaration, cssName);
       const setter = (value: unknown) => {
-        if (loader === undefined) invalidateClassContext();
+        if (loader === undefined) invalidateStyleContext();
         const normalized = String(value);
         if (normalized === "") nativeDeclarationRemoveProperty.call(declaration, cssName);
         else nativeDeclarationSetProperty.call(declaration, cssName, normalized);
@@ -984,7 +992,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     }
     const original = descriptor.value as (...args: unknown[]) => unknown;
     const wrapped = function(this: unknown, ...args: unknown[]) {
-      if (affectsStyle(this)) invalidateClassContext();
+      if (affectsStyle(this)) invalidateStyleContext();
       const result = original.apply(this, args);
       after?.(this, args);
       return result;
@@ -1019,7 +1027,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     }
     const original = descriptor.set;
     const wrapped = function(this: unknown, value: unknown) {
-      if (affectsStyle(this)) invalidateClassContext();
+      if (affectsStyle(this)) invalidateStyleContext();
       original.call(this, value);
       after?.(this, value);
     };
@@ -1196,7 +1204,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
             return value;
           },
           set(value: CSSStyleSheet[]) {
-            invalidateClassContext();
+            invalidateStyleContext();
             setter.call(document, value);
             adoptedCollections.add(value);
           },
@@ -1239,16 +1247,28 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       if (captures?.length === 0) exactAttributeCaptures.delete(record.target);
       consumedExactRecords.add(record);
     }
-    const classContextChanged = records.some((record) => {
-      if (record.type !== "attributes" || !(record.target instanceof Element)) return true;
-      if (record.target === controller && record.attributeName === "aria-busy") return false;
-      return !(record.target.matches(loaderSelector) && controller.contains(record.target) &&
-        ["class", "hidden", "aria-hidden", "style"].includes(record.attributeName ?? ""));
+    const styleContextChanged = records.some((record) => {
+      const target = record.target instanceof Element
+        ? record.target
+        : record.target.parentElement;
+      if (target === null) return remoteStructureCanAffectLoader;
+      if (record.type === "attributes" && target === controller &&
+          record.attributeName === "aria-busy") return false;
+      if (record.type === "attributes" && target.matches(loaderSelector) &&
+          controller.contains(target) &&
+          ["class", "hidden", "aria-hidden", "style"].includes(
+            record.attributeName ?? "",
+          )) return false;
+      if (target.matches("style, link[rel~=stylesheet]")) return true;
+      if (record.type === "attributes" && [...loaderStates.keys()].some((loader) =>
+        target !== loader && target.contains(loader)
+      )) return true;
+      return remoteStructureCanAffectLoader;
     });
-    if (classContextChanged) {
-      invalidateClassContext();
+    if (styleContextChanged) {
+      invalidateStyleContext();
     }
-    if (sampleStyleContext() !== armedStyleContextToken) invalidateClassContext();
+    if (sampleStyleContext() !== armedStyleContextToken) invalidateStyleContext();
     for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller) {
         if (record.oldValue === "true") {
@@ -1271,7 +1291,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
             register(loader);
             if (visible(loader)) {
               recordLoaderTransition(
-                loader, false, true, "other", sampleStyleContext(), false,
+                loader, false, true, "other", sampleStyleContext(), true,
               );
             }
           }
@@ -1284,7 +1304,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           for (const loader of removed) {
             if (loaderStates.get(loader)?.visible === true) {
               recordLoaderTransition(
-                loader, true, false, "other", sampleStyleContext(), false,
+                loader, true, false, "other", sampleStyleContext(), true,
               );
             }
           }
@@ -1358,9 +1378,11 @@ function freezeNavigationWitness(actionId: string): boolean {
     actionId?: string;
     observer?: MutationObserver;
     frozen?: boolean;
+    activeBusy?: Map<object, unknown>;
   } | undefined;
   if (state?.actionId !== actionId) return false;
   const witnessed = (state as { settled?: boolean }).settled === true &&
+    state.activeBusy?.size === 0 &&
     globalState.__huntWorkdayNavigationWitness === actionId;
   state.observer?.disconnect();
   (state as { restoreInstrumentation?: () => void }).restoreInstrumentation?.();
@@ -1605,17 +1627,38 @@ async function readApplicationSnapshot(
   ].join(", ");
   const physicalRadioScope = root.getRootNode() as Document | ShadowRoot;
   const rootNativeRadios = [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  const physicalFormContext = root.closest<HTMLFormElement>("form");
   const physicalForms = new Set<HTMLFormElement>([
     ...(root instanceof HTMLFormElement ? [root] : []),
+    ...(physicalFormContext === null ? [] : [physicalFormContext]),
     ...root.querySelectorAll<HTMLFormElement>("form"),
     ...rootNativeRadios.flatMap((radio) => radio.form === null ? [] : [radio.form]),
   ]);
+  const physicalRadioBoundary = physicalFormContext ??
+    root.closest<HTMLElement>('[data-automation-id="applyFlowPage"]') ?? root;
+  const effectivelyDisabledRadio = (radio: HTMLInputElement): boolean => {
+    if (radio.matches(":disabled")) return true;
+    const radioBoundary = physicalRadioBoundary.contains(radio)
+      ? physicalRadioBoundary
+      : radio.closest<HTMLElement>('[data-automation-id="applyFlowPage"], form') ??
+        (radio.getRootNode() instanceof ShadowRoot
+          ? (radio.getRootNode() as ShadowRoot).host
+          : document.documentElement);
+    let current: Element | null = radio;
+    while (current !== null) {
+      if (current.getAttribute("aria-disabled")?.toLocaleLowerCase("en-US") === "true") {
+        return true;
+      }
+      if (current === radioBoundary) break;
+      current = current.parentElement;
+    }
+    return false;
+  };
   const nativeRadioDiscoveryInputs = [...physicalRadioScope.querySelectorAll<HTMLInputElement>(
     'input[type="radio"]',
   )].filter((radio) =>
     (root.contains(radio) || radio.form !== null && physicalForms.has(radio.form)) &&
-    text(radio.name) !== "" && !radio.matches(":disabled") &&
-    radio.getAttribute("aria-disabled") !== "true"
+    text(radio.name) !== "" && !effectivelyDisabledRadio(radio)
   );
   const nativeRadioDiscoverySet = new Set<HTMLElement>(nativeRadioDiscoveryInputs);
   const registryCandidates = [...root.querySelectorAll<HTMLElement>(supportedControls)];
@@ -1633,8 +1676,9 @@ async function readApplicationSnapshot(
     .filter((control) => (visible(control) || resumeInputs.includes(
       control as HTMLInputElement,
     ) || nativeRadioDiscoverySet.has(control)) &&
-      !control.matches(":disabled") &&
-      control.getAttribute("aria-disabled") !== "true")
+      (control instanceof HTMLInputElement && control.type === "radio"
+        ? !effectivelyDisabledRadio(control)
+        : !control.matches(":disabled") && control.getAttribute("aria-disabled") !== "true"))
     .filter((control) => {
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -1695,19 +1739,40 @@ async function readApplicationSnapshot(
   const requiredControlSet = new Set(requiredControls);
   const promotedGroupOwnerSet = new Set(promotedGroupOwners);
   const seenRadioGroups = new Set<string>();
+  type SemanticOwnerContext = {
+    readonly tag: string;
+    readonly automationId: string;
+    readonly role: string;
+    readonly accessibleName: string;
+    readonly heading: string;
+  };
+  const semanticOwnerEntry = (element: Element): SemanticOwnerContext | undefined => {
+    const automationId = element.getAttribute("data-automation-id") ?? "";
+    const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
+      ? ""
+      : automationId;
+    const role = element.getAttribute("role") ?? "";
+    const ownerAccessibleName = accessibleName(element, false, false);
+    const heading = text(element.querySelector(
+      ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
+    )?.textContent);
+    if (stableAutomationId === "" && role === "" && ownerAccessibleName === "" &&
+        heading === "" && element !== root) return undefined;
+    return {
+      tag: element.tagName.toLocaleLowerCase("en-US"),
+      automationId: stableAutomationId,
+      role,
+      accessibleName: ownerAccessibleName,
+      heading,
+    };
+  };
   type NativeRadioModel = {
     readonly members: readonly HTMLInputElement[];
     readonly questionLabel: string;
     readonly required: boolean;
     readonly groupKey: string;
     readonly fieldId: string;
-    readonly ownerContext: {
-      readonly tag: string;
-      readonly automationId: string;
-      readonly role: string;
-      readonly accessibleName: string;
-      readonly heading: string;
-    };
+    readonly ownerContext: readonly SemanticOwnerContext[];
   };
   type PendingNativeRadioModel = Omit<NativeRadioModel, "groupKey" | "fieldId"> & {
     readonly canonical: string;
@@ -1727,7 +1792,7 @@ async function readApplicationSnapshot(
       .querySelectorAll<HTMLInputElement>('input[type="radio"]')]
       .filter((member) => member.form === anchor.form &&
         member.getRootNode() === anchor.getRootNode() && text(member.name) === name &&
-        !member.matches(":disabled") && member.getAttribute("aria-disabled") !== "true");
+        !effectivelyDisabledRadio(member));
     ownerGroups.set(name, members);
     nativeRadioGroups.set(owner, ownerGroups);
 
@@ -1765,21 +1830,17 @@ async function readApplicationSnapshot(
       ) !== null
     );
     const nativeOwner = anchor.form;
-    const ownerContext = nativeOwner === null ? {
-      tag: owner instanceof ShadowRoot ? "shadow-root" : "document",
-      automationId: "",
-      role: "",
-      accessibleName: owner instanceof ShadowRoot && owner.host instanceof Element
-        ? accessibleName(owner.host, false)
-        : "",
-      heading: "",
-    } : {
-      tag: "form",
-      automationId: "",
-      role: nativeOwner.getAttribute("role") ?? "",
-      accessibleName: accessibleName(nativeOwner, false, false),
-      heading: "",
-    };
+    const ownerContext: SemanticOwnerContext[] = [];
+    let ownerElement: Element | null = nativeOwner ?? (
+      owner instanceof ShadowRoot ? owner.host : root
+    );
+    for (let depth = 0; ownerElement !== null && depth < 8; depth += 1) {
+      const entry = semanticOwnerEntry(ownerElement);
+      if (entry !== undefined) ownerContext.push(entry);
+      if (ownerElement === document.body) break;
+      ownerElement = ownerElement.parentElement;
+    }
+    ownerContext.reverse();
     const stableOwnerCoordinate = JSON.stringify(ownerContext);
     const canonical = JSON.stringify({
       owner: stableOwnerCoordinate,
@@ -1914,43 +1975,24 @@ async function readApplicationSnapshot(
       ].filter(Boolean))].join(" "))
       : accessibleName(fingerprintControl) ||
       (fieldOwner === null ? "" : accessibleName(fieldOwner));
-    const semanticOwnerContext: {
-      tag: string;
-      automationId: string;
-      role: string;
-      accessibleName: string;
-      heading: string;
-    }[] = [];
+    const semanticOwnerContext: SemanticOwnerContext[] = [];
     let semanticOwner: Element | null = fingerprintControl ?? fieldOwner;
     for (let depth = 0;
       semanticOwner !== null && root.contains(semanticOwner) && depth < 8;
       depth += 1
     ) {
-      const automationId = semanticOwner.getAttribute("data-automation-id") ?? "";
-      const ownerRole = semanticOwner.getAttribute("role") ?? "";
-      const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
-        ? ""
-        : automationId;
-      const ownerAccessibleName = accessibleName(semanticOwner, false, false);
-      const heading = text(semanticOwner.querySelector(
-        ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
-      )?.textContent);
-      if (stableAutomationId !== "" || ownerRole !== "" || ownerAccessibleName !== "" ||
-          heading !== "" || semanticOwner === root) {
-        semanticOwnerContext.push({
-          tag: semanticOwner.tagName.toLocaleLowerCase("en-US"),
-          automationId: stableAutomationId,
-          role: ownerRole,
-          accessibleName: ownerAccessibleName,
-          heading,
-        });
-      }
+      const entry = semanticOwnerEntry(semanticOwner);
+      if (entry !== undefined) semanticOwnerContext.push(entry);
       if (semanticOwner === root) break;
       semanticOwner = semanticOwner.parentElement;
     }
     semanticOwnerContext.reverse();
     if (nativeRadioModel !== undefined) {
-      semanticOwnerContext.splice(0, semanticOwnerContext.length, nativeRadioModel.ownerContext);
+      semanticOwnerContext.splice(
+        0,
+        semanticOwnerContext.length,
+        ...nativeRadioModel.ownerContext,
+      );
     }
     const semanticControls = radioMembershipOwner !== undefined
       ? [fingerprintControl, ...radioMembers.filter((member) => member !== fingerprintControl)]

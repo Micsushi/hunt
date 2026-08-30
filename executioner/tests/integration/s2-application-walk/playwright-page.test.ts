@@ -623,6 +623,54 @@ test("a mixed loader pair is revoked when its class-show context later changes",
   }
 });
 
+test("stylesheet invalidation revokes completed and active non-class loader evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["completed", "active-then-removed"] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style id="loader-style">
+          .loader-visible { display:block }
+        </style><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div id="loader" data-automation-id="applyFlowLoadingPage"
+          class="loader-visible" hidden>Loading</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('#loader');
+            loader.hidden = false;
+            if ('${variant}' === 'completed') loader.hidden = true;
+            const declaration = document.querySelector('#loader-style').sheet.cssRules[0].style;
+            declaration.color = 'red'; declaration.color = '';
+            if ('${variant}' === 'active-then-removed') loader.remove();
+            setTimeout(() => document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<label>Conditional detail*<input required value="committed"></label>'), 100);
+          });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 1_000,
+        navigationSettleTimeoutMs: 1_000,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId, before.value.pageId, variant);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("loader witnesses pair only the exact physical source and preserve independent controller proof", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -642,6 +690,38 @@ test("loader witnesses pair only the exact physical source and preserve independ
         script: `
           first.className = 'loader-visible';
           second.className = 'loader-hidden';`,
+        expectedAdvance: false,
+      },
+      {
+        name: "settled-loader-with-open-loader",
+        script: `
+          first.className = 'loader-visible';
+          first.className = 'loader-hidden';
+          second.className = 'loader-visible';`,
+        expectedAdvance: false,
+      },
+      {
+        name: "settled-loader-with-open-controller",
+        script: `
+          first.className = 'loader-visible';
+          first.className = 'loader-hidden';
+          controller.setAttribute('aria-busy', 'true');`,
+        expectedAdvance: false,
+      },
+      {
+        name: "loader-settle-then-rebusy",
+        script: `
+          first.className = 'loader-visible';
+          first.className = 'loader-hidden';
+          first.className = 'loader-visible';`,
+        expectedAdvance: false,
+      },
+      {
+        name: "controller-settle-then-rebusy",
+        script: `
+          controller.setAttribute('aria-busy', 'true');
+          controller.setAttribute('aria-busy', 'false');
+          controller.setAttribute('aria-busy', 'true');`,
         expectedAdvance: false,
       },
       {
@@ -1785,6 +1865,62 @@ test("all-hidden native radio groups retain browser-owned completion evidence", 
   }
 });
 
+test("a wrapping physical form discovers all-hidden external sibling radios", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const checked of [true, false]) {
+      const page = await browser.newPage();
+      await page.setContent(`<form aria-label="Application form">
+        <div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <p>Questionnaire content</p>
+          </main><button type="button">Save and Continue</button>
+        </div>
+        <div hidden><label>Yes<input type="radio" name="external-status" required
+          value="yes" ${checked ? "checked" : ""}></label>
+          <label>No<input type="radio" name="external-status" required value="no"></label></div>
+      </form>`);
+      const observed = await new PlaywrightWorkdayApplicationPage(page).observe(
+        new AbortController().signal,
+      );
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+      if (observed.ok) {
+        assert.equal(observed.value.requiredFields.length, 1);
+        assert.equal(observed.value.requiredFields[0]?.verification,
+          checked ? "verified" : "unverified");
+      }
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("inherited aria-disabled containers cannot contribute native radio evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["radiogroup", "container"] as const) {
+      const page = await browser.newPage();
+      const group = `<div role="radiogroup" aria-label="Disabled status"
+          ${variant === "radiogroup" ? 'aria-disabled="true"' : ""}>
+        <label><input type="radio" name="status" required checked value="yes">Yes</label>
+        <label><input type="radio" name="status" required value="no">No</label></div>`;
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          ${variant === "container" ? `<section aria-disabled="true">${group}</section>` : group}
+        </main><button type="button">Save and Continue</button></div>`);
+      const observed = await new PlaywrightWorkdayApplicationPage(page).observe(
+        new AbortController().signal,
+      );
+      assert.equal(observed.ok, true, `${variant}:${JSON.stringify(observed)}`);
+      if (observed.ok) assert.equal(observed.value.requiredFields.length, 0, variant);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("disabled fieldset radios cannot contribute requiredness or checked readback", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -1858,6 +1994,57 @@ test("native radio identity survives regenerated transport attributes and true c
     if (after.ok) assert.deepEqual(
       after.value.requiredFields.map(({ fieldId }) => fieldId).sort(),
       identities,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio identity retains distinct semantic ancestor owners through clone reorder", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <section aria-labelledby="alpha-heading"><h2 id="alpha-heading">Alpha section</h2>
+          <form id="generated-alpha" action="/old-alpha"><fieldset><legend>Status</legend>
+            <label><input type="radio" name="status" required checked value="yes">Yes</label>
+          </fieldset></form>
+          <input hidden form="generated-alpha" type="radio" name="status" value="no"></section>
+        <section aria-labelledby="beta-heading"><h2 id="beta-heading">Beta section</h2>
+          <form id="generated-beta" action="/old-beta"><fieldset><legend>Status</legend>
+            <label><input type="radio" name="status" required checked value="yes">Yes</label>
+          </fieldset></form>
+          <input hidden form="generated-beta" type="radio" name="status" value="no"></section>
+      </main><button type="button">Save and Continue</button></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const beforeIds = before.value.requiredFields.map(({ fieldId }) => fieldId);
+    assert.equal(beforeIds.length, 2);
+    assert.notEqual(beforeIds[0], beforeIds[1]);
+    await page.locator("main").evaluate((main) => {
+      const clones = [...main.querySelectorAll("section")].map((section, index) => {
+        const clone = section.cloneNode(true) as HTMLElement;
+        const form = clone.querySelector("form")!;
+        const heading = clone.querySelector("h2")!;
+        const nextFormId = `remounted-form-${index}`;
+        const nextHeadingId = `remounted-heading-${index}`;
+        form.id = nextFormId;
+        form.setAttribute("action", `/new-${index}`);
+        heading.id = nextHeadingId;
+        clone.setAttribute("aria-labelledby", nextHeadingId);
+        clone.querySelector('input[form]')?.setAttribute("form", nextFormId);
+        return clone;
+      });
+      main.replaceChildren(clones[1]!, clones[0]!);
+    });
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.deepEqual(
+      after.value.requiredFields.map(({ fieldId }) => fieldId),
+      [beforeIds[1], beforeIds[0]],
     );
   } finally {
     await browser.close();
