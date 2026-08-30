@@ -428,6 +428,159 @@ test("does not advance a questionnaire occurrence for a same-count remount and r
   }
 });
 
+test("pre-mounted loader aria, style, and class cycles prove same-page advancement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      {
+        name: "aria-hidden",
+        initial: 'aria-hidden="true"',
+        show: "loader.removeAttribute('aria-hidden')",
+        hide: "loader.setAttribute('aria-hidden', 'true')",
+      },
+      {
+        name: "style",
+        initial: 'style="display:none"',
+        show: "loader.removeAttribute('style')",
+        hide: "loader.setAttribute('style', 'display:none')",
+      },
+      {
+        name: "class",
+        initial: 'class="hidden"',
+        show: "loader.removeAttribute('class')",
+        hide: "loader.setAttribute('class', 'hidden')",
+      },
+    ]) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>.hidden, [aria-hidden="true"] { display: none; }</style>
+        <div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+          </main>
+          <div data-automation-id="applyFlowLoadingPage" ${variant.initial}>Loading</div>
+          <button id="next">Save and Continue</button>
+        </div>
+        <script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            ${variant.show};
+            document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
+            ${variant.hide};
+          });
+        </script>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 4_000,
+        navigationSettleTimeoutMs: 4_000,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      assert.deepEqual(await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId, variant.name);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an always-hidden loader ancestor cannot advance a conditional semantic superset", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<style>.always-hidden { display: none; }</style>
+      <div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+      </main>
+      <div class="always-hidden"><div data-automation-id="applyFlowLoadingPage" hidden>Loading</div></div>
+      <button id="next">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+          loader.hidden = false;
+          document.querySelector('main').insertAdjacentHTML('beforeend',
+            '<div data-automation-id="formField"><label>Conditional detail*<input required value="committed"></label></div>');
+          loader.hidden = true;
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 4_000,
+      navigationSettleTimeoutMs: 4_000,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("owned loading plus an unchanged reload cannot synthesize questionnaire advancement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      if (window.name !== "reload-unchanged-questionnaire") return;
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+          </main><button>Save and Continue</button></div>`;
+      });
+    });
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+      </main><button id="next">Save and Continue</button>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'reload-unchanged-questionnaire';
+          document.querySelector('main').remove();
+          document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+            'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 100,
+      navigationSettleTimeoutMs: 250,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a current-action owned-loading reload preserves a same-marker questionnaire transition", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -439,6 +592,7 @@ test("a current-action owned-loading reload preserves a same-marker questionnair
           <main data-automation-id="applyFlowApplicationQuestionsPage">
             <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
             <div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>
+            <div data-automation-id="formField"><label>Persisted destination*<input required value="committed"></label></div>
           </main><button>Save and Continue</button></div>`;
       });
     });

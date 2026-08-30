@@ -343,9 +343,12 @@ export class PlaywrightWorkdayApplicationPage {
           currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
         }
         const after = await this.#readSnapshot(signal);
+        const persistedDestinationProven = navigationActionId !== undefined &&
+          persistedNavigationActionId === navigationActionId && after.ok &&
+          hasIndependentDestinationEvidence(before, after.value);
         const currentActionWitness = navigationActionId !== undefined && (
           after.ok && after.value.navigationWitness === navigationActionId ||
-          persistedNavigationActionId === navigationActionId
+          persistedDestinationProven
         );
         if (
           after.ok && (after.value.signature !== before.signature || currentActionWitness) &&
@@ -356,14 +359,13 @@ export class PlaywrightWorkdayApplicationPage {
             after.value.requiredFields.length > before.requiredFields.length ||
             hasValidationDowngrade(before, after.value))
         ) {
-          const candidate = persistedNavigationActionId === navigationActionId &&
-              navigationActionId !== undefined
+          const candidate = persistedDestinationProven && navigationActionId !== undefined
             ? { ...after.value, navigationWitness: navigationActionId }
             : after.value;
           const stable = await this.#confirmStableDestination(
             candidate,
             signal,
-            persistedNavigationActionId,
+            persistedDestinationProven ? persistedNavigationActionId : undefined,
           );
           if (stable !== undefined) return { ok: true, value: stable };
           navigationDiagnostic("destination_candidate_unstable", {
@@ -617,6 +619,17 @@ function hasValidationDowngrade(
   const priorValidation = new Set(before.validationKeys);
   return !newField && after.validationKeys.some((key) => !priorValidation.has(key));
 }
+function hasIndependentDestinationEvidence(
+  before: BrowserApplicationSnapshot,
+  after: BrowserApplicationSnapshot,
+): boolean {
+  if (after.page !== before.page || after.rootSelector !== before.rootSelector ||
+      after.transitionKey !== before.transitionKey) return true;
+  const semanticFields = (snapshot: BrowserApplicationSnapshot): string =>
+    snapshot.requiredFields.map(({ page, semanticKey }) => `${page ?? ""}:${semanticKey}`)
+      .sort().join("\u001f");
+  return semanticFields(after) !== semanticFields(before);
+}
 function armNavigationWitness(input: { readonly rootSelector: string; readonly actionId: string }): boolean {
   const root = document.querySelector<HTMLElement>(input.rootSelector);
   if (root === null) return false;
@@ -657,10 +670,25 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     if (value.hidden !== null || value.ariaHidden?.toLocaleLowerCase("en-US") === "true") {
       return false;
     }
-    if (/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\s*(?:;|$)/iu
-      .test(value.style ?? "")) return false;
+    const inlineStyle = document.createElement("div").style;
+    inlineStyle.cssText = value.style ?? "";
+    if (inlineStyle.display === "none" || inlineStyle.visibility === "hidden" ||
+        inlineStyle.visibility === "collapse") return false;
     return !/(?:^|\s)(?:hidden|is-hidden|wd-hidden|invisible)(?:\s|$)/iu
       .test(value.className ?? "");
+  };
+  const ancestorVisibilityCapable = (element: Element): boolean => {
+    let ancestor = element.parentElement;
+    while (ancestor !== null && controller.contains(ancestor)) {
+      if (ancestor.hidden || ancestor.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(ancestor);
+      if (style.display === "none" || style.visibility === "hidden" ||
+          style.visibility === "collapse" ||
+          style.display !== "contents" && ancestor.getClientRects().length === 0) return false;
+      if (ancestor === controller) return controller.isConnected;
+      ancestor = ancestor.parentElement;
+    }
+    return false;
   };
   const loaderStates = new Map<Element, { attributes: LoaderAttributes; visible: boolean }>();
   const register = (element: Element) => {
@@ -726,10 +754,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           ? loader.getAttribute(name ?? "")
           : later.oldValue;
         known.attributes = { ...known.attributes, [key]: nextValue };
+        const finalState = later === undefined;
         const nextVisible = loader.isConnected && controller.contains(loader) &&
-          attributeVisible(known.attributes) && (
-            later !== undefined || nextValue !== loader.getAttribute(name ?? "") || visible(loader)
-          );
+          ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
+          (!finalState || visible(loader));
         recordLoaderTransition(known.visible, nextVisible);
         known.visible = nextVisible;
         loaderStates.set(loader, known);
