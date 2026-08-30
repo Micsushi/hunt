@@ -707,9 +707,12 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     busySeen: false,
     settled: false,
     frozen: false,
-    contextMutationSeen: false,
     styleContextMutated: false,
     instrumentationComplete: true,
+    classBusySeen: false,
+    classSettled: false,
+    nonClassBusySeen: false,
+    nonClassSettled: false,
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -734,12 +737,18 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     style: element.getAttribute("style"),
     className: element.getAttribute("class"),
   });
+  let internalStyleParse = false;
   const attributeVisible = (value: LoaderAttributes): boolean => {
     if (value.hidden !== null || value.ariaHidden?.toLocaleLowerCase("en-US") === "true") {
       return false;
     }
     const inlineStyle = document.createElement("div").style;
-    inlineStyle.cssText = value.style ?? "";
+    internalStyleParse = true;
+    try {
+      inlineStyle.cssText = value.style ?? "";
+    } finally {
+      internalStyleParse = false;
+    }
     if (inlineStyle.display === "none" || inlineStyle.visibility === "hidden" ||
         inlineStyle.visibility === "collapse") return false;
     return true;
@@ -763,6 +772,54 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         element.hasAttribute("data-hunt-render-probe") || !controller.contains(element)) return;
     loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
   };
+  const syncWitnessState = () => {
+    state.busySeen = state.nonClassBusySeen ||
+      !state.styleContextMutated && state.classBusySeen;
+    state.settled = state.nonClassSettled ||
+      !state.styleContextMutated && state.classSettled;
+    if (state.settled && controller.isConnected) {
+      globalState.__huntWorkdayNavigationWitness = state.actionId;
+    } else if (globalState.__huntWorkdayNavigationWitness === state.actionId) {
+      delete globalState.__huntWorkdayNavigationWitness;
+    }
+  };
+  const invalidateClassContext = () => {
+    if (!state.clicked || state.frozen) return;
+    state.styleContextMutated = true;
+    state.classBusySeen = false;
+    state.classSettled = false;
+    syncWitnessState();
+  };
+  const recordLoaderTransition = (
+    wasVisible: boolean,
+    isVisible: boolean,
+    source: "class" | "other",
+  ) => {
+    if (!state.clicked || wasVisible === isVisible) return;
+    if (source === "class") {
+      if (!state.instrumentationComplete || state.styleContextMutated) return;
+      if (isVisible) state.classBusySeen = true;
+      else if (state.classBusySeen) state.classSettled = true;
+    } else if (isVisible) {
+      state.nonClassBusySeen = true;
+    } else if (state.nonClassBusySeen || state.classBusySeen) {
+      state.nonClassSettled = true;
+    }
+    syncWitnessState();
+  };
+  const captureExactClassState = (element: Element) => {
+    if (!element.matches(loaderSelector) || !controller.contains(element) ||
+        element.hasAttribute("data-hunt-render-probe")) return;
+    const nextVisible = visible(element);
+    const known = loaderStates.get(element) ?? {
+      attributes: attributes(element),
+      visible: nextVisible,
+    };
+    recordLoaderTransition(known.visible, nextVisible, "class");
+    known.visible = nextVisible;
+    known.attributes = attributes(element);
+    loaderStates.set(element, known);
+  };
   const observerOptions: MutationObserverInit = {
     subtree: true,
     childList: true,
@@ -783,10 +840,13 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     ...[...document.styleSheets].map((sheet) => sheet as CSSStyleSheet),
     ...("adoptedStyleSheets" in document ? [...document.adoptedStyleSheets] : []),
   ].map((sheet) => {
-    let rules = "inaccessible";
+    let rules: string;
     try {
       rules = [...sheet.cssRules].map((rule) => rule.cssText).join("\n");
-    } catch {}
+    } catch {
+      state.instrumentationComplete = false;
+      rules = "inaccessible";
+    }
     const owner = sheet.ownerNode instanceof Element ? sheet.ownerNode : null;
     return {
       id: sheetId(sheet),
@@ -800,29 +860,142 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   }));
   const initialStyleContextToken = styleContextToken();
   const restorers: (() => void)[] = [];
-  const instrumentMethod = (name: "deleteRule" | "insertRule" | "replace" | "replaceSync") => {
-    const descriptor = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, name);
+  const instrumentMethod = (
+    requestedPrototype: object | undefined,
+    name: string,
+    affectsStyle: (receiver: unknown) => boolean = () => true,
+    after?: (receiver: unknown, args: readonly unknown[]) => void,
+  ) => {
+    if (requestedPrototype === undefined) return;
+    let prototype: object | null = requestedPrototype;
+    let descriptor: PropertyDescriptor | undefined;
+    while (prototype !== null && descriptor === undefined) {
+      descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+      if (descriptor === undefined) prototype = Object.getPrototypeOf(prototype) as object | null;
+    }
+    if (prototype === null) {
+      if (name in requestedPrototype) state.instrumentationComplete = false;
+      return;
+    }
     if (descriptor?.value === undefined || typeof descriptor.value !== "function" ||
         descriptor.configurable !== true) {
-      if (name in CSSStyleSheet.prototype) state.instrumentationComplete = false;
+      if (name in requestedPrototype) state.instrumentationComplete = false;
       return;
     }
     const original = descriptor.value as (...args: unknown[]) => unknown;
-    const wrapped = function(this: CSSStyleSheet, ...args: unknown[]) {
-      if (state.clicked && !state.frozen) state.styleContextMutated = true;
-      return original.apply(this, args);
+    const wrapped = function(this: unknown, ...args: unknown[]) {
+      if (affectsStyle(this)) invalidateClassContext();
+      const result = original.apply(this, args);
+      after?.(this, args);
+      return result;
     };
-    Object.defineProperty(CSSStyleSheet.prototype, name, { ...descriptor, value: wrapped });
+    Object.defineProperty(prototype, name, { ...descriptor, value: wrapped });
     restorers.push(() => {
-      if ((CSSStyleSheet.prototype as unknown as Record<string, unknown>)[name] === wrapped) {
-        Object.defineProperty(CSSStyleSheet.prototype, name, descriptor);
+      if ((prototype as Record<string, unknown>)[name] === wrapped) {
+        Object.defineProperty(prototype, name, descriptor);
       }
     });
   };
-  for (const name of ["insertRule", "deleteRule", "replace", "replaceSync"] as const) {
-    instrumentMethod(name);
+  const instrumentSetter = (
+    requestedPrototype: object | undefined,
+    name: string,
+    affectsStyle: (receiver: unknown) => boolean = () => true,
+  ) => {
+    if (requestedPrototype === undefined) return;
+    let prototype: object | null = requestedPrototype;
+    let descriptor: PropertyDescriptor | undefined;
+    while (prototype !== null && descriptor === undefined) {
+      descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+      if (descriptor === undefined) prototype = Object.getPrototypeOf(prototype) as object | null;
+    }
+    if (prototype === null) {
+      if (name in requestedPrototype) state.instrumentationComplete = false;
+      return;
+    }
+    if (descriptor?.set === undefined || descriptor.configurable !== true) {
+      if (name in requestedPrototype) state.instrumentationComplete = false;
+      return;
+    }
+    const original = descriptor.set;
+    const wrapped = function(this: unknown, value: unknown) {
+      if (affectsStyle(this)) invalidateClassContext();
+      original.call(this, value);
+    };
+    Object.defineProperty(prototype, name, { ...descriptor, set: wrapped });
+    restorers.push(() => {
+      if (Object.getOwnPropertyDescriptor(prototype, name)?.set === wrapped) {
+        Object.defineProperty(prototype, name, descriptor);
+      }
+    });
+  };
+  for (const name of ["insertRule", "deleteRule", "replace", "replaceSync"]) {
+    instrumentMethod(CSSStyleSheet.prototype, name);
+  }
+  const groupingPrototype = (globalThis as unknown as {
+    CSSGroupingRule?: { prototype: object };
+  }).CSSGroupingRule?.prototype;
+  const mediaRulePrototype = (globalThis as unknown as {
+    CSSMediaRule?: { prototype: object };
+  }).CSSMediaRule?.prototype;
+  for (const name of ["insertRule", "deleteRule"]) {
+    instrumentMethod(groupingPrototype ?? mediaRulePrototype, name);
+  }
+  for (const name of ["setProperty", "removeProperty"]) {
+    instrumentMethod(CSSStyleDeclaration.prototype, name, () => !internalStyleParse);
+  }
+  instrumentSetter(CSSStyleDeclaration.prototype, "cssText", () => !internalStyleParse);
+  instrumentSetter(CSSStyleSheet.prototype, "disabled");
+  const styleRulePrototype = (globalThis as unknown as {
+    CSSStyleRule?: { prototype: object };
+  }).CSSStyleRule?.prototype;
+  instrumentSetter(styleRulePrototype, "selectorText");
+  const mediaListPrototype = (globalThis as unknown as {
+    MediaList?: { prototype: object };
+  }).MediaList?.prototype;
+  instrumentSetter(mediaListPrototype, "mediaText");
+  for (const name of ["appendMedium", "deleteMedium"]) {
+    instrumentMethod(mediaListPrototype, name);
+  }
+  const elementPrototype = Element.prototype;
+  const classDescriptor = Object.getOwnPropertyDescriptor(elementPrototype, "className");
+  if (classDescriptor?.set === undefined || classDescriptor.configurable !== true) {
+    state.instrumentationComplete = false;
+  } else {
+    const original = classDescriptor.set;
+    const wrapped = function(this: Element, value: string) {
+      original.call(this, value);
+      captureExactClassState(this);
+    };
+    Object.defineProperty(elementPrototype, "className", { ...classDescriptor, set: wrapped });
+    restorers.push(() => {
+      if (Object.getOwnPropertyDescriptor(elementPrototype, "className")?.set === wrapped) {
+        Object.defineProperty(elementPrototype, "className", classDescriptor);
+      }
+    });
+  }
+  for (const name of ["setAttribute", "removeAttribute"]) {
+    instrumentMethod(elementPrototype, name, () => false, (receiver, args) => {
+      if (receiver instanceof Element && typeof args[0] === "string" &&
+          args[0].toLocaleLowerCase("en-US") === "class") captureExactClassState(receiver);
+    });
+  }
+  instrumentMethod(elementPrototype, "setAttributeNS", () => false, (receiver, args) => {
+    if (receiver instanceof Element && typeof args[1] === "string" &&
+        args[1].toLocaleLowerCase("en-US") === "class") captureExactClassState(receiver);
+  });
+  const tokenListPrototype = DOMTokenList.prototype;
+  const isOwnedLoaderTokenList = (receiver: unknown): boolean =>
+    [...controller.querySelectorAll(loaderSelector)].some((loader) => loader.classList === receiver);
+  for (const name of ["add", "remove", "replace", "toggle"]) {
+    instrumentMethod(tokenListPrototype, name, () => false, (receiver) => {
+      if (!isOwnedLoaderTokenList(receiver)) return;
+      const loader = [...controller.querySelectorAll(loaderSelector)]
+        .find((candidate) => candidate.classList === receiver);
+      if (loader !== undefined) captureExactClassState(loader);
+    });
   }
   if ("adoptedStyleSheets" in document) {
+    const priorOwnDescriptor = Object.getOwnPropertyDescriptor(document, "adoptedStyleSheets");
     let owner: object | null = document;
     let descriptor: PropertyDescriptor | undefined;
     while (owner !== null && descriptor === undefined) {
@@ -839,17 +1012,35 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         Object.defineProperty(document, "adoptedStyleSheets", {
           configurable: true,
           enumerable: descriptor.enumerable ?? true,
-          get() { return getter.call(document) as CSSStyleSheet[]; },
+          get() {
+            const value = getter.call(document) as CSSStyleSheet[];
+            adoptedCollections.add(value);
+            return value;
+          },
           set(value: CSSStyleSheet[]) {
-            if (state.clicked && !state.frozen) state.styleContextMutated = true;
+            invalidateClassContext();
             setter.call(document, value);
+            adoptedCollections.add(value);
           },
         });
-        restorers.push(() => { delete (document as unknown as Record<string, unknown>).adoptedStyleSheets; });
+        restorers.push(() => {
+          if (priorOwnDescriptor === undefined) {
+            delete (document as unknown as Record<string, unknown>).adoptedStyleSheets;
+          } else {
+            Object.defineProperty(document, "adoptedStyleSheets", priorOwnDescriptor);
+          }
+        });
       } catch {
         state.instrumentationComplete = false;
       }
     }
+  }
+  const adoptedCollections = new WeakSet<object>();
+  if ("adoptedStyleSheets" in document) adoptedCollections.add(document.adoptedStyleSheets);
+  for (const name of ["copyWithin", "fill", "pop", "push", "reverse", "shift", "sort", "splice", "unshift"]) {
+    instrumentMethod(Array.prototype, name, (receiver) =>
+      typeof receiver === "object" && receiver !== null && adoptedCollections.has(receiver)
+    );
   }
   state.restoreInstrumentation = () => {
     while (restorers.length > 0) restorers.pop()?.();
@@ -857,58 +1048,31 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   const observe = () => {
     if (!state.frozen && !state.settled) state.observer?.observe(document.documentElement, observerOptions);
   };
-  const classContextStable = (records: readonly MutationRecord[], loader: Element): boolean =>
-    state.instrumentationComplete && !state.styleContextMutated && !state.contextMutationSeen &&
-    styleContextToken() === initialStyleContextToken && records.every((record) =>
-      record.type === "attributes" && record.target === loader && record.attributeName === "class"
-    );
-  const reconstructedVisible = (
-    loader: Element,
-    value: LoaderAttributes,
-    records: readonly MutationRecord[],
-  ): boolean => {
-    if (!(loader instanceof HTMLElement) || !loader.isConnected ||
-        !controller.contains(loader) || !ancestorVisibilityCapable(loader) ||
-        !attributeVisible(value) || !classContextStable(records, loader)) return false;
-    const current = attributes(loader);
-    const assign = (name: string, attributeValue: string | null) => {
-      if (attributeValue === null) loader.removeAttribute(name);
-      else loader.setAttribute(name, attributeValue);
-    };
-    state.observer?.disconnect();
-    assign("hidden", value.hidden);
-    assign("aria-hidden", value.ariaHidden);
-    assign("style", value.style);
-    assign("class", value.className);
-    try {
-      return visible(loader);
-    } finally {
-      assign("hidden", current.hidden);
-      assign("aria-hidden", current.ariaHidden);
-      assign("style", current.style);
-      assign("class", current.className);
-      observe();
-    }
-  };
   controller.querySelectorAll(loaderSelector).forEach(register);
-  const recordLoaderTransition = (wasVisible: boolean, isVisible: boolean) => {
-    if (!state.clicked || state.settled || wasVisible === isVisible) return;
-    if (isVisible) state.busySeen = true;
-    else if (state.busySeen) state.settled = true;
-  };
   state.observer = new MutationObserver((records) => {
-    if (!state.clicked || state.settled) return;
+    if (!state.clicked) return;
+    const classContextChanged = records.some((record) => {
+      if (record.type !== "attributes" || !(record.target instanceof Element)) return true;
+      if (record.target === controller && record.attributeName === "aria-busy") return false;
+      return !(record.target.matches(loaderSelector) && controller.contains(record.target) &&
+        ["class", "hidden", "aria-hidden", "style"].includes(record.attributeName ?? ""));
+    });
+    if (classContextChanged) {
+      invalidateClassContext();
+    }
+    if (styleContextToken() !== initialStyleContextToken) invalidateClassContext();
     for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller) {
         if (record.oldValue === "true") {
-          state.settled = state.busySeen;
+          state.nonClassSettled = state.nonClassBusySeen || state.classBusySeen;
         } else if (controller.getAttribute("aria-busy") === "true" ||
             records.slice(recordIndex + 1).some((later) =>
               later.type === "attributes" && later.target === controller &&
               later.attributeName === "aria-busy" && later.oldValue === "true"
             )) {
-          state.busySeen = true;
+          state.nonClassBusySeen = true;
         }
+        syncWitnessState();
       }
       if (record.type === "childList") {
         for (const node of record.addedNodes) {
@@ -918,7 +1082,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
               !element.hasAttribute("data-hunt-render-probe"));
           for (const loader of added) {
             register(loader);
-            if (visible(loader)) state.busySeen = true;
+            if (visible(loader)) {
+              state.nonClassBusySeen = true;
+              syncWitnessState();
+            }
           }
         }
         for (const node of record.removedNodes) {
@@ -926,8 +1093,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           const removed = [node, ...node.querySelectorAll(loaderSelector)]
             .filter((element) => element.matches(loaderSelector) &&
               !element.hasAttribute("data-hunt-render-probe"));
-          if (state.busySeen && removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
-            state.settled = true;
+          if ((state.nonClassBusySeen || state.classBusySeen) &&
+              removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
+            state.nonClassSettled = true;
+            syncWitnessState();
           }
           removed.forEach((loader) => loaderStates.delete(loader));
         }
@@ -954,21 +1123,13 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         const finalState = later === undefined;
         const nextVisible = loader.isConnected && controller.contains(loader) &&
           ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
-          (finalState ? visible(loader) : name === "class"
-            ? reconstructedVisible(loader, known.attributes, records)
-            : true);
-        recordLoaderTransition(known.visible, nextVisible);
+          (finalState ? visible(loader) : name === "class" ? known.visible : true);
+        recordLoaderTransition(known.visible, nextVisible, name === "class" ? "class" : "other");
         known.visible = nextVisible;
         loaderStates.set(loader, known);
       }
     }
-    if (state.settled && controller.isConnected) {
-      globalState.__huntWorkdayNavigationWitness = state.actionId;
-    }
-    if (records.some((record) =>
-      record.type !== "attributes" || record.target !== controller.querySelector(loaderSelector) ||
-      record.attributeName !== "class"
-    )) state.contextMutationSeen = true;
+    syncWitnessState();
   });
   observe();
   globalState.__huntWorkdayNavigationAction = state;
@@ -1329,6 +1490,13 @@ async function readApplicationSnapshot(
     );
     const ownsAriaRadioGroup = control.matches('fieldset, [role="radiogroup"]') &&
       control.querySelector('input[type="radio"], [role="radio"]') !== null;
+    const ownsNamedNativeRadio = ownsAriaRadioGroup && [...control.querySelectorAll<HTMLInputElement>(
+      'input[type="radio"]',
+    )].some((member) => text(member.name) !== "");
+    // A native named radio keeps browser form/tree-root membership even when
+    // Workday wraps the members in a radiogroup. Its input candidates carry
+    // the shared radiogroup/fieldset prompt without fabricating a second group.
+    if (ownsNamedNativeRadio) continue;
     const nativeRadioName = input?.type === "radio" ? text(input.name) : "";
     const nativeMembershipOwner = input?.type === "radio" && nativeRadioName !== ""
       ? input.form ?? input.getRootNode()
@@ -1358,15 +1526,37 @@ async function readApplicationSnapshot(
         : [...(ariaRadioOwner ?? control).querySelectorAll<HTMLElement>(
           'input[type="radio"], [role="radio"]',
         )].filter(visible);
+    const structuredQuestionOwners = radioMembers.map((member) =>
+      member.closest<HTMLElement>('fieldset, [role="radiogroup"]')
+    );
+    const sharedQuestionOwner = structuredQuestionOwners[0] !== null &&
+        structuredQuestionOwners.every((owner) => owner === structuredQuestionOwners[0])
+      ? structuredQuestionOwners[0] ?? undefined
+      : undefined;
+    const memberQuestionReferences = radioMembers.map((member) =>
+      (member.getAttribute("aria-labelledby") ?? "").split(/\s+/u).filter(Boolean)
+    );
+    const sharedQuestionReferenceIds = memberQuestionReferences.length === 0
+      ? []
+      : memberQuestionReferences[0]!.filter((id) =>
+        memberQuestionReferences.every((ids) => ids.includes(id))
+      );
+    const sharedQuestionReference = text(sharedQuestionReferenceIds.map((id) =>
+      document.getElementById(id)?.textContent ?? ""
+    ).join(" "));
     if (radioGroupKey !== undefined && seenRadioGroups.has(radioGroupKey)) continue;
     if (radioGroupKey !== undefined) seenRadioGroups.add(radioGroupKey);
-    const fingerprintControl = radioQuestionOwner ?? control;
+    const fingerprintControl = sharedQuestionOwner ?? radioQuestionOwner ?? control;
     const completionRequired = requiredControlSet.has(control) ||
       radioMembers.some((member) => requiredControlSet.has(member));
     const requiredIndex = requiredControls.findIndex((candidate) =>
       candidate === control || radioMembers.includes(candidate)
     );
+    const nativeRadioFieldId = nativeMembershipOwner === undefined
+      ? undefined
+      : `native-radio-${radioOwnerId(nativeMembershipOwner)}-${semanticHash(nativeRadioName)}`;
     const rawId = [
+      nativeRadioFieldId,
       control.getAttribute("data-hunt-field-id"),
       control.getAttribute("data-automation-id"),
       control.id,
@@ -1377,7 +1567,10 @@ async function readApplicationSnapshot(
       ? rawId
       : completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`;
     const questionLabel = nativeMembershipOwner !== undefined
-      ? accessibleName(fingerprintControl, false, false)
+      ? text([...new Set([
+        accessibleName(fingerprintControl, false),
+        sharedQuestionReference,
+      ].filter(Boolean))].join(" "))
       : accessibleName(fingerprintControl) ||
       (fieldOwner === null ? "" : accessibleName(fieldOwner));
     const semanticOwnerContext: {
@@ -1387,7 +1580,7 @@ async function readApplicationSnapshot(
       accessibleName: string;
       heading: string;
     }[] = [];
-    let semanticOwner: Element | null = radioQuestionOwner ?? fieldOwner ?? fingerprintControl;
+    let semanticOwner: Element | null = fingerprintControl ?? fieldOwner;
     for (let depth = 0;
       semanticOwner !== null && root.contains(semanticOwner) && depth < 8;
       depth += 1
@@ -1847,18 +2040,17 @@ async function readApplicationSnapshot(
       )].filter(visible);
       verified = verified && input.files?.length === 1 &&
         items.length === 1 && successes.length === 1;
+    } else if (radioMembershipOwner !== undefined) {
+      // Browser radio ownership is form-or-tree-root plus native name. Reuse
+      // that exact admitted member set for completion instead of requerying a
+      // wider Workday root that may contain an independent same-name group.
+      verified = verified && radioMembers.length > 0 &&
+        radioMembers.filter(isChecked).length === 1;
     } else if (descendantRadios.length > 0) {
       // Workday visually exposes styled labels while keeping the native radio
       // inputs hidden, and its required group container may omit an ARIA role.
       // Checked state is authoritative inside the required composite control.
       verified = verified && descendantRadios.filter(isChecked).length === 1;
-    } else if (input?.type === "radio") {
-      const radios = input.name === ""
-        ? [input]
-        : [...root.querySelectorAll<HTMLInputElement>(
-          `input[type="radio"][name="${CSS.escape(input.name)}"]`,
-        )].filter(visible);
-      verified = verified && radios.filter(({ checked }) => checked).length === 1;
     } else if (input?.type === "checkbox") {
       verified = verified && input.checked;
     } else if (role === "radio" || role === "checkbox") {
@@ -1927,6 +2119,7 @@ async function readApplicationSnapshot(
         control.tagName,
         input?.type ?? "",
         role ?? "",
+        nativeMembershipOwner === undefined ? "" : radioGroupKey ?? "",
       ].join("\u0000")),
       ...(fieldPage === undefined ? {} : { page: fieldPage }),
       verification: verified ? "verified" : "unverified",

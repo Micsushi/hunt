@@ -707,6 +707,67 @@ test("historical loader class visibility is measured at the exact structural pos
         contextMutation: "const adopted = new CSSStyleSheet(); adopted.replaceSync('.adopted { color:red }'); document.adoptedStyleSheets = [...document.adoptedStyleSheets, adopted]",
         expectedAdvance: false,
       },
+      {
+        name: "nested-rule-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block } @media all { .nested { color:red } }",
+        extra: "",
+        contextMutation: "const group = document.querySelector('#loader-style').sheet.cssRules[2]; group.insertRule('.temporary { color: blue }', group.cssRules.length); group.deleteRule(group.cssRules.length - 1)",
+        expectedAdvance: false,
+      },
+      {
+        name: "declaration-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const declaration = document.querySelector('#loader-style').sheet.cssRules[1].style; declaration.setProperty('color', 'red'); declaration.removeProperty('color')",
+        expectedAdvance: false,
+      },
+      {
+        name: "disabled-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const sheet = document.querySelector('#loader-style').sheet; sheet.disabled = true; sheet.disabled = false",
+        expectedAdvance: false,
+      },
+      {
+        name: "media-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const media = document.querySelector('#loader-style').sheet.media; media.mediaText = 'not all'; media.mediaText = ''",
+        expectedAdvance: false,
+      },
+      {
+        name: "selector-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: "",
+        contextMutation: "const rule = document.querySelector('#loader-style').sheet.cssRules[1]; rule.selectorText = '.temporary-visible'; rule.selectorText = '.loader-visible'",
+        expectedAdvance: false,
+      },
+      {
+        name: "inaccessible-link",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: `<link id="inaccessible-link" rel="stylesheet" href="data:text/css,.unused%7Bcolor:red%7D">
+          <script>Object.defineProperty(document.querySelector('#inaccessible-link').sheet, 'cssRules', {
+            configurable: true,
+            get() { throw new DOMException('inaccessible', 'SecurityError'); },
+          });</script>`,
+        contextMutation: "",
+        expectedAdvance: false,
+      },
+      {
+        name: "adopted-list-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        extra: `<script>
+          const adoptedList = [];
+          Object.defineProperty(document, 'adoptedStyleSheets', {
+            configurable: true,
+            enumerable: false,
+            get() { return adoptedList; },
+            set(value) { adoptedList.splice(0, adoptedList.length, ...value); },
+          });
+        </script>`,
+        contextMutation: "const temporary = new CSSStyleSheet(); document.adoptedStyleSheets.push(temporary); document.adoptedStyleSheets.pop()",
+        expectedAdvance: false,
+      },
     ] as const) {
       const page = await browser.newPage();
       await page.setContent(`<style id="loader-style">${variant.css}</style>
@@ -744,6 +805,11 @@ test("historical loader class visibility is measured at the exact structural pos
       assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
       if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
         variant.expectedAdvance, variant.name);
+      if (variant.name === "adopted-list-restored") {
+        assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(
+          document, "adoptedStyleSheets",
+        )), true, "pre-existing adoptedStyleSheets descriptor restored");
+      }
       await page.close();
     }
   } finally {
@@ -1204,19 +1270,72 @@ test("the supported-control semantic registry detects only answer-affecting chan
 test("native radio semantics follow form ownership across harmless Workday wrappers", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    const source = `<label><input type="radio" name="status" required checked value="shared">Shared</label>
-      <label><input type="radio" name="status" required value="source">Source only</label>`;
+    const fieldsetSource = `<fieldset><legend>Employment status</legend>
+      <label><input type="radio" name="status" required checked value="shared">Shared</label>
+      <label><input type="radio" name="status" required value="source">Source only</label></fieldset>`;
+    const ariaSource = `<span id="status-question">Employment status</span>
+      <span id="shared-option">Shared</span><span id="source-option">Source only</span>
+      <input type="radio" name="status" required checked value="shared"
+        aria-labelledby="status-question shared-option">
+      <input type="radio" name="status" required value="source"
+        aria-labelledby="status-question source-option">`;
+    const radiogroupSource = `<div role="radiogroup" aria-label="Employment status">
+      <label><input type="radio" name="status" required checked value="shared">Shared</label>
+      <label><input type="radio" name="status" required value="source">Source only</label></div>`;
     for (const variant of [
       {
         name: "wrapper-equivalent",
-        destination: `<div data-automation-id="formField-second"><label><input type="radio" name="status" required value="source">Source only</label></div>
-          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div>`,
+        source: fieldsetSource,
+        destination: `<fieldset><legend>Employment status</legend>
+          <div data-automation-id="formField-second"><label><input type="radio" name="status" required value="source">Source only</label></div>
+          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div></fieldset>`,
         advanced: false,
       },
       {
         name: "non-first-option-changed",
-        destination: `<div data-automation-id="formField-second"><label><input type="radio" name="status" required value="destination">Destination only</label></div>
-          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div>`,
+        source: fieldsetSource,
+        destination: `<fieldset><legend>Employment status</legend>
+          <div data-automation-id="formField-second"><label><input type="radio" name="status" required value="destination">Destination only</label></div>
+          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div></fieldset>`,
+        advanced: true,
+      },
+      {
+        name: "legend-only-changed",
+        source: fieldsetSource,
+        destination: `<fieldset><legend>Changed employment status</legend>
+          <div data-automation-id="formField-second"><label><input type="radio" name="status" required value="source">Source only</label></div>
+          <div data-automation-id="formField-first"><label><input type="radio" name="status" required checked value="shared">Shared</label></div></fieldset>`,
+        advanced: true,
+      },
+      {
+        name: "shared-aria-wrapper-equivalent",
+        source: ariaSource,
+        destination: `<span id="status-question">Employment status</span>
+          <div data-automation-id="formField-second"><span id="source-option">Source only</span>
+            <input type="radio" name="status" required value="source"
+              aria-labelledby="status-question source-option"></div>
+          <div data-automation-id="formField-first"><span id="shared-option">Shared</span>
+            <input type="radio" name="status" required checked value="shared"
+              aria-labelledby="status-question shared-option"></div>`,
+        advanced: false,
+      },
+      {
+        name: "shared-aria-question-changed",
+        source: ariaSource,
+        destination: `<span id="status-question">Changed employment status</span>
+          <span id="shared-option">Shared</span><span id="source-option">Source only</span>
+          <input type="radio" name="status" required checked value="shared"
+            aria-labelledby="status-question shared-option">
+          <input type="radio" name="status" required value="source"
+            aria-labelledby="status-question source-option">`,
+        advanced: true,
+      },
+      {
+        name: "native-radiogroup-name-changed",
+        source: radiogroupSource,
+        destination: `<div role="radiogroup" aria-label="Changed employment status">
+          <label><input type="radio" name="status" required checked value="shared">Shared</label>
+          <label><input type="radio" name="status" required value="source">Source only</label></div>`,
         advanced: true,
       },
     ] as const) {
@@ -1227,7 +1346,7 @@ test("native radio semantics follow form ownership across harmless Workday wrapp
           document.body.innerHTML = `<form id="application-form"><div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${destination}</main><button type="button">Save and Continue</button></div></form>`;
         });
       }, variant);
-      await page.setContent(`<form id="application-form"><div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${source}</main>
+      await page.setContent(`<form id="application-form"><div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${variant.source}</main>
         <button id="next" type="button">Save and Continue</button></div></form><script>
           document.querySelector('#next').addEventListener('click', () => {
             window.name = 'native-radio-${variant.name}';
@@ -1256,6 +1375,37 @@ test("native radio semantics follow form ownership across harmless Workday wrapp
         variant.advanced, variant.name);
       await page.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio completion and identity use the exact browser-owned member set", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <form id="first-form"><fieldset><legend>First status</legend>
+          <label><input type="radio" name="status" required value="first-local">First local</label>
+        </fieldset></form>
+        <label><input form="first-form" type="radio" name="status" required checked
+          value="first-external">First external</label>
+        <form id="second-form"><fieldset><legend>Second status</legend>
+          <label><input type="radio" name="status" required checked value="second-one">Second one</label>
+          <label><input type="radio" name="status" required value="second-two">Second two</label>
+        </fieldset></form>
+      </main><button type="button">Save and Continue</button></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    const observed = await application.observe(new AbortController().signal);
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    if (!observed.ok) return;
+    assert.equal(observed.value.requiredFields.length, 2);
+    assert.deepEqual(observed.value.requiredFields.map(({ verification }) => verification), [
+      "verified",
+      "verified",
+    ]);
+    assert.equal(new Set(observed.value.requiredFields.map(({ fieldId }) => fieldId)).size, 2);
   } finally {
     await browser.close();
   }
