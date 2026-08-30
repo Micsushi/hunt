@@ -2835,6 +2835,86 @@ test("My Experience reconciles a committed skill after its prompt activation tar
   }
 });
 
+test("My Experience validation ownership is atomic across direct and nested remount churn", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div id="skills-owner" data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <ul data-automation-id="selectedItemList" hidden>
+                <li data-automation-id="selectedItem">
+                  <p data-automation-id="promptOption">Python</p>
+                </li>
+              </ul>
+            </div>
+            <div id="direct-error" data-automation-id="errorMessage">Direct error</div>
+            <div id="nested-owner" data-automation-id="formField-nested">
+              <div id="nested-error" data-automation-id="errorMessage">Nested error</div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const originalQuerySelectorAll = Element.prototype.querySelectorAll;
+          let validationChurnArmed = false;
+          Element.prototype.querySelectorAll = function(selector) {
+            const result = originalQuerySelectorAll.call(this, selector);
+            if (validationChurnArmed && this.id === 'skills-owner' &&
+                selector.includes('errorMessage')) {
+              validationChurnArmed = false;
+              queueMicrotask(() => {
+                const owner = document.getElementById('skills-owner');
+                const direct = document.getElementById('direct-error');
+                const nestedOwner = document.getElementById('nested-owner');
+                const directClone = direct.cloneNode(true);
+                const nestedClone = nestedOwner.cloneNode(true);
+                direct.replaceWith(directClone);
+                nestedOwner.replaceWith(nestedClone);
+                owner.prepend(nestedClone);
+                owner.append(directClone);
+              });
+            }
+            return result;
+          };
+          window.configureValidationChurn = (directHidden, nestedHidden) => {
+            const owner = document.getElementById('skills-owner');
+            const direct = document.getElementById('direct-error');
+            const nestedOwner = document.getElementById('nested-owner');
+            direct.hidden = directHidden;
+            document.getElementById('nested-error').hidden = nestedHidden;
+            owner.append(direct, nestedOwner);
+            validationChurnArmed = true;
+          };
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const configure = async (directHidden: boolean, nestedHidden: boolean) =>
+      await page.evaluate(([direct, nested]) => {
+        (window as unknown as {
+          configureValidationChurn: (directHidden: boolean, nestedHidden: boolean) => void;
+        }).configureValidationChurn(direct, nested);
+      }, [directHidden, nestedHidden] as const);
+
+    await configure(false, true);
+    const blocked = (await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "skills.values");
+    assert.equal(blocked?.required, true);
+    assert.equal(blocked?.readback, null);
+
+    await configure(true, false);
+    const accepted = (await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "skills.values");
+    assert.equal(accepted?.required, false);
+    assert.equal(accepted?.readback, "Python");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience field of study opens its prompt and commits an exact option token", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
