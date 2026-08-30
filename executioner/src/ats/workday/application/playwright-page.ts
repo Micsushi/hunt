@@ -709,8 +709,15 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     frozen: false,
     styleContextMutated: false,
     instrumentationComplete: true,
-    activeBusy: undefined as { readonly source: "class" | "other" } | undefined,
-    settledPairs: [] as { readonly classDependent: boolean }[],
+    activeBusy: new Map<object, {
+      readonly source: "class" | "other";
+      readonly styleDependent: boolean;
+      readonly styleContextToken?: string;
+    }>(),
+    settledPairs: [] as {
+      readonly key: object;
+      readonly classDependent: boolean;
+    }[],
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -735,43 +742,21 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     style: element.getAttribute("style"),
     className: element.getAttribute("class"),
   });
-  let internalStyleParse = false;
-  const attributeVisible = (value: LoaderAttributes): boolean => {
-    if (value.hidden !== null || value.ariaHidden?.toLocaleLowerCase("en-US") === "true") {
-      return false;
-    }
-    const inlineStyle = document.createElement("div").style;
-    internalStyleParse = true;
-    try {
-      inlineStyle.cssText = value.style ?? "";
-    } finally {
-      internalStyleParse = false;
-    }
-    if (inlineStyle.display === "none" || inlineStyle.visibility === "hidden" ||
-        inlineStyle.visibility === "collapse") return false;
-    return true;
-  };
-  const ancestorVisibilityCapable = (element: Element): boolean => {
-    let ancestor = element.parentElement;
-    while (ancestor !== null && controller.contains(ancestor)) {
-      if (ancestor.hidden || ancestor.getAttribute("aria-hidden") === "true") return false;
-      const style = getComputedStyle(ancestor);
-      if (style.display === "none" || style.visibility === "hidden" ||
-          style.visibility === "collapse" ||
-          style.display !== "contents" && ancestor.getClientRects().length === 0) return false;
-      if (ancestor === controller) return controller.isConnected;
-      ancestor = ancestor.parentElement;
-    }
-    return false;
-  };
   const loaderStates = new Map<Element, { attributes: LoaderAttributes; visible: boolean }>();
+  const exactAttributeCaptures = new Map<Element, {
+    readonly name: string;
+    readonly oldValue: string | null;
+  }[]>();
+  let sampleStyleContext = (): string | undefined => undefined;
+  let armedStyleContextToken: string | undefined;
   const register = (element: Element) => {
     if (!element.matches(loaderSelector) ||
         element.hasAttribute("data-hunt-render-probe") || !controller.contains(element)) return;
     loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
   };
+  controller.querySelectorAll(loaderSelector).forEach(register);
   const syncWitnessState = () => {
-    state.busySeen = state.activeBusy !== undefined || state.settledPairs.length > 0;
+    state.busySeen = state.activeBusy.size > 0 || state.settledPairs.length > 0;
     state.settled = state.settledPairs.length > 0;
     if (state.settled && controller.isConnected) {
       globalState.__huntWorkdayNavigationWitness = state.actionId;
@@ -782,40 +767,85 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   const invalidateClassContext = () => {
     if (!state.clicked || state.frozen) return;
     state.styleContextMutated = true;
-    if (state.activeBusy?.source === "class") state.activeBusy = undefined;
+    for (const [key, active] of state.activeBusy) {
+      if (active.source === "class") state.activeBusy.delete(key);
+    }
     state.settledPairs = state.settledPairs.filter((pair) => !pair.classDependent);
     syncWitnessState();
   };
   const recordLoaderTransition = (
+    key: object,
     wasVisible: boolean,
     isVisible: boolean,
     source: "class" | "other",
+    styleToken?: string,
+    styleDependent = false,
   ) => {
     if (!state.clicked || wasVisible === isVisible) return;
-    if (source === "class" && (!state.instrumentationComplete || state.styleContextMutated)) {
+    if (styleToken !== undefined && (
+      armedStyleContextToken === undefined || styleToken !== armedStyleContextToken
+    )) {
+      invalidateClassContext();
+      return;
+    }
+    if ((source === "class" || styleDependent) && (
+      !state.instrumentationComplete || state.styleContextMutated ||
+      styleToken === undefined
+    )) {
+      invalidateClassContext();
       return;
     }
     if (isVisible) {
-      state.activeBusy = { source };
-    } else if (state.activeBusy !== undefined) {
+      state.activeBusy.set(key, { source, styleDependent, styleContextToken: styleToken });
+    } else {
+      const active = state.activeBusy.get(key);
+      if (active === undefined) return;
+      const classDependent = active.source === "class" || source === "class";
+      state.activeBusy.delete(key);
+      if ((active.styleDependent || styleDependent) && (
+        armedStyleContextToken === undefined ||
+        active.styleContextToken !== armedStyleContextToken ||
+        styleToken !== armedStyleContextToken
+      )) {
+        invalidateClassContext();
+        return;
+      }
       state.settledPairs.push({
-        classDependent: state.activeBusy.source === "class" || source === "class",
+        key,
+        classDependent,
       });
-      state.activeBusy = undefined;
     }
     syncWitnessState();
   };
-  const captureExactLoaderState = (element: Element, source: "class" | "other") => {
+  const captureExactLoaderState = (
+    element: Element,
+    source: "class" | "other",
+    attributeName: "class" | "hidden" | "aria-hidden" | "style",
+  ) => {
     if (!element.matches(loaderSelector) || !controller.contains(element) ||
         element.hasAttribute("data-hunt-render-probe")) return;
-    const nextVisible = visible(element);
     const known = loaderStates.get(element) ?? {
       attributes: attributes(element),
-      visible: nextVisible,
+      visible: visible(element),
     };
-    recordLoaderTransition(known.visible, nextVisible, source);
+    const priorAttributes = known.attributes;
+    const nextAttributes = attributes(element);
+    const attributeKey = attributeName === "aria-hidden" ? "ariaHidden"
+      : attributeName === "class" ? "className"
+      : attributeName as keyof LoaderAttributes;
+    if (priorAttributes[attributeKey] !== nextAttributes[attributeKey]) {
+      const captures = exactAttributeCaptures.get(element) ?? [];
+      captures.push({ name: attributeName, oldValue: priorAttributes[attributeKey] });
+      exactAttributeCaptures.set(element, captures);
+    }
+    const styleToken = sampleStyleContext();
+    if (styleToken === undefined || styleToken !== armedStyleContextToken) {
+      invalidateClassContext();
+    }
+    const nextVisible = visible(element);
+    recordLoaderTransition(element, known.visible, nextVisible, source, styleToken, true);
     known.visible = nextVisible;
-    known.attributes = attributes(element);
+    known.attributes = nextAttributes;
     loaderStates.set(element, known);
   };
   const observerOptions: MutationObserverInit = {
@@ -857,11 +887,19 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     };
   }));
   const initialStyleContextToken = styleContextToken();
+  armedStyleContextToken = state.instrumentationComplete ? initialStyleContextToken : undefined;
+  sampleStyleContext = () => {
+    const token = styleContextToken();
+    return state.instrumentationComplete ? token : undefined;
+  };
   const restorers: (() => void)[] = [];
   const nativeDeclarationSetProperty = CSSStyleDeclaration.prototype.setProperty;
   const nativeDeclarationRemoveProperty = CSSStyleDeclaration.prototype.removeProperty;
   const nativeDeclarationGetPropertyValue = CSSStyleDeclaration.prototype.getPropertyValue;
-  const instrumentDeclarationInstance = (declaration: CSSStyleDeclaration) => {
+  const instrumentDeclarationInstance = (
+    declaration: CSSStyleDeclaration,
+    loader?: HTMLElement,
+  ) => {
     for (const name of Object.getOwnPropertyNames(declaration)) {
       if (/^\d+$/u.test(name)) continue;
       const descriptor = Object.getOwnPropertyDescriptor(declaration, name);
@@ -872,10 +910,11 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         .replace(/[A-Z]/gu, (letter) => `-${letter.toLocaleLowerCase("en-US")}`);
       const getter = () => nativeDeclarationGetPropertyValue.call(declaration, cssName);
       const setter = (value: unknown) => {
-        invalidateClassContext();
+        if (loader === undefined) invalidateClassContext();
         const normalized = String(value);
         if (normalized === "") nativeDeclarationRemoveProperty.call(declaration, cssName);
         else nativeDeclarationSetProperty.call(declaration, cssName, normalized);
+        if (loader !== undefined) captureExactLoaderState(loader, "other", "style");
       };
       try {
         Object.defineProperty(declaration, name, {
@@ -917,6 +956,9 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     } catch {
       state.instrumentationComplete = false;
     }
+  }
+  for (const loader of controller.querySelectorAll<HTMLElement>(loaderSelector)) {
+    instrumentDeclarationInstance(loader.style, loader);
   }
   const instrumentMethod = (
     requestedPrototype: object | undefined,
@@ -1004,11 +1046,10 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     [...controller.querySelectorAll<HTMLElement>(loaderSelector)]
       .find((loader) => loader.style === receiver);
   const styleDeclarationAffectsClassContext = (receiver: unknown): boolean =>
-    !internalStyleParse && ownedLoaderForStyle(receiver) === undefined;
+    ownedLoaderForStyle(receiver) === undefined;
   const captureOwnedLoaderStyle = (receiver: unknown) => {
-    if (internalStyleParse) return;
     const loader = ownedLoaderForStyle(receiver);
-    if (loader !== undefined) captureExactLoaderState(loader, "other");
+    if (loader !== undefined) captureExactLoaderState(loader, "other", "style");
   };
   for (const name of ["setProperty", "removeProperty"]) {
     instrumentMethod(
@@ -1044,6 +1085,12 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     CSSKeyframeRule?: { prototype: object };
   }).CSSKeyframeRule?.prototype;
   instrumentSetter(keyframeRulePrototype, "keyText");
+  const keyframesRulePrototype = (globalThis as unknown as {
+    CSSKeyframesRule?: { prototype: object };
+  }).CSSKeyframesRule?.prototype;
+  for (const name of ["appendRule", "deleteRule"]) {
+    instrumentMethod(keyframesRulePrototype, name);
+  }
   const mediaListPrototype = (globalThis as unknown as {
     MediaList?: { prototype: object };
   }).MediaList?.prototype;
@@ -1059,7 +1106,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     const original = classDescriptor.set;
     const wrapped = function(this: Element, value: string) {
       original.call(this, value);
-      captureExactLoaderState(this, "class");
+      captureExactLoaderState(this, "class", "class");
     };
     Object.defineProperty(elementPrototype, "className", { ...classDescriptor, set: wrapped });
     restorers.push(() => {
@@ -1071,9 +1118,13 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   const captureAttributeState = (receiver: unknown, rawName: unknown) => {
     if (!(receiver instanceof Element) || typeof rawName !== "string") return;
     const name = rawName.toLocaleLowerCase("en-US");
-    if (name === "class") captureExactLoaderState(receiver, "class");
+    if (name === "class") captureExactLoaderState(receiver, "class", "class");
     else if (["hidden", "aria-hidden", "style"].includes(name)) {
-      captureExactLoaderState(receiver, "other");
+      captureExactLoaderState(
+        receiver,
+        "other",
+        name as "hidden" | "aria-hidden" | "style",
+      );
     }
   };
   for (const name of ["setAttribute", "removeAttribute"]) {
@@ -1096,7 +1147,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   });
   const htmlElementPrototype = HTMLElement.prototype;
   instrumentSetter(htmlElementPrototype, "hidden", () => false, (receiver) => {
-    if (receiver instanceof Element) captureExactLoaderState(receiver, "other");
+    if (receiver instanceof Element) captureExactLoaderState(receiver, "other", "hidden");
   });
   const tokenListPrototype = DOMTokenList.prototype;
   const isOwnedLoaderTokenList = (receiver: unknown): boolean =>
@@ -1106,14 +1157,14 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       if (!isOwnedLoaderTokenList(receiver)) return;
       const loader = [...controller.querySelectorAll(loaderSelector)]
         .find((candidate) => candidate.classList === receiver);
-      if (loader !== undefined) captureExactLoaderState(loader, "class");
+      if (loader !== undefined) captureExactLoaderState(loader, "class", "class");
     });
   }
   instrumentSetter(tokenListPrototype, "value", () => false, (receiver) => {
     if (!isOwnedLoaderTokenList(receiver)) return;
     const loader = [...controller.querySelectorAll(loaderSelector)]
       .find((candidate) => candidate.classList === receiver);
-    if (loader !== undefined) captureExactLoaderState(loader, "class");
+    if (loader !== undefined) captureExactLoaderState(loader, "class", "class");
   });
   const linkPrototype = (globalThis as unknown as {
     HTMLLinkElement?: { prototype: object };
@@ -1175,9 +1226,19 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   const observe = () => {
     if (!state.frozen && !state.settled) state.observer?.observe(document.documentElement, observerOptions);
   };
-  controller.querySelectorAll(loaderSelector).forEach(register);
   state.observer = new MutationObserver((records) => {
     if (!state.clicked) return;
+    const consumedExactRecords = new Set<MutationRecord>();
+    for (const record of records) {
+      if (record.type !== "attributes" || !(record.target instanceof Element)) continue;
+      const captures = exactAttributeCaptures.get(record.target);
+      const expected = captures?.[0];
+      if (expected === undefined || expected.name !== record.attributeName ||
+          expected.oldValue !== record.oldValue) continue;
+      captures?.shift();
+      if (captures?.length === 0) exactAttributeCaptures.delete(record.target);
+      consumedExactRecords.add(record);
+    }
     const classContextChanged = records.some((record) => {
       if (record.type !== "attributes" || !(record.target instanceof Element)) return true;
       if (record.target === controller && record.attributeName === "aria-busy") return false;
@@ -1187,17 +1248,17 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     if (classContextChanged) {
       invalidateClassContext();
     }
-    if (styleContextToken() !== initialStyleContextToken) invalidateClassContext();
+    if (sampleStyleContext() !== armedStyleContextToken) invalidateClassContext();
     for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller) {
         if (record.oldValue === "true") {
-          recordLoaderTransition(true, false, "other");
+          recordLoaderTransition(controller, true, false, "other");
         } else if (controller.getAttribute("aria-busy") === "true" ||
             records.slice(recordIndex + 1).some((later) =>
               later.type === "attributes" && later.target === controller &&
               later.attributeName === "aria-busy" && later.oldValue === "true"
             )) {
-          recordLoaderTransition(false, true, "other");
+          recordLoaderTransition(controller, false, true, "other");
         }
       }
       if (record.type === "childList") {
@@ -1209,7 +1270,9 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           for (const loader of added) {
             register(loader);
             if (visible(loader)) {
-              recordLoaderTransition(false, true, "other");
+              recordLoaderTransition(
+                loader, false, true, "other", sampleStyleContext(), false,
+              );
             }
           }
         }
@@ -1218,36 +1281,56 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           const removed = [node, ...node.querySelectorAll(loaderSelector)]
             .filter((element) => element.matches(loaderSelector) &&
               !element.hasAttribute("data-hunt-render-probe"));
-          if (removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
-            recordLoaderTransition(true, false, "other");
+          for (const loader of removed) {
+            if (loaderStates.get(loader)?.visible === true) {
+              recordLoaderTransition(
+                loader, true, false, "other", sampleStyleContext(), false,
+              );
+            }
           }
           removed.forEach((loader) => loaderStates.delete(loader));
         }
       }
       if (record.type === "attributes" && record.target instanceof Element &&
-          record.target.matches(loaderSelector) && controller.contains(record.target)) {
+          record.target.matches(loaderSelector) && controller.contains(record.target) &&
+          ["class", "hidden", "aria-hidden", "style"].includes(record.attributeName ?? "")) {
         const loader = record.target;
         const known = loaderStates.get(loader) ?? {
           attributes: attributes(loader),
           visible: visible(loader),
         };
         const name = record.attributeName;
+        if (consumedExactRecords.has(record)) {
+          known.attributes = attributes(loader);
+          known.visible = visible(loader);
+          loaderStates.set(loader, known);
+          continue;
+        }
         const key = name === "aria-hidden" ? "ariaHidden"
           : name === "class" ? "className"
           : name as keyof LoaderAttributes;
-        const later = records.slice(recordIndex + 1).find((candidate) =>
+        const related = records.slice(recordIndex).filter((candidate) =>
           candidate.type === "attributes" && candidate.target === loader &&
-          candidate.attributeName === name
+          candidate.attributeName === name && !consumedExactRecords.has(candidate)
         );
-        const nextValue = later === undefined
-          ? loader.getAttribute(name ?? "")
-          : later.oldValue;
+        if (related.length > 1) {
+          known.attributes = attributes(loader);
+          known.visible = visible(loader);
+          loaderStates.set(loader, known);
+          continue;
+        }
+        const nextValue = loader.getAttribute(name ?? "");
         known.attributes = { ...known.attributes, [key]: nextValue };
-        const finalState = later === undefined;
-        const nextVisible = loader.isConnected && controller.contains(loader) &&
-          ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
-          (finalState ? visible(loader) : name === "class" ? known.visible : true);
-        recordLoaderTransition(known.visible, nextVisible, name === "class" ? "class" : "other");
+        const nextVisible = visible(loader);
+        const styleToken = sampleStyleContext();
+        recordLoaderTransition(
+          loader,
+          known.visible,
+          nextVisible,
+          name === "class" ? "class" : "other",
+          styleToken,
+          true,
+        );
         known.visible = nextVisible;
         loaderStates.set(loader, known);
       }
@@ -1520,6 +1603,21 @@ async function readApplicationSnapshot(
       '[data-hunt-field-id]',
     ] : []),
   ].join(", ");
+  const physicalRadioScope = root.getRootNode() as Document | ShadowRoot;
+  const rootNativeRadios = [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  const physicalForms = new Set<HTMLFormElement>([
+    ...(root instanceof HTMLFormElement ? [root] : []),
+    ...root.querySelectorAll<HTMLFormElement>("form"),
+    ...rootNativeRadios.flatMap((radio) => radio.form === null ? [] : [radio.form]),
+  ]);
+  const nativeRadioDiscoveryInputs = [...physicalRadioScope.querySelectorAll<HTMLInputElement>(
+    'input[type="radio"]',
+  )].filter((radio) =>
+    (root.contains(radio) || radio.form !== null && physicalForms.has(radio.form)) &&
+    text(radio.name) !== "" && !radio.matches(":disabled") &&
+    radio.getAttribute("aria-disabled") !== "true"
+  );
+  const nativeRadioDiscoverySet = new Set<HTMLElement>(nativeRadioDiscoveryInputs);
   const registryCandidates = [...root.querySelectorAll<HTMLElement>(supportedControls)];
   const promotedGroupOwners = registryCandidates.flatMap((control) => {
     const owner = control.closest<HTMLElement>(
@@ -1530,11 +1628,12 @@ async function readApplicationSnapshot(
   const candidates = [...new Set([
     ...root.querySelectorAll<HTMLElement>(candidateSelector),
     ...promotedGroupOwners,
+    ...nativeRadioDiscoveryInputs,
   ])]
     .filter((control) => (visible(control) || resumeInputs.includes(
       control as HTMLInputElement,
-    )) &&
-      !("disabled" in control && control.disabled === true) &&
+    ) || nativeRadioDiscoverySet.has(control)) &&
+      !control.matches(":disabled") &&
       control.getAttribute("aria-disabled") !== "true")
     .filter((control) => {
       const genericCheckboxOwner = control.closest<HTMLElement>(
@@ -1617,8 +1716,7 @@ async function readApplicationSnapshot(
   const nativeRadioModelByMember = new Map<HTMLInputElement, NativeRadioModel>();
   const pendingNativeRadioModels: PendingNativeRadioModel[] = [];
   const nativeRadioGroups = new Map<object, Map<string, HTMLInputElement[]>>();
-  for (const anchor of candidates) {
-    if (!(anchor instanceof HTMLInputElement) || anchor.type !== "radio") continue;
+  for (const anchor of nativeRadioDiscoveryInputs) {
     const name = text(anchor.name);
     if (name === "") continue;
     const owner = anchor.form ?? anchor.getRootNode();
@@ -1629,7 +1727,7 @@ async function readApplicationSnapshot(
       .querySelectorAll<HTMLInputElement>('input[type="radio"]')]
       .filter((member) => member.form === anchor.form &&
         member.getRootNode() === anchor.getRootNode() && text(member.name) === name &&
-        !member.disabled && member.getAttribute("aria-disabled") !== "true");
+        !member.matches(":disabled") && member.getAttribute("aria-disabled") !== "true");
     ownerGroups.set(name, members);
     nativeRadioGroups.set(owner, ownerGroups);
 
@@ -1677,19 +1775,12 @@ async function readApplicationSnapshot(
       heading: "",
     } : {
       tag: "form",
-      automationId: text(nativeOwner.getAttribute("data-automation-id")),
+      automationId: "",
       role: nativeOwner.getAttribute("role") ?? "",
       accessibleName: accessibleName(nativeOwner, false, false),
       heading: "",
     };
-    const stableOwnerCoordinate = JSON.stringify({
-      tag: ownerContext.tag,
-      id: nativeOwner?.id ?? "",
-      name: nativeOwner?.getAttribute("name") ?? "",
-      action: nativeOwner?.getAttribute("action") ?? "",
-      method: nativeOwner?.getAttribute("method") ?? "",
-      ownerContext,
-    });
+    const stableOwnerCoordinate = JSON.stringify(ownerContext);
     const canonical = JSON.stringify({
       owner: stableOwnerCoordinate,
       name,

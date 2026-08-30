@@ -623,6 +623,134 @@ test("a mixed loader pair is revoked when its class-show context later changes",
   }
 });
 
+test("loader witnesses pair only the exact physical source and preserve independent controller proof", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      {
+        name: "two-loader-overlap",
+        script: `
+          first.className = 'loader-visible';
+          second.className = 'loader-visible';
+          first.className = 'loader-hidden';
+          second.className = 'loader-hidden';`,
+        expectedAdvance: true,
+      },
+      {
+        name: "cross-loader-denied",
+        secondInitial: "loader-visible",
+        script: `
+          first.className = 'loader-visible';
+          second.className = 'loader-hidden';`,
+        expectedAdvance: false,
+      },
+      {
+        name: "controller-survives-class-revocation",
+        script: `
+          controller.setAttribute('aria-busy', 'true');
+          first.className = 'loader-visible';
+          first.className = 'loader-hidden';
+          const declaration = document.querySelector('#loader-style').sheet.cssRules[1].style;
+          declaration.color = 'red'; declaration.color = '';
+          controller.setAttribute('aria-busy', 'false');`,
+        expectedAdvance: true,
+      },
+    ]) {
+      const page = await browser.newPage();
+      await page.setContent(`<style id="loader-style">
+          .loader-hidden { display:none } .loader-visible { display:block }
+        </style><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main>
+        <div id="first" data-automation-id="applyFlowLoadingPage" class="loader-hidden">One</div>
+        <div id="second" data-automation-id="applyFlowLoadingPage"
+          class="${variant.secondInitial ?? "loader-hidden"}">Two</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const controller = document.querySelector('[data-automation-id="applyFlowPage"]');
+            const first = document.querySelector('#first');
+            const second = document.querySelector('#second');
+            ${variant.script}
+            setTimeout(() => document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<label>Destination detail*<input required value="committed"></label>'), 100);
+          });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 1_500,
+        navigationSettleTimeoutMs: 1_500,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      if (variant.expectedAdvance) assert.equal(result.ok, true, variant.name);
+      else if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(
+        after.value.pageId !== before.value.pageId,
+        variant.expectedAdvance,
+        variant.name,
+      );
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("permanently CSS-hidden loaders cannot synthesize a witness from attribute churn", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      { name: "aria", initial: 'aria-hidden="true"', show: "loader.removeAttribute('aria-hidden')", hide: "loader.setAttribute('aria-hidden', 'true')" },
+      { name: "hidden", initial: "hidden", show: "loader.removeAttribute('hidden')", hide: "loader.setAttribute('hidden', '')" },
+      { name: "style", initial: 'style="visibility:hidden"', show: "loader.removeAttribute('style')", hide: "loader.setAttribute('style', 'visibility:hidden')" },
+    ]) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>.permanent-loader { display:none !important }</style>
+        <div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div data-automation-id="applyFlowLoadingPage" class="permanent-loader" ${variant.initial}>Loading</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            ${variant.show}; ${variant.hide};
+            document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<label>Conditional detail*<input required value="committed"></label>');
+          });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 1_000,
+        navigationSettleTimeoutMs: 1_000,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, variant.name);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, variant.name);
+      if (after.ok) assert.equal(after.value.pageId, before.value.pageId, variant.name);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("an always-hidden loader ancestor cannot advance a conditional semantic superset", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -850,6 +978,13 @@ test("historical loader class visibility is measured at the exact structural pos
         expectedAdvance: false,
       },
       {
+        name: "keyframes-append-delete-restored",
+        css: ".loader-hidden { display:none } .loader-visible { display:block } @keyframes pulse { from { opacity: 0 } to { opacity: 1 } }",
+        extra: "",
+        contextMutation: "const keyframes = document.querySelector('#loader-style').sheet.cssRules[2]; keyframes.appendRule('50% { opacity: .5 }'); keyframes.deleteRule('50%')",
+        expectedAdvance: false,
+      },
+      {
         name: "inaccessible-link",
         css: ".loader-hidden { display:none } .loader-visible { display:block }",
         extra: `<link id="inaccessible-link" rel="stylesheet" href="data:text/css,.unused%7Bcolor:red%7D">
@@ -917,6 +1052,63 @@ test("historical loader class visibility is measured at the exact structural pos
           document, "adoptedStyleSheets",
         )), true, "pre-existing adoptedStyleSheets descriptor restored");
       }
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("exact loader captures reject direct adopted stylesheet index and length drift", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["index", "length"] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>.loader-hidden { display:none } .loader-visible { display:block }</style>
+        <script>
+          const base = new CSSStyleSheet(); base.replaceSync('.base { color: black }');
+          const second = new CSSStyleSheet(); second.replaceSync('.second { color: blue }');
+          const replacement = new CSSStyleSheet(); replacement.replaceSync('.replacement { color: red }');
+          const adoptedList = [base, second];
+          Object.defineProperty(document, 'adoptedStyleSheets', {
+            configurable: true,
+            get() { return adoptedList; },
+            set(value) { adoptedList.splice(0, adoptedList.length, ...value); },
+          });
+        </script><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            if ('${variant}' === 'index') adoptedList[0] = replacement;
+            else adoptedList.length = 1;
+            loader.className = 'loader-visible';
+            loader.className = 'loader-hidden';
+            if ('${variant}' === 'index') adoptedList[0] = base;
+            else { adoptedList.length = 2; adoptedList[1] = second; }
+            document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<label>Conditional detail*<input required value="committed"></label>');
+          });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 1_000,
+        navigationSettleTimeoutMs: 1_000,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId, before.value.pageId, variant);
       await page.close();
     }
   } finally {
@@ -1559,6 +1751,114 @@ test("native radio completion includes hidden external required members and stab
       );
       await page.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("all-hidden native radio groups retain browser-owned completion evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const checked of [true, false]) {
+      const page = await browser.newPage();
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <form aria-label="Hidden status"><fieldset><legend>Hidden status</legend>
+            <label>Available<input style="display:none" type="radio" name="status" required
+              value="available" ${checked ? "checked" : ""}></label>
+            <label>Unavailable<input style="display:none" type="radio" name="status" required
+              value="unavailable"></label>
+          </fieldset></form>
+        </main><button type="button">Save and Continue</button></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page);
+      const observed = await application.observe(new AbortController().signal);
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+      if (observed.ok) {
+        assert.equal(observed.value.requiredFields.length, 1);
+        assert.equal(observed.value.requiredFields[0]?.verification,
+          checked ? "verified" : "unverified");
+      }
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("disabled fieldset radios cannot contribute requiredness or checked readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const activeRequired of [true, false]) {
+      const page = await browser.newPage();
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <form id="active-form"><fieldset><legend>Employment status</legend>
+            <label>Active<input type="radio" name="status" value="active"
+              ${activeRequired ? "required" : ""}></label>
+          </fieldset></form>
+          <fieldset disabled><legend>Disabled backing</legend>
+            <input form="active-form" type="radio" name="status" value="disabled"
+              required checked>
+          </fieldset>
+        </main><button type="button">Save and Continue</button></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page);
+      const observed = await application.observe(new AbortController().signal);
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+      if (observed.ok) {
+        assert.equal(observed.value.requiredFields.length, activeRequired ? 1 : 0);
+        if (activeRequired) {
+          assert.equal(observed.value.requiredFields[0]?.verification, "unverified");
+        }
+      }
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native radio identity survives regenerated transport attributes and true clone reorder", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <section id="first-owner"><form id="generated-a" name="transport-a" action="/old-a">
+          <fieldset><legend>First status</legend>
+            <label><input type="radio" name="status" required checked value="first">First</label>
+            <label><input type="radio" name="status" required value="other-first">Other first</label>
+          </fieldset></form><input hidden form="generated-a" type="radio" name="status" value="external-first"></section>
+        <section id="second-owner"><form id="generated-b" name="transport-b" action="/old-b">
+          <fieldset><legend>Second status</legend>
+            <label><input type="radio" name="status" required checked value="second">Second</label>
+            <label><input type="radio" name="status" required value="other-second">Other second</label>
+          </fieldset></form><input hidden form="generated-b" type="radio" name="status" value="external-second"></section>
+      </main><button type="button">Save and Continue</button></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page);
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const identities = before.value.requiredFields.map(({ fieldId }) => fieldId).sort();
+    assert.equal(identities.length, 2);
+    await page.locator("main").evaluate((main) => {
+      const sections = [...main.querySelectorAll("section")].map((section, index) => {
+        const clone = section.cloneNode(true) as HTMLElement;
+        const form = clone.querySelector("form")!;
+        const nextId = `remounted-${index}`;
+        form.id = nextId;
+        form.setAttribute("name", `new-transport-${index}`);
+        form.setAttribute("action", `/new-${index}`);
+        clone.querySelector('input[form]')?.setAttribute("form", nextId);
+        return clone;
+      });
+      main.replaceChildren(sections[1]!, sections[0]!);
+    });
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.deepEqual(
+      after.value.requiredFields.map(({ fieldId }) => fieldId).sort(),
+      identities,
+    );
   } finally {
     await browser.close();
   }
