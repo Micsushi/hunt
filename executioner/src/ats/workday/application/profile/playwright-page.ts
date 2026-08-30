@@ -705,15 +705,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
       });
+      const valid = (await Promise.all(matches.map((match) =>
+        validationCleared(match)
+      ))).every(Boolean);
       return [{
         controlId,
         fieldId: entry.fieldId,
-        required: (await Promise.all(matches.map((match) =>
+        required: !valid || (await Promise.all(matches.map((match) =>
           required(match, "radiogroup")
         ))).some(Boolean),
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        readback: await radioReadback(matches),
+        readback: valid ? await radioReadback(matches) : null,
       }];
     }
     if (matches.length > 1) {
@@ -729,13 +732,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
       });
+      const currentReadback = await readback(match, entry.uiBehavior);
+      const valid = await validationCleared(match);
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
-        required: await required(match),
+        required: !valid || await required(match),
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        readback: await readback(match, entry.uiBehavior),
+        readback: valid ? currentReadback : null,
       });
     }
     return snapshots;
@@ -2670,7 +2675,7 @@ async function required(
 async function validationCleared(locator: Locator): Promise<boolean> {
   if (await locator.getAttribute("aria-invalid") === "true") return false;
   const field = locator.locator(
-    'xpath=ancestor::*[@data-automation-id="formField"][1]',
+    'xpath=ancestor::*[@data-automation-id="formField" or starts-with(@data-automation-id,"formField-")][1]',
   );
   const root = await field.count() === 1 ? field : locator;
   return (await visibleLocators(root.locator(

@@ -2761,6 +2761,7 @@ test("My Experience reconciles a committed skill after its prompt activation tar
               </div>
               <ul data-automation-id="selectedItemList" hidden></ul>
             </div>
+            <div data-automation-id="errorMessage">Choose a skill</div>
           </div>
         </main>
         <div id="skills-options" role="listbox" hidden>
@@ -2770,10 +2771,12 @@ test("My Experience reconciles a committed skill after its prompt activation tar
           const prompt = document.querySelector('[data-automation-id="searchBox"]');
           const options = document.querySelector('#skills-options');
           const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          window.skillSearches = 0;
           document.querySelector('[data-automation-id="promptSearchButton"]')
             .addEventListener('click', () => prompt.hidden = false);
           prompt.addEventListener('input', () => {
             if (prompt.value !== 'Python') return;
+            window.skillSearches += 1;
             options.hidden = false;
             setTimeout(() => {
               const item = document.createElement('li');
@@ -2794,16 +2797,29 @@ test("My Experience reconciles a committed skill after its prompt activation tar
       timeoutMs: 90_000,
     });
     const options = JSON.stringify(["Python"]);
-    const started = performance.now();
-    const result = await completeWorkdayProfilePage({
+    const plan = {
       mode: "live",
       pageType: "profile",
       fields: [field("skills.values", "skill", "multi_select", options, options)],
       repeatables: [],
-    }, adapter, AbortSignal.any([]));
+    } as const;
+    const blocked = await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]));
+
+    assert.notEqual(blocked.kind, "verified", JSON.stringify(blocked));
+    assert.equal(await page.evaluate(() =>
+      (window as unknown as { readonly skillSearches: number }).skillSearches
+    ), 1);
+    await page.locator('[data-automation-id="errorMessage"]').evaluate((element) => {
+      (element as HTMLElement).hidden = true;
+    });
+    const started = performance.now();
+    const result = await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]));
 
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.equal(performance.now() - started < 10_000, true);
+    assert.equal(await page.evaluate(() =>
+      (window as unknown as { readonly skillSearches: number }).skillSearches
+    ), 1);
     assert.equal(
       (await adapter.inspect(AbortSignal.any([]))).controls
         .find(({ fieldId }) => fieldId === "skills.values")?.readback,
