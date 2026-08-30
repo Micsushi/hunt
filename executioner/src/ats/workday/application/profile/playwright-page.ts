@@ -2385,6 +2385,23 @@ async function readback(
   const field = locator.locator(
     'xpath=ancestor::*[@data-automation-id="formField" or starts-with(@data-automation-id,"formField-")][1]',
   );
+  if (behavior === "multi_select" && await field.count() === 1) {
+    const committed = await field.evaluate((owner) => {
+      const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
+      const normalize = (value: string | null | undefined) => (value ?? "")
+        .normalize("NFC").replace(/\s+/gu, " ").trim();
+      return [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
+        .filter((item) => item.closest(fieldSelector) === owner)
+        .map((item) => normalize(
+          item.querySelector('[data-automation-id="promptOption"]')?.textContent ??
+            item.textContent,
+        ))
+        .filter(Boolean);
+    });
+    if (committed.length > 0) {
+      return committed.length > 1 ? JSON.stringify(committed) : committed[0]!;
+    }
+  }
   const pills = await visibleLocators(field.locator('[data-automation-id="selectedItem"]'));
   if (pills.length === 0) return null;
   const labels = (await Promise.all(pills.map(async (pill) =>
