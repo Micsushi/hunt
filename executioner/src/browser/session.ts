@@ -313,7 +313,14 @@ export class PlaywrightBrowserSession implements BrowserSession {
         )
       : effect().then((value) => ({ ok: true as const, value }));
     const result = await bounded(action, signal, this.#timeoutMs);
-    if (result.kind === "cancelled" || result.kind === "timeout") {
+    if (result.kind === "cancelled") {
+      if (effectStarted) {
+        await this.#invalidateOwnedSession();
+        return failure("browser_effect_uncertain");
+      }
+      return cancelled();
+    }
+    if (result.kind === "timeout") {
       if (effectStarted) {
         const reconciled = await reconcileCommittedMutation(
           active.page, snapshot.effect.sessionId, snapshot.effect.pageId, mutation, this.#uploads,
@@ -331,7 +338,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
         await this.#invalidateOwnedSession();
         return failure("browser_effect_uncertain");
       }
-      return result.kind === "cancelled" ? cancelled() : failure("browser_timeout");
+      return failure("browser_timeout");
     }
     if (result.kind === "error") {
       if (effectStarted) {

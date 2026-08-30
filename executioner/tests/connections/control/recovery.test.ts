@@ -352,8 +352,9 @@ test("real F9 replaces an uncertain F3 session, observes fresh truth, and termin
     assert.deepEqual(driverCalls, [{
       fieldId: "s1-field-country",
       behavior: "listbox",
+      errorCode: "browser_effect_uncertain",
     }]);
-    assert.equal(verifierCalls, 1);
+    assert.equal(verifierCalls, 0);
 
     assert.deepEqual(
       await realBrowser.observe(old, signal),
@@ -472,7 +473,7 @@ test("real F9 replaces an uncertain F3 session, observes fresh truth, and termin
       0,
     );
     assert.equal(driverCalls.length, 1);
-    assert.equal(verifierCalls, 1);
+    assert.equal(verifierCalls, 0);
     assert.equal(notifications, 0);
 
     const reopened = new FileJourneyStateStore(stateDirectory);

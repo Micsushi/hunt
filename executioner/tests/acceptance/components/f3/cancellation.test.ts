@@ -11,17 +11,17 @@ test("cancellation after a custom-listbox effect starts is uncertain and invalid
   const browser = await chromium.launch();
   const context = await browser.newContext();
   const provider = new PlaywrightBrowserSession({ context, ids: testIds("acacacacacacacac"), timeoutMs: 2_000 });
+  const controller = new AbortController();
   try {
+    await context.exposeFunction("huntAbortAfterEffectStarts", () => controller.abort());
     const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
-      <div role="listbox" aria-label="Department" data-hunt-target-token="target-department"><div role="option">Engineering</div><div role="option" onclick="const start=performance.now(); while(performance.now()-start<500){}; this.setAttribute('aria-selected','true')">Sales</div></div>
+      <div role="listbox" aria-label="Department" data-hunt-target-token="target-department"><div role="option">Engineering</div><div role="option" onclick="window.huntAbortAfterEffectStarts(); const start=performance.now(); while(performance.now()-start<500){}; this.setAttribute('aria-selected','true')">Sales</div></div>
     `) }, new AbortController().signal);
     if (!started.ok) throw new Error("start failed");
     const observed = await provider.observe(started.value, new AbortController().signal);
     if (!observed.ok) throw new Error("observe failed");
     const target = observed.value.targets[0]?.token;
     if (target === undefined) throw new Error("target missing");
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 25);
     const result = await provider.mutate(admittedMutation(started.value.sessionId, started.value.pageId, { kind: "select", target, option: boundedText("Sales") }), controller.signal);
     assert.deepEqual(result, { ok: false, error: { code: "browser_effect_uncertain", retryable: false } });
     const after = await provider.mutate(admittedMutation(started.value.sessionId, started.value.pageId, { kind: "select", target, option: boundedText("Engineering") }, "1212121212121212"), new AbortController().signal);
