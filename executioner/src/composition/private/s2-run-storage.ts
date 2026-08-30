@@ -80,6 +80,7 @@ const APPLICATION_FAILURE_RETAINED_FILES = new Set([
   "acceptance.json",
   "application-walk-acceptance.json",
   "completion-audit.json",
+  "external-monitor-observer-failure.json",
   "failure-source-binding.json",
   "page-local-inspection.json",
   "pending-profile-questions.json",

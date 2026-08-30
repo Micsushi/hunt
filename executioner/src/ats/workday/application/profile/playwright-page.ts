@@ -1665,8 +1665,29 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (radios.length > 1) {
       throw new TypeError("Workday prompt catalog radio is ambiguous");
     }
-    await (radios[0] ?? option).click({ timeout: this.#timeoutMs });
-    interaction.optionActivated = true;
+    const activation = radios[0] ?? option;
+    try {
+      await activation.click({
+        timeout: behavior === "multi_select"
+          ? Math.min(this.#timeoutMs, 5_000)
+          : this.#timeoutMs,
+      });
+      interaction.optionActivated = true;
+    } catch (error) {
+      // A Workday prompt row can commit and remount while Playwright is still
+      // waiting for its stale activation target. Reconcile exact field-owned
+      // backing truth promptly instead of spending the full page budget or
+      // repeating an effect whose outcome is already committed.
+      interaction.backingValueCommitted = await selectionReadbackIncludes(
+        control,
+        behavior,
+        value,
+      );
+      interaction.validationCleared = await validationCleared(control);
+      if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+        throw error;
+      }
+    }
     await this.#page.waitForTimeout(100);
     interaction.popupClosed = (await visibleLocators(options)).length === 0;
     interaction.backingValueCommitted = await selectionReadbackIncludes(

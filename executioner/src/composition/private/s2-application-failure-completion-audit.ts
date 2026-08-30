@@ -23,6 +23,7 @@ const ROOT_FILES = new Set([
   "pending-profile-questions.json", "process-audit.json", "profile-field-learning.json",
   "profile-field-learning-02.json", "question-answer-learning.json", "terminal-artifact.json",
   "value-free-trace.ndjson", "failure-source-binding.json",
+  "external-monitor-observer-failure.json",
 ]);
 const NESTED_DIRECTORIES = new Set(["auth-monitor", "monitor"]);
 

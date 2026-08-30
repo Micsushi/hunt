@@ -2745,6 +2745,75 @@ test("My Experience accepts a committed skill whose selected-item list collapses
   }
 });
 
+test("My Experience reconciles a committed skill after its prompt activation target remounts", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+              <ul data-automation-id="selectedItemList" hidden></ul>
+            </div>
+          </div>
+        </main>
+        <div id="skills-options" role="listbox" hidden>
+          <div role="option"><input type="radio" disabled>Python</div>
+        </div>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          const options = document.querySelector('#skills-options');
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('input', () => {
+            if (prompt.value !== 'Python') return;
+            options.hidden = false;
+            setTimeout(() => {
+              const item = document.createElement('li');
+              item.setAttribute('data-automation-id', 'selectedItem');
+              item.innerHTML = '<p data-automation-id="promptOption">Python</p>';
+              selected.replaceChildren(item);
+              selected.hidden = true;
+              prompt.value = '';
+              prompt.hidden = true;
+              options.hidden = true;
+            }, 50);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 90_000,
+    });
+    const options = JSON.stringify(["Python"]);
+    const started = performance.now();
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(performance.now() - started < 10_000, true);
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience field of study opens its prompt and commits an exact option token", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

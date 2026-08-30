@@ -268,6 +268,19 @@ test("auth monitoring reports a visible sign-in overlay before its backing appli
   }), "sign_in");
 });
 
+test("auth monitoring reports the specific email choice inside its account shell", () => {
+  assert.equal(authMonitorPhase({
+    schemaVersion: 1,
+    traitIds: [
+      "structural_trait_page_account_entry_v1",
+      "structural_trait_navigation_email_sign_in_choice_v1",
+    ],
+    controlCount: 1,
+    requiredControlCount: 0,
+    optionCount: 0,
+  }), "email_sign_in_choice");
+});
+
 test("callback receives only closed semantic account controls after exact ownership admission", async () => {
   const context = new FakeContext();
   const semantic = new FakeSemanticAccountPage();

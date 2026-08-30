@@ -233,6 +233,11 @@ test("real local failure composition seals terminal, process, disposal, and reta
         errorCode: "browser_effect_uncertain",
       },
     }), "utf8");
+    writeFileSync(
+      join(layout.evidenceRoot, "external-monitor-observer-failure.json"),
+      JSON.stringify({ status: "failed", failureCode: "structure_classification" }),
+      "utf8",
+    );
     writeFileSync(join(layout.evidenceRoot, "process-audit.json"), JSON.stringify({
       schemaVersion: 1,
       evidenceRevision: "s2-windows-process-audit-v2",
