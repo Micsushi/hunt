@@ -16,7 +16,8 @@ import {
 } from "./page-walk-contract.ts";
 export interface PlaywrightWorkdayApplicationPageOptions { readonly timeoutMs?: number;
   readonly navigationSettleTimeoutMs?: number;
-  readonly pageIds?: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>; }
+  readonly pageIds?: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
+  readonly prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>; }
 interface BrowserApplicationSnapshot {
   readonly page: ApplicationPage;
   readonly lanes: readonly ApplicationHandlerPage[];
@@ -81,6 +82,7 @@ interface BrowserApplicationSnapshot {
   readonly submitActivated: boolean;
   readonly signature: string;
   readonly semanticDestinationFingerprint: string;
+  readonly semanticDestinationComparable: boolean;
   readonly transitionKey: string;
   readonly physicalPageOccurrenceKey: string;
   readonly physicalDomKey: string;
@@ -105,11 +107,13 @@ export class PlaywrightWorkdayApplicationPage {
   readonly #timeoutMs: number;
   readonly #navigationSettleTimeoutMs: number;
   readonly #pageIds: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
+  readonly #prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>;
   constructor(page: Page, options: PlaywrightWorkdayApplicationPageOptions = {}) {
     this.#page = page;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
     this.#navigationSettleTimeoutMs = options.navigationSettleTimeoutMs ?? this.#timeoutMs;
     this.#pageIds = options.pageIds ?? {};
+    this.#prepareQuestionnaireSnapshot = options.prepareQuestionnaireSnapshot;
     if (!questionnaireOccurrences.has(page)) {
       questionnaireOccurrences.set(page, { epoch: 0, nextAction: 0 });
     }
@@ -303,6 +307,8 @@ export class PlaywrightWorkdayApplicationPage {
   async #readSnapshot(signal: AbortSignal): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     if (signal.aborted) return failure("operation_cancelled", "none");
     try {
+      await this.#prepareQuestionnaireSnapshot?.(signal);
+      if (signal.aborted) return failure("operation_cancelled", "none");
       await annotateCheckboxGroups(this.#page);
       const snapshot = await this.#page.evaluate(
         readApplicationSnapshot, {
@@ -637,7 +643,8 @@ function hasIndependentDestinationEvidence(
 ): boolean {
   if (after.page !== before.page || after.rootSelector !== before.rootSelector ||
       after.transitionKey !== before.transitionKey) return true;
-  return after.semanticDestinationFingerprint !== before.semanticDestinationFingerprint;
+  return before.semanticDestinationComparable && after.semanticDestinationComparable &&
+    after.semanticDestinationFingerprint !== before.semanticDestinationFingerprint;
 }
 function armNavigationWitness(input: { readonly rootSelector: string; readonly actionId: string }): boolean {
   const root = document.querySelector<HTMLElement>(input.rootSelector);
@@ -683,8 +690,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     inlineStyle.cssText = value.style ?? "";
     if (inlineStyle.display === "none" || inlineStyle.visibility === "hidden" ||
         inlineStyle.visibility === "collapse") return false;
-    return !/(?:^|\s)(?:hidden|is-hidden|wd-hidden|invisible)(?:\s|$)/iu
-      .test(value.className ?? "");
+    return true;
   };
   const ancestorVisibilityCapable = (element: Element): boolean => {
     let ancestor = element.parentElement;
@@ -701,8 +707,30 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
   };
   const loaderStates = new Map<Element, { attributes: LoaderAttributes; visible: boolean }>();
   const register = (element: Element) => {
-    if (!element.matches(loaderSelector) || !controller.contains(element)) return;
+    if (!element.matches(loaderSelector) ||
+        element.hasAttribute("data-hunt-render-probe") || !controller.contains(element)) return;
     loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
+  };
+  const reconstructedVisible = (loader: Element, value: LoaderAttributes): boolean => {
+    if (!(loader instanceof HTMLElement) || !loader.isConnected ||
+        !controller.contains(loader) || !ancestorVisibilityCapable(loader) ||
+        !attributeVisible(value)) return false;
+    const probe = loader.cloneNode(true) as HTMLElement;
+    probe.setAttribute("data-hunt-render-probe", "true");
+    const assign = (name: string, attributeValue: string | null) => {
+      if (attributeValue === null) probe.removeAttribute(name);
+      else probe.setAttribute(name, attributeValue);
+    };
+    assign("hidden", value.hidden);
+    assign("aria-hidden", value.ariaHidden);
+    assign("style", value.style);
+    assign("class", value.className);
+    loader.before(probe);
+    try {
+      return visible(probe);
+    } finally {
+      probe.remove();
+    }
   };
   controller.querySelectorAll(loaderSelector).forEach(register);
   const recordLoaderTransition = (wasVisible: boolean, isVisible: boolean) => {
@@ -728,7 +756,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         for (const node of record.addedNodes) {
           if (!(node instanceof Element)) continue;
           const added = [node, ...node.querySelectorAll(loaderSelector)]
-            .filter((element) => element.matches(loaderSelector));
+            .filter((element) => element.matches(loaderSelector) &&
+              !element.hasAttribute("data-hunt-render-probe"));
           for (const loader of added) {
             register(loader);
             if (visible(loader)) state.busySeen = true;
@@ -737,7 +766,8 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         for (const node of record.removedNodes) {
           if (!(node instanceof Element)) continue;
           const removed = [node, ...node.querySelectorAll(loaderSelector)]
-            .filter((element) => element.matches(loaderSelector));
+            .filter((element) => element.matches(loaderSelector) &&
+              !element.hasAttribute("data-hunt-render-probe"));
           if (state.busySeen && removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
             state.settled = true;
           }
@@ -764,14 +794,11 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
           : later.oldValue;
         known.attributes = { ...known.attributes, [key]: nextValue };
         const finalState = later === undefined;
-        // Mutation records expose old class strings, but the browser cannot
-        // reconstruct computed style for an intermediate class once a later
-        // same-batch mutation has already replaced it. Treat that state as
-        // unproven instead of guessing that an unfamiliar class was visible.
-        const intermediateVisibilityProvable = name !== "class" || finalState;
         const nextVisible = loader.isConnected && controller.contains(loader) &&
           ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
-          intermediateVisibilityProvable && (!finalState || visible(loader));
+          (finalState ? visible(loader) : name === "class"
+            ? reconstructedVisible(loader, known.attributes)
+            : true);
         recordLoaderTransition(known.visible, nextVisible);
         known.visible = nextVisible;
         loaderStates.set(loader, known);
@@ -1077,12 +1104,45 @@ async function readApplicationSnapshot(
   });
   const requiredFields: BrowserApplicationSnapshot["requiredFields"][number][] = [];
   const semanticDestinationFields: string[] = [];
-  const seenRadioGroups = new Set<string>();
-  for (const [index, control] of requiredControls.entries()) {
+  let semanticDestinationComparable = true;
+  const requiredControlSet = new Set(requiredControls);
+  const seenRadioGroups = new Set<Element | string>();
+  for (const [index, control] of candidates.entries()) {
     const input = control instanceof HTMLInputElement ? control : undefined;
     const role = control.getAttribute("role");
     const fieldOwner = control.closest<HTMLElement>(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    );
+    const ownsRadioGroup = control.matches('fieldset, [role="radiogroup"]') &&
+      control.querySelector('input[type="radio"], [role="radio"]') !== null;
+    const structuredRadioOwner = ownsRadioGroup
+      ? control
+      : control.closest<HTMLElement>('fieldset, [role="radiogroup"]') ?? fieldOwner;
+    const radioGroupOwner = ownsRadioGroup
+      ? control
+      : input?.type === "radio" || role === "radio"
+        ? structuredRadioOwner ?? control
+        : undefined;
+    const radioGroupKey: Element | string | undefined = radioGroupOwner === undefined
+      ? undefined
+      : structuredRadioOwner ?? (input?.name === undefined || input.name === ""
+        ? control
+        : `native-radio:${input.name}`);
+    const radioMembers = radioGroupOwner === undefined
+      ? []
+      : [...(structuredRadioOwner ?? root).querySelectorAll<HTMLElement>(
+        'input[type="radio"], [role="radio"]',
+      )].filter((member) => visible(member) && (
+        !(member instanceof HTMLInputElement) || input === undefined || input.name === "" ||
+        member.name === input?.name
+      ));
+    if (radioGroupKey !== undefined && seenRadioGroups.has(radioGroupKey)) continue;
+    if (radioGroupKey !== undefined) seenRadioGroups.add(radioGroupKey);
+    const fingerprintControl = radioGroupOwner ?? control;
+    const completionRequired = requiredControlSet.has(control) ||
+      radioMembers.some((member) => requiredControlSet.has(member));
+    const requiredIndex = requiredControls.findIndex((candidate) =>
+      candidate === control || radioMembers.includes(candidate)
     );
     const rawId = [
       control.getAttribute("data-hunt-field-id"),
@@ -1090,17 +1150,14 @@ async function readApplicationSnapshot(
       control.id,
       input?.name,
     ].find((value): value is string => typeof value === "string" && value !== "") ??
-      `required-field-${index}`;
+      (completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`);
     const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(rawId)
       ? rawId
-      : `required-field-${index}`;
-    const radioKey = input?.type === "radio" || role === "radio"
-      ? input?.name || fieldOwner?.getAttribute("data-automation-id") || safeId
-      : undefined;
-    if (radioKey !== undefined && seenRadioGroups.has(radioKey)) continue;
-    if (radioKey !== undefined) seenRadioGroups.add(radioKey);
-    const questionLabel = text(fieldOwner?.querySelector("label, legend")?.textContent) ||
-      text(control.getAttribute("aria-label")) ||
+      : completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`;
+    const questionLabel = text(fingerprintControl.querySelector(
+      ":scope > legend, :scope > [role=heading]",
+    )?.textContent) || text(fieldOwner?.querySelector("label, legend")?.textContent) ||
+      text(fingerprintControl.getAttribute("aria-label")) ||
       (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
           control instanceof HTMLSelectElement
         ? text(control.labels?.[0]?.textContent)
@@ -1113,7 +1170,7 @@ async function readApplicationSnapshot(
       labelledBy: string;
       heading: string;
     }[] = [];
-    let semanticOwner: Element | null = fieldOwner ?? control.parentElement;
+    let semanticOwner: Element | null = fieldOwner ?? fingerprintControl;
     for (let depth = 0;
       semanticOwner !== null && root.contains(semanticOwner) && depth < 8;
       depth += 1
@@ -1145,16 +1202,18 @@ async function readApplicationSnapshot(
       semanticOwner = semanticOwner.parentElement;
     }
     semanticOwnerContext.reverse();
-    const semanticControls = control.matches(
+    const semanticControls = radioGroupOwner !== undefined
+      ? [fingerprintControl, ...radioMembers.filter((member) => member !== fingerprintControl)]
+      : control.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"], ' +
         '[data-automation-id$="-CheckboxGroup"], ' +
         `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
-    )
-      ? [control, ...control.querySelectorAll<HTMLElement>(
-        'input:not([type="hidden"]), textarea, select, [role="radio"], [role="checkbox"], ' +
-          '[role="combobox"], button[aria-haspopup="listbox"]',
-      )]
-      : [control];
+      )
+        ? [control, ...control.querySelectorAll<HTMLElement>(
+          'input:not([type="hidden"]), textarea, select, [role="radio"], [role="checkbox"], ' +
+            '[role="combobox"], button[aria-haspopup="listbox"]',
+        )]
+        : [control];
     const constraints = semanticControls.map((item) => ({
       tag: item.tagName.toLocaleLowerCase("en-US"),
       automationId: (() => {
@@ -1177,9 +1236,11 @@ async function readApplicationSnapshot(
       multiple: item.hasAttribute("multiple"),
       readOnly: item.hasAttribute("readonly") || item.getAttribute("aria-readonly") === "true",
     })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
-    const semanticLeaf = control.matches("input, textarea, select, [contenteditable=true]")
-      ? control
-      : control.querySelector<HTMLElement>(
+    const semanticLeaf = fingerprintControl.matches(
+      "input, textarea, select, [contenteditable=true]",
+    )
+      ? fingerprintControl
+      : fingerprintControl.querySelector<HTMLElement>(
         "input:not([type=hidden]), textarea, select, [contenteditable=true], " +
           "[role=combobox], [role=listbox], [role=radiogroup], [role=checkbox]",
       ) ?? control;
@@ -1187,7 +1248,7 @@ async function readApplicationSnapshot(
       (semanticLeaf.type === "text" || semanticLeaf.type === "tel") &&
       (/^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(text(semanticLeaf.placeholder)) ||
         /^date(?:\s*\*)?$/iu.test(questionLabel));
-    const supportedBehavior = control.matches(
+    const supportedBehavior = fingerprintControl.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
     ) || semanticLeaf instanceof HTMLInputElement &&
         (semanticLeaf.type === "date" || formattedDate)
@@ -1195,13 +1256,13 @@ async function readApplicationSnapshot(
       : semanticLeaf instanceof HTMLTextAreaElement ? "textarea"
       : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "file" ? "file_upload"
       : semanticLeaf instanceof HTMLSelectElement ? "select"
-      : control.getAttribute("aria-haspopup") === "listbox" ||
+      : fingerprintControl.getAttribute("aria-haspopup") === "listbox" ||
           semanticLeaf.getAttribute("role") === "combobox" ||
           semanticLeaf.getAttribute("role") === "listbox"
         ? "listbox"
-        : control instanceof HTMLFieldSetElement ||
+        : fingerprintControl instanceof HTMLFieldSetElement ||
             semanticLeaf.getAttribute("role") === "radiogroup" ||
-            control.getAttribute("data-hunt-checkbox-selection-mode") === "exclusive"
+            fingerprintControl.getAttribute("data-hunt-checkbox-selection-mode") === "exclusive"
           ? "radio"
           : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "checkbox" ||
               semanticLeaf.getAttribute("role") === "checkbox"
@@ -1249,27 +1310,30 @@ async function readApplicationSnapshot(
       }
     }
     catalog.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    if (supportedBehavior === "listbox" && catalog.length === 0) {
+      semanticDestinationComparable = false;
+    }
     semanticDestinationFields.push(JSON.stringify({
       questionLabel,
       behavior: {
         supported: supportedBehavior,
-        tag: control.tagName.toLocaleLowerCase("en-US"),
+        tag: fingerprintControl.tagName.toLocaleLowerCase("en-US"),
         type: input?.type ?? "",
         role: role ?? "",
-        popup: control.getAttribute("aria-haspopup") ?? "",
-        contentEditable: control.getAttribute("contenteditable") ?? "",
+        popup: fingerprintControl.getAttribute("aria-haspopup") ?? "",
+        contentEditable: fingerprintControl.getAttribute("contenteditable") ?? "",
       },
-      selectionMode: control.getAttribute("data-hunt-checkbox-selection-mode") ??
-        control.getAttribute(checkboxGroupAttribute) ??
-        (control instanceof HTMLSelectElement && control.multiple
-          ? "multiple"
-          : control.getAttribute("aria-multiselectable") === "true"
-            ? "multiple"
-            : input?.type ?? role ?? "single"),
+      selectionMode: fingerprintControl.getAttribute("data-hunt-checkbox-selection-mode") ===
+          "multiple" || fingerprintControl.getAttribute(checkboxGroupAttribute) === "multiple" ||
+          fingerprintControl instanceof HTMLSelectElement && fingerprintControl.multiple ||
+          fingerprintControl.getAttribute("aria-multiselectable") === "true"
+        ? "multiple"
+        : "single",
       constraints,
       catalog,
       ownerContext: semanticOwnerContext,
     }));
+    if (!completionRequired) continue;
     const nativeInvalid = (
       control instanceof HTMLInputElement ||
       control instanceof HTMLTextAreaElement ||
@@ -1788,6 +1852,7 @@ async function readApplicationSnapshot(
     submitActivated: document.documentElement.getAttribute("data-hunt-submit-activated") === "true",
     signature,
     semanticDestinationFingerprint,
+    semanticDestinationComparable,
     transitionKey,
     physicalPageOccurrenceKey,
     physicalDomKey,

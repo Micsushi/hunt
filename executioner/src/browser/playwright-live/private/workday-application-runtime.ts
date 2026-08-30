@@ -406,6 +406,14 @@ export class OwnedWorkdayApplicationRuntime {
       }
       case "next": {
         const input = operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0];
+        const prepareQuestionnaireSnapshot = async (innerSignal: AbortSignal) => {
+          await prepareNavigationQuestionnaireSnapshot(
+            page,
+            input.fromPageId,
+            this.#timeoutMs,
+            () => this.#assertAuthorized(innerSignal),
+          );
+        };
         const attempt = this.#nextNavigationMonitorAttempt(input.from);
         await this.#monitor(
           page,
@@ -418,7 +426,7 @@ export class OwnedWorkdayApplicationRuntime {
         this.#assertAuthorized(signal);
         const navigationSource = await new PlaywrightWorkdayApplicationPage(
           page,
-          { timeoutMs: this.#timeoutMs },
+          { timeoutMs: this.#timeoutMs, prepareQuestionnaireSnapshot },
         ).observe(signal);
         if (
           !navigationSource.ok || navigationSource.value.page !== input.from ||
@@ -431,6 +439,7 @@ export class OwnedWorkdayApplicationRuntime {
         const advanced = await new PlaywrightWorkdayApplicationPage(page, {
           timeoutMs: this.#timeoutMs,
           navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
+          prepareQuestionnaireSnapshot,
         }).next(
           input, signal,
         );
@@ -493,6 +502,7 @@ export class OwnedWorkdayApplicationRuntime {
             const retried = await new PlaywrightWorkdayApplicationPage(page, {
               timeoutMs: this.#timeoutMs,
               navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
+              prepareQuestionnaireSnapshot,
             }).next(input, signal);
             if (!retried.ok) return retried;
             observed = await waitForApplicationObservation(
@@ -3302,6 +3312,32 @@ async function prepareQuestionnaireTargets(
     throw new TypeError("questionnaire popup hydration limit exceeded");
   }
   await bindQuestionnaireTargets(page, pageId);
+}
+
+async function prepareNavigationQuestionnaireSnapshot(
+  page: Page,
+  pageId: BrowserPageId,
+  timeoutMs: number,
+  assertAuthorized: () => void,
+): Promise<void> {
+  const questionnaireRootCount = await page.evaluate(({ selectors }) => {
+    const visible = (element: Element): boolean => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
+    return [
+      selectors.primaryQuestions,
+      selectors.primaryQuestionnaire,
+      selectors.applicationQuestions,
+      selectors.voluntaryDisclosuresAndSelfIdentify,
+    ].flatMap((selector) => [...document.querySelectorAll(selector)]).filter(visible).length;
+  }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
+  if (questionnaireRootCount === 0) return;
+  assertAuthorized();
+  await prepareQuestionnaireTargets(page, pageId, timeoutMs, assertAuthorized);
 }
 
 async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> {

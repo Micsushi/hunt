@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 
 import {
   createApplicationLaneHandlers,
@@ -30,6 +30,11 @@ import {
   createWorkdayResumeVerifier,
 } from "../../../src/ats/workday/application/resume/index.ts";
 import {
+  bindQuestionnaireTargets,
+  hydrateQuestionnairePopupOptions,
+  questionnairePopupHydrationTargets,
+} from "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+import {
   browserPageId,
   browserTargetToken,
   boundedText,
@@ -47,6 +52,33 @@ import {
 } from "../../../src/contracts/index.ts";
 import type { UnknownCandidateId } from "../../../src/contracts/live/index.ts";
 import { walkFixture } from "./fixtures.ts";
+
+const popupPreparationPageId = browserPageId("page-questionnaire-popup-preparation");
+
+function popupPreparedApplication(
+  page: Page,
+  navigationSettleTimeoutMs: number,
+): PlaywrightWorkdayApplicationPage {
+  return new PlaywrightWorkdayApplicationPage(page, {
+    timeoutMs: Math.min(navigationSettleTimeoutMs, 500),
+    navigationSettleTimeoutMs,
+    prepareQuestionnaireSnapshot: async (signal) => {
+      if (signal.aborted) return;
+      await bindQuestionnaireTargets(page, popupPreparationPageId);
+      for (let count = 0; count < 16; count += 1) {
+        const target = (await questionnairePopupHydrationTargets(page))[0];
+        if (target === undefined) return;
+        await hydrateQuestionnairePopupOptions(
+          page,
+          popupPreparationPageId,
+          target,
+          Math.min(navigationSettleTimeoutMs, 500),
+        );
+      }
+      throw new TypeError("fixture popup preparation exceeded");
+    },
+  });
+}
 
 test("Intermountain retained Profile button selects agree with the completion gate", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -428,7 +460,7 @@ test("does not advance a questionnaire occurrence for a same-count remount and r
   }
 });
 
-test("pre-mounted loader aria, style, and class cycles prove same-page advancement", async () => {
+test("synchronous pre-mounted loader aria, style, and class cycles prove same-page advancement", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     for (const variant of [
@@ -448,14 +480,17 @@ test("pre-mounted loader aria, style, and class cycles prove same-page advanceme
       },
       {
         name: "class",
-        initial: 'class="hidden"',
-        show: "loader.removeAttribute('class')",
-        hide: "loader.setAttribute('class', 'hidden')",
-        deferred: true,
+        initial: 'class="loader-a"',
+        show: "loader.className = 'loader-visible'",
+        hide: "loader.className = 'loader-b'",
+        deferred: false,
       },
     ]) {
       const page = await browser.newPage();
-      await page.setContent(`<style>.hidden, [aria-hidden="true"] { display: none; }</style>
+      await page.setContent(`<style>
+        .hidden, .loader-a, .loader-b, [aria-hidden="true"] { display: none; }
+        .loader-visible { display: block; }
+      </style>
         <div data-automation-id="applyFlowPage">
           <main data-automation-id="applyFlowApplicationQuestionsPage">
             <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
@@ -629,6 +664,88 @@ test("owned loading plus an unchanged reload cannot synthesize questionnaire adv
   }
 });
 
+test("popup catalog preparation distinguishes unchanged, changed, and transient reloads", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      { name: "unchanged", destination: ["Shared", "Source only"], outcome: "uncertain" },
+      { name: "changed", destination: ["Shared", "Destination only"], outcome: "advanced" },
+      { name: "transient", destination: ["Shared", "Transient only"], outcome: "uncertain" },
+    ] as const) {
+      const page = await browser.newPage();
+      await page.addInitScript(({ declaredVariant, destination }) => {
+        const install = (options: readonly string[], hydrated: boolean) => {
+          document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+            <main data-automation-id="applyFlowApplicationQuestionsPage">
+              <div data-automation-id="formField"><label for="choice">Popup question*</label>
+                <button id="choice" required aria-required="true" aria-haspopup="listbox"
+                  aria-controls="portal" aria-valuetext="Shared" data-selected-label="Shared"
+                  ${hydrated ? `data-hunt-popup-options='${JSON.stringify(options)}'` : ""}>Shared</button>
+              </div>
+            </main><div id="portal" role="listbox" hidden>${options.map((option) =>
+              `<div role="option">${option}</div>`).join("")}</div>
+            <button>Save and Continue</button></div>`;
+          const button = document.querySelector<HTMLButtonElement>("#choice")!;
+          const portal = document.querySelector<HTMLElement>("#portal")!;
+          button.addEventListener("click", () => { portal.hidden = !portal.hidden; });
+        };
+        if (window.name !== `popup-reload-${declaredVariant}`) return;
+        document.addEventListener("DOMContentLoaded", () => {
+          install(destination, false);
+          if (declaredVariant === "transient") {
+            setTimeout(() => install(["Shared", "Source only"], true), 1_000);
+          }
+        });
+      }, { declaredVariant: variant.name, destination: variant.destination });
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <div data-automation-id="formField"><label for="choice">Popup question*</label>
+            <button id="choice" required aria-required="true" aria-haspopup="listbox"
+              aria-controls="portal" aria-valuetext="Shared" data-selected-label="Shared"
+              data-hunt-popup-options='["Shared","Source only"]'>Shared</button>
+          </div>
+        </main><div id="portal" role="listbox" hidden>
+          <div role="option">Shared</div><div role="option">Source only</div></div>
+        <button id="next">Save and Continue</button>
+        <script>
+          document.querySelector('#choice').addEventListener('click', () => {
+            const portal = document.querySelector('#portal'); portal.hidden = !portal.hidden;
+          });
+          document.querySelector('#next').addEventListener('click', () => {
+            window.name = 'popup-reload-${variant.name}';
+            document.querySelector('main').remove();
+            document.querySelector('#portal').remove();
+            document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+              'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+          });
+        </script></div>`);
+      const application = popupPreparedApplication(page, 1_500);
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      assert.equal(result.ok, variant.outcome === "advanced",
+        `${variant.name}:${JSON.stringify(result)}`);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) {
+        assert.equal(after.value.pageId === before.value.pageId,
+          variant.outcome === "uncertain", variant.name);
+      }
+      assert.equal(await page.locator("#choice").getAttribute("aria-valuetext"), "Shared");
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("owned reload accepts a stable same-label destination with changed answer semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -680,6 +797,72 @@ test("owned reload accepts a stable same-label destination with changed answer s
     const after = await application.observe(new AbortController().signal);
     assert.equal(after.ok, true, JSON.stringify(after));
     if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("owned reload detects optional-only and non-first radio-option semantic changes", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["optional", "radio"] as const) {
+      const page = await browser.newPage();
+      await page.addInitScript((declaredVariant) => {
+        if (window.name !== `reload-${declaredVariant}-semantics`) return;
+        document.addEventListener("DOMContentLoaded", () => {
+          const changed = declaredVariant === "optional"
+            ? `<div data-automation-id="formField"><label for="required">Required question*</label>
+                <input id="required" required value="committed"></div>
+              <div data-automation-id="formField"><label for="optional">Optional question</label>
+                <select id="optional"><option selected>Shared</option>
+                  <option>Destination only</option></select></div>`
+            : `<div data-automation-id="formField"><span>Radio question*</span>
+                <label><input type="radio" name="answer" required checked value="shared">Shared</label>
+                <label><input type="radio" name="answer" required value="destination">Destination only</label>
+              </div>`;
+          document.body.innerHTML = `<div data-automation-id="applyFlowPage">
+            <main data-automation-id="applyFlowApplicationQuestionsPage">${changed}</main>
+            <button>Save and Continue</button></div>`;
+        });
+      }, variant);
+      const source = variant === "optional"
+        ? `<div data-automation-id="formField"><label for="required">Required question*</label>
+            <input id="required" required value="committed"></div>
+          <div data-automation-id="formField"><label for="optional">Optional question</label>
+            <select id="optional"><option selected>Shared</option><option>Source only</option></select></div>`
+        : `<div data-automation-id="formField"><span>Radio question*</span>
+            <label><input type="radio" name="answer" required checked value="shared">Shared</label>
+            <label><input type="radio" name="answer" required value="source">Source only</label>
+          </div>`;
+      await page.setContent(`<div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">${source}</main>
+        <button id="next">Save and Continue</button>
+        <script>
+          document.querySelector('#next').addEventListener('click', () => {
+            window.name = 'reload-${variant}-semantics';
+            document.querySelector('main').remove();
+            document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML(
+              'afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+          });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 150,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      assert.deepEqual(await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
+      if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId, variant);
+      await page.close();
+    }
   } finally {
     await browser.close();
   }
