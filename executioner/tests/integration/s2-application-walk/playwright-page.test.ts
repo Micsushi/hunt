@@ -1253,6 +1253,63 @@ test("freezing a style-dependent witness resamples direct adopted stylesheet dri
   }
 });
 
+test("freeze-time style drift preserves an independent settled controller witness", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of ["index", "length"] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style>.loader-hidden { display:none } .loader-visible { display:block }</style>
+        <script>
+          const base = new CSSStyleSheet(); base.replaceSync('.base { color: black }');
+          const second = new CSSStyleSheet(); second.replaceSync('.second { color: blue }');
+          const replacement = new CSSStyleSheet(); replacement.replaceSync('.replacement { color: red }');
+          const adoptedList = [base, second];
+          Object.defineProperty(document, 'adoptedStyleSheets', {
+            configurable: true,
+            get() { return adoptedList; },
+            set(value) { adoptedList.splice(0, adoptedList.length, ...value); },
+          });
+        </script><div data-automation-id="applyFlowPage">
+        <main data-automation-id="applyFlowApplicationQuestionsPage">
+          <label>Repeated question*<input required value="committed"></label>
+        </main><div data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div>
+        <button id="next">Save and Continue</button><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const controller = document.querySelector('[data-automation-id="applyFlowPage"]');
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            controller.setAttribute('aria-busy', 'true');
+            controller.setAttribute('aria-busy', 'false');
+            loader.className = 'loader-visible';
+            loader.className = 'loader-hidden';
+            queueMicrotask(() => {
+              if ('${variant}' === 'index') adoptedList[0] = replacement;
+              else adoptedList.length = 1;
+            });
+          }, { once: true });
+        </script></div>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 750,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      assert.deepEqual(await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
+      if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId, variant);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("unrelated controller attributes cannot settle an aria-busy interval", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -722,6 +722,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     styleContextVersion: 0,
     armedStyleContextToken: undefined as string | undefined,
     sampleStyleContext: undefined as (() => string | undefined) | undefined,
+    syncWitnessState: undefined as (() => void) | undefined,
     restoreInstrumentation: undefined as (() => void) | undefined,
     observer: undefined as MutationObserver | undefined,
   };
@@ -768,6 +769,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       delete globalState.__huntWorkdayNavigationWitness;
     }
   };
+  state.syncWitnessState = syncWitnessState;
   const invalidateStyleContext = () => {
     if (!state.clicked || state.frozen) return;
     state.styleContextVersion += 1;
@@ -1412,35 +1414,33 @@ function freezeNavigationWitness(actionId: string): boolean {
     observer?: MutationObserver;
     frozen?: boolean;
     activeBusy?: Map<object, unknown>;
-    settledPairs?: readonly {
+    settledPairs?: {
       readonly styleDependent?: boolean;
       readonly styleContextToken?: string;
     }[];
     armedStyleContextToken?: string;
     sampleStyleContext?: () => string | undefined;
+    syncWitnessState?: () => void;
   } | undefined;
   if (state?.actionId !== actionId) return false;
-  const styleDependentPairs = state.settledPairs?.filter(
+  const hasStyleDependentPair = state.settledPairs?.some(
     (pair) => pair.styleDependent === true,
-  ) ?? [];
-  const freezeStyleContextToken = styleDependentPairs.length === 0
+  ) === true;
+  const freezeStyleContextToken = !hasStyleDependentPair
     ? undefined
     : state.sampleStyleContext?.();
-  const styleContextValid = styleDependentPairs.length === 0 || (
-    freezeStyleContextToken !== undefined &&
-    state.armedStyleContextToken !== undefined &&
-    freezeStyleContextToken === state.armedStyleContextToken &&
-    styleDependentPairs.every((pair) =>
+  state.settledPairs = state.settledPairs?.filter((pair) =>
+    pair.styleDependent !== true || (
+      freezeStyleContextToken !== undefined &&
+      state.armedStyleContextToken !== undefined &&
+      freezeStyleContextToken === state.armedStyleContextToken &&
       pair.styleContextToken !== undefined &&
       pair.styleContextToken === freezeStyleContextToken
     )
   );
-  if (!styleContextValid && globalState.__huntWorkdayNavigationWitness === actionId) {
-    delete globalState.__huntWorkdayNavigationWitness;
-  }
+  state.syncWitnessState?.();
   const witnessed = (state as { settled?: boolean }).settled === true &&
     state.activeBusy?.size === 0 &&
-    styleContextValid &&
     globalState.__huntWorkdayNavigationWitness === actionId;
   state.observer?.disconnect();
   (state as { restoreInstrumentation?: () => void }).restoreInstrumentation?.();
