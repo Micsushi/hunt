@@ -3311,23 +3311,31 @@ async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> 
   ).evaluateAll((controls) => {
     const normalize = (value: string | null | undefined) =>
       (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement) || element.hidden ||
+          element.getAttribute("aria-hidden") === "true") return false;
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        style.visibility !== "collapse" && element.getClientRects().length > 0;
+    };
     for (const control of controls) {
       const field = control.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
-      const ownedIds = [control.getAttribute("aria-controls"), control.getAttribute("aria-owns")]
-        .flatMap((value) => value?.split(/\s+/u) ?? []);
-      const owners = [field, ...ownedIds.map((id) => document.getElementById(id))]
-        .filter((owner): owner is Element => owner !== null);
-      const labels = [...new Set(owners.flatMap((owner) => {
-        const leaves = [...owner.querySelectorAll<HTMLElement>(
+      if (field === null || !visible(field) ||
+          control.hasAttribute("aria-controls") || control.hasAttribute("aria-owns") ||
+          field.querySelectorAll('button[aria-haspopup="listbox"]').length !== 1) continue;
+      const leaves = [...field.querySelectorAll<HTMLElement>(
           '[data-automation-id="promptLeafNode"], [role="option"]',
-        )];
-        const options = leaves.length > 0 ? leaves : [...owner.querySelectorAll<HTMLElement>(
+        )].filter((option) => visible(option) && option.closest(
+          '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+        ) === field);
+      const options = leaves.length > 0 ? leaves : [...field.querySelectorAll<HTMLElement>(
           '[data-automation-id="promptOption"]',
-        )];
-        return options.map((option) => normalize(option.textContent)).filter(Boolean);
-      }))];
+        )].filter((option) => visible(option) && option.closest(
+          '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+        ) === field);
+      const labels = [...new Set(options.map((option) => normalize(option.textContent)).filter(Boolean))];
       if (labels.length > 0 && labels.length <= 128 && labels.every((label) => label.length <= 512)) {
         control.setAttribute("data-hunt-popup-options", JSON.stringify(labels));
       }

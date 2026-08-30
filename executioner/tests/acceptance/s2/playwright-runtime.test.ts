@@ -1540,18 +1540,24 @@ test("questionnaire batches external proof once while every field keeps independ
         }
         return originalScrollIntoView.call(this, options);
       };
-      document.querySelectorAll('button[aria-haspopup="listbox"]').forEach((button) => {
-        const field = button.closest('[data-automation-id^="formField-"]');
-        const options = field.querySelector('.options');
-        button.addEventListener('click', () => { options.hidden = false; });
-        options.addEventListener('click', (event) => {
-          const option = event.target.closest('[data-automation-id="promptOption"]');
-          if (option === null) return;
-          button.textContent = option.textContent.trim();
-          button.dataset.committed = 'true';
-          options.hidden = true;
-          if (button.id === 'mcvf2') document.querySelector('#conditional-age').hidden = false;
-        });
+      document.addEventListener('click', event => {
+        const button = event.target.closest('button[aria-haspopup="listbox"]');
+        if (button !== null) {
+          button.closest('[data-automation-id^="formField-"]').querySelector('.options').hidden = false;
+          return;
+        }
+        const option = event.target.closest('[data-automation-id="promptOption"]');
+        if (option === null) return;
+        const field = option.closest('[data-automation-id^="formField-"]');
+        const owner = field.querySelector('button[aria-haspopup="listbox"]');
+        owner.textContent = option.textContent.trim();
+        owner.dataset.committed = 'true';
+        field.querySelector('.options').hidden = true;
+        if (owner.id === 'mcvf2') document.querySelector('#conditional-age').hidden = false;
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        document.querySelectorAll('.options').forEach(options => { options.hidden = true; });
       });
     </script>
   </main></body></html>`);
@@ -2671,9 +2677,9 @@ test("full questionnaire reconciliation rehydrates selected same-label popup cla
   });
   if (!resumeIntent.ok) throw new Error("resume fixture invalid");
   await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
-    <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-required="true" data-options='["Shared","Popup alpha"]'>Select One</button></div>
-    <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-required="true" data-options='["Shared","Popup beta"]'>Select One</button></div>
-    <div data-automation-id="promptMenu" hidden></div>
+    <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-controls="shared-popup" aria-required="true" data-options='["Shared","Popup alpha"]'>Select One</button></div>
+    <div data-automation-id="formField"><label>Unseen popup*</label><button type="button" aria-haspopup="listbox" aria-controls="shared-popup" aria-required="true" data-options='["Shared","Popup beta"]'>Select One</button></div>
+    <div id="shared-popup" role="listbox" data-automation-id="promptMenu" hidden><div data-automation-id="promptOption">Shared</div><div data-automation-id="promptOption">Popup beta</div></div>
     <script>
       document.addEventListener('click', event => {
         const button = event.target.closest('button[aria-haspopup="listbox"]');
@@ -2764,7 +2770,9 @@ test("full questionnaire reconciliation rehydrates selected same-label popup cla
       assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').evaluateAll((controls) =>
         controls.map((control) => {
           const options = JSON.parse(control.getAttribute("data-options") ?? "[]") as string[];
-          return options.includes(control.textContent?.trim() ?? "");
+          const hydrated = JSON.parse(control.getAttribute("data-hunt-popup-options") ?? "[]") as string[];
+          return options.includes(control.textContent?.trim() ?? "") &&
+            JSON.stringify(options) === JSON.stringify(hydrated);
         })
       ), [true, true]);
     };

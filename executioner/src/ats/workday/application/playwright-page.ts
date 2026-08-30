@@ -333,21 +333,38 @@ export class PlaywrightWorkdayApplicationPage {
     signal: AbortSignal,
     navigationActionId: string | undefined,
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
+    let persistedNavigationActionId: string | undefined;
+    let currentActionBusySeen = false;
     for (let pass = 0; pass < 2; pass += 1) {
       const deadline = Date.now() + this.#navigationSettleTimeoutMs;
       while (Date.now() < deadline) {
         if (signal.aborted) return failure("operation_cancelled", "none");
+        if (navigationActionId !== undefined && !currentActionBusySeen) {
+          currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
+        }
         const after = await this.#readSnapshot(signal);
+        const currentActionWitness = navigationActionId !== undefined && (
+          after.ok && after.value.navigationWitness === navigationActionId ||
+          persistedNavigationActionId === navigationActionId
+        );
         if (
-          after.ok && after.value.signature !== before.signature &&
+          after.ok && (after.value.signature !== before.signature || currentActionWitness) &&
           (after.value.page !== before.page ||
             after.value.rootSelector !== before.rootSelector ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
-              after.value.navigationWitness === navigationActionId) ||
+              currentActionWitness) ||
             after.value.requiredFields.length > before.requiredFields.length ||
             hasValidationDowngrade(before, after.value))
         ) {
-          const stable = await this.#confirmStableDestination(after.value, signal);
+          const candidate = persistedNavigationActionId === navigationActionId &&
+              navigationActionId !== undefined
+            ? { ...after.value, navigationWitness: navigationActionId }
+            : after.value;
+          const stable = await this.#confirmStableDestination(
+            candidate,
+            signal,
+            persistedNavigationActionId,
+          );
           if (stable !== undefined) return { ok: true, value: stable };
           navigationDiagnostic("destination_candidate_unstable", {
             candidatePage: after.value.page,
@@ -369,8 +386,15 @@ export class PlaywrightWorkdayApplicationPage {
       if (
         await applicationShell.count() !== 1 || sourceCount > 1 ||
         (sourceCount === 1 && await source.isVisible()) ||
-        await loading.count() !== 1
+        await loading.count() !== 1 ||
+        await applicationShell.locator(
+          '[data-automation-id="applyFlowLoadingPage"]:visible',
+        ).count() !== 1
       ) break;
+      if (navigationActionId === undefined) break;
+      currentActionBusySeen = currentActionBusySeen ||
+        await this.#navigationActionBusySeen(navigationActionId);
+      if (!currentActionBusySeen) break;
       if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
         process.stderr.write('{"applicationNavigationRecovery":"owned_loading_reload"}\n');
       }
@@ -379,11 +403,19 @@ export class PlaywrightWorkdayApplicationPage {
           waitUntil: "domcontentloaded",
           timeout: this.#navigationSettleTimeoutMs,
         });
+        persistedNavigationActionId = navigationActionId;
       } catch {
         break;
       }
     }
     return failure("browser_effect_uncertain", "navigation");
+  }
+  async #navigationActionBusySeen(actionId: string): Promise<boolean> {
+    try {
+      return await this.#page.evaluate(readNavigationActionBusySeen, actionId);
+    } catch {
+      return false;
+    }
   }
   async #armNavigationWitness(rootSelector: string): Promise<string> {
     const occurrence = questionnaireOccurrences.get(this.#page)!;
@@ -397,6 +429,7 @@ export class PlaywrightWorkdayApplicationPage {
   async #confirmStableDestination(
     candidate: BrowserApplicationSnapshot,
     signal: AbortSignal,
+    persistedNavigationActionId?: string,
   ): Promise<BrowserApplicationSnapshot | undefined> {
     const deadline = Date.now() + Math.min(
       destinationStabilityWindowMs,
@@ -409,14 +442,20 @@ export class PlaywrightWorkdayApplicationPage {
         '[data-automation-id="applyFlowLoadingPage"]:visible',
       ).count() !== 0) return undefined;
       const observed = await this.#readSnapshot(signal);
+      const observedWitness = persistedNavigationActionId === candidate.navigationWitness &&
+          observed.ok && observed.value.navigationWitness === "none"
+        ? persistedNavigationActionId
+        : observed.ok ? observed.value.navigationWitness : "none";
       if (
         !observed.ok ||
         observed.value.page !== candidate.page ||
         observed.value.rootSelector !== candidate.rootSelector ||
         observed.value.transitionKey !== candidate.transitionKey ||
-        observed.value.navigationWitness !== candidate.navigationWitness
+        observedWitness !== candidate.navigationWitness
       ) return undefined;
-      confirmed = observed.value;
+      confirmed = observedWitness === observed.value.navigationWitness
+        ? observed.value
+        : { ...observed.value, navigationWitness: observedWitness };
     }
     return confirmed;
   }
@@ -593,23 +632,107 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     settled: false,
     observer: undefined as MutationObserver | undefined,
   };
-  const loading = (node: Node): boolean => node instanceof Element && (
-    node.matches('[data-automation-id="applyFlowLoadingPage"]') ||
-    node.querySelector('[data-automation-id="applyFlowLoadingPage"]') !== null
-  );
+  type LoaderAttributes = {
+    hidden: string | null;
+    ariaHidden: string | null;
+    style: string | null;
+    className: string | null;
+  };
+  const loaderSelector = '[data-automation-id="applyFlowLoadingPage"]';
+  const visible = (element: Element): boolean => {
+    if (!(element instanceof HTMLElement) || !element.isConnected ||
+        !controller.contains(element) || element.hidden ||
+        element.getAttribute("aria-hidden") === "true") return false;
+    const style = getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      style.visibility !== "collapse" && element.getClientRects().length > 0;
+  };
+  const attributes = (element: Element): LoaderAttributes => ({
+    hidden: element.getAttribute("hidden"),
+    ariaHidden: element.getAttribute("aria-hidden"),
+    style: element.getAttribute("style"),
+    className: element.getAttribute("class"),
+  });
+  const attributeVisible = (value: LoaderAttributes): boolean => {
+    if (value.hidden !== null || value.ariaHidden?.toLocaleLowerCase("en-US") === "true") {
+      return false;
+    }
+    if (/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\s*(?:;|$)/iu
+      .test(value.style ?? "")) return false;
+    return !/(?:^|\s)(?:hidden|is-hidden|wd-hidden|invisible)(?:\s|$)/iu
+      .test(value.className ?? "");
+  };
+  const loaderStates = new Map<Element, { attributes: LoaderAttributes; visible: boolean }>();
+  const register = (element: Element) => {
+    if (!element.matches(loaderSelector) || !controller.contains(element)) return;
+    loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
+  };
+  controller.querySelectorAll(loaderSelector).forEach(register);
+  const recordLoaderTransition = (wasVisible: boolean, isVisible: boolean) => {
+    if (!state.clicked || state.settled || wasVisible === isVisible) return;
+    if (isVisible) state.busySeen = true;
+    else if (state.busySeen) state.settled = true;
+  };
   state.observer = new MutationObserver((records) => {
     if (!state.clicked || state.settled) return;
-    for (const record of records) {
+    for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller) {
         if (record.oldValue === "true") {
           state.settled = state.busySeen;
-        } else {
+        } else if (controller.getAttribute("aria-busy") === "true" ||
+            records.slice(recordIndex + 1).some((later) =>
+              later.type === "attributes" && later.target === controller &&
+              later.attributeName === "aria-busy" && later.oldValue === "true"
+            )) {
           state.busySeen = true;
         }
       }
       if (record.type === "childList") {
-        if ([...record.addedNodes].some(loading)) state.busySeen = true;
-        if (state.busySeen && [...record.removedNodes].some(loading)) state.settled = true;
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const added = [node, ...node.querySelectorAll(loaderSelector)]
+            .filter((element) => element.matches(loaderSelector));
+          for (const loader of added) {
+            register(loader);
+            if (visible(loader)) state.busySeen = true;
+          }
+        }
+        for (const node of record.removedNodes) {
+          if (!(node instanceof Element)) continue;
+          const removed = [node, ...node.querySelectorAll(loaderSelector)]
+            .filter((element) => element.matches(loaderSelector));
+          if (state.busySeen && removed.some((loader) => loaderStates.get(loader)?.visible === true)) {
+            state.settled = true;
+          }
+          removed.forEach((loader) => loaderStates.delete(loader));
+        }
+      }
+      if (record.type === "attributes" && record.target instanceof Element &&
+          record.target.matches(loaderSelector) && controller.contains(record.target)) {
+        const loader = record.target;
+        const known = loaderStates.get(loader) ?? {
+          attributes: attributes(loader),
+          visible: visible(loader),
+        };
+        const name = record.attributeName;
+        const key = name === "aria-hidden" ? "ariaHidden"
+          : name === "class" ? "className"
+          : name as keyof LoaderAttributes;
+        const later = records.slice(recordIndex + 1).find((candidate) =>
+          candidate.type === "attributes" && candidate.target === loader &&
+          candidate.attributeName === name
+        );
+        const nextValue = later === undefined
+          ? loader.getAttribute(name ?? "")
+          : later.oldValue;
+        known.attributes = { ...known.attributes, [key]: nextValue };
+        const nextVisible = loader.isConnected && controller.contains(loader) &&
+          attributeVisible(known.attributes) && (
+            later !== undefined || nextValue !== loader.getAttribute(name ?? "") || visible(loader)
+          );
+        recordLoaderTransition(known.visible, nextVisible);
+        known.visible = nextVisible;
+        loaderStates.set(loader, known);
       }
     }
     if (state.settled && controller.isConnected) {
@@ -620,11 +743,22 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["aria-busy"],
+    attributeFilter: ["aria-busy", "hidden", "aria-hidden", "style", "class"],
     attributeOldValue: true,
   });
   globalState.__huntWorkdayNavigationAction = state;
   return true;
+}
+function readNavigationActionBusySeen(actionId: string): boolean {
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const state = globalState.__huntWorkdayNavigationAction as {
+    actionId?: string;
+    controller?: HTMLElement;
+    clicked?: boolean;
+    busySeen?: boolean;
+  } | undefined;
+  return state?.actionId === actionId && state.clicked === true &&
+    state.busySeen === true && state.controller?.isConnected === true;
 }
 function markNavigationWitnessClicked(actionId: string): void {
   const globalState = globalThis as unknown as Record<string, unknown>;

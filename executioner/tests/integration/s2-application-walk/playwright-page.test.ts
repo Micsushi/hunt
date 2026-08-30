@@ -298,16 +298,17 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
           const replacement = document.createElement('main');
           replacement.dataset.automationId = 'applyFlowApplicationQuestionsPage';
           if (phase === 0) {
-            replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated-remounted">Repeated question*</label><input id="repeated-remounted" required value="committed"></div><div data-automation-id="formField"><label for="conditional">Conditional detail*</label><input id="conditional" required></div>';
+            replacement.innerHTML = '<div data-automation-id="formField"><label for="repeated-remounted">Repeated question*</label><input id="repeated-remounted" required value="committed"></div><div data-automation-id="formField"><label for="conditional">Conditional detail*</label><input id="conditional" required></div><div data-automation-id="applyFlowLoadingPage" hidden>Loading</div>';
             oldRoot.replaceWith(replacement);
           } else {
-            oldRoot.setAttribute('aria-busy', 'true');
+            const loader = oldRoot.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            loader.hidden = false;
             const repeated = oldRoot.querySelector('#repeated-remounted');
             const repeatedLabel = oldRoot.querySelector('label[for="repeated-remounted"]');
             repeated.id = 'repeated';
             repeatedLabel.htmlFor = 'repeated';
             oldRoot.insertAdjacentHTML('beforeend', '<div data-automation-id="formField"><label for="destination-detail">Destination detail*</label><input id="destination-detail" required value="committed"></div>');
-            oldRoot.setAttribute('aria-busy', 'false');
+            loader.hidden = true;
           }
           phase += 1;
         });
@@ -427,7 +428,7 @@ test("does not advance a questionnaire occurrence for a same-count remount and r
   }
 });
 
-test("an owned-loading reload cannot replay a prior questionnaire transition witness", async () => {
+test("a current-action owned-loading reload preserves a same-marker questionnaire transition", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -457,7 +458,7 @@ test("an owned-loading reload cannot replay a prior questionnaire transition wit
           } else {
             window.name = 'reload-same-questionnaire';
             root.remove();
-            shell.insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage"></main>');
+            shell.insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
           }
           phase += 1;
         });
@@ -479,6 +480,64 @@ test("an owned-loading reload cannot replay a prior questionnaire transition wit
     assert.equal(destination.ok, true, JSON.stringify(destination));
     if (!destination.ok) return;
     assert.notEqual(destination.value.pageId, first.value.pageId);
+    const persisted = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: destination.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.deepEqual(persisted, { ok: true, value: { advanced: true } });
+    const reloaded = await application.observe(new AbortController().signal);
+    assert.equal(reloaded.ok, true, JSON.stringify(reloaded));
+    if (reloaded.ok) assert.notEqual(reloaded.value.pageId, destination.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an old action witness cannot authorize a later owned-loading reload", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label>Repeated question*<input required value="committed"></label></div>
+      </main><button id="next">Save and Continue</button>
+      <script>
+        let phase = 0;
+        document.querySelector('#next').addEventListener('click', () => {
+          const shell = document.querySelector('[data-automation-id="applyFlowPage"]');
+          const root = document.querySelector('main[data-automation-id="applyFlowApplicationQuestionsPage"]');
+          if (phase === 0) {
+            shell.setAttribute('aria-busy', 'true');
+            root.insertAdjacentHTML('beforeend', '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
+            shell.setAttribute('aria-busy', 'false');
+          } else {
+            root.remove();
+          }
+          phase += 1;
+        });
+      </script></div>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 100,
+      navigationSettleTimeoutMs: 250,
+    });
+    const first = await application.observe(new AbortController().signal);
+    assert.equal(first.ok, true, JSON.stringify(first));
+    if (!first.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: first.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    const destination = await application.observe(new AbortController().signal);
+    assert.equal(destination.ok, true, JSON.stringify(destination));
+    if (!destination.ok) return;
+    await page.locator('[data-automation-id="applyFlowPage"]').evaluate((shell) => {
+      shell.insertAdjacentHTML("afterbegin",
+        '<div data-automation-id="applyFlowLoadingPage"></div>');
+    });
     const replay = await application.next({
       journeyId: walkFixture.journeyId,
       from: "questionnaire",
