@@ -3274,7 +3274,7 @@ export async function questionnairePopupHydrationTargets(
       .filter(visible);
     if (roots.length !== 1) return [];
     return [...roots[0]!.querySelectorAll<HTMLElement>(
-      'button[aria-haspopup="listbox"][data-hunt-target-token]',
+      '[data-hunt-target-token]:is(button[aria-haspopup="listbox"], [role="combobox"])',
     )].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true" ||

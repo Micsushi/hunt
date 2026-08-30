@@ -469,21 +469,21 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
         initial: 'aria-hidden="true"',
         show: "loader.removeAttribute('aria-hidden')",
         hide: "loader.setAttribute('aria-hidden', 'true')",
-        deferred: false,
+        destinationDeferred: false,
       },
       {
         name: "style",
         initial: 'style="display:none"',
         show: "loader.removeAttribute('style')",
         hide: "loader.setAttribute('style', 'display:none')",
-        deferred: false,
+        destinationDeferred: false,
       },
       {
         name: "class",
         initial: 'class="loader-a"',
         show: "loader.className = 'loader-visible'",
         hide: "loader.className = 'loader-b'",
-        deferred: false,
+        destinationDeferred: true,
       },
     ]) {
       const page = await browser.newPage();
@@ -502,13 +502,16 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
           document.querySelector('#next').addEventListener('click', () => {
             const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
             ${variant.show};
-            const finish = () => {
+            const destination = () => {
               document.querySelector('main').insertAdjacentHTML('beforeend',
                 '<div data-automation-id="formField"><label>Destination detail*<input required value="committed"></label></div>');
-              ${variant.hide};
             };
-            if (${variant.deferred}) setTimeout(finish, 0);
-            else finish();
+            const finish = () => {
+              ${variant.hide};
+              if (${variant.destinationDeferred}) setTimeout(destination, 0);
+              else destination();
+            };
+            finish();
           });
         </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
@@ -611,6 +614,77 @@ test("two computed-hidden loader classes cannot advance a conditional semantic s
     const after = await application.observe(new AbortController().signal);
     assert.equal(after.ok, true, JSON.stringify(after));
     if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("historical loader class visibility is measured at the exact structural position", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      {
+        name: "positional-visible",
+        css: ".loader-hidden { display:none } .loader-visible:only-child { display:block }",
+        contextMutation: "",
+        expectedAdvance: true,
+      },
+      {
+        name: "positional-hidden",
+        css: ".loader-hidden { display:none } .loader-visible:only-child { display:none } .loader-visible:not(:only-child) { display:block }",
+        contextMutation: "",
+        expectedAdvance: false,
+      },
+      {
+        name: "changed-ancestor",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        contextMutation: "loader.parentElement.className = 'changed-context'",
+        expectedAdvance: false,
+      },
+      {
+        name: "changed-stylesheet",
+        css: ".loader-hidden { display:none } .loader-visible { display:block }",
+        contextMutation: "document.querySelector('#loader-style').textContent += ' .unrelated { color: blue }'",
+        expectedAdvance: false,
+      },
+    ] as const) {
+      const page = await browser.newPage();
+      await page.setContent(`<style id="loader-style">${variant.css}</style>
+        <div data-automation-id="applyFlowPage">
+          <main data-automation-id="applyFlowApplicationQuestionsPage">
+            <label>Repeated question*<input required value="committed"></label>
+          </main>
+          <div class="loader-owner"><div data-automation-id="applyFlowLoadingPage" class="loader-hidden">Loading</div></div>
+          <button id="next">Save and Continue</button>
+        </div><script>
+          document.querySelector('#next').addEventListener('click', () => {
+            const loader = document.querySelector('[data-automation-id="applyFlowLoadingPage"]');
+            loader.className = 'loader-visible';
+            ${variant.contextMutation};
+            loader.className = 'loader-hidden';
+            setTimeout(() => document.querySelector('main').insertAdjacentHTML('beforeend',
+              '<label>Destination detail*<input required value="committed"></label>'), 0);
+          });
+        </script>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 1_000,
+        navigationSettleTimeoutMs: 1_000,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      assert.deepEqual(await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
+        variant.expectedAdvance, variant.name);
+      await page.close();
+    }
   } finally {
     await browser.close();
   }
@@ -746,6 +820,63 @@ test("popup catalog preparation distinguishes unchanged, changed, and transient 
   }
 });
 
+test("post-click popup hydration busy cycles cannot authorize unchanged-page advancement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <div data-automation-id="formField"><label for="choice">Popup question*</label>
+          <button id="choice" required aria-required="true" aria-haspopup="listbox"
+            aria-controls="portal" aria-valuetext="Shared" data-selected-label="Shared"
+            data-hunt-popup-options='["Shared","Other"]'>Shared</button></div>
+      </main><div id="portal" role="listbox" hidden><div role="option">Shared</div>
+        <div role="option">Other</div></div><button id="next">Save and Continue</button>
+      </div><script>
+        window.hydrationClicks = 0;
+        const installPopupMechanics = () => {
+          const choice = document.querySelector('#choice');
+          const portal = document.querySelector('#portal');
+          choice.addEventListener('click', () => {
+            window.hydrationClicks += 1;
+            const controller = document.querySelector('[data-automation-id="applyFlowPage"]');
+            controller.setAttribute('aria-busy', 'true');
+            portal.hidden = false;
+            controller.removeAttribute('aria-busy');
+          });
+        };
+        installPopupMechanics();
+        document.querySelector('#next').addEventListener('click', () => {
+          const old = document.querySelector('#choice');
+          const replacement = old.cloneNode(true);
+          replacement.removeAttribute('data-hunt-popup-options');
+          old.replaceWith(replacement);
+          installPopupMechanics();
+        });
+      </script>`);
+    const application = popupPreparedApplication(page, 600);
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    const result = await application.next({
+      journeyId: walkFixture.journeyId,
+      from: "questionnaire",
+      fromPageId: before.value.pageId,
+      allowed: ["questionnaire"],
+    }, new AbortController().signal);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain");
+    assert.equal(await page.evaluate(() => (window as unknown as { hydrationClicks: number }).hydrationClicks), 0);
+    const after = await new PlaywrightWorkdayApplicationPage(page).observe(
+      new AbortController().signal,
+    );
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) assert.equal(after.value.pageId, before.value.pageId);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("owned reload accepts a stable same-label destination with changed answer semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -861,6 +992,93 @@ test("owned reload detects optional-only and non-first radio-option semantic cha
       const after = await application.observe(new AbortController().signal);
       assert.equal(after.ok, true, `${variant}:${JSON.stringify(after)}`);
       if (after.ok) assert.notEqual(after.value.pageId, before.value.pageId, variant);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("the supported-control semantic registry detects only answer-affecting changes", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const variant of [
+      {
+        name: "unsupported-actions",
+        source: '<input required value="committed"><div tabindex="0">Source helper</div><button type="button">Source action</button>',
+        destination: '<input required value="committed"><div tabindex="0">Destination helper</div><button type="button">Destination action</button>',
+        advanced: false,
+      },
+      {
+        name: "optional-aria-multiselect",
+        source: '<input required value="committed"><div role="listbox" aria-multiselectable="true" aria-label="Skills"><div role="option">Source only</div></div>',
+        destination: '<input required value="committed"><div role="listbox" aria-multiselectable="true" aria-label="Skills"><div role="option">Destination only</div></div>',
+        advanced: true,
+      },
+      {
+        name: "optional-empty-radiogroup",
+        source: '<input required value="committed"><div role="radiogroup" aria-label="Source empty group"></div>',
+        destination: '<input required value="committed"><div role="radiogroup" aria-label="Destination empty group"></div>',
+        advanced: true,
+      },
+      {
+        name: "two-native-names-one-field",
+        source: '<div data-automation-id="formField"><label><input type="radio" name="first" checked value="shared">Shared</label><label><input type="radio" name="first" value="source">Source A</label><label><input type="radio" name="second" checked value="shared">Shared</label><label><input type="radio" name="second" value="stable">Stable B</label></div>',
+        destination: '<div data-automation-id="formField"><label><input type="radio" name="first" checked value="shared">Shared</label><label><input type="radio" name="first" value="destination">Destination A</label><label><input type="radio" name="second" checked value="shared">Shared</label><label><input type="radio" name="second" value="stable">Stable B</label></div>',
+        advanced: true,
+      },
+      {
+        name: "equivalent-numeric-constraints",
+        source: '<label for="number">Number*</label><input id="number" required type="number" min="01" max="010" step="01" value="5">',
+        destination: '<label for="number">Number*</label><input id="number" required type="number" min="1" max="10" step="1" value="5">',
+        advanced: false,
+      },
+      {
+        name: "optional-labelledby-name",
+        source: '<input required value="committed"><span id="optional-name">Source optional</span><input aria-labelledby="optional-name">',
+        destination: '<input required value="committed"><span id="optional-name">Destination optional</span><input aria-labelledby="optional-name">',
+        advanced: true,
+      },
+      {
+        name: "non-first-aria-radio-labelledby",
+        source: '<input required value="committed"><div role="radiogroup" aria-label="Choice"><span id="one">One</span><span id="two">Source two</span><div role="radio" aria-checked="true" aria-labelledby="one" data-value="one"></div><div role="radio" aria-checked="false" aria-labelledby="two" data-value="two"></div></div>',
+        destination: '<input required value="committed"><div role="radiogroup" aria-label="Choice"><span id="one">One</span><span id="two">Destination two</span><div role="radio" aria-checked="true" aria-labelledby="one" data-value="one"></div><div role="radio" aria-checked="false" aria-labelledby="two" data-value="two"></div></div>',
+        advanced: true,
+      },
+    ] as const) {
+      const page = await browser.newPage();
+      await page.addInitScript(({ name, destination }) => {
+        if (window.name !== `registry-${name}`) return;
+        document.addEventListener("DOMContentLoaded", () => {
+          document.body.innerHTML = `<div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${destination}</main><button>Save and Continue</button></div>`;
+        });
+      }, { name: variant.name, destination: variant.destination });
+      await page.setContent(`<div data-automation-id="applyFlowPage"><main data-automation-id="applyFlowApplicationQuestionsPage">${variant.source}</main><button id="next">Save and Continue</button></div><script>
+        document.querySelector('#next').addEventListener('click', () => {
+          window.name = 'registry-${variant.name}';
+          document.querySelector('main').remove();
+          document.querySelector('[data-automation-id="applyFlowPage"]').insertAdjacentHTML('afterbegin', '<main data-automation-id="applyFlowLoadingPage">Loading</main>');
+        });
+      </script>`);
+      const application = new PlaywrightWorkdayApplicationPage(page, {
+        timeoutMs: 150,
+        navigationSettleTimeoutMs: 750,
+      });
+      const before = await application.observe(new AbortController().signal);
+      assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
+      if (!before.ok) continue;
+      const result = await application.next({
+        journeyId: walkFixture.journeyId,
+        from: "questionnaire",
+        fromPageId: before.value.pageId,
+        allowed: ["questionnaire"],
+      }, new AbortController().signal);
+      assert.equal(result.ok, variant.advanced, `${variant.name}:${JSON.stringify(result)}`);
+      if (!result.ok) assert.equal(result.error.code, "browser_effect_uncertain", variant.name);
+      const after = await application.observe(new AbortController().signal);
+      assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
+        variant.advanced, variant.name);
       await page.close();
     }
   } finally {

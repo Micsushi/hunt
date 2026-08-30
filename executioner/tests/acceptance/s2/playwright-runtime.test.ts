@@ -2389,6 +2389,45 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
+test("optional ARIA comboboxes hydrate only their exact owner and preserve selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-skills"><label for="skills">Optional skills</label>
+        <input id="skills" role="combobox" aria-controls="skills-popup" aria-expanded="false"
+          value="Shared" aria-valuetext="Shared"></div></main>
+      <div id="stale-popup" role="listbox"><div role="option">Stale</div></div>
+      <div id="skills-popup" role="listbox" hidden><div role="option">Shared</div>
+        <div role="option">Destination</div></div><script>
+        const input = document.querySelector('#skills');
+        const popup = document.querySelector('#skills-popup');
+        input.addEventListener('click', () => {
+          popup.hidden = false;
+          input.setAttribute('aria-expanded', 'true');
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key !== 'Escape') return;
+          popup.hidden = true;
+          input.setAttribute('aria-expanded', 'false');
+        });
+      </script>`);
+    const pageId = "questionnaire-optional-combobox" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const targets = await questionnairePopupHydrationTargets(page);
+    assert.equal(targets.length, 1);
+    await hydrateQuestionnairePopupOptions(page, pageId, targets[0]!, 5_000);
+    const input = page.locator("#skills");
+    assert.equal(await input.inputValue(), "Shared");
+    assert.deepEqual(JSON.parse(await input.getAttribute("data-hunt-popup-options") ?? "[]"),
+      ["Shared", "Destination"]);
+    assert.equal(await page.locator("#skills-popup").isVisible(), false);
+    assert.equal(await page.locator("#stale-popup").isVisible(), true);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("canonical questionnaire binding survives an identity-losing React remount", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

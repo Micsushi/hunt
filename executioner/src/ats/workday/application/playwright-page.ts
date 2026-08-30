@@ -4,6 +4,7 @@ import { browserPageId, fieldId } from "../../../contracts/index.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
+  supportedControlSelector,
 } from "../../../deterministic/supported-controls.ts";
 import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
@@ -304,16 +305,20 @@ export class PlaywrightWorkdayApplicationPage {
       );
     }
   }
-  async #readSnapshot(signal: AbortSignal): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
+  async #readSnapshot(
+    signal: AbortSignal,
+    prepareQuestionnaire = true,
+  ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     if (signal.aborted) return failure("operation_cancelled", "none");
     try {
-      await this.#prepareQuestionnaireSnapshot?.(signal);
+      if (prepareQuestionnaire) await this.#prepareQuestionnaireSnapshot?.(signal);
       if (signal.aborted) return failure("operation_cancelled", "none");
       await annotateCheckboxGroups(this.#page);
       const snapshot = await this.#page.evaluate(
         readApplicationSnapshot, {
           selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
           checkboxGroupAttribute: checkboxGroupKindAttribute,
+          supportedControls: supportedControlSelector,
         },
       );
       if ("ambiguity" in snapshot) {
@@ -349,7 +354,21 @@ export class PlaywrightWorkdayApplicationPage {
         if (navigationActionId !== undefined && !currentActionBusySeen) {
           currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
         }
-        const after = await this.#readSnapshot(signal);
+        const rawAfter = await this.#readSnapshot(signal, false);
+        const rawCurrentActionWitness = navigationActionId !== undefined && rawAfter.ok &&
+          rawAfter.value.navigationWitness === navigationActionId;
+        const preparationAdmitted = rawAfter.ok && navigationActionId !== undefined && (
+          rawCurrentActionWitness || persistedNavigationActionId === navigationActionId ||
+          rawAfter.value.page !== before.page ||
+          rawAfter.value.rootSelector !== before.rootSelector ||
+          rawAfter.value.transitionKey !== before.transitionKey
+        );
+        if (preparationAdmitted && persistedNavigationActionId === undefined) {
+          await this.#freezeNavigationWitness(navigationActionId);
+        }
+        const after = preparationAdmitted
+          ? await this.#readSnapshot(signal)
+          : rawAfter;
         const persistedDestinationProven = navigationActionId !== undefined &&
           persistedNavigationActionId === navigationActionId && after.ok &&
           hasIndependentDestinationEvidence(before, after.value);
@@ -427,6 +446,11 @@ export class PlaywrightWorkdayApplicationPage {
       return false;
     }
   }
+  async #freezeNavigationWitness(actionId: string): Promise<void> {
+    try {
+      await this.#page.evaluate(freezeNavigationWitness, actionId);
+    } catch {}
+  }
   async #armNavigationWitness(rootSelector: string): Promise<string> {
     const occurrence = questionnaireOccurrences.get(this.#page)!;
     occurrence.nextAction += 1;
@@ -484,7 +508,10 @@ export class PlaywrightWorkdayApplicationPage {
     signal: AbortSignal,
   ): Promise<boolean> {
     if (signal.aborted) return false;
-    const current = await this.#readSnapshot(signal);
+    // This is still part of the armed navigation action. Preparation can open
+    // a popup and emit controller loading; it must never manufacture the
+    // evidence used to decide whether the trusted navigation click is retryable.
+    const current = await this.#readSnapshot(signal, false);
     return current.ok &&
       current.value.signature === before.signature &&
       current.value.transitionKey === before.transitionKey &&
@@ -659,6 +686,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
     clicked: false,
     busySeen: false,
     settled: false,
+    frozen: false,
     observer: undefined as MutationObserver | undefined,
   };
   type LoaderAttributes = {
@@ -711,25 +739,64 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         element.hasAttribute("data-hunt-render-probe") || !controller.contains(element)) return;
     loaderStates.set(element, { attributes: attributes(element), visible: visible(element) });
   };
-  const reconstructedVisible = (loader: Element, value: LoaderAttributes): boolean => {
+  const observerOptions: MutationObserverInit = {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["aria-busy", "hidden", "aria-hidden", "style", "class"],
+    attributeOldValue: true,
+  };
+  const observe = () => {
+    if (!state.frozen && !state.settled) state.observer?.observe(document.documentElement, observerOptions);
+  };
+  const classContextStable = (records: readonly MutationRecord[], loader: Element): boolean =>
+    records.every((record) => {
+      if (record.type === "attributes" && record.target === loader &&
+          record.attributeName === "class") return true;
+      if (record.type === "attributes" && record.target instanceof Element &&
+          (record.target === controller || record.target.contains(loader))) return false;
+      if (record.type === "characterData" && record.target.parentElement?.closest("style") !== null) {
+        return false;
+      }
+      if (record.type === "childList") {
+        if (record.target instanceof Element &&
+            (record.target === controller || record.target.contains(loader) ||
+             record.target.closest("style, head") !== null)) return false;
+        const styled = [...record.addedNodes, ...record.removedNodes].some((node) =>
+          node instanceof Element && (node.matches("style, link[rel=stylesheet]") ||
+            node.querySelector("style, link[rel=stylesheet]") !== null)
+        );
+        if (styled) return false;
+      }
+      return true;
+    });
+  const reconstructedVisible = (
+    loader: Element,
+    value: LoaderAttributes,
+    records: readonly MutationRecord[],
+  ): boolean => {
     if (!(loader instanceof HTMLElement) || !loader.isConnected ||
         !controller.contains(loader) || !ancestorVisibilityCapable(loader) ||
-        !attributeVisible(value)) return false;
-    const probe = loader.cloneNode(true) as HTMLElement;
-    probe.setAttribute("data-hunt-render-probe", "true");
+        !attributeVisible(value) || !classContextStable(records, loader)) return false;
+    const current = attributes(loader);
     const assign = (name: string, attributeValue: string | null) => {
-      if (attributeValue === null) probe.removeAttribute(name);
-      else probe.setAttribute(name, attributeValue);
+      if (attributeValue === null) loader.removeAttribute(name);
+      else loader.setAttribute(name, attributeValue);
     };
+    state.observer?.disconnect();
     assign("hidden", value.hidden);
     assign("aria-hidden", value.ariaHidden);
     assign("style", value.style);
     assign("class", value.className);
-    loader.before(probe);
     try {
-      return visible(probe);
+      return visible(loader);
     } finally {
-      probe.remove();
+      assign("hidden", current.hidden);
+      assign("aria-hidden", current.ariaHidden);
+      assign("style", current.style);
+      assign("class", current.className);
+      observe();
     }
   };
   controller.querySelectorAll(loaderSelector).forEach(register);
@@ -797,7 +864,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
         const nextVisible = loader.isConnected && controller.contains(loader) &&
           ancestorVisibilityCapable(loader) && attributeVisible(known.attributes) &&
           (finalState ? visible(loader) : name === "class"
-            ? reconstructedVisible(loader, known.attributes)
+            ? reconstructedVisible(loader, known.attributes, records)
             : true);
         recordLoaderTransition(known.visible, nextVisible);
         known.visible = nextVisible;
@@ -808,13 +875,7 @@ function armNavigationWitness(input: { readonly rootSelector: string; readonly a
       globalState.__huntWorkdayNavigationWitness = state.actionId;
     }
   });
-  state.observer.observe(controller, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ["aria-busy", "hidden", "aria-hidden", "style", "class"],
-    attributeOldValue: true,
-  });
+  observe();
   globalState.__huntWorkdayNavigationAction = state;
   return true;
 }
@@ -829,6 +890,17 @@ function readNavigationActionBusySeen(actionId: string): boolean {
   return state?.actionId === actionId && state.clicked === true &&
     state.busySeen === true && state.controller?.isConnected === true;
 }
+function freezeNavigationWitness(actionId: string): void {
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const state = globalState.__huntWorkdayNavigationAction as {
+    actionId?: string;
+    observer?: MutationObserver;
+    frozen?: boolean;
+  } | undefined;
+  if (state?.actionId !== actionId) return;
+  state.observer?.disconnect();
+  state.frozen = true;
+}
 function markNavigationWitnessClicked(actionId: string): void {
   const globalState = globalThis as unknown as Record<string, unknown>;
   const state = globalState.__huntWorkdayNavigationAction as {
@@ -841,9 +913,10 @@ async function readApplicationSnapshot(
   input: {
     readonly selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS;
     readonly checkboxGroupAttribute: string;
+    readonly supportedControls: string;
   },
 ): Promise<BrowserApplicationSnapshot | BrowserApplicationAmbiguity> {
-  const { selectors, checkboxGroupAttribute } = input;
+  const { selectors, checkboxGroupAttribute, supportedControls } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -853,6 +926,33 @@ async function readApplicationSnapshot(
   };
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+  const referencedText = (element: Element): string => text(
+    (element.getAttribute("aria-labelledby") ?? "").split(/\s+/u)
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" "),
+  );
+  const accessibleName = (element: Element, fallbackText = true): string => {
+    const referenced = referencedText(element);
+    if (referenced !== "") return referenced;
+    const ariaLabel = text(element.getAttribute("aria-label"));
+    if (ariaLabel !== "") return ariaLabel;
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLSelectElement) {
+      const native = text([...element.labels ?? []].map((label) => label.textContent ?? "").join(" "));
+      if (native !== "") return native;
+    }
+    const owned = text(element.querySelector(
+      ":scope > legend, :scope > label, :scope > [role=heading], :scope > h1, :scope > h2, :scope > h3",
+    )?.textContent);
+    return owned || (fallbackText ? text(element.textContent) : "");
+  };
+  const effectiveNumber = (value: string | null): string => {
+    const normalized = text(value);
+    if (normalized === "") return "";
+    const numeric = Number(normalized);
+    return Number.isFinite(numeric) ? String(numeric) : normalized;
+  };
   const globalState = globalThis as unknown as Record<string, unknown>;
   const navigationAction = globalState.__huntWorkdayNavigationAction as {
     readonly actionId?: string;
@@ -1022,27 +1122,26 @@ async function readApplicationSnapshot(
     '[data-automation-id="dateSection"]',
     '[data-automation-id="dateInputWrapper"]',
     '[data-automation-id$="-CheckboxGroup"]',
-    '[data-automation-id="formField"]',
-    '[data-automation-id^="formField-"]',
-    'input:not([type="hidden"])',
-    "textarea",
-    "select",
-    '[contenteditable="true"]',
-    '[role="combobox"]',
-    '[role="radio"]',
-    '[role="checkbox"]',
-    '[tabindex]:not([tabindex="-1"])',
-    'button[data-automation-id="sourcePrompt"]',
-    'button[aria-haspopup="listbox"]',
-    'button[id="country--country"]',
-    'button[id="address--countryRegion"]',
-    'button[id="phoneNumber--phoneType"]',
-    'button[data-automation-id="country--country"]',
-    'button[data-automation-id="address--countryRegion"]',
-    'button[data-automation-id="phoneNumber--phoneType"]',
-    '[aria-required="true"]',
+    supportedControls,
+    ...(profileRoot ? [
+      'button[aria-required="true"]',
+      '[required]',
+      '[aria-required="true"]',
+      '[tabindex]',
+      '[data-hunt-field-id]',
+    ] : []),
   ].join(", ");
-  const candidates = [...new Set(root.querySelectorAll<HTMLElement>(candidateSelector))]
+  const registryCandidates = [...root.querySelectorAll<HTMLElement>(supportedControls)];
+  const promotedGroupOwners = registryCandidates.flatMap((control) => {
+    const owner = control.closest<HTMLElement>(
+      `[${checkboxGroupAttribute}="exclusive"], [${checkboxGroupAttribute}="multiple"]`,
+    );
+    return owner === null ? [] : [owner];
+  });
+  const candidates = [...new Set([
+    ...root.querySelectorAll<HTMLElement>(candidateSelector),
+    ...promotedGroupOwners,
+  ])]
     .filter((control) => (visible(control) || resumeInputs.includes(
       control as HTMLInputElement,
     )) &&
@@ -1106,7 +1205,17 @@ async function readApplicationSnapshot(
   const semanticDestinationFields: string[] = [];
   let semanticDestinationComparable = true;
   const requiredControlSet = new Set(requiredControls);
-  const seenRadioGroups = new Set<Element | string>();
+  const promotedGroupOwnerSet = new Set(promotedGroupOwners);
+  const seenRadioGroups = new Set<string>();
+  const radioOwnerIds = new WeakMap<Element, number>();
+  let radioOwnerSequence = 0;
+  const radioOwnerId = (owner: Element): number => {
+    const existing = radioOwnerIds.get(owner);
+    if (existing !== undefined) return existing;
+    radioOwnerSequence += 1;
+    radioOwnerIds.set(owner, radioOwnerSequence);
+    return radioOwnerSequence;
+  };
   for (const [index, control] of candidates.entries()) {
     const input = control instanceof HTMLInputElement ? control : undefined;
     const role = control.getAttribute("role");
@@ -1117,24 +1226,24 @@ async function readApplicationSnapshot(
       control.querySelector('input[type="radio"], [role="radio"]') !== null;
     const structuredRadioOwner = ownsRadioGroup
       ? control
-      : control.closest<HTMLElement>('fieldset, [role="radiogroup"]') ?? fieldOwner;
+      : control.closest<HTMLElement>('fieldset, [role="radiogroup"]') ??
+        (input?.type === "radio" || role === "radio" ? fieldOwner : null);
     const radioGroupOwner = ownsRadioGroup
       ? control
       : input?.type === "radio" || role === "radio"
         ? structuredRadioOwner ?? control
         : undefined;
-    const radioGroupKey: Element | string | undefined = radioGroupOwner === undefined
+    const nativeRadioName = input?.type === "radio" ? text(input.name) : "";
+    const radioGroupKey = radioGroupOwner === undefined
       ? undefined
-      : structuredRadioOwner ?? (input?.name === undefined || input.name === ""
-        ? control
-        : `native-radio:${input.name}`);
+      : `${radioOwnerId(radioGroupOwner)}:${nativeRadioName || "aria"}`;
     const radioMembers = radioGroupOwner === undefined
       ? []
-      : [...(structuredRadioOwner ?? root).querySelectorAll<HTMLElement>(
+      : [...radioGroupOwner.querySelectorAll<HTMLElement>(
         'input[type="radio"], [role="radio"]',
       )].filter((member) => visible(member) && (
-        !(member instanceof HTMLInputElement) || input === undefined || input.name === "" ||
-        member.name === input?.name
+        nativeRadioName === "" || !(member instanceof HTMLInputElement) ||
+        text(member.name) === nativeRadioName
       ));
     if (radioGroupKey !== undefined && seenRadioGroups.has(radioGroupKey)) continue;
     if (radioGroupKey !== undefined) seenRadioGroups.add(radioGroupKey);
@@ -1154,20 +1263,13 @@ async function readApplicationSnapshot(
     const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(rawId)
       ? rawId
       : completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`;
-    const questionLabel = text(fingerprintControl.querySelector(
-      ":scope > legend, :scope > [role=heading]",
-    )?.textContent) || text(fieldOwner?.querySelector("label, legend")?.textContent) ||
-      text(fingerprintControl.getAttribute("aria-label")) ||
-      (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ||
-          control instanceof HTMLSelectElement
-        ? text(control.labels?.[0]?.textContent)
-        : "");
+    const questionLabel = accessibleName(fingerprintControl) ||
+      (fieldOwner === null ? "" : accessibleName(fieldOwner));
     const semanticOwnerContext: {
       tag: string;
       automationId: string;
       role: string;
-      ariaLabel: string;
-      labelledBy: string;
+      accessibleName: string;
       heading: string;
     }[] = [];
     let semanticOwner: Element | null = fieldOwner ?? fingerprintControl;
@@ -1180,21 +1282,17 @@ async function readApplicationSnapshot(
       const stableAutomationId = /(?:formField|[0-9a-f]{8,}|\d{4,})/iu.test(automationId)
         ? ""
         : automationId;
-      const ariaLabel = text(semanticOwner.getAttribute("aria-label"));
-      const labelledBy = text(semanticOwner.getAttribute("aria-labelledby"))
-        .split(" ").filter(Boolean).map((id) => text(document.getElementById(id)?.textContent))
-        .filter(Boolean).join("|");
+      const ownerAccessibleName = accessibleName(semanticOwner, false);
       const heading = text(semanticOwner.querySelector(
         ":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > [role=heading]",
       )?.textContent);
-      if (stableAutomationId !== "" || ownerRole !== "" || ariaLabel !== "" ||
-          labelledBy !== "" || heading !== "" || semanticOwner === root) {
+      if (stableAutomationId !== "" || ownerRole !== "" || ownerAccessibleName !== "" ||
+          heading !== "" || semanticOwner === root) {
         semanticOwnerContext.push({
           tag: semanticOwner.tagName.toLocaleLowerCase("en-US"),
           automationId: stableAutomationId,
           role: ownerRole,
-          ariaLabel,
-          labelledBy,
+          accessibleName: ownerAccessibleName,
           heading,
         });
       }
@@ -1222,13 +1320,16 @@ async function readApplicationSnapshot(
       })(),
       type: item instanceof HTMLInputElement ? item.type : "",
       role: item.getAttribute("role") ?? "",
-      required: item.hasAttribute("required"),
-      ariaRequired: item.getAttribute("aria-required") ?? "",
-      min: item.getAttribute("min") ?? "",
-      max: item.getAttribute("max") ?? "",
-      step: item.getAttribute("step") ?? "",
-      minLength: item.getAttribute("minlength") ?? "",
-      maxLength: item.getAttribute("maxlength") ?? "",
+      required: item.hasAttribute("required") || item.getAttribute("aria-required") === "true",
+      min: effectiveNumber(item.getAttribute("min")),
+      max: effectiveNumber(item.getAttribute("max")),
+      step: effectiveNumber(item.getAttribute("step")),
+      minLength: item instanceof HTMLInputElement || item instanceof HTMLTextAreaElement
+        ? item.minLength < 0 ? "" : String(item.minLength)
+        : effectiveNumber(item.getAttribute("minlength")),
+      maxLength: item instanceof HTMLInputElement || item instanceof HTMLTextAreaElement
+        ? item.maxLength < 0 ? "" : String(item.maxLength)
+        : effectiveNumber(item.getAttribute("maxlength")),
       pattern: item.getAttribute("pattern") ?? "",
       accept: item.getAttribute("accept") ?? "",
       inputMode: item.getAttribute("inputmode") ?? "",
@@ -1248,7 +1349,9 @@ async function readApplicationSnapshot(
       (semanticLeaf.type === "text" || semanticLeaf.type === "tel") &&
       (/^M{1,2}\s*\/\s*D{1,2}\s*\/\s*Y{2,4}$/iu.test(text(semanticLeaf.placeholder)) ||
         /^date(?:\s*\*)?$/iu.test(questionLabel));
-    const supportedBehavior = fingerprintControl.matches(
+    const supportedBehavior = radioGroupOwner !== undefined
+      ? "radio"
+      : fingerprintControl.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
     ) || semanticLeaf instanceof HTMLInputElement &&
         (semanticLeaf.type === "date" || formattedDate)
@@ -1296,13 +1399,21 @@ async function readApplicationSnapshot(
           disabled: option.disabled,
         })));
       }
+      if (item.getAttribute("role") === "listbox" || item.getAttribute("role") === "radiogroup") {
+        const memberSelector = item.getAttribute("role") === "listbox" ? '[role="option"]' : '[role="radio"]';
+        catalog.push(...[...item.querySelectorAll<HTMLElement>(memberSelector)].map((member) => ({
+          label: accessibleName(member),
+          value: text(member.getAttribute("data-value") ?? member.getAttribute("aria-valuetext") ??
+            member.getAttribute("value") ?? member.textContent),
+          disabled: member.getAttribute("aria-disabled") === "true",
+        })));
+      }
       appendEncodedCatalog(item);
       if (item instanceof HTMLInputElement && ["radio", "checkbox"].includes(item.type) ||
           item.getAttribute("role") === "radio" || item.getAttribute("role") === "checkbox") {
         const itemInput = item instanceof HTMLInputElement ? item : undefined;
         catalog.push({
-          label: text(item.getAttribute("aria-label")) ||
-            text(itemInput?.labels?.[0]?.textContent) || text(item.textContent),
+          label: accessibleName(item),
           value: text(itemInput?.value ?? item.getAttribute("data-value")),
           disabled: item.matches(":disabled") ||
             item.getAttribute("aria-disabled") === "true",
@@ -1310,10 +1421,16 @@ async function readApplicationSnapshot(
       }
     }
     catalog.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
-    if (supportedBehavior === "listbox" && catalog.length === 0) {
+    const semanticEligible = control.matches([
+      supportedControls,
+      '[data-automation-id="dateSection"]',
+      '[data-automation-id="dateInputWrapper"]',
+      '[data-automation-id$="-CheckboxGroup"]',
+    ].join(", ")) || promotedGroupOwnerSet.has(control);
+    if (semanticEligible && supportedBehavior === "listbox" && catalog.length === 0) {
       semanticDestinationComparable = false;
     }
-    semanticDestinationFields.push(JSON.stringify({
+    if (semanticEligible) semanticDestinationFields.push(JSON.stringify({
       questionLabel,
       behavior: {
         supported: supportedBehavior,
@@ -1322,6 +1439,7 @@ async function readApplicationSnapshot(
         role: role ?? "",
         popup: fingerprintControl.getAttribute("aria-haspopup") ?? "",
         contentEditable: fingerprintControl.getAttribute("contenteditable") ?? "",
+        nativeGroupName: nativeRadioName,
       },
       selectionMode: fingerprintControl.getAttribute("data-hunt-checkbox-selection-mode") ===
           "multiple" || fingerprintControl.getAttribute(checkboxGroupAttribute) === "multiple" ||
