@@ -2681,6 +2681,7 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
               <input id="skills--skills" role="combobox" aria-controls="skills-options"
                 aria-expanded="false" placeholder="Search">
               <ul data-automation-id="selectedItemList" hidden></ul>
+              <div id="visible-selected-items"></div>
               <div id="skills-options" role="listbox" hidden>
                 <div role="option">Python</div>
               </div>
@@ -2691,6 +2692,7 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
           const input = document.getElementById("skills--skills");
           const listbox = document.getElementById("skills-options");
           const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          const visibleSelected = document.getElementById("visible-selected-items");
           window.skillOptionActivations = 0;
           input.addEventListener("click", () => {
             listbox.hidden = false;
@@ -2706,6 +2708,10 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
             item.innerHTML = '<p data-automation-id="promptOption">Python</p>';
             selected.replaceChildren(item);
             selected.hidden = true;
+            const mirror = document.createElement("div");
+            mirror.setAttribute("data-automation-id", "selectedItem");
+            mirror.textContent = "Python";
+            visibleSelected.replaceChildren(mirror);
             input.value = "";
             input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
             listbox.hidden = true;
