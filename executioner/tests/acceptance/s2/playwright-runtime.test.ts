@@ -2422,6 +2422,110 @@ test("canonical questionnaire binding survives an identity-losing React remount"
   }
 });
 
+test("questionnaire verification recovers a committed text remount before the next mutation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent(`
+    <main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-remount">
+        <label for="generated-remount-1">Unseen remount detail*</label>
+        <input id="generated-remount-1" required>
+      </div>
+      <div data-automation-id="formField-next">
+        <label for="generated-next-1">Unseen next detail*</label>
+        <input id="generated-next-1" required>
+      </div>
+    </main>
+    <script>
+      const first = document.querySelector('#generated-remount-1');
+      first.addEventListener('input', () => {
+        const replacement = first.cloneNode();
+        replacement.value = first.value;
+        replacement.removeAttribute('data-hunt-target-token');
+        first.replaceWith(replacement);
+      }, { once: true });
+    </script>
+  `);
+  const traces: { readonly event: string; readonly details?: unknown }[] = [];
+  const acceptances: { readonly checkpoint: string }[] = [];
+  let operation = 0;
+  const artifact = resumeArtifact();
+  const resumeIntent = createWorkdayResumeFileIntent({
+    artifactId: artifact.resumeId,
+    artifact,
+    fileType: "pdf",
+  });
+  if (!resumeIntent.ok) throw new Error("resume fixture invalid");
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {
+      owner: { revisionId: "revision_uncertain_text_remount" },
+      ownerSources: {
+        resumeIntent: resumeIntent.value,
+        profileId: upstreamProfileId("profile-uncertain-text-remount"),
+        profileRevision: 1,
+        profileQuery: {
+          async query() {
+            return { ok: true as const, value: { kind: "profile_answer_missing" as const } };
+          },
+        },
+        narrative: createConfiguredNarrativeProvider({
+          revision: "narrative-uncertain-text-remount-v1",
+          template: "Synthetic remount fixture narrative.",
+        }),
+        sensitiveValues: [],
+        profilePlan: { mode: "synthetic_test_non_submittable" },
+      },
+    } as never,
+    acceptances: { record(value) { acceptances.push(value); } },
+    nextOperationId: () => generatedOperationId(
+      `operation_uncertain_remount_${(++operation).toString().padStart(8, "0")}`,
+    ),
+    timeoutMs: 1_500,
+    trace: (event, details) => traces.push({ event, details }),
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-09-01T12:30:00.000Z",
+    now: () => "2026-09-01T12:00:00.000Z",
+  });
+  runtime.bindSession({
+    schemaVersion: 1,
+    journeyId: journeyId("journey_uncertain_remount_01"),
+    sessionId: "live_session_uncertain_remount_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_uncertain_remount_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-09-01T13:00:00.000Z",
+  });
+  try {
+    const result = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_uncertain_remount_01"),
+      operationId: generatedOperationId("operation_uncertain_remount_run_01"),
+      sessionId: "live_session_uncertain_remount_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-09-01T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-uncertain-remount" } as never,
+    }, new AbortController().signal);
+
+    assert.equal((result as { ok: boolean }).ok, true, JSON.stringify(result));
+    assert.equal(await page.locator("#generated-remount-1").inputValue() !== "", true);
+    assert.equal(await page.locator("#generated-next-1").inputValue() !== "", true);
+    assert.equal(acceptances.at(-1)?.checkpoint, "questionnaire_verified");
+    assert.equal(traces.some(({ event, details }) => event === "questionnaire_field_drive_completed" &&
+      (details as { status?: string; code?: string }).status === "failed" &&
+      (details as { status?: string; code?: string }).code === "browser_effect_uncertain"), true);
+    assert.equal(traces.some(({ event, details }) => event === "questionnaire_field_verification_completed" &&
+      (details as { status?: string }).status === "succeeded"), true);
+  } finally {
+    runtime.dispose();
+    disposeResumeArtifact(artifact);
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("canonical discovery survives reorder, delayed reveal, and duplicate-label occurrences", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

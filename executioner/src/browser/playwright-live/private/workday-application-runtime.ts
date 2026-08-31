@@ -87,6 +87,8 @@ import { createSafetyGuard } from "../../../safety/guards.ts";
 import type { OwnedApplicationOperation } from "./application-page-types.ts";
 import type { OwnedApplicationPageRequest } from "./application-page-types.ts";
 import type { ExternalMonitorPage, ExternalMonitorPort } from "./external-monitor-port.ts";
+import { createQuestionnaireSemanticAuthority } from
+  "./questionnaire-semantic-authority.ts";
 import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 import type { PersistentPage } from "./types.ts";
 
@@ -1096,7 +1098,7 @@ export class OwnedWorkdayApplicationRuntime {
     const questionLearning = request.questionLearning;
     let closeBatch: () => Promise<void> = async () => undefined;
     let semanticSessionId: BrowserSessionId | undefined;
-    let semantic: PlaywrightBrowserSession | undefined;
+    let semantic: ReturnType<typeof createQuestionnaireSemanticAuthority> | undefined;
     let causalError: unknown;
     try {
       if (sharedBatch === undefined) {
@@ -1151,17 +1153,35 @@ export class OwnedWorkdayApplicationRuntime {
       );
       const activeSemanticSessionId =
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
-      const activeSemantic = new PlaywrightBrowserSession({
+      const createSemanticBrowser = () => new PlaywrightBrowserSession({
         attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId },
         ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
         timeoutMs: this.#timeoutMs,
       });
       semanticSessionId = activeSemanticSessionId;
-      semantic = activeSemantic;
+      semantic = createQuestionnaireSemanticAuthority({
+        sessionId: activeSemanticSessionId,
+        pageId: input.pageId,
+        createDriverBrowser: createSemanticBrowser,
+        verifierBrowser: createSemanticBrowser(),
+        createDriver: (browser) => createFieldDriver(browser, createSafetyGuard()),
+        createVerifier: createFieldVerifier,
+        prepare: (innerSignal) => prepareQuestionnaireTargets(
+          page, input.pageId, this.#timeoutMs,
+          () => this.#assertAuthorized(innerSignal), this.#trace,
+        ),
+        driverRebindFailed: (driveRequest, underlyingError) => {
+          this.#trace?.("questionnaire_field_rebind_failed", {
+            fieldId: driveRequest.intent.fieldId,
+            uiBehavior: driveRequest.intent.behavior,
+            operation: driveRequest.intent.kind,
+            underlyingError,
+            remountGeneration: reconciliationGeneration,
+          });
+        },
+      });
       const semanticObservationStartedAt = performance.now();
-      const observed = await activeSemantic.observe(
-        { sessionId: activeSemanticSessionId, pageId: input.pageId }, signal,
-      );
+      const observed = await semantic.observe(signal);
       this.#trace?.("questionnaire_semantic_observation_completed", {
         durationMs: monotonicDuration(semanticObservationStartedAt),
         status: observed.ok ? "succeeded" : "failed",
@@ -1246,8 +1266,6 @@ export class OwnedWorkdayApplicationRuntime {
         operation: "resolve_answer",
         observedOptionCount: 0,
       };
-      const semanticDriver = createFieldDriver(activeSemantic, createSafetyGuard());
-      const semanticVerifier = createFieldVerifier(activeSemantic);
       const driver: FieldDriver = Object.freeze({
         drive: async (
           driveRequest: Parameters<FieldDriver["drive"]>[0],
@@ -1260,32 +1278,7 @@ export class OwnedWorkdayApplicationRuntime {
             uiBehavior: driveRequest.intent.behavior,
           });
           this.#assertAuthorized(innerSignal);
-          // Rebind and refresh the semantic session immediately before every
-          // admitted field effect. This is the single bounded pre-effect
-          // recovery point for any supported control type after a React
-          // remount; uncertain effects are never replayed.
-          await prepareQuestionnaireTargets(
-            page, input.pageId, this.#timeoutMs,
-            () => this.#assertAuthorized(innerSignal), this.#trace,
-          );
-          const rebound = await activeSemantic.observe(
-            { sessionId: activeSemanticSessionId, pageId: input.pageId },
-            innerSignal,
-          );
-          if (!rebound.ok) {
-            this.#trace?.("questionnaire_field_rebind_failed", {
-              fieldId: driveRequest.intent.fieldId,
-              uiBehavior: driveRequest.intent.behavior,
-              operation: driveRequest.intent.kind,
-              underlyingError: rebound.error.code,
-              remountGeneration: reconciliationGeneration,
-            });
-            return {
-              ok: false as const,
-              error: { code: "driver_target_invalid" as const, retryable: false as const },
-            };
-          }
-          const driven = await semanticDriver.drive(driveRequest, innerSignal);
+          const driven = await semantic!.driver.drive(driveRequest, innerSignal);
           this.#trace?.("questionnaire_field_drive_completed", {
             fieldId: driveRequest.intent.fieldId,
             kind: driveRequest.intent.kind,
@@ -1303,15 +1296,7 @@ export class OwnedWorkdayApplicationRuntime {
           innerSignal: AbortSignal,
         ) => {
           const verificationStartedAt = performance.now();
-          // Workday may replace a control (or the entire questionnaire root)
-          // after blur/selection. Restore the deterministic semantic bindings
-          // before the independent readback so the original intent can still
-          // be verified against the newly rendered control.
-          await prepareQuestionnaireTargets(
-            page, input.pageId, this.#timeoutMs,
-            () => this.#assertAuthorized(innerSignal), this.#trace,
-          );
-          const verified = await semanticVerifier.verify(verificationRequest, innerSignal);
+          const verified = await semantic!.verifier.verify(verificationRequest, innerSignal);
           this.#trace?.("questionnaire_field_verification_completed", {
             fieldId: verificationRequest.intent.fieldId,
             kind: verified.ok ? verified.value.kind : "failed",
@@ -1600,7 +1585,7 @@ export class OwnedWorkdayApplicationRuntime {
       // identities before the final review-expectation readback just as the
       // per-field verifier does above.
       await bindQuestionnaireTargets(page, input.pageId);
-      const after = await semantic.observe({ sessionId: semanticSessionId, pageId: input.pageId }, signal);
+      const after = await semantic.observe(signal);
       if (!after.ok) throw new TypeError("questionnaire review truth unavailable");
       const targets = new Map(after.value.targets.map((target) => [target.token, target]));
       for (const answer of completed.value.answers) {
@@ -1621,12 +1606,9 @@ export class OwnedWorkdayApplicationRuntime {
       await finalizeQuestionnaireReconciliation({
         causalError,
         closeBatch,
-        closeSemantic: () => semantic === undefined || semanticSessionId === undefined
+        closeSemantic: () => semantic === undefined
           ? Promise.resolve()
-          : semantic.close(
-              { sessionId: semanticSessionId },
-              AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000)),
-            ).then(() => undefined),
+          : semantic.close(AbortSignal.timeout(Math.min(this.#timeoutMs, 5_000))),
         writeLearning: () => causalError === undefined ? null : questionLearning?.write() ?? null,
         trace: (details) => this.#trace?.("questionnaire_semantic_finalized", details),
       });
