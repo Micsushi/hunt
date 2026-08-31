@@ -30,7 +30,7 @@ test("the Stage 2 F0 manifest freezes exact trees, versions, and adapters", () =
     s2ContractSourceTree,
     contractTreeOids: {
       "executioner/src/contracts":
-        "3ce9f5eba016b8b15cf70af0e46cf9db70395bdd",
+        "e9e455f56b11b0f812fb888ccf0a0d8dda9bbb6b",
       "executioner/src/contracts/live":
         "ac3971aae2a1ceb3703b0f8c8f171c884c4059d9",
       "executioner/src/control/orchestrator/live":
@@ -110,6 +110,7 @@ test("Stage 2 preserves every pre-existing Stage 1 contract blob", () => {
     indexDiff.filter((line) => line.startsWith("+") && !line.startsWith("+++")),
     [
       '+export * from "./live/index.ts";',
+      '+export * from "./s2-causal-error.ts";',
       '+export * from "./s2-common-schemas.ts";',
       '+export * from "./s2-common-serialized.ts";',
       '+export * from "./s2-common-wire.ts";',

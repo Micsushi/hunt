@@ -45,8 +45,8 @@ export interface ContractImpact {
   taskActivations: TaskActivation[];
 }
 
-const acceptedS2ContractRevision = "b98ebad34b74b3a318edfca4532a954bf07e1051";
-const acceptedS2ContractTree = "94521b4c6468f88505c6cb55da608618002e2d61";
+const acceptedS2ContractRevision = "b3bda9517656f9352cd9fd50cdb1715049b0c378";
+const acceptedS2ContractTree = "e2651d236bf0f2e6c3e73ffd4d1882ee67782886";
 const f2Tasks = Array.from({ length: 13 }, (_, index) => `S3-F2-T${index + 1}`);
 const f3Tasks = Array.from({ length: 12 }, (_, index) => `S3-F3-T${index + 1}`);
 const activatedVariants = new Map([

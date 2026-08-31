@@ -5,8 +5,8 @@ Status: frozen
 The accepted Stage 1 base is
 `87c77e538d8bba378ec93516dbea3f4747beb822`. The machine-readable Stage 2
 contract source is
-`b98ebad34b74b3a318edfca4532a954bf07e1051`, with exact tree
-`94521b4c6468f88505c6cb55da608618002e2d61`. The machine-readable Stage 2
+`b3bda9517656f9352cd9fd50cdb1715049b0c378`, with exact tree
+`e2651d236bf0f2e6c3e73ffd4d1882ee67782886`. The machine-readable Stage 2
 record is `docs/s2-contract-revision.json`. It freezes the Git tree object IDs
 for the complete contract surface, live contract subset, F9 live coordinator,
 deterministic live test kit, live contract tests, and offline walking
@@ -41,7 +41,7 @@ token, or provider payload. It does not authorize provider access, deployment,
 publication, or final application submission.
 
 This replacement freeze accepts the monitored live Review integration at
-`b98ebad34b74b3a318edfca4532a954bf07e1051`. The compatible contract delta
+`b3bda9517656f9352cd9fd50cdb1715049b0c378`. The compatible contract delta
 keeps every serialized version and the exact four-method MCP request surface,
 while the authority matrix now governs phase-specific acceptance files and the
 private external-monitor screenshot/ACK lane. The integration also pins
