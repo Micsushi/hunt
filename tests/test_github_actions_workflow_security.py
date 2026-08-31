@@ -42,13 +42,13 @@ class GitHubActionsWorkflowSecurityTest(unittest.TestCase):
                 "ubuntu-latest",
             )
 
-    def test_trusted_main_jobs_use_server1(self) -> None:
+    def test_trusted_main_jobs_use_available_hunt_runner(self) -> None:
         for job in ("trusted-linux-smoke", "ci-trusted"):
             _assert_exact_job_target(
                 WORKFLOW,
                 job,
                 "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-                "[self-hosted, Linux, X64, server1, hunt]",
+                "[self-hosted, Linux, X64, hunt]",
             )
 
     def test_windows_jobs_remain_hosted(self) -> None:
@@ -66,7 +66,7 @@ class GitHubActionsWorkflowSecurityTest(unittest.TestCase):
             "    runs-on: ubuntu-latest",
             "  pull-request-linux-smoke:\n"
             "    if: github.event_name == 'pull_request'\n"
-            "    runs-on: [self-hosted, Linux, X64, server1, hunt]",
+            "    runs-on: [self-hosted, Linux, X64, hunt]",
             1,
         )
         with self.assertRaises(AssertionError):

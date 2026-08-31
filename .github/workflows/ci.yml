@@ -12,7 +12,7 @@ permissions:
 jobs:
   trusted-linux-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, hunt]
+    runs-on: [self-hosted, Linux, X64, hunt]
     name: Linux launcher smoke (trusted main)
     steps:
       - name: Check out repo
@@ -179,7 +179,7 @@ jobs:
 
   ci-trusted:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, server1, hunt]
+    runs-on: [self-hosted, Linux, X64, hunt]
     name: Full CI (trusted main)
     steps:
       - name: Check out repo
