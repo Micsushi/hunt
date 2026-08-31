@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -219,7 +219,10 @@ test("retained Integer formatted dates agree across every completion observer", 
     assert.ok(Array.isArray(inspectionEvidence.consoleTypes));
     assert.ok(Array.isArray(inspectionEvidence.pageErrorNames));
     assert.ok(Array.isArray(inspectionEvidence.requestFailures));
-    assert.equal(existsSync(join(evidenceRoot, "monitor-visible.png")), false);
+    assert.deepEqual(
+      readFileSync(join(evidenceRoot, "monitor-visible.png")).subarray(0, 8),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
   } finally {
     await browser.close();
     rmSync(evidenceRoot, { recursive: true, force: true });
