@@ -194,7 +194,7 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
     )));
     assert.equal(learning.schemaVersion, 6);
     assert.equal(learning.browserTransport, "live_browser");
-    assert.equal(learning.answerFallbackPolicy, "owner_facts_only");
+    assert.equal(learning.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(learning.liveProofEligibility, "eligible");
     assert.equal(learning.fields.length, identities.length);
     assert.equal(new Set(learning.fields.map(({ observationBinding }) =>

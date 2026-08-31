@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   admitApplicationExecutionPolicy,
+  liveApplicationExecutionPolicy,
   type ApplicationExecutionPolicy,
 } from "../../contracts/application-execution-policy.ts";
 
@@ -215,7 +216,12 @@ export function createProfileFieldLearningCapture(input: {
   const rowOrdinals = new Map<string, number>();
   const nextRowOrdinal = new Map<string, number>();
   const visibleIdentities = new Set<string>();
-  const plans = plannedFields(input.plan);
+  const executionPolicy = input.executionPolicy ??
+    liveApplicationExecutionPolicy(input.plan.mode);
+  const plans = plannedFields(
+    input.plan,
+    executionPolicy.answerFallbackPolicy,
+  );
   let written = false;
   let metadataFailure: ProfileMetadataReconciliationFailure | undefined;
   let inspectionFailure: ProfileInspectionFailure | undefined;
@@ -393,11 +399,11 @@ export function createProfileFieldLearningCapture(input: {
           schemaVersion: 6,
           evidenceRevision: "s2-profile-field-learning-v6",
           page: "profile",
-          ...input.executionPolicy,
-          liveProofEligibility: input.executionPolicy.browserTransport === "live_browser" &&
+          ...executionPolicy,
+          liveProofEligibility: executionPolicy.browserTransport === "live_browser" &&
               fields.some(({ lane }) => lane === "synthetic_test_default")
             ? "ineligible_synthetic_answer" as const
-            : input.executionPolicy.liveProofEligibility,
+            : executionPolicy.liveProofEligibility,
           ...(metadataFailure === undefined ? {} : {
             learningConversion: conversion(metadataFailure),
           }),
@@ -538,23 +544,21 @@ function metadataMismatchReasons(
 export function admitProfileFieldLearningEvidence(
   value: ProfileFieldLearningEvidenceV2,
 ): ProfileFieldLearningEvidenceV2 {
-  if (
-    !exactKeys(value, [
+  if (!exactKeys(value, [
       "schemaVersion", "evidenceRevision", "page", "browserTransport",
       "answerFallbackPolicy", "submissionPolicy", "liveProofEligibility",
       ...(value.learningConversion === undefined ? [] : ["learningConversion"]),
       ...(value.syntheticFieldsSha256 === undefined ? [] : ["syntheticFieldsSha256"]),
       "visibleControlCount", "fields",
-    ]) ||
-    value.schemaVersion !== 6 ||
-    value.evidenceRevision !== "s2-profile-field-learning-v6" ||
-    value.page !== "profile" ||
-    !validExecutionPolicy(value) ||
-    (value.syntheticFieldsSha256 !== undefined &&
-      !/^[0-9a-f]{64}$/u.test(value.syntheticFieldsSha256)) ||
-    value.fields.length < 1 || value.fields.length > 128 ||
-    value.visibleControlCount !== value.fields.length
-  ) denied();
+    ])) denied("evidence_shape");
+  if (value.schemaVersion !== 6 ||
+      value.evidenceRevision !== "s2-profile-field-learning-v6" ||
+      value.page !== "profile") denied("evidence_revision");
+  if (!validExecutionPolicy(value)) denied("execution_policy");
+  if (value.syntheticFieldsSha256 !== undefined &&
+      !/^[0-9a-f]{64}$/u.test(value.syntheticFieldsSha256)) denied("synthetic_digest");
+  if (value.fields.length < 1 || value.fields.length > 128 ||
+      value.visibleControlCount !== value.fields.length) denied("field_count");
   const identities = new Set<string>();
   for (const field of value.fields) {
     if (!validFieldIdentity(field.fieldIdentity)) denied("field_identity");
@@ -902,14 +906,17 @@ type MetadataRecord = Pick<MutableRecord,
   "sanitizedLabelSha256" | "optionCatalogState" | "visibleOptionIds"
 >;
 
-function plannedFields(plan: ProfilePagePlan): Map<string, ProfileFieldPlan> {
+function plannedFields(
+  plan: ProfilePagePlan,
+  answerFallbackPolicy: ApplicationExecutionPolicy["answerFallbackPolicy"],
+): Map<string, ProfileFieldPlan> {
   const result = new Map<string, ProfileFieldPlan>();
   for (const field of [
     ...plan.fields,
     ...plan.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
   ]) {
     const admitted = field.answer.kind === "answered" &&
-        !answerLaneAdmitted(plan.mode, field.answer.lane)
+        !answerLaneAdmitted(plan.mode, field.answer.lane, answerFallbackPolicy)
       ? Object.freeze({
           ...field,
           answer: Object.freeze({ kind: "profile_answer_missing" as const }),

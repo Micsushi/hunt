@@ -704,7 +704,8 @@ export class OwnedWorkdayApplicationRuntime {
             request.ownerSources.profilePlan,
             learning.page,
             signal,
-            request.ownerSources.executionPolicy.answerFallbackPolicy,
+            request.ownerSources.executionPolicy?.answerFallbackPolicy ??
+              "deterministic_site_valid_editable",
           );
           if (result.kind === "verified" && result.committedFields.length > 0) {
             syntheticFields = Object.freeze(result.committedFields.map((field) =>
@@ -804,7 +805,8 @@ export class OwnedWorkdayApplicationRuntime {
           schemaVersion: 1,
           checkpoint: "profile_verified",
           pageId: input.pageId,
-          answerFallbackPolicy: request.ownerSources.executionPolicy.answerFallbackPolicy,
+          answerFallbackPolicy: request.ownerSources.executionPolicy?.answerFallbackPolicy ??
+            "deterministic_site_valid_editable",
           pageType: result.pageType,
           verifiedFields: result.verifiedFields,
           ...(syntheticFields.length === 0 ? {} : { syntheticFields }),
@@ -1417,7 +1419,8 @@ export class OwnedWorkdayApplicationRuntime {
       try {
         completed = await questionnaire.complete({
           mode: request.ownerSources.profilePlan?.mode ?? "live",
-          answerFallbackPolicy: request.ownerSources.executionPolicy.answerFallbackPolicy,
+          answerFallbackPolicy: request.ownerSources.executionPolicy?.answerFallbackPolicy ??
+            "deterministic_site_valid_editable",
           journeyId: session.journeyId,
           sessionId: semanticSessionId,
           pageId: input.pageId,

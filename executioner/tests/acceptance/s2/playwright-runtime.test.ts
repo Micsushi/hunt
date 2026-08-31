@@ -1043,7 +1043,7 @@ test("repeated questionnaire navigation distinguishes the destination by exact f
   }
 });
 
-test("a profile preflight owner-input block remains a deterministic page failure before mutation", async () => {
+test("a live profile deterministically traverses a supported unknown required control", async () => {
   const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-runtime-"));
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -1103,35 +1103,22 @@ fields: [{
       input: { attempt: 1, pageId: "page-profile" } as never,
     }, new AbortController().signal);
 
-    assert.deepEqual(result, {
-      ok: false,
-      error: {
-        code: "page_incomplete",
-        classifier: "profile_page",
-        primitive: "profile_control",
-        unknownLayer: "required_field",
-      },
-    });
+    assert.equal((result as { readonly ok: boolean }).ok, true, JSON.stringify(result));
     assert.equal(
       await page.locator('#name--legalName--firstName').inputValue(),
-      "",
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="unreviewedRequiredControl"]').inputValue(),
+      "Test response pending owner review.",
     );
     const learning = readFileSync(join(evidenceRoot, "profile-field-learning.json"), "utf8");
     assert.equal(learning.includes("Ada"), false);
     assert.equal(learning.includes("unreviewedRequiredControl"), false);
-    assert.equal(JSON.parse(learning).fields[1].prefillDisposition, "needs_owner_input");
-    assert.deepEqual(traces, [{
-      event: "profile_reconciliation_blocked",
-      details: {
-        pageId: "page-profile",
-        code: "answer_type_unknown",
-        fieldId: "unknown.required.1",
-        uiBehavior: "text",
-        uiVariant: "workday_unknown_required_v1",
-        mutationAttempted: false,
-        retryable: false,
-      },
-    }]);
+    const fields = JSON.parse(learning).fields;
+    assert.equal(fields[1].lane, "synthetic_test_default");
+    assert.equal(fields[1].terminalDisposition, "verified");
+    assert.equal(traces.some(({ event }) => event === "profile_reconciliation_blocked"), false);
   } finally {
     runtime.dispose();
     await context.close();
@@ -1140,7 +1127,7 @@ fields: [{
   }
 });
 
-test("generated prior-employment defaults fail closed before mutation", async () => {
+test("a generated prior-employment fallback remains explicit and non-submittable", async () => {
   const evidenceRoot = mkdtempSync(join(tmpdir(), "hunt-s2-prior-employment-runtime-"));
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -1154,6 +1141,7 @@ test("generated prior-employment defaults fail closed before mutation", async ()
   const accepted: string[] = [];
   const monitored: string[] = [];
   const traces: { readonly event: string; readonly details?: object }[] = [];
+  let nextOperation = 0;
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
@@ -1180,7 +1168,9 @@ fields: [{
       },
     } as never,
     acceptances: { record(value) { accepted.push(value.checkpoint); } },
-    nextOperationId: () => generatedOperationId("operation_prior_employment_01"),
+    nextOperationId: () => generatedOperationId(
+      `operation_prior_employment_${String(++nextOperation).padStart(8, "0")}`,
+    ),
     timeoutMs: 1_000,
     initialReviewExpected: [],
     externalMonitor: {
@@ -1212,75 +1202,24 @@ fields: [{
       input: { attempt: 1, pageId: "page-profile" } as never,
     }, new AbortController().signal);
 
-    assert.deepEqual(result, {
-      ok: false,
-      error: {
-        code: "page_incomplete",
-        classifier: "profile_page",
-        primitive: "profile_control",
-        unknownLayer: "required_field",
-      },
-    });
+    assert.equal((result as { readonly ok: boolean }).ok, true, JSON.stringify(result));
     assert.equal(await page.locator("#previous-yes").isChecked(), false);
-    assert.equal(await page.locator("#previous-no").isChecked(), false);
+    assert.equal(await page.locator("#previous-no").isChecked(), true);
     assert.equal(await page.getByRole("button", { name: /^Submit(?: application)?$/iu }).count(), 0);
     assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
-    assert.deepEqual(accepted, []);
-    assert.deepEqual(monitored, ["state_observed"]);
+    assert.deepEqual(accepted, ["profile_verified"]);
+    assert.deepEqual(monitored, ["state_observed", "before_mutation", "after_readback"]);
     const learning = JSON.parse(readFileSync(
       join(evidenceRoot, "profile-field-learning.json"),
       "utf8",
     ));
-    assert.deepEqual(learning.fields, [{
-      fieldIdentity: "profile.employment.previously_worked_for_organization",
-      uiType: "radio_group",
-      uiVariant: "workday_previous_worker_radio_v1",
-      questionCategory: "prior_employment",
-      answerCategory: "single_select",
-      required: true,
-      answerState: "unset",
-      lane: null,
-      binderStrategy: "catalog_selector_exact",
-      sanitizedLabelSha256: "cb8a534730a85fc9b2d2ae0ba130d05cdd5300666fac5bcc82c29fa0b7655fd8",
-      metadataReconciliation: "matched",
-      backingState: "unset",
-      validationState: "clear",
-      optionCatalogState: "observed",
-      observationBinding: {
-        operationId: "operation_prior_employment_01",
-        attempt: 1,
-        stateObservedAck: true,
-      },
-      visibleOptionIds: [
-        "option_sha256_8a798890fe93817163b10b5f7bd2ca4d25d84c52739a645a889c173eee7d9d3d",
-        "option_sha256_9390298f3fb0c5b160498935d79cb139aef28e1c47358b4bbba61862b9c26e59",
-      ],
-      selectedOptionId: null,
-      optionMapping: "owner_visible_option",
-      prefillDisposition: "needs_owner_input",
-      driverAttempt: "none",
-      monitorBinding: null,
-      terminalDisposition: "required_unset",
-      mechanics: {
-        popupBound: "not_applicable",
-        optionFocused: "not_applicable",
-        optionActivated: "not_observed",
-        popupClosed: "not_applicable",
-        backingValueCommitted: "not_observed",
-        validationCleared: "not_observed",
-        persistentReadback: "not_attempted",
-      },
-    }]);
-    assert.deepEqual(traces, [{
-      event: "profile_reconciliation_blocked",
-      details: {
-        pageId: "page-profile",
-        code: "profile_answer_provenance_denied",
-        fieldId: "employment.previously_worked_for_organization",
-        mutationAttempted: false,
-        retryable: false,
-      },
-    }]);
+    assert.equal(learning.answerFallbackPolicy, "deterministic_site_valid_editable");
+    assert.equal(learning.liveProofEligibility, "ineligible_synthetic_answer");
+    assert.equal(learning.fields[0].answerState, "answered");
+    assert.equal(learning.fields[0].lane, "synthetic_test_default");
+    assert.equal(learning.fields[0].terminalDisposition, "verified");
+    assert.equal(learning.fields[0].mechanics.persistentReadback, "verified_after_rescan");
+    assert.equal(traces.some(({ event }) => event === "profile_reconciliation_blocked"), false);
   } finally {
     runtime.dispose();
     await context.close();
@@ -1289,7 +1228,7 @@ fields: [{
   }
 });
 
-test("a profile block after a commit remains browser-effect uncertain", async () => {
+test("a supported unknown revealed after a profile commit is reconciled in the same live transport", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1341,7 +1280,7 @@ fields: [
     leaseExpiresAt: "2026-08-05T13:00:00.000Z",
   });
   try {
-    await assert.rejects(() => runtime.run(page as never, {
+    const result = await runtime.run(page as never, {
       schemaVersion: 1,
       journeyId: journeyId("journey_profile_effect_01"),
       operationId: generatedOperationId("operation_profile_effect_02"),
@@ -1351,14 +1290,19 @@ fields: [
     }, {
       kind: "reconcile_profile",
       input: { attempt: 1, pageId: "page-profile" } as never,
-    }, new AbortController().signal), /profile reconciliation denied/u);
+    }, new AbortController().signal);
+    assert.equal((result as { readonly ok: boolean }).ok, true, JSON.stringify(result));
     assert.equal(
       await page.locator('#name--legalName--firstName').inputValue(),
       "Ada",
     );
     assert.equal(
       await page.locator('#name--legalName--lastName').inputValue(),
-      "",
+      "Lovelace",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="unreviewedConditional"]').inputValue(),
+      "Test response pending owner review.",
     );
   } finally {
     runtime.dispose();
@@ -1525,10 +1469,14 @@ test("questionnaire batches external proof once while every field keeps independ
   const context = await browser.newContext();
   const page = await context.newPage();
   const questionEvidenceRoot = mkdtempSync(join(tmpdir(), "hunt-questionnaire-remount-learning-"));
+  const ownerFactsOnlyPolicy = Object.freeze({
+    ...liveApplicationExecutionPolicy("live"),
+    answerFallbackPolicy: "owner_facts_only" as const,
+  });
   const questionLearning = createQuestionAnswerLearningCapture({
     root: questionEvidenceRoot,
     mode: "live",
-    executionPolicy: liveApplicationExecutionPolicy("live"),
+    executionPolicy: ownerFactsOnlyPolicy,
   });
   const profilePlan = {
     mode: "live" as "live" | "synthetic_test_non_submittable",
@@ -1588,6 +1536,7 @@ test("questionnaire batches external proof once while every field keeps independ
     request: {
       owner: { revisionId: "revision_questionnaire_monitor" },
       ownerSources: {
+        executionPolicy: ownerFactsOnlyPolicy,
         resumeIntent: intent.value,
         profileId: upstreamProfileId("profile-questionnaire-monitor"),
         profileRevision: 1,
