@@ -8,7 +8,7 @@ import { runStaticCorpusAudit, validateIssueDispositions } from "../../src/corpu
 import { scanCorpusPrivacyFiles } from "../../src/corpus/audit/privacy.ts";
 
 const impactSha =
-  "sha256.2e361e746e723b662e5600f99109e0e9d9cb62bd3feff6f0235591fa8414bdc2";
+  "sha256.c0181706ab8be8034aecd306ca4d9b66dfbaded6163346605bc5981e8762af1f";
 
 test("corpus audit preserves privacy, MCP capability, and module-size gates", async () => {
   const report = await runStaticCorpusAudit(resolve("."));

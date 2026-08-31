@@ -4,7 +4,7 @@ S3-F4 freezes the accepted Workday 40-slot manifest, four accepted page/UI
 fixtures, variant map, declarations, source reconciliation, package lock,
 runtime configuration, and exact contract-impact record:
 
-`sha256.2e361e746e723b662e5600f99109e0e9d9cb62bd3feff6f0235591fa8414bdc2`
+`sha256.c0181706ab8be8034aecd306ca4d9b66dfbaded6163346605bc5981e8762af1f`
 
 The prerequisite is accepted `S3-F2-T13`. All twelve S3-F3 tasks remain
 `not-activated` with zero variant, fixture, and slot evidence. Freeze and audit
