@@ -63,9 +63,9 @@ export interface CheckboxGroupingPage {
 }
 
 export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promise<void> {
-  const evidence = await page.evaluate(({
-    attribute, optionsAttribute, selectedOptionAttribute,
-  }) => {
+  const evidence = await page.evaluate((attribute) => {
+    const optionsAttribute = "data-hunt-checkbox-options";
+    const selectedOptionAttribute = "data-hunt-checkbox-selected-option";
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -170,11 +170,7 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
           .normalize("NFC").replace(/\s+/gu, " ").trim(),
       };
     });
-  }, {
-    attribute: checkboxGroupKindAttribute,
-    optionsAttribute: checkboxGroupOptionsAttribute,
-    selectedOptionAttribute: checkboxGroupSelectedOptionAttribute,
-  });
+  }, checkboxGroupKindAttribute);
   const decisions = evidence.map((item) => classifyCheckboxGroup({
     ...item,
     explicitMode: item.explicitMode === "exclusive" || item.explicitMode === "multiple"
