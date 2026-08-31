@@ -99,6 +99,7 @@ $actionSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordin
 $editSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
 $documentTitles = [Collections.Generic.List[string]]::new()
+$applicationFieldCount = 0
 $stageCounts = [ordered]@{
   myInformation = 0
   myExperience = 0
@@ -106,6 +107,29 @@ $stageCounts = [ordered]@{
   voluntaryDisclosures = 0
   selfIdentify = 0
   review = 0
+}
+$fieldControlTypes = @(50002, 50003, 50004, 50013, 50016)
+foreach ($document in @($elements | Where-Object {
+  -not $_.Current.IsOffscreen -and $_.Current.ControlType.Id -eq 50030
+})) {
+  try {
+    $documentElements = $document.FindAll(
+      [Windows.Automation.TreeScope]::Descendants,
+      [Windows.Automation.Condition]::TrueCondition
+    )
+    $ownsNavigation = $false
+    $documentFieldCount = 0
+    foreach ($candidate in $documentElements) {
+      if ($candidate.Current.IsOffscreen) { continue }
+      $candidateType = [int]$candidate.Current.ControlType.Id
+      if ([string]$candidate.Current.Name -eq 'Save and Continue' -and
+          ($candidateType -eq 50000 -or $candidateType -eq 50005 -or $candidateType -eq 50031)) {
+        $ownsNavigation = $true
+      }
+      if ($fieldControlTypes -contains $candidateType) { $documentFieldCount++ }
+    }
+    if ($ownsNavigation) { $applicationFieldCount += $documentFieldCount }
+  } catch {}
 }
 $address = $null
 foreach ($element in $elements) {
@@ -154,6 +178,7 @@ $payload = [ordered]@{
   title = [string]$window.Current.Name
   selectedTabTitles = @($selectedTabTitles)
   documentTitles = @($documentTitles)
+  applicationFieldCount = $applicationFieldCount
   stageCounts = $stageCounts
   address = $address
   flags = @($seen | Sort-Object)
@@ -192,6 +217,7 @@ try {
     readonly title?: unknown;
     readonly selectedTabTitles?: unknown;
     readonly documentTitles?: unknown;
+    readonly applicationFieldCount?: unknown;
     readonly stageCounts?: unknown;
     readonly address?: unknown;
     readonly flags?: unknown;
@@ -211,7 +237,10 @@ try {
       !Array.isArray(observed.actionFlags) ||
       observed.actionFlags.some((value) => typeof value !== "string") ||
       !Array.isArray(observed.editFlags) ||
-      observed.editFlags.some((value) => typeof value !== "string")) {
+      observed.editFlags.some((value) => typeof value !== "string") ||
+      !Number.isInteger(observed.applicationFieldCount) ||
+      (observed.applicationFieldCount as number) < 0 ||
+      (observed.applicationFieldCount as number) > 512) {
     observerFailure("accessibility_payload");
   }
   const stageCounts = admitObservedStageCounts(observed.stageCounts);
@@ -225,6 +254,7 @@ try {
   const owned: ObservedOwnedControlStructure = Object.freeze({
     actionFlags: new Set(observed.actionFlags.map(canonicalObservedFlag)),
     editFlags: new Set(observed.editFlags.map(canonicalObservedFlag)),
+    applicationFieldCount: observed.applicationFieldCount as number,
   });
   const activeStageTitles = observedActiveStageTitles(stageCounts);
   let page: string;
@@ -245,6 +275,7 @@ try {
       flags,
       stageCounts,
       activeStageTitles,
+      owned.applicationFieldCount ?? 0,
     ));
   }
   let title: string;
@@ -278,6 +309,7 @@ function structureFailureDiagnostic(
   flags: ReadonlySet<string>,
   stageCounts: ObservedStageCounts,
   activeStageTitles: readonly string[],
+  applicationFieldCount: number,
 ): ExternalMonitorObserverFailureDiagnostic {
   const titleHashes = observedChromeIdentityTitleSha256s(windowTitle, identityTitles);
   return Object.freeze({
@@ -287,6 +319,7 @@ function structureFailureDiagnostic(
     observedStructureFlags: [...flags].filter((value) => observedFlagSet.has(value)).sort(),
     observedStageCounts: Object.freeze({ ...stageCounts }),
     activeStageTitles: Object.freeze([...activeStageTitles]),
+    observedApplicationFieldCount: applicationFieldCount,
   });
 }
 

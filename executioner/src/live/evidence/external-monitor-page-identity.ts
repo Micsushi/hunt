@@ -1,6 +1,7 @@
 export interface ObservedOwnedControlStructure {
   readonly actionFlags: ReadonlySet<string>;
   readonly editFlags: ReadonlySet<string>;
+  readonly applicationFieldCount?: number;
 }
 
 export interface ObservedStageCounts {
@@ -53,6 +54,8 @@ export function observedStructurePage(
       flags.has("Resume, Cover Letter and References") ||
       flags.has("Upload a file (5MB max)")) return "resume";
   if (flags.has("My Information") || flags.has("My Experience")) return "profile";
+  if (owned.actionFlags.has("Save and Continue") &&
+      (owned.applicationFieldCount ?? 0) > 0) return "questionnaire";
   if (owned.actionFlags.has("Apply Manually") || flags.has("Apply Manually")) {
     return "apply_choice";
   }

@@ -1625,6 +1625,8 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.match(observerSource, /\[void\]\$documentTitles\.Add\(\$name\)/u);
   assert.match(observerSource, /observedStructureFlags/u);
   assert.match(observerSource, /observedStageCounts/u);
+  assert.match(observerSource, /applicationFieldCount/u);
+  assert.match(observerSource, /\$ownsNavigation/u);
   assert.match(observerSource, /observedTitleCandidateSha256s/u);
   assert.match(observerSource, /s2-external-monitor-observer-failure-v1/u);
   assert.match(observerSource, /submitActivated: false/u);
@@ -1717,6 +1719,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   const railLessQuestionnaireOwned = {
     actionFlags: new Set(["Save and Continue"]),
     editFlags: new Set<string>(),
+    applicationFieldCount: 0,
   };
   assert.equal(observedStructurePageWithIdentity(
     new Set(["Save and Continue"]),
@@ -1731,6 +1734,24 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "My Experience - Google Chrome for Testing",
     digest(Buffer.from("My Experience", "utf8")),
     railLessQuestionnaireOwned,
+  ), /external monitor observer denied/u);
+  assert.equal(observedStructurePage(
+    new Set(["Save and Continue"]),
+    [],
+    {
+      actionFlags: new Set(["Save and Continue"]),
+      editFlags: new Set<string>(),
+      applicationFieldCount: 9,
+    },
+  ), "questionnaire");
+  assert.throws(() => observedStructurePage(
+    new Set(["Save and Continue"]),
+    [],
+    {
+      actionFlags: new Set(["Save and Continue"]),
+      editFlags: new Set<string>(),
+      applicationFieldCount: 0,
+    },
   ), /external monitor observer denied/u);
   assert.throws(() => observedStructurePageWithIdentity(
     new Set(["Save and Continue"]),

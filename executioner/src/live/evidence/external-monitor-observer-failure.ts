@@ -29,6 +29,7 @@ export interface ExternalMonitorObserverFailureDiagnostic {
   readonly observedStructureFlags?: readonly string[];
   readonly observedStageCounts?: ObservedStageCounts;
   readonly activeStageTitles?: readonly string[];
+  readonly observedApplicationFieldCount?: number;
   readonly observedStructurePage?: string;
 }
 
