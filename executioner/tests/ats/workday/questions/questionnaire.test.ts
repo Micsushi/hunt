@@ -247,6 +247,75 @@ test("required narrative and fixed choices resolve canonically and independently
   assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
 });
 
+test("an uncertain text effect continues only after independent committed readback", async () => {
+  let verifiedReceipt: unknown;
+  const { handler } = dependencies({
+    driver: {
+      async drive() {
+        return {
+          ok: false,
+          error: { code: "browser_effect_uncertain", retryable: false },
+        };
+      },
+    },
+    verifier: {
+      async verify(input) {
+        verifiedReceipt = input.receipt;
+        return {
+          ok: true,
+          value: { kind: "verified", fieldId: input.intent.fieldId },
+        };
+      },
+    },
+  });
+
+  const result = await handler.complete(
+    request([narrativeField]),
+    new AbortController().signal,
+  );
+
+  assert.equal(result.ok && result.value.kind, "verified");
+  assert.deepEqual(verifiedReceipt, {
+    operationId: "operation_questionnaire_0000000000000001",
+    fieldId: narrativeField.fieldId,
+    behavior: narrativeField.behavior,
+    attempted: true,
+  });
+});
+
+test("an unverified uncertain text effect preserves the earliest driver error", async () => {
+  const { handler } = dependencies({
+    driver: {
+      async drive() {
+        return {
+          ok: false,
+          error: { code: "browser_effect_uncertain", retryable: false },
+        };
+      },
+    },
+    verifier: {
+      async verify(input) {
+        return {
+          ok: true,
+          value: {
+            kind: "rejected",
+            fieldId: input.intent.fieldId,
+            reason: "mismatch",
+          },
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(await handler.complete(
+    request([narrativeField]),
+    new AbortController().signal,
+  ), {
+    ok: false,
+    error: { code: "browser_effect_uncertain", retryable: false },
+  });
+});
+
 test("a conditional rescan reuses only an exact previously verified field", async () => {
   const verified = new Set<string>();
   const conditionalReveals: boolean[] = [];

@@ -465,7 +465,9 @@ export function createQuestionnairePageHandler(
           operationId,
           intent: answer.value.intent,
         }, signal);
-        if (!driven.ok) {
+        const uncertainDrive = !driven.ok &&
+          driven.error.code === "browser_effect_uncertain";
+        if (!driven.ok && !uncertainDrive) {
           dependencies.recordFailure?.({
             operationId,
             code: driven.error.code,
@@ -474,14 +476,29 @@ export function createQuestionnairePageHandler(
           });
           return driven;
         }
+        const receipt = driven.ok ? driven.value : {
+          operationId,
+          fieldId: answer.value.intent.fieldId,
+          behavior: answer.value.intent.behavior,
+          attempted: true as const,
+        };
 
         const verified = await dependencies.verifier.verify({
           sessionId: request.sessionId,
           pageId: request.pageId,
           intent: answer.value.intent,
-          receipt: driven.value,
+          receipt,
         }, signal);
         if (!verified.ok) {
+          if (!driven.ok) {
+            dependencies.recordFailure?.({
+              operationId,
+              code: driven.error.code,
+              retryable: driven.error.retryable,
+              stage: "driver",
+            });
+            return driven;
+          }
           dependencies.recordFailure?.({
             operationId,
             code: verified.error.code,
@@ -491,6 +508,15 @@ export function createQuestionnairePageHandler(
           return verified;
         }
         if (verified.value.kind !== "verified") {
+          if (!driven.ok) {
+            dependencies.recordFailure?.({
+              operationId,
+              code: driven.error.code,
+              retryable: driven.error.retryable,
+              stage: "driver",
+            });
+            return driven;
+          }
           const code = verified.value.kind === "rejected"
             ? "verification_rejected"
             : verified.value.kind === "ambiguous"
