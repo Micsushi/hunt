@@ -12,6 +12,7 @@ export type SubmissionPolicy = (typeof submissionPolicies)[number];
 
 export const liveProofEligibilities = [
   "eligible",
+  "ineligible_synthetic_answer",
   "ineligible_fixture_transport",
 ] as const;
 export type LiveProofEligibility = (typeof liveProofEligibilities)[number];
@@ -28,11 +29,11 @@ export function liveApplicationExecutionPolicy(
 ): ApplicationExecutionPolicy {
   return Object.freeze({
     browserTransport: "live_browser" as const,
-    answerFallbackPolicy: answerMode === "live"
-      ? "owner_facts_only" as const
-      : "deterministic_site_valid_editable" as const,
+    answerFallbackPolicy: "deterministic_site_valid_editable" as const,
     submissionPolicy: "forbidden" as const,
-    liveProofEligibility: "eligible" as const,
+    liveProofEligibility: answerMode === "live"
+      ? "eligible" as const
+      : "ineligible_synthetic_answer" as const,
   });
 }
 
@@ -61,8 +62,10 @@ export function admitApplicationExecutionPolicy(
       !answerFallbackPolicies.includes(policy.answerFallbackPolicy as AnswerFallbackPolicy) ||
       policy.submissionPolicy !== "forbidden" ||
       !liveProofEligibilities.includes(policy.liveProofEligibility as LiveProofEligibility) ||
-      (policy.browserTransport === "live_browser") !==
-        (policy.liveProofEligibility === "eligible")) denied();
+      (policy.browserTransport === "fixture_browser") !==
+        (policy.liveProofEligibility === "ineligible_fixture_transport") ||
+      (policy.liveProofEligibility === "ineligible_synthetic_answer" &&
+        policy.answerFallbackPolicy !== "deterministic_site_valid_editable")) denied();
   return Object.freeze({
     browserTransport: policy.browserTransport as BrowserTransport,
     answerFallbackPolicy: policy.answerFallbackPolicy as AnswerFallbackPolicy,
@@ -71,12 +74,11 @@ export function admitApplicationExecutionPolicy(
   });
 }
 
-export function answerModeForPolicy(
+export function answerModeAllowedByPolicy(
   policy: Pick<ApplicationExecutionPolicy, "answerFallbackPolicy">,
-): "live" | "synthetic_test_non_submittable" {
-  return policy.answerFallbackPolicy === "owner_facts_only"
-    ? "live"
-    : "synthetic_test_non_submittable";
+  mode: "live" | "synthetic_test_non_submittable",
+): boolean {
+  return mode === "live" || policy.answerFallbackPolicy === "deterministic_site_valid_editable";
 }
 
 function denied(): never {

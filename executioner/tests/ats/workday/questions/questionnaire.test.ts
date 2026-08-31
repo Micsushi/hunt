@@ -89,6 +89,7 @@ const countryField = field(
 function request(fields: readonly FieldObservation[]) {
   return {
     mode: "live" as const,
+    answerFallbackPolicy: "owner_facts_only" as const,
     journeyId: journeyId("journey_questionnaire_fixture_1"),
     sessionId: "browser_session_questionnaire_fixture_1" as BrowserSessionId,
     pageId: browserPageId("page-questionnaire"),
@@ -317,7 +318,7 @@ test("listbox mutations rely on the driver's exact owned-popup binding", async (
   assert.deepEqual(calls, { resolved: 0, driven: 1, verified: 1 });
 });
 
-test("unknown questions remain unset in live mode before mutation", async () => {
+test("unknown supported questions use deterministic editable fallback in live transport", async () => {
   const unknown = field("s2-field-unknown", "Describe your interest in this role", "textarea");
   const profile: ProfileQuery = {
     async query() {
@@ -330,15 +331,20 @@ test("unknown questions remain unset in live mode before mutation", async () => 
   });
 
   const result = await handler.complete(
-    request([unknown]),
+    {
+      ...request([unknown]),
+      answerFallbackPolicy: "deterministic_site_valid_editable",
+    },
     new AbortController().signal,
   );
 
-  assert.equal(result.ok && result.value.kind, "blocked");
-  if (result.ok && result.value.kind === "blocked") {
-    assert.equal(result.value.code, "question_unknown");
+  assert.equal(result.ok && result.value.kind, "verified");
+  if (result.ok && result.value.kind === "verified") {
+    assert.equal(result.value.answers.length, 1);
+    assert.equal(result.value.answers[0]?.lane, "synthetic_test_default");
+    assert.equal(result.value.answers[0]?.provenance, "reviewed_catalog");
   }
-  assert.deepEqual(calls, { resolved: 0, driven: 0, verified: 0 });
+  assert.deepEqual(calls, { resolved: 0, driven: 1, verified: 1 });
 });
 
 test("reviewed age aliases reject injected learning defaults", async () => {

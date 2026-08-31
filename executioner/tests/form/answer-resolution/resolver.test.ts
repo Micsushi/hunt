@@ -49,7 +49,7 @@ function request(observed: FieldObservation) {
   const resumeArtifact = createResumeArtifactFixture();
   return Object.freeze({
     mode: "live",
-
+    answerFallbackPolicy: "owner_facts_only" as const,
     field: observed,
     profileId: upstreamProfileId("profile-1"),
     profileRevision: 3,

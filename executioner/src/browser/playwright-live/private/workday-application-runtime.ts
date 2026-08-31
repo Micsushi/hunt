@@ -704,6 +704,7 @@ export class OwnedWorkdayApplicationRuntime {
             request.ownerSources.profilePlan,
             learning.page,
             signal,
+            request.ownerSources.executionPolicy.answerFallbackPolicy,
           );
           if (result.kind === "verified" && result.committedFields.length > 0) {
             syntheticFields = Object.freeze(result.committedFields.map((field) =>
@@ -1416,6 +1417,7 @@ export class OwnedWorkdayApplicationRuntime {
       try {
         completed = await questionnaire.complete({
           mode: request.ownerSources.profilePlan?.mode ?? "live",
+          answerFallbackPolicy: request.ownerSources.executionPolicy.answerFallbackPolicy,
           journeyId: session.journeyId,
           sessionId: semanticSessionId,
           pageId: input.pageId,

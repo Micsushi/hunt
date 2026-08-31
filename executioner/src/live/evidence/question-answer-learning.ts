@@ -418,6 +418,10 @@ export function createQuestionAnswerLearningCapture(input: {
           evidenceRevision: "s2-question-answer-learning-v6",
           page: "questionnaire",
           ...input.executionPolicy,
+          liveProofEligibility: input.executionPolicy.browserTransport === "live_browser" &&
+              questions.some(({ lane }) => lane === "synthetic_test_default")
+            ? "ineligible_synthetic_answer" as const
+            : input.executionPolicy.liveProofEligibility,
           questions,
         });
         return writeAtomicJsonEvidence({
@@ -600,6 +604,11 @@ export function admitQuestionAnswerLearningEvidence(
     ) denied();
     fields.add(questionIdentity(record.pageId, record.fieldId));
   }
+  if (
+    value.browserTransport === "live_browser" &&
+    value.questions.some(({ lane }) => lane === "synthetic_test_default") &&
+    value.liveProofEligibility !== "ineligible_synthetic_answer"
+  ) denied();
   return Object.freeze({
     ...value,
     questions: Object.freeze(value.questions.map(freezeRecord)),

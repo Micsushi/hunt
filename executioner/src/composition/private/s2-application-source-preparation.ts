@@ -11,7 +11,7 @@ import {
 
 import {
   admitApplicationExecutionPolicy,
-  answerModeForPolicy,
+  answerModeAllowedByPolicy,
   type ApplicationExecutionPolicy,
 } from "../../contracts/application-execution-policy.ts";
 import { parseApplicationProfile } from "../../profile/application-profile.ts";
@@ -126,7 +126,7 @@ function validateApplicationSource(value: Stage2ApplicationSourceInput): void {
   catch { return denied(); }
   if (
     (plan.mode !== "live" && plan.mode !== "synthetic_test_non_submittable") ||
-    answerModeForPolicy(executionPolicy) !== plan.mode ||
+    !answerModeAllowedByPolicy(executionPolicy, plan.mode) ||
     !Array.isArray(plan.fields) || !Array.isArray(plan.repeatables)
   ) denied();
   const fields = [

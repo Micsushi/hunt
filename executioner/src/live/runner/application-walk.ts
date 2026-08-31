@@ -13,6 +13,7 @@ import {
 } from "../../ats/workday/application/page-walk.ts";
 import type { JourneyId } from "../../contracts/index.ts";
 import type { S2StableErrorCode } from "../../contracts/s2-common-wire.ts";
+import { stage2CausalCode } from "../../contracts/s2-causal-error.ts";
 import type { ApplicationExecutionPolicy } from "../../contracts/application-execution-policy.ts";
 import type {
   ApplicationWalkAcceptanceV1,
@@ -122,7 +123,7 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly classifier?: string;
       readonly primitive?: string;
       readonly unknownLayer?: string;
-      readonly totalDurationMs: number;
+      readonly applicationWalkDurationMs: number;
       readonly monotonicClock: "performance_now";
       readonly submitActivated: false;
     };
@@ -207,7 +208,7 @@ export async function runObservedApplicationPageWalk(
       checkpoint: result.value.checkpoint,
       completedPages: result.value.completedPages,
       failure: null,
-      totalDurationMs: elapsed(clock, totalStarted),
+      applicationWalkDurationMs: elapsed(clock, totalStarted),
       monotonicClock: "performance_now",
       submitActivated: false,
     } : {
@@ -221,7 +222,7 @@ export async function runObservedApplicationPageWalk(
       classifier: result.error.failure.classifier,
       primitive: result.error.failure.primitive,
       unknownLayer: result.error.failure.unknownLayer,
-      totalDurationMs: elapsed(clock, totalStarted),
+      applicationWalkDurationMs: elapsed(clock, totalStarted),
       monotonicClock: "performance_now",
       submitActivated: false,
     });
@@ -234,7 +235,7 @@ export async function runObservedApplicationPageWalk(
       checkpoint: "unknown",
       completedPages: 0,
       failure: null,
-      totalDurationMs: elapsed(clock, totalStarted),
+      applicationWalkDurationMs: elapsed(clock, totalStarted),
       monotonicClock: "performance_now",
       submitActivated: false,
     });
@@ -264,14 +265,15 @@ export async function runStage2ApplicationWalk(
       { journeyId: input.journeyId, stopAfter: input.stopAfter },
       signal,
     );
-  } catch {
+  } catch (error) {
+    const code = stage2CausalCode(error, "failure_context_invalid");
     walk = {
       ok: false,
       error: {
         checkpoint: "resume",
         completedPages: 0,
         failure: {
-          code: "failure_context_invalid",
+          code,
           retryable: false,
           owner: "browser_truth",
           classifier: "workday_page",
@@ -322,12 +324,22 @@ export async function runStage2ApplicationWalk(
   let acceptance: ApplicationWalkAcceptanceV1;
   try {
     const laneAcceptances = dependencies.laneAcceptances.snapshot(walk.value.checkpoint);
+    const syntheticAnswerUsed = laneAcceptances.some((lane) =>
+      lane.checkpoint === "profile_verified"
+        ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+        : lane.checkpoint === "questionnaire_verified" &&
+          lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+    );
     acceptance = Object.freeze({
       schemaVersion: 2,
       evidenceRevision: "s2-application-walk-acceptance-v2",
       checkpoint: walk.value.checkpoint,
       status: "passed",
       ...input.executionPolicy,
+      liveProofEligibility: input.executionPolicy.browserTransport === "live_browser" &&
+          syntheticAnswerUsed
+        ? "ineligible_synthetic_answer" as const
+        : input.executionPolicy.liveProofEligibility,
       sourceRevision: input.sourceRevision,
       revisionId: input.revisionId,
       approvalId: input.approvalId,

@@ -32,9 +32,37 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
       snapshot() {
         calls.push("snapshot");
         return [
-          { checkpoint: "profile_verified", answerFallbackPolicy: "owner_facts_only" },
-          { checkpoint: "resume_verified" },
-          { checkpoint: "questionnaire_verified" },
+          {
+            schemaVersion: 1,
+            checkpoint: "profile_verified",
+            pageId: "page-profile",
+            answerFallbackPolicy: "deterministic_site_valid_editable",
+            pageType: "profile",
+            verifiedFields: [],
+            ownedDuplicateRows: 0,
+            independentlyVerified: true,
+            submitActivated: false,
+            privacyScan: "pass",
+          },
+          {
+            schemaVersion: 1,
+            checkpoint: "resume_verified",
+            pageId: "page-resume",
+            fileCount: 1,
+            verifiedFileCount: 1,
+            independentlyVerified: true,
+            submitActivated: false,
+            privacyScan: "pass",
+          },
+          {
+            schemaVersion: 1,
+            checkpoint: "questionnaire_verified",
+            answers: [],
+            protectedPlaceholderCount: 0,
+            independentlyVerified: true,
+            submitActivated: false,
+            privacyScan: "pass",
+          },
         ] as never;
       },
     },
@@ -316,7 +344,7 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   const terminal = trace.at(-1);
   assert.equal(terminal?.kind, "application_walk_terminal");
   if (terminal?.kind === "application_walk_terminal") {
-    assert.equal(terminal.totalDurationMs > 0, true);
+    assert.equal(terminal.applicationWalkDurationMs > 0, true);
   }
 });
 
@@ -375,7 +403,11 @@ test("admitted answer fallback supports profile-less owner-fact and deterministi
     assert.equal(result.ok, true, JSON.stringify(result));
     if (result.ok) assert.equal(
       result.acceptance.answerFallbackPolicy,
-      synthetic ? "deterministic_site_valid_editable" : "owner_facts_only",
+      "deterministic_site_valid_editable",
+    );
+    if (result.ok) assert.equal(
+      result.acceptance.liveProofEligibility,
+      synthetic ? "ineligible_synthetic_answer" : "eligible",
     );
   }
 });

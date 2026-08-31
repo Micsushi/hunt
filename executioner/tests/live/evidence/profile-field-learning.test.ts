@@ -352,7 +352,7 @@ test("returns all value-free metadata mismatches for learning conversion", async
     ]);
     assert.equal(capture.write() !== null, true);
     const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
-    assert.equal(evidence.answerFallbackPolicy, "owner_facts_only");
+    assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.browserTransport, "live_browser");
     assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.learningConversion, {
@@ -579,7 +579,7 @@ fields: [{
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
     assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.browserTransport, "live_browser");
-    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.equal(evidence.liveProofEligibility, "ineligible_synthetic_answer");
     assert.equal(evidence.fields[0]?.lane, "synthetic_test_default");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -648,7 +648,7 @@ test("admits a synthetic non-submittable page with only owner facts and optional
     ));
     assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.browserTransport, "live_browser");
-    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.equal(evidence.liveProofEligibility, "ineligible_synthetic_answer");
     assert.equal(evidence.fields.some(({ lane }) => lane === "synthetic_test_default"), false);
     assert.deepEqual(evidence.fields.map(({ fieldIdentity }) => fieldIdentity), [
       "profile.social.linkedin",

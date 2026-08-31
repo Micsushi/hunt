@@ -136,6 +136,7 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     assert.deepEqual(timingEvents, [
       "runtime_review_verification_completed",
       "runtime_review_acceptance_sealing_completed",
+      "runtime_total_completed",
     ]);
     assert.deepEqual(calls, [
       "runtime.bind",

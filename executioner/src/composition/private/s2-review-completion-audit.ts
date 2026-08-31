@@ -184,6 +184,7 @@ export function inspectStage2ReviewCompletion(
       application.approvalId !== config.approvalId ||
       application.journeyId !== config.journeyId ||
       application.targetHandleId !== config.targetHandleId ||
+      application.liveProofEligibility !== "eligible" ||
       packet.revisionId !== config.revisionId ||
       packet.approvalId !== config.approvalId ||
       packet.journeyId !== config.journeyId ||
@@ -646,6 +647,7 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
   const started = records.filter(({ event }) => event === "application_walk_started");
   const progress = records.filter(({ event }) => event === "application_walk_progress");
   const terminal = records.filter(({ event }) => event === "application_walk_terminal");
+  const totals = records.filter(({ event }) => event === "runtime_total_completed");
   const monitorTimings = records.filter(({ event }) =>
     event === "external_monitor_capture_completed"
   );
@@ -662,7 +664,7 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
     "runtime_evidence_sealing_completed",
     "runtime_cleanup_completed",
   ];
-  if (started.length !== 1 || terminal.length !== 1 ||
+  if (started.length !== 1 || terminal.length !== 1 || totals.length !== 1 ||
       progress.length !== application.pageChecks.length ||
       applicationMonitorTimings.length < Math.max(1, application.pageChecks.length) ||
       authMonitorTimings.length < 1 ||
@@ -675,9 +677,15 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
       started[0]?.details.monotonicClock !== "performance_now" ||
       terminal[0]?.details.journeyId !== application.journeyId ||
       terminal[0]?.details.status !== "passed" ||
-      !Number.isSafeInteger(terminal[0]?.details.totalDurationMs) ||
+      !Number.isSafeInteger(terminal[0]?.details.applicationWalkDurationMs) ||
       terminal[0]?.details.monotonicClock !== "performance_now" ||
       terminal[0]?.details.submitActivated !== false ||
+      !Number.isSafeInteger(totals[0]?.details.totalWallDurationMs) ||
+      (totals[0]?.details.totalWallDurationMs as number) <
+        (terminal[0]?.details.applicationWalkDurationMs as number) ||
+      totals[0]?.details.phasePassed !== true ||
+      totals[0]?.details.monotonicClock !== "performance_now" ||
+      totals[0]?.details.submitActivated !== false ||
       progress.some(({ details }) =>
         !Number.isSafeInteger(details.pageReadinessDurationMs) ||
         !Number.isSafeInteger(details.navigationWaitDurationMs) ||

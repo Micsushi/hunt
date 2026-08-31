@@ -49,7 +49,7 @@ function field(
 function request(observed: FieldObservation) {
   return Object.freeze({
     mode: "live",
-
+    answerFallbackPolicy: "owner_facts_only" as const,
     field: observed,
     profileId: upstreamProfileId("profile-acceptance"),
     profileRevision: 7,

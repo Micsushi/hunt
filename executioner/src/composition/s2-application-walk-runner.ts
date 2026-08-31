@@ -109,43 +109,58 @@ export function createStage2ApplicationWalkProductionBinding(
         throw stage2CausalError("cancellation", "operation_cancelled");
       }
       const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-      const source = (dependencies.inspectSource ?? (() =>
-        inspectCleanSourceRevision(executionerRoot)))();
-      const config = readStablePrivateFile(options.configPath, 64 * 1024);
+      const source = causalStep("source_admission", "owner_config_invalid", () =>
+        (dependencies.inspectSource ?? (() => inspectCleanSourceRevision(executionerRoot)))()
+      );
+      const config = causalStep("source_admission", "owner_config_invalid", () =>
+        readStablePrivateFile(options.configPath, 64 * 1024)
+      );
       const configPath = config.canonicalPath;
       const configSha256 = createHash("sha256").update(config.bytes).digest("hex");
-      const value = readOwnerConfig(config.bytes);
+      const value = causalStep("source_admission", "owner_config_invalid", () =>
+        readOwnerConfig(config.bytes)
+      );
       const now = (dependencies.now ?? (() => new Date().toISOString()))();
-      const admission = createPrivateRealRunAdmission(value, {
+      const admission = causalStep("source_admission", "owner_config_invalid", () =>
+        createPrivateRealRunAdmission(value, {
         now,
         forbiddenRoots: [source.repositoryRoot],
         ownerConfigPath: configPath,
         ...(dependencies.aclAdmission === undefined
           ? {}
           : { aclAdmission: dependencies.aclAdmission }),
-      });
-      if (!admission.ok) throw new TypeError("application binding denied");
+        })
+      );
+      if (!admission.ok) {
+        throw stage2CausalError("source_admission", "owner_config_invalid");
+      }
       const owner = value as RealRunOwnerInputsV1;
-      if (!matchesStage2OwnerStorageBinding({
+      if (!causalStep("source_admission", "owner_config_invalid", () =>
+        matchesStage2OwnerStorageBinding({
         ownerConfigPath: configPath,
         runtimeRoot: owner.roots.runtime.path,
         ownerEvidenceRoot: owner.roots.evidence.path,
         requestedEvidenceRoot: options.evidenceRoot,
-      })) throw new TypeError("application binding denied");
+        })
+      )) throw stage2CausalError("source_admission", "owner_config_invalid");
       const resolver = dependencies.resolver ??
         new FileBackedStage2ApplicationOwnerSourceResolver({
           forbiddenRoots: [source.repositoryRoot],
         });
-      const resolvedOwnerSources = await resolver.resolve({
-        runtimeRoot: owner.roots.runtime.path,
-        revisionId: owner.revisionId,
-        approvalId: owner.approval.approvalId,
-        journeyId: owner.journeyId,
-        targetHandleId: owner.target.handleId,
-        profileRef: owner.profileRef,
-        resumeRef: owner.resumeRef,
-        approvedAt: owner.approval.approvedAt,
-      }, signal);
+      const resolvedOwnerSources = await causalStepAsync(
+        "source_admission",
+        "owner_config_invalid",
+        async () => await resolver.resolve({
+          runtimeRoot: owner.roots.runtime.path,
+          revisionId: owner.revisionId,
+          approvalId: owner.approval.approvalId,
+          journeyId: owner.journeyId,
+          targetHandleId: owner.target.handleId,
+          profileRef: owner.profileRef,
+          resumeRef: owner.resumeRef,
+          approvedAt: owner.approval.approvedAt,
+        }, signal),
+      );
       let ownerSources: typeof resolvedOwnerSources | undefined = resolvedOwnerSources;
       let sensitiveValues: readonly string[] | undefined = applicationSensitiveValues(
         owner,
@@ -280,9 +295,27 @@ export async function runStage2ApplicationWalkFromOwnerConfig(
   try {
     const resolved = await binding.bind(options, signal);
     if (resolved.account !== undefined) {
-      const account = await resolved.account.verify(signal);
+      let account: Awaited<ReturnType<NonNullable<typeof resolved.account>["verify"]>>;
+      try {
+        account = await causalStepAsync(
+          "authentication",
+          "verification_input_invalid",
+          async () => await resolved.account!.verify(signal),
+        );
+      } catch (error) {
+        try {
+          await resolved.dependencies.cleanup.close(new AbortController().signal);
+        } catch {
+          // Cleanup is secondary; the authenticated stage failure remains earliest.
+        }
+        throw error;
+      }
       if (!account.ok) {
-        await resolved.dependencies.cleanup.close(new AbortController().signal);
+        try {
+          await resolved.dependencies.cleanup.close(new AbortController().signal);
+        } catch {
+          // Cleanup is secondary; the provider/account fact remains earliest.
+        }
         return account.fact === undefined
           ? { ok: false, code: stableAccountCode(account.code) }
           : { ok: false, code: account.fact.kind, fact: account.fact };
@@ -309,6 +342,30 @@ export async function runStage2ApplicationWalkFromOwnerConfig(
         ? "operation_cancelled"
         : stage2CausalCode(error, "owner_config_invalid"),
     };
+  }
+}
+
+function causalStep<T>(
+  layer: Parameters<typeof stage2CausalError>[0],
+  code: S2StableErrorCode,
+  action: () => T,
+): T {
+  try {
+    return action();
+  } catch (error) {
+    throw stage2CausalError(layer, code, error);
+  }
+}
+
+async function causalStepAsync<T>(
+  layer: Parameters<typeof stage2CausalError>[0],
+  code: S2StableErrorCode,
+  action: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    throw stage2CausalError(layer, code, error);
   }
 }
 

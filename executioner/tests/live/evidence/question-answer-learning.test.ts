@@ -256,7 +256,7 @@ test("question learning proves explicit unset without applicant values", () => {
       readFileSync(join(root, "question-answer-learning.json"), "utf8"),
     ));
     assert.equal(evidence.browserTransport, "live_browser");
-    assert.equal(evidence.answerFallbackPolicy, "owner_facts_only");
+    assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.questions.map(({ answerState, lane, provenance }) => ({
       answerState,

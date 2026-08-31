@@ -30,6 +30,8 @@ import {
   type AnswerExecutionMode,
   type ApplicationProfileQuery,
 } from "../../../../form/answers/application-types.ts";
+import type { AnswerFallbackPolicy } from
+  "../../../../contracts/application-execution-policy.ts";
 import type { ApplicationAnswerResolver } from
   "../../../../form/answers/application-types.ts";
 import {
@@ -91,6 +93,7 @@ export function isCanonicalBinaryQuestionnaireLabel(label: string): boolean {
 
 export interface QuestionnairePageRequest {
   readonly mode: AnswerExecutionMode;
+  readonly answerFallbackPolicy: AnswerFallbackPolicy;
   readonly journeyId: JourneyId;
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
@@ -292,6 +295,7 @@ export function createQuestionnairePageHandler(
         });
         const answer = await resolver.resolve({
           mode,
+          answerFallbackPolicy: request.answerFallbackPolicy,
           field,
           profileId: request.profileId,
           profileRevision: request.profileRevision,
@@ -345,13 +349,11 @@ export function createQuestionnairePageHandler(
             candidate,
           );
         }
-        if (!answerLaneAdmitted(mode, answer.value.lane)) {
+        if (!answerLaneAdmitted(mode, answer.value.lane, request.answerFallbackPolicy)) {
           recordUnset();
           return blocked("profile_answer_missing", field.fieldId, category);
         }
-        const syntheticLearningDefault =
-          mode === "synthetic_test_non_submittable" &&
-          answer.value.lane === "synthetic_test_default";
+        const syntheticLearningDefault = answer.value.lane === "synthetic_test_default";
         if (
           category !== null &&
           !syntheticLearningDefault &&

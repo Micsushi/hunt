@@ -174,7 +174,7 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       browserTransport: "live_browser",
       answerFallbackPolicy: "deterministic_site_valid_editable",
       submissionPolicy: "forbidden",
-      liveProofEligibility: "eligible",
+      liveProofEligibility: "ineligible_synthetic_answer",
     };
     writeFileSync(sourcePath, JSON.stringify(source));
     let admittedMode: string | undefined;
@@ -215,7 +215,7 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       browserTransport: "live_browser",
       answerFallbackPolicy: "deterministic_site_valid_editable",
       submissionPolicy: "forbidden",
-      liveProofEligibility: "eligible",
+      liveProofEligibility: "ineligible_synthetic_answer",
     });
     assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([])), true);
   } finally {
@@ -281,6 +281,71 @@ test("application slice preserves a posting-unavailable account fact", async () 
       fact: { kind: "posting_unavailable", reason: "not_found" },
     });
     assert.equal(cleanupCalls, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("application slice preserves authentication as the earliest cause and still cleans", async () => {
+  const fixture = liveFixture();
+  let cleanupCalls = 0;
+  try {
+    const binding = createStage2ApplicationWalkProductionBinding({
+      runtime: {
+        async bind() {
+          return {
+            walk: {
+              observer: { async observe() { throw new Error("must not walk"); } },
+              handlers: {
+                resume: verifiedHandler("resume", "resume_verified"),
+                profile: neverHandler("profile", "profile_verified"),
+                questionnaire: neverHandler("questionnaire", "questionnaire_verified"),
+              },
+              navigation: { async next() { throw new Error("must not navigate"); } },
+              progress: { async record() { throw new Error("must not record"); } },
+            },
+            laneAcceptances: createApplicationLaneAcceptanceCollector(),
+            account: { async verify() { throw new Error("provider challenge unavailable"); } },
+            cleanup: { async close() { cleanupCalls += 1; return true; } },
+          };
+        },
+      },
+      inspectSource: () => ({
+        repositoryRoot: resolve(".."),
+        sourceRevision: "1111111111111111111111111111111111111111",
+      }),
+      now: () => fixture.now,
+      aclAdmission: { admit: () => ({ ok: true as const }) },
+    });
+    const result = await runStage2ApplicationWalkFromOwnerConfig({
+      configPath: fixture.configPath,
+      evidenceRoot: fixture.evidenceRoot,
+      checkpoint: "pre_review",
+    }, AbortSignal.any([]), binding);
+    assert.deepEqual(result, { ok: false, code: "verification_input_invalid" });
+    assert.equal(cleanupCalls, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("source inspection failure remains source admission and never assembles a browser", async () => {
+  const fixture = liveFixture();
+  let runtimeCalls = 0;
+  try {
+    const binding = createStage2ApplicationWalkProductionBinding({
+      runtime: { async bind() { runtimeCalls += 1; throw new Error("must not bind"); } },
+      inspectSource: () => { throw new Error("repository unavailable"); },
+      now: () => fixture.now,
+      aclAdmission: { admit: () => ({ ok: true as const }) },
+    });
+    const result = await runStage2ApplicationWalkFromOwnerConfig({
+      configPath: fixture.configPath,
+      evidenceRoot: fixture.evidenceRoot,
+      checkpoint: "pre_review",
+    }, AbortSignal.any([]), binding);
+    assert.deepEqual(result, { ok: false, code: "owner_config_invalid" });
+    assert.equal(runtimeCalls, 0);
   } finally {
     fixture.cleanup();
   }

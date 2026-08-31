@@ -21,7 +21,7 @@ import {
 } from "../../contracts/index.ts";
 import {
   admitApplicationExecutionPolicy,
-  answerModeForPolicy,
+  answerModeAllowedByPolicy,
   type ApplicationExecutionPolicy,
 } from "../../contracts/application-execution-policy.ts";
 import {
@@ -166,7 +166,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         profile.facts,
       );
       const executionPolicy = admitApplicationExecutionPolicy(manifest.executionPolicy);
-      if (answerModeForPolicy(executionPolicy) !== profilePlan.mode) denied();
+      if (!answerModeAllowedByPolicy(executionPolicy, profilePlan.mode)) denied();
       const narrativeFact = profile.facts.find(({ factId }) =>
         factId === "configured_narrative"
       );

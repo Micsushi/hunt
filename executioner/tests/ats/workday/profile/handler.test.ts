@@ -950,6 +950,30 @@ test("synthetic mode fills supported unknown profile controls without owner inpu
   assert.equal(port.commits[2]?.value, "true");
 });
 
+test("a live profile transport traverses supported unknowns under the explicit fallback policy", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]), "deterministic_site_valid_editable");
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.equal(result.committedFields[0]?.synthetic, true);
+  assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  assert.equal(result.verifiedFields[0]?.provenance, "generated_default");
+  assert.notEqual(result.verifiedFields[0]?.provenance, "owner_provided");
+});
+
 test("synthetic unknown values honor native constraints", async () => {
   const port = new MemoryProfilePage({
     pageType: "contact",

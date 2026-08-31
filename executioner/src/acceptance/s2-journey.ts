@@ -134,6 +134,7 @@ export async function runStage2RealJourney(
   ports: Stage2RealJourneyPorts,
   signal: AbortSignal,
 ): Promise<Stage2RealJourneyResult> {
+  const journeyStarted = performance.now();
   if (signal.aborted) {
     return persistTerminalArtifact(
       invocation,
@@ -217,7 +218,14 @@ export async function runStage2RealJourney(
     }
   }
   if (result === undefined) throw new Error("journey terminal result unavailable");
-  return persistTerminalArtifact(invocation, ports, result);
+  const persisted = await persistTerminalArtifact(invocation, ports, result);
+  runtime.timing?.record("runtime_total_completed", {
+    totalWallDurationMs: journeyDuration(journeyStarted),
+    phasePassed: persisted.ok,
+    monotonicClock: "performance_now",
+    submitActivated: false,
+  });
+  return persisted;
 }
 
 function runtimeBindingErrorCode(error: unknown): S2StableErrorCode {

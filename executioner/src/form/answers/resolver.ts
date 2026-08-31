@@ -409,7 +409,9 @@ export function createApplicationAnswerResolver(
       if (signal.aborted) return cancelled;
 
       const { field } = request;
-      const synthetic = request.mode === "synthetic_test_non_submittable";
+      const syntheticMode = request.mode === "synthetic_test_non_submittable";
+      const fallbackAllowed = syntheticMode ||
+        request.answerFallbackPolicy === "deterministic_site_valid_editable";
       if (field.readOnly === true) {
         return field.state === "populated"
           ? success({ kind: "readback_only", fieldId: field.fieldId })
@@ -429,7 +431,7 @@ export function createApplicationAnswerResolver(
         questionResolution.kind === "resolved" ? questionResolution.id : undefined,
       );
       if (questionResolution.kind === "unknown") {
-        if (!synthetic) {
+        if (!fallbackAllowed) {
           return failure(protectedCategory === null ? "question_unknown" : "protected_answer_denied");
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
@@ -441,7 +443,7 @@ export function createApplicationAnswerResolver(
           : generatedSuccess(field, generated);
       }
       if (questionResolution.kind === "ambiguous") {
-        if (!synthetic) {
+        if (!fallbackAllowed) {
           return failure(protectedCategory === null ? "question_ambiguous" : "protected_answer_denied");
         }
         const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
@@ -456,7 +458,7 @@ export function createApplicationAnswerResolver(
       const canonicalQuestionId = questionResolution.id as CanonicalQuestionId;
       const question = questionForField(field.label, field.behavior);
       if (question === undefined) {
-        if (!synthetic) {
+        if (!fallbackAllowed) {
           return protectedCategory === null
             ? unsupported(field)
             : failure("protected_answer_denied");
@@ -476,7 +478,7 @@ export function createApplicationAnswerResolver(
           target: field.target,
           artifact: request.resumeArtifact,
           provenance: "resume_verified",
-        }, synthetic ? "synthetic_test_default" : "live_owner_fact");
+        }, syntheticMode ? "synthetic_test_default" : "live_owner_fact");
       }
       if (question.source.kind === "narrative") {
         const configured = await query({
@@ -501,7 +503,7 @@ export function createApplicationAnswerResolver(
             provenance: "configured_template",
           }, configured.value.lane);
         }
-        if (!synthetic) {
+        if (!fallbackAllowed) {
           return success({
             kind: "profile_answer_missing",
             questionId: questionId(canonicalQuestionId),
@@ -517,7 +519,7 @@ export function createApplicationAnswerResolver(
         }, "synthetic_test_default");
       }
       if (question.source.kind === "neutral_disclosure") {
-        if (!synthetic) return failure("protected_answer_denied");
+        if (!fallbackAllowed) return failure("protected_answer_denied");
         for (const candidate of contractApprovedPrivacyChoices) {
           const matched = matchedChoiceIntent(field, candidate);
           if (matched !== undefined) return success(matched);
@@ -530,7 +532,7 @@ export function createApplicationAnswerResolver(
           : generatedSuccess(field, generated);
       }
       if (question.source.kind === "synthetic_placeholder") {
-        if (!synthetic) return failure("protected_answer_denied");
+        if (!fallbackAllowed) return failure("protected_answer_denied");
         const intended = intentFor(
           field,
           canonicalQuestionId,
@@ -560,7 +562,7 @@ export function createApplicationAnswerResolver(
         return answer;
       }
       if (answer.value.kind === "profile_answer_missing") {
-        if (!synthetic) {
+        if (!fallbackAllowed) {
           return success({
             kind: "profile_answer_missing",
             questionId: questionId(canonicalQuestionId),
@@ -607,7 +609,7 @@ export function createApplicationAnswerResolver(
         (answer.value.provenance !== "owner_provided" ||
           answer.value.lane !== "live_owner_fact")
       ) {
-        if (!synthetic) return failure("protected_answer_denied");
+        if (!fallbackAllowed) return failure("protected_answer_denied");
         const generated = generatedLearningIntent(
           field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
         );
@@ -624,7 +626,7 @@ export function createApplicationAnswerResolver(
       );
       if (intent.kind === "resolved") return success(intent);
       if (question.source.ownerProvidedOnly === true) {
-        if (!synthetic) return failure("protected_answer_denied");
+        if (!fallbackAllowed) return failure("protected_answer_denied");
         const generated = generatedLearningIntent(
           field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
         );
@@ -632,7 +634,7 @@ export function createApplicationAnswerResolver(
           ? failure("protected_answer_denied")
           : generatedSuccess(field, generated);
       }
-      return synthetic
+      return fallbackAllowed
         ? generatedSuccess(field, generatedLearningIntent(
             field,
             request.resumeArtifact,
@@ -695,6 +697,7 @@ export function createAnswerResolver(
       const result = await resolver.resolve({
         ...request,
         mode: "synthetic_test_non_submittable",
+        answerFallbackPolicy: "deterministic_site_valid_editable",
       }, signal);
       if (!result.ok) return result;
       if (result.value.kind !== "resolved") {

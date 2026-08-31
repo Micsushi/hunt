@@ -61,6 +61,7 @@ export function createImmutableApplicationLaneSources(
   const profilePlan = deepFreeze(structuredClone(values.profilePlan));
   const requestClone = structuredClone({
     mode: values.questionnaireRequest.mode,
+    answerFallbackPolicy: values.questionnaireRequest.answerFallbackPolicy,
     journeyId: values.questionnaireRequest.journeyId,
     sessionId: values.questionnaireRequest.sessionId,
     pageId: values.questionnaireRequest.pageId,
@@ -268,9 +269,7 @@ function profileHandler(
         schemaVersion: 1,
         checkpoint: "profile_verified",
         pageId: request.pageId,
-        answerFallbackPolicy: dependencies.sources.profilePlan().mode === "live"
-          ? "owner_facts_only"
-          : "deterministic_site_valid_editable",
+        answerFallbackPolicy: dependencies.sources.questionnaireRequest().answerFallbackPolicy,
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
         ...(result.committedFields.length === 0 ? {} : {

@@ -25,6 +25,8 @@ import {
 } from "./inspection.ts";
 import { answerLaneAdmitted } from "../../../../form/answers/application-types.ts";
 import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-value.ts";
+import type { AnswerFallbackPolicy } from
+  "../../../../contracts/application-execution-policy.ts";
 
 const reviewedVariants = new Set([
   "workday_text_v1",
@@ -107,6 +109,9 @@ export async function completeWorkdayProfilePage(
   plan: ProfilePagePlan,
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
+  answerFallbackPolicy: AnswerFallbackPolicy = plan.mode === "synthetic_test_non_submittable"
+    ? "deterministic_site_valid_editable"
+    : "owner_facts_only",
 ): Promise<ProfilePageCompletionResult> {
   if (signal.aborted) return blocked("operation_cancelled");
   const observed = await inspect(page, signal);
@@ -124,9 +129,13 @@ export async function completeWorkdayProfilePage(
     });
   }
   const syntheticFallbacks = new Map<string, ProfileFieldPlan>();
-  const preparedPlan = plan.mode === "synthetic_test_non_submittable"
-    ? withSupportedSyntheticUnknowns(plan, observed.snapshot, syntheticFallbacks)
+  const fallbackEnabled = answerFallbackPolicy === "deterministic_site_valid_editable";
+  const executionPlan = fallbackEnabled && plan.mode === "live"
+    ? Object.freeze({ ...plan, mode: "synthetic_test_non_submittable" as const })
     : plan;
+  const preparedPlan = fallbackEnabled
+    ? withSupportedSyntheticUnknowns(executionPlan, observed.snapshot, syntheticFallbacks)
+    : executionPlan;
   registerGeneratedFields(plan, preparedPlan, page);
   const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, observed.snapshot);
   if (preflight !== undefined) return preflight;

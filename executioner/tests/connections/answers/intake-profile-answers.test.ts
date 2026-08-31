@@ -123,7 +123,12 @@ function answerRequest(
   field: FieldObservation,
   values: Pick<ApplicationAnswerResolutionRequest, "profileId" | "profileRevision" | "resume" | "resumeArtifact">,
 ): ApplicationAnswerResolutionRequest {
-  return { mode: "live", field, ...values };
+  return {
+    mode: "live",
+    answerFallbackPolicy: "owner_facts_only",
+    field,
+    ...values,
+  };
 }
 
 test("real F4 intake and F5 facts produce ten exact F6 answer intents", async () => {

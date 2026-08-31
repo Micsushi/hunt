@@ -162,12 +162,6 @@ test("Review completion admits an observed unknown optional control left unset",
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     const learningPath = join(layout.evidenceRoot, "profile-field-learning.json");
     let learning = JSON.parse(readFileSync(learningPath, "utf8"));
-    learning.answerFallbackPolicy = "deterministic_site_valid_editable";
-    learning.fields[0].lane = "synthetic_test_default";
-    const syntheticFields = [syntheticProfileField(
-      "profile-page-1", "identity.given_name", "First Name", "Synthetic owner review",
-    )];
-    learning = bindSyntheticProfileLearning(learning, syntheticFields);
     learning.fields[1] = {
       ...learning.fields[1],
       fieldIdentity: "profile.unknown.optional.2",
@@ -186,40 +180,8 @@ test("Review completion admits an observed unknown optional control left unset",
     writeFileSync(learningPath, learningBytes);
     const applicationPath = join(layout.evidenceRoot, "application-walk-acceptance.json");
     const application = JSON.parse(readFileSync(applicationPath, "utf8"));
-    application.answerFallbackPolicy = "deterministic_site_valid_editable";
-    application.laneAcceptances[0].answerFallbackPolicy = "deterministic_site_valid_editable";
-    application.laneAcceptances[0].verifiedFields[0].provenance = "generated_default";
-    application.laneAcceptances[0].verifiedFields[0].lane = "synthetic_test_default";
-    application.laneAcceptances[0].syntheticFields = syntheticFields;
     application.laneAcceptances[0].profileFieldLearningSha256 = digest(learningBytes);
     writeFileSync(applicationPath, `${JSON.stringify(application)}\n`);
-    const questionPath = join(layout.evidenceRoot, "question-answer-learning.json");
-    const questionLearning = JSON.parse(readFileSync(questionPath, "utf8"));
-    questionLearning.answerFallbackPolicy = "deterministic_site_valid_editable";
-    writeFileSync(questionPath, `${JSON.stringify(questionLearning)}\n`);
-    const pendingPath = join(layout.evidenceRoot, "pending-profile-questions.json");
-    const pending = JSON.parse(readFileSync(pendingPath, "utf8"));
-    pending.pendingProfileQuestions.push({
-      pageId: "profile-page-1",
-      rowKey: null,
-      questionId: "question.profile.identity.given_name",
-      fieldId: "identity.given_name",
-      exactQuestion: "First Name",
-      required: true,
-      semanticQuestionType: "unknown",
-      answerType: "text",
-      controlType: "text",
-      options: [],
-      constraints: null,
-      conditionalReveal: false,
-      testDefault: "Synthetic owner review",
-      actualOwnerValue: null,
-      needsUserValue: true,
-      provenance: "generated_default",
-      validation: "verified",
-      committedReadback: "Synthetic owner review",
-    });
-    writeFileSync(pendingPath, `${JSON.stringify(pending)}\n`);
 
     assert.equal(
       (await auditStage2Completion(layout.evidenceRoot) as { readonly status: string }).status,
@@ -256,10 +218,11 @@ test("Review completion admits one exact value-free application trace and reject
       status: "passed",
       checkpoint: "pre_review",
       completedPages: 3,
-      totalDurationMs: 3_000,
+      applicationWalkDurationMs: 3_000,
       monotonicClock: "performance_now",
       submitActivated: false,
     });
+    writeTotalTiming(trace, 4_000);
     assert.equal(
       (await auditStage2Completion(layout.evidenceRoot) as { readonly status: string }).status,
       "pass",
@@ -382,7 +345,7 @@ test("Review completion reconciles Profile controls embedded on Resume with fail
   }
 });
 
-test("Review completion admits bound non-submittable synthetic questionnaire learning", async () => {
+test("Review completion rejects bound non-submittable synthetic questionnaire learning as a live proof", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-synthetic-questions-"));
   try {
     const layout = await prepareStage2RunStorage({
@@ -401,12 +364,10 @@ test("Review completion admits bound non-submittable synthetic questionnaire lea
       1,
       true,
     );
-    const audit = await auditStage2Completion(layout.evidenceRoot) as {
-      readonly status: string;
-      readonly questionAnswerLearningSha256: string | null;
-    };
-    assert.equal(audit.status, "pass");
-    assert.match(audit.questionAnswerLearningSha256 ?? "", /^[0-9a-f]{64}$/u);
+    await assert.rejects(
+      auditStage2Completion(layout.evidenceRoot),
+      /completion audit denied/u,
+    );
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
@@ -447,10 +408,11 @@ test("Review completion independently rejects freshly sealed inconsistent active
         status: "passed",
         checkpoint: "pre_review",
         completedPages: 3,
-        totalDurationMs: 3_000,
+        applicationWalkDurationMs: 3_000,
         monotonicClock: "performance_now",
         submitActivated: false,
       });
+      writeTotalTiming(trace, 4_000);
       await assert.rejects(auditStage2Completion(layout.evidenceRoot), /completion audit denied/u);
     } finally {
       rmSync(storageRoot, { recursive: true, force: true });
@@ -520,7 +482,7 @@ test("fresh Review evidence rejects every altered Profile pending-owner binding 
       const configSha256 = writeOwnerConfig(layout);
       await writeReviewEvidence(
         layout.evidenceRoot, configSha256, journeyId, false, false, true,
-        false, 1, false, true,
+        false, 1, false, true, true,
       );
       const path = join(layout.evidenceRoot, "pending-profile-questions.json");
       const evidence = JSON.parse(readFileSync(path, "utf8"));
@@ -1161,6 +1123,7 @@ async function writeReviewEvidence(
   profileMutationAttempt = 1,
   syntheticQuestionnaire = false,
   combinedResumeProfile = false,
+  syntheticProfile = false,
 ): Promise<void> {
   let learningBytes = Buffer.from(`${JSON.stringify({
     schemaVersion: 6,
@@ -1247,10 +1210,10 @@ async function writeReviewEvidence(
       },
     }],
   }, null, 2)}\n`, "utf8");
-  if (combinedResumeProfile || syntheticQuestionnaire) {
+  if (combinedResumeProfile || syntheticQuestionnaire || syntheticProfile) {
     let learning = JSON.parse(learningBytes.toString("utf8"));
     learning.answerFallbackPolicy = "deterministic_site_valid_editable";
-    if (combinedResumeProfile) {
+    if (syntheticProfile) {
       learning.fields[0].lane = "synthetic_test_default";
       learning = bindSyntheticProfileLearning(learning, [
         syntheticProfileField(
@@ -1351,7 +1314,7 @@ async function writeReviewEvidence(
     combinedProfileFieldLearningSha256 = digest(combinedBytes);
   }
   if (!directReview) {
-    const syntheticRun = syntheticQuestionnaire || combinedResumeProfile;
+    const syntheticRun = syntheticQuestionnaire || syntheticProfile;
     writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
       schemaVersion: 6,
       evidenceRevision: "s2-question-answer-learning-v6",
@@ -1453,7 +1416,7 @@ async function writeReviewEvidence(
         provenance: "reviewed_catalog",
         validation: "verified",
         committedReadback: "Yes",
-      }] : []), ...(combinedResumeProfile ? [{
+      }] : []), ...(syntheticProfile ? [{
         pageId: "profile-page-1",
         rowKey: null,
         questionId: "question.profile.identity.given_name",
@@ -1508,6 +1471,7 @@ async function writeReviewEvidence(
       repeatedQuestionnaire,
       syntheticQuestionnaire,
       combinedProfileFieldLearningSha256,
+      syntheticProfile,
     ),
     sensitiveValues: [],
   });
@@ -1614,6 +1578,7 @@ async function writeReviewEvidence(
       repeatedQuestionnaire,
       false,
       combinedResumeProfile ? "b".repeat(64) : undefined,
+      syntheticProfile,
     );
     trace("application_walk_started", {
       journeyId,
@@ -1633,10 +1598,11 @@ async function writeReviewEvidence(
       completedPages: directReview ? 1 : repeatedQuestionnaire || combinedResumeProfile
         ? 4
         : skipResume ? 2 : 3,
-      totalDurationMs: Math.max(1, walk.pageChecks.length) * 1_000,
+      applicationWalkDurationMs: Math.max(1, walk.pageChecks.length) * 1_000,
       monotonicClock: "performance_now",
       submitActivated: false,
     });
+    writeTotalTiming(trace, Math.max(1, walk.pageChecks.length) * 1_000 + 1_000);
   }
 }
 
@@ -1678,6 +1644,18 @@ function writePhaseTimings(trace: (event: string, details?: object) => void): vo
     "runtime_evidence_sealing_completed",
     "runtime_cleanup_completed",
   ]) trace(event, { durationMs: 100, phasePassed: true });
+}
+
+function writeTotalTiming(
+  trace: (event: string, details?: object) => void,
+  totalWallDurationMs: number,
+): void {
+  trace("runtime_total_completed", {
+    totalWallDurationMs,
+    phasePassed: true,
+    monotonicClock: "performance_now",
+    submitActivated: false,
+  });
 }
 
 function writeProcessAudit(root: string, checkedAt: string, configSha256: string): void {
@@ -2035,6 +2013,7 @@ function applicationWalk(
   repeatedQuestionnaire = false,
   syntheticQuestionnaire = false,
   combinedProfileFieldLearningSha256?: string,
+  syntheticProfile = false,
 ) {
   const pageChecks = [
     pageCheck("profile", "profile_verified"),
@@ -2047,7 +2026,7 @@ function applicationWalk(
       profileFieldLearningSha256,
       syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined,
       "identity.given_name",
-      combinedProfileFieldLearningSha256 !== undefined,
+      syntheticProfile,
     ),
     resumeAcceptance(),
     syntheticQuestionnaire ? { ...questionnaire, answers: [] } : questionnaire,
@@ -2084,11 +2063,11 @@ function applicationWalk(
     checkpoint: "pre_review" as const,
     status: "passed" as const,
     browserTransport: "live_browser" as const,
-    answerFallbackPolicy: syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined
-      ? "deterministic_site_valid_editable" as const
-      : "owner_facts_only" as const,
+    answerFallbackPolicy: "deterministic_site_valid_editable" as const,
     submissionPolicy: "forbidden" as const,
-    liveProofEligibility: "eligible" as const,
+    liveProofEligibility: syntheticQuestionnaire || syntheticProfile
+      ? "ineligible_synthetic_answer" as const
+      : "eligible" as const,
     sourceRevision,
     revisionId,
     approvalId,
@@ -2114,7 +2093,7 @@ function applicationWalk(
 
 function profileAcceptance(
   profileFieldLearningSha256: string,
-  syntheticMode = false,
+  _syntheticMode = false,
   field = "identity.given_name",
   generated = false,
 ) {
@@ -2122,9 +2101,7 @@ function profileAcceptance(
     schemaVersion: 1 as const,
     checkpoint: "profile_verified" as const,
     pageId: field === "social.linkedin" ? "profile-page-2" as never : "profile-page-1" as never,
-    answerFallbackPolicy: syntheticMode
-      ? "deterministic_site_valid_editable" as const
-      : "owner_facts_only" as const,
+    answerFallbackPolicy: "deterministic_site_valid_editable" as const,
     pageType: "profile" as const,
     verifiedFields: [{
       fieldId: field,

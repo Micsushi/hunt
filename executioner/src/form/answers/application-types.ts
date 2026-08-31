@@ -19,6 +19,8 @@ import {
   numberProfileFactIds,
   textProfileFactIds,
 } from "../../contracts/index.ts";
+import type { AnswerFallbackPolicy } from
+  "../../contracts/application-execution-policy.ts";
 
 export const answerProvenanceLanes = [
   "live_owner_fact",
@@ -35,9 +37,11 @@ export type AnswerExecutionMode = (typeof answerExecutionModes)[number];
 export function answerLaneAdmitted(
   mode: AnswerExecutionMode,
   lane: AnswerProvenanceLane,
+  fallbackPolicy: AnswerFallbackPolicy = "owner_facts_only",
 ): boolean {
   return mode === "live"
-    ? lane === "live_owner_fact"
+    ? lane === "live_owner_fact" ||
+      fallbackPolicy === "deterministic_site_valid_editable" && lane === "synthetic_test_default"
     : lane === "live_owner_fact" || lane === "synthetic_test_default";
 }
 
@@ -168,6 +172,7 @@ export type ApplicationFieldObservation = FieldObservation & {
 
 export interface ApplicationAnswerResolutionRequest {
   readonly mode: AnswerExecutionMode;
+  readonly answerFallbackPolicy: AnswerFallbackPolicy;
   readonly field: ApplicationFieldObservation;
   readonly profileId: ProfileId;
   readonly profileRevision: number;
