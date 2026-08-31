@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -54,10 +55,10 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       "utf8",
     )) as {
       readonly evidenceRevision: string;
-      readonly ariaSnapshots: readonly string[];
+      readonly ariaSnapshotSha256: readonly string[];
       readonly checkboxGroups: readonly {
         readonly ownerAutomationId: string | null;
-        readonly label: string;
+        readonly labelSha256: string;
         readonly group: {
           readonly automationId: string | null;
           readonly role: string | null;
@@ -72,7 +73,7 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
           }[];
         };
         readonly inputs: readonly {
-          readonly optionLabel: string;
+          readonly optionLabelSha256: string;
           readonly checked: boolean;
           readonly active: boolean;
         }[];
@@ -89,19 +90,19 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       }[];
       readonly mutations: readonly { readonly attribute?: string | null }[];
     };
-    assert.equal(evidence.evidenceRevision, "s2-page-local-inspection-v2");
-    assert.equal(evidence.ariaSnapshots.length, 1);
+    assert.equal(evidence.evidenceRevision, "s2-page-local-inspection-v3");
+    assert.equal(evidence.ariaSnapshotSha256.length, 1);
     assert.equal(evidence.checkboxGroups.length, 1);
     const group = evidence.checkboxGroups[0]!;
     assert.equal(group.ownerAutomationId, "formField-disabilityStatus");
-    assert.equal(group.label, "Please check one of the boxes below:*");
+    assert.equal(group.labelSha256, hash("Please check one of the boxes below:*"));
     assert.deepEqual(group.group, {
       kind: "exclusive",
       automationId: "disabilityStatus-CheckboxGroup",
       role: null,
       requiredMarker: true,
       aria: {
-        label: null,
+        labelSha256: null,
         labelledby: null,
         describedby: null,
         controls: null,
@@ -115,12 +116,12 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       checkedCount: 1,
       reactLayers: group.group.reactLayers,
     });
-    assert.deepEqual(group.inputs.map(({ optionLabel, checked, active }) => ({
-      optionLabel, checked, active,
+    assert.deepEqual(group.inputs.map(({ optionLabelSha256, checked, active }) => ({
+      optionLabelSha256, checked, active,
     })), [
-      { optionLabel: "Yes", checked: true, active: false },
-      { optionLabel: "No", checked: false, active: true },
-      { optionLabel: "I do not want to answer", checked: false, active: false },
+      { optionLabelSha256: hash("Yes"), checked: true, active: false },
+      { optionLabelSha256: hash("No"), checked: false, active: true },
+      { optionLabelSha256: hash("I do not want to answer"), checked: false, active: false },
     ]);
     assert.deepEqual(group.ownedPortals, [{
       id: "disability-help",
@@ -136,8 +137,17 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       handlers.some(({ name, arity }) => name === "onSelect" && arity === 1)
     ));
     assert.ok(evidence.mutations.some(({ attribute }) => attribute === "aria-invalid"));
+    const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
+    assert.doesNotMatch(serialized, /Please check|I do not want|Self-identification help/u);
+    assert.equal(existsSync(join(evidenceRoot, "external-monitor.png")), false);
   } finally {
     await browser.close();
     rmSync(evidenceRoot, { recursive: true, force: true });
   }
 });
+
+function hash(value: string): string {
+  return createHash("sha256").update(
+    value.normalize("NFC").replace(/\s+/gu, " ").trim(),
+  ).digest("hex");
+}

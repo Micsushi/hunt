@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -7,10 +8,9 @@ import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
 } from "../../deterministic/supported-controls.ts";
-import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
-
-const evidenceRevision = "s2-page-local-inspection-v2";
+const evidenceRevision = "s2-page-local-inspection-v3";
 const recordLimit = 128;
+const sensitiveTextKeys = new Set(["label", "optionLabel", "placeholder"]);
 
 interface EventRecord {
   readonly consoleTypes: string[];
@@ -58,21 +58,18 @@ export function createPageLocalInspection(evidenceRoot: string): {
     await annotateCheckboxGroups(page);
     const pageRecord = records.get(page)!;
     const live = await page.evaluate(readPageLocalSnapshot, checkboxGroupKindAttribute);
-    const ariaSnapshots: string[] = [];
+    const ariaSnapshotSha256: string[] = [];
     const ariaOwners = page.locator(
       '[data-automation-id="dateInputWrapper"], ' +
         `[${checkboxGroupKindAttribute}="exclusive"], ` +
         `[${checkboxGroupKindAttribute}="multiple"]`,
     );
     for (let index = 0; index < await ariaOwners.count(); index += 1) {
-      ariaSnapshots.push(await ariaOwners.nth(index).ariaSnapshot({ timeout: 5_000 }));
+      ariaSnapshotSha256.push(diagnosticTextHash(
+        await ariaOwners.nth(index).ariaSnapshot({ timeout: 5_000 }),
+      ));
     }
     await mkdir(evidenceRoot, { recursive: true });
-    await page.screenshot({
-      path: join(evidenceRoot, MONITOR_SCREENSHOT_FILE),
-      animations: "disabled",
-      fullPage: true,
-    });
     const value = Object.freeze({
       schemaVersion: 1,
       evidenceRevision,
@@ -80,8 +77,8 @@ export function createPageLocalInspection(evidenceRoot: string): {
       consoleTypes: [...pageRecord.consoleTypes],
       pageErrorNames: [...pageRecord.pageErrorNames],
       requestFailures: [...pageRecord.requestFailures],
-      ariaSnapshots,
-      ...live,
+      ariaSnapshotSha256,
+      ...privacySafeSnapshot(live),
     });
     const destination = join(evidenceRoot, "page-local-inspection.json");
     const partial = `${destination}.tmp`;
@@ -94,6 +91,35 @@ export function createPageLocalInspection(evidenceRoot: string): {
   };
 
   return Object.freeze({ prepare, capture });
+}
+
+function privacySafeSnapshot(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("page-local inspection snapshot denied");
+  }
+  return redactDiagnosticValue(value) as Record<string, unknown>;
+}
+
+function redactDiagnosticValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactDiagnosticValue);
+  if (typeof value !== "object" || value === null) return value;
+  const safe: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (sensitiveTextKeys.has(key)) {
+      safe[`${key}Sha256`] = typeof child === "string"
+        ? diagnosticTextHash(child)
+        : null;
+    } else {
+      safe[key] = redactDiagnosticValue(child);
+    }
+  }
+  return safe;
+}
+
+function diagnosticTextHash(value: string): string {
+  return createHash("sha256").update(
+    value.normalize("NFC").replace(/\s+/gu, " ").trim(),
+  ).digest("hex");
 }
 
 function boundedPush<Value>(target: Value[], value: Value): void {

@@ -206,20 +206,20 @@ test("retained Integer formatted dates agree across every completion observer", 
     const inspectionEvidence = JSON.parse(inspectionText) as {
       readonly evidenceRevision?: string;
       readonly dateControls?: readonly unknown[];
-      readonly ariaSnapshots?: readonly unknown[];
+      readonly ariaSnapshotSha256?: readonly unknown[];
       readonly mutations?: readonly unknown[];
       readonly consoleTypes?: readonly unknown[];
       readonly pageErrorNames?: readonly unknown[];
       readonly requestFailures?: readonly unknown[];
     };
-    assert.equal(inspectionEvidence.evidenceRevision, "s2-page-local-inspection-v2");
+    assert.equal(inspectionEvidence.evidenceRevision, "s2-page-local-inspection-v3");
     assert.equal(inspectionEvidence.dateControls?.length, 2);
-    assert.equal(inspectionEvidence.ariaSnapshots?.length, 2);
+    assert.equal(inspectionEvidence.ariaSnapshotSha256?.length, 2);
     assert.ok(Array.isArray(inspectionEvidence.mutations));
     assert.ok(Array.isArray(inspectionEvidence.consoleTypes));
     assert.ok(Array.isArray(inspectionEvidence.pageErrorNames));
     assert.ok(Array.isArray(inspectionEvidence.requestFailures));
-    assert.equal(existsSync(join(evidenceRoot, "monitor-visible.png")), true);
+    assert.equal(existsSync(join(evidenceRoot, "monitor-visible.png")), false);
   } finally {
     await browser.close();
     rmSync(evidenceRoot, { recursive: true, force: true });
