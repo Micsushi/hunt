@@ -66,6 +66,8 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
   const evidence = await page.evaluate((attribute) => {
     const optionsAttribute = "data-hunt-checkbox-options";
     const selectedOptionAttribute = "data-hunt-checkbox-selected-option";
+    const normalize = (value: string | null | undefined) =>
+      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -73,10 +75,9 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
       return style.display !== "none" && style.visibility !== "hidden" &&
         style.visibility !== "collapse" && element.getClientRects().length > 0;
     };
-    document.querySelectorAll(`[${attribute}], [${optionsAttribute}], [${selectedOptionAttribute}]`)
+    document.querySelectorAll(`[${attribute}], [${selectedOptionAttribute}]`)
       .forEach((element) => {
         element.removeAttribute(attribute);
-        element.removeAttribute(optionsAttribute);
         element.removeAttribute(selectedOptionAttribute);
       });
     const native = [...document.querySelectorAll<HTMLElement>(
@@ -89,10 +90,28 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
       [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].filter(visible)
         .length >= 2
     );
-    return [...new Set([...native, ...generic])].map((owner, index) => {
+    const owners = [...new Set([...native, ...generic])];
+    document.querySelectorAll(`[${optionsAttribute}]`).forEach((element) => {
+      if (!owners.includes(element as HTMLElement)) element.removeAttribute(optionsAttribute);
+    });
+    return owners.map((owner, index) => {
       owner.setAttribute("data-hunt-checkbox-group-candidate", String(index));
       const checkboxes = [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
         .filter(visible);
+      const priorOptions = (() => {
+        const encoded = owner.getAttribute(optionsAttribute);
+        if (encoded === null) return [];
+        try {
+          const parsed: unknown = JSON.parse(encoded);
+          return Array.isArray(parsed) && parsed.length >= 2 && parsed.every((option) =>
+              typeof option === "string" && normalize(option) !== ""
+            ) && new Set(parsed.map((option) => normalize(String(option)))).size === parsed.length
+            ? parsed.map((option) => normalize(String(option)))
+            : [];
+        } catch {
+          return [];
+        }
+      })();
       const records: Record<string, unknown>[] = [];
       const seen = new Set<unknown>();
       const inspect = (value: unknown): void => {
@@ -116,7 +135,7 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
         fiber = fiber.return as typeof fiber;
       }
       const backing = records.flatMap((record) => {
-        if (!Array.isArray(record.options) || record.options.length < 2) return [];
+        if (!Array.isArray(record.options) || record.options.length < 1) return [];
         const options = record.options.map((option) => {
           if (typeof option !== "object" || option === null) return undefined;
           const item = option as Record<string, unknown>;
@@ -144,13 +163,30 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
         })();
         return [{ options: exactOptions.map(({ label }) => label), selected }];
       });
-      const optionSets = new Map(backing.map(({ options }) => [JSON.stringify(options), options]));
-      const backingOptions = optionSets.size === 1 ? [...optionSets.values()][0]! : [];
+      const optionSets = new Map(backing.filter(({ options }) => options.length >= 2)
+        .map(({ options }) => [JSON.stringify(options), options]));
+      const currentOptions = optionSets.size === 1 ? [...optionSets.values()][0]! : [];
+      const checkboxLabels = checkboxes.map((checkbox) => {
+        const aria = normalize(checkbox.getAttribute("aria-label"));
+        if (aria !== "") return aria;
+        const label = checkbox.labels?.[0]?.cloneNode(true) as HTMLElement | undefined;
+        label?.querySelectorAll("input,textarea,select,button").forEach((control) => control.remove());
+        return normalize(label?.textContent) || normalize(checkbox.value);
+      }).filter(Boolean);
+      const observedSubsetsPrior = priorOptions.length >= 2 &&
+        [...backing.flatMap(({ options }) => options), ...checkboxLabels].length > 0 &&
+        [...backing.flatMap(({ options }) => options), ...checkboxLabels]
+          .every((option) => priorOptions.includes(option));
+      const backingOptions = currentOptions.length >= 2
+        ? currentOptions
+        : observedSubsetsPrior ? priorOptions : [];
       const selectedOptions = new Set(backing.map(({ selected }) => selected).filter(
         (selected): selected is string => selected !== undefined,
       ));
       if (backingOptions.length >= 2) {
         owner.setAttribute(optionsAttribute, JSON.stringify(backingOptions));
+      } else {
+        owner.removeAttribute(optionsAttribute);
       }
       if (selectedOptions.size === 1) {
         owner.setAttribute(selectedOptionAttribute, [...selectedOptions][0]!);

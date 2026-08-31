@@ -2488,6 +2488,73 @@ test("checkbox-group identity and readback survive option virtualization", async
   }
 });
 
+test("checkbox-group identity and readback survive a one-option controlled remount", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowSelfIdentifyPage">
+        <div data-automation-id="formField-disabilityStatus">
+          <label>Please check one of the boxes below:*</label>
+          <fieldset data-automation-id="disabilityStatus-CheckboxGroup" aria-required="true">
+            <label><input type="checkbox" aria-label="Yes" id="option-yes">Yes</label>
+            <label><input type="checkbox" aria-label="No" id="option-no">No</label>
+            <label><input type="checkbox" aria-label="Decline" id="option-decline">Decline</label>
+          </fieldset>
+        </div>
+      </main>
+      <script>
+        const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+        const props = {
+          options: [
+            { id: 'option-yes', label: 'Yes' },
+            { id: 'option-no', label: 'No' },
+            { id: 'option-decline', label: 'Decline' },
+          ],
+          value: undefined,
+          isMultiSelect: false,
+          onSelect() {},
+        };
+        Object.defineProperty(group, '__reactProps$controlledOwner', {
+          enumerable: true,
+          value: props,
+        });
+        window.commitControlledOption = () => {
+          props.options = [{ id: 'option-decline', label: 'Decline' }];
+          props.value = 'option-decline';
+          group.innerHTML = '<label><input type="checkbox" aria-label="Decline" checked disabled>Decline</label>';
+        };
+      </script>
+    `);
+    const pageId = "page-controlled-checkbox-remount" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const group = page.locator('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+    const original = await group.getAttribute("data-hunt-target-token");
+    assert.ok(original !== null);
+
+    await page.evaluate(() => (window as unknown as {
+      commitControlledOption(): void;
+    }).commitControlledOption());
+    await bindQuestionnaireTargets(page, pageId);
+
+    assert.equal(await group.getAttribute("data-hunt-target-token"), original);
+    assert.deepEqual(JSON.parse(await group.getAttribute("data-hunt-checkbox-options") ?? "[]"),
+      ["Yes", "No", "Decline"]);
+    assert.equal(await group.getAttribute("data-hunt-checkbox-selected-option"), "Decline");
+    const observed = await inspectPage(
+      page,
+      "live_session_controlled_checkbox" as never,
+      pageId,
+      new Map(),
+    );
+    const target = [...observed.targets.values()].flat().find(({ token }) => token === original);
+    assert.deepEqual(target?.radioOptions, ["Yes", "No", "Decline"]);
+    assert.deepEqual(target?.readback, { kind: "selected", option: "Decline" });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("questionnaire verification recovers a committed text remount before the next mutation", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
