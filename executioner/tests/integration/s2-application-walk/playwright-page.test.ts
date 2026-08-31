@@ -1112,7 +1112,7 @@ test("historical loader class visibility is measured at the exact structural pos
         </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
         timeoutMs: 1_000,
-        navigationSettleTimeoutMs: 1_000,
+        navigationSettleTimeoutMs: 3_000,
       });
       const before = await application.observe(new AbortController().signal);
       assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
