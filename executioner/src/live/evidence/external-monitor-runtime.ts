@@ -29,6 +29,7 @@ import {
   type Stage2ExternalMonitorObserverSigner,
   verifyStage2ExternalMonitorAcknowledgement,
 } from "./external-monitor-authority.ts";
+import { compatibleObservedStructure } from "./external-monitor-page-identity.ts";
 export {
   readStage2AuthMonitorChain,
   readStage2ReviewMonitorChain,
@@ -764,13 +765,6 @@ function observerFields(binding: Stage2ExternalMonitorObserverBinding) {
     observerPublicKeySpki: binding.publicKeySpki,
     observerPublicKeySha256: binding.publicKeySha256,
   });
-}
-
-function compatibleObservedStructure(requestPage: string, observedPage: unknown): boolean {
-  if (requestPage === observedPage) return true;
-  if (requestPage === "resume" && observedPage === "profile") return true;
-  return requestPage === "application_ready" && typeof observedPage === "string" &&
-    ["resume", "profile", "questionnaire", "review"].includes(observedPage);
 }
 
 function signedAcknowledgement(

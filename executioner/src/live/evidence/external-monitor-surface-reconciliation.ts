@@ -5,6 +5,7 @@ import {
   externalMonitorObserverFailureCode,
   observerFailure,
 } from "./external-monitor-observer-failure.ts";
+import { compatibleObservedStructure } from "./external-monitor-page-identity.ts";
 
 export interface ObservedMonitorSurface {
   readonly title: string;
@@ -30,7 +31,8 @@ export async function waitForReconciledMonitorSurface(
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const observed = await observe();
-      if (typeof request.page !== "string" || !compatibleObservedPage(request.page, observed.page)) {
+      if (typeof request.page !== "string" ||
+          !compatibleObservedStructure(request.page, observed.page)) {
         const expectedTitleSha256 = typeof request.capturedIdentityDigests === "object" &&
             request.capturedIdentityDigests !== null &&
             "titleSha256" in request.capturedIdentityDigests &&
@@ -96,13 +98,6 @@ export function reconcileObservedMonitorSurface(
       observed.submitPresent !== request.expectedSubmitPresent) {
     observerFailure("submit_state_reconciliation");
   }
-}
-
-function compatibleObservedPage(requestPage: string, observedPage: string): boolean {
-  if (requestPage === observedPage) return true;
-  if (requestPage === "resume" && observedPage === "profile") return true;
-  return requestPage === "application_ready" &&
-    ["resume", "profile", "questionnaire", "review"].includes(observedPage);
 }
 
 function delay(ms: number): Promise<void> {

@@ -64,6 +64,7 @@ export {
   waitForReconciledMonitorSurface,
 } from "./external-monitor-surface-reconciliation.ts";
 export {
+  compatibleObservedStructure,
   observedActiveStageTitles,
   observedStructureIdentityTitles,
   observedStructurePage,

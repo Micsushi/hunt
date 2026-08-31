@@ -26,6 +26,7 @@ import { createStage2ExternalMonitorObserverAuthority } from
 import {
   externalMonitorObserverFailureDiagnostic,
   externalMonitorObserverFailureCode,
+  compatibleObservedStructure,
   normalizeObservedAddressHost,
   normalizeObservedChromeTitle,
   observedActiveStageTitles,
@@ -1740,6 +1741,9 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.equal(observedStructurePage(new Set([
     "Sign In", "Email Address", "Password", "Review", "Submit application",
   ])), "sign_in");
+  assert.equal(compatibleObservedStructure("account_entry", "sign_in"), true);
+  assert.equal(compatibleObservedStructure("sign_in", "account_entry"), false);
+  assert.equal(compatibleObservedStructure("account_entry", "profile"), false);
   const visibleSignIn = {
     actionFlags: new Set(["Sign In"]),
     editFlags: new Set(["Email Address", "Password"]),
