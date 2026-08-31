@@ -12,16 +12,27 @@ export async function committedMultiSelectReadback(
     const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
     const normalize = (value: string | null | undefined) => (value ?? "")
       .normalize("NFC").replace(/\s+/gu, " ").trim();
-    const labels = [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
+    const items = [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
       .filter((item) => item.closest(fieldSelector) === owner)
       .map((item) => {
-        const semantic = item.querySelector('[data-automation-id="promptOption"]') ?? item;
+        const promptOptions = item.querySelectorAll('[data-automation-id="promptOption"]');
+        if (promptOptions.length > 1) {
+          throw new TypeError("Workday selected item has ambiguous semantic text");
+        }
+        const semantic = promptOptions[0] ?? item;
         const copy = semantic.cloneNode(true) as Element;
         copy.querySelectorAll('[data-automation-id="DELETE_charm"]')
           .forEach((affordance) => affordance.remove());
-        return normalize(copy.textContent);
+        return { canonical: promptOptions.length === 1, label: normalize(copy.textContent) };
       })
-      .filter(Boolean);
+      .filter(({ label }) => label !== "");
+
+    // Production Workday pills expose their semantic text as promptOption.
+    // Collapsed and visible presentation mirrors can coexist as selectedItem
+    // nodes without that child, so never mix their aggregate text into a
+    // canonical prompt-backed selection set.
+    const canonical = items.filter((item) => item.canonical);
+    const labels = (canonical.length > 0 ? canonical : items).map(({ label }) => label);
 
     // Workday can remount one semantic selection into both a collapsed list
     // and a visible token. Multi-select options are set members, so retain one

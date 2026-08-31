@@ -2710,7 +2710,7 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
             selected.hidden = true;
             const mirror = document.createElement("div");
             mirror.setAttribute("data-automation-id", "selectedItem");
-            mirror.textContent = "Python";
+            mirror.textContent = "PythonPython";
             visibleSelected.replaceChildren(mirror);
             input.value = "";
             input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
