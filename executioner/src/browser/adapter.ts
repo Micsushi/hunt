@@ -17,6 +17,8 @@ import {
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
+  checkboxGroupOptionsAttribute,
+  checkboxGroupSelectedOptionAttribute,
   supportedControlSelector,
 } from "../deterministic/supported-controls.ts";
 import { commitSingleCheckbox } from "./single-checkbox-commit.ts";
@@ -1992,7 +1994,9 @@ export async function clickNext(
 }
 
 async function inspectControls(page: Page): Promise<RawControl[]> {
-  const raw = await page.locator(controlSelector).evaluateAll((elements) => {
+  const raw = await page.locator(controlSelector).evaluateAll((elements, {
+    checkboxOptionsAttribute, checkboxSelectedOptionAttribute,
+  }) => {
     const normalize = (value: string | null | undefined): string =>
       (value ?? "").replace(/\s+/gu, " ").trim();
     const nameOf = (element: Element): string => {
@@ -2245,8 +2249,21 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       )) {
         const checkboxes = [...element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
         const options = checkboxes.map(checkboxOptionName).filter(Boolean);
-        if (checkboxes.length < 2 || options.length !== checkboxes.length ||
-            new Set(options).size !== options.length) return [];
+        const backedOptions = (() => {
+          const encoded = element.getAttribute(checkboxOptionsAttribute);
+          if (encoded === null) return [];
+          try {
+            const parsed: unknown = JSON.parse(encoded);
+            return Array.isArray(parsed) && parsed.length >= 2 && parsed.every((option) =>
+              typeof option === "string" && normalize(option) !== ""
+            ) ? parsed.map((option) => normalize(option)) : [];
+          } catch {
+            return [];
+          }
+        })();
+        const exactOptions = backedOptions.length >= 2 ? backedOptions : options;
+        if (options.length !== checkboxes.length || exactOptions.length < 2 ||
+            new Set(exactOptions).size !== exactOptions.length) return [];
         checkboxes.forEach((checkbox, index) => {
           const option = options[index]!;
           checkbox.setAttribute("data-hunt-option-label", option);
@@ -2278,18 +2295,24 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
           }
         });
         const selected = checkboxes.filter((checkbox) => checkbox.checked);
+        const backedSelected = normalize(
+          element.getAttribute(checkboxSelectedOptionAttribute),
+        );
+        const selectedLabel = backedSelected !== "" && exactOptions.includes(backedSelected)
+          ? backedSelected
+          : selected.length === 1 ? checkboxOptionName(selected[0]!) : "";
         const multiple = element.getAttribute("data-hunt-checkbox-selection-mode") === "multiple";
         control = multiple
-          ? { kind: "select", element: "listbox", options: options as never[] }
+          ? { kind: "select", element: "listbox", options: exactOptions as never[] }
           : {
               kind: "choice", element: "input", choice: "radio", group: name as never,
-              checked: selected.length === 1,
+              checked: selectedLabel !== "",
             };
-        readback = { kind: "selected", option: selected.length >= 1
-          ? checkboxOptionName(selected[0]!) as never
+        readback = { kind: "selected", option: selectedLabel !== ""
+          ? selectedLabel as never
           : null };
-        selectedOptions = selected.map(checkboxOptionName).filter(Boolean);
-        radioOptions = options;
+        selectedOptions = selectedLabel === "" ? [] : [selectedLabel];
+        radioOptions = exactOptions;
         interaction = multiple ? "multi-checkbox-group" : "exclusive-checkbox-group";
       } else if (
         element.getAttribute("role") === "combobox" ||
@@ -2444,6 +2467,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         interaction,
       }];
     });
+  }, {
+    checkboxOptionsAttribute: checkboxGroupOptionsAttribute,
+    checkboxSelectedOptionAttribute: checkboxGroupSelectedOptionAttribute,
   });
   return raw as RawControl[];
 }

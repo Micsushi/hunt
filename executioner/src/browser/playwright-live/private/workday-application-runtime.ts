@@ -42,6 +42,7 @@ import { PlaywrightBrowserSession } from "../../session.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
+  checkboxGroupOptionsAttribute,
   supportedControlSelector,
 } from "../../../deterministic/supported-controls.ts";
 import {
@@ -2975,6 +2976,7 @@ export async function bindQuestionnaireTargets(
   await annotateCheckboxGroups(page);
   const result = await page.evaluate(({
     declaredPageId, selectors, supportedControls, checkboxGroupAttribute,
+    checkboxOptionsAttribute,
   }) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
@@ -3168,7 +3170,8 @@ export async function bindQuestionnaireTargets(
         if (leaf instanceof HTMLSelectElement) {
           return [...leaf.options].map((option) => normalize(option.text));
         }
-        const encoded = control.getAttribute("data-hunt-popup-options") ??
+        const encoded = control.getAttribute(checkboxOptionsAttribute) ??
+          control.getAttribute("data-hunt-popup-options") ??
           control.getAttribute("data-hunt-deferred-options");
         if (encoded !== null) {
           try {
@@ -3257,6 +3260,7 @@ export async function bindQuestionnaireTargets(
     selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
     supportedControls: supportedControlSelector,
     checkboxGroupAttribute: checkboxGroupKindAttribute,
+    checkboxOptionsAttribute: checkboxGroupOptionsAttribute,
   });
   if (!result) throw new TypeError("questionnaire control binding denied");
 }

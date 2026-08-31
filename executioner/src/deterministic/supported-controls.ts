@@ -24,6 +24,8 @@ export function isSupportedProfileUiBehavior(value: unknown): boolean {
 }
 
 export const checkboxGroupKindAttribute = "data-hunt-checkbox-group-kind";
+export const checkboxGroupOptionsAttribute = "data-hunt-checkbox-options";
+export const checkboxGroupSelectedOptionAttribute = "data-hunt-checkbox-selected-option";
 export type CheckboxGroupKind = "independent" | "exclusive" | "multiple";
 
 export interface CheckboxGroupEvidence {
@@ -61,7 +63,9 @@ export interface CheckboxGroupingPage {
 }
 
 export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promise<void> {
-  const evidence = await page.evaluate((attribute) => {
+  const evidence = await page.evaluate(({
+    attribute, optionsAttribute, selectedOptionAttribute,
+  }) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -69,9 +73,12 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
       return style.display !== "none" && style.visibility !== "hidden" &&
         style.visibility !== "collapse" && element.getClientRects().length > 0;
     };
-    document.querySelectorAll(`[${attribute}]`).forEach((element) =>
-      element.removeAttribute(attribute)
-    );
+    document.querySelectorAll(`[${attribute}], [${optionsAttribute}], [${selectedOptionAttribute}]`)
+      .forEach((element) => {
+        element.removeAttribute(attribute);
+        element.removeAttribute(optionsAttribute);
+        element.removeAttribute(selectedOptionAttribute);
+      });
     const native = [...document.querySelectorAll<HTMLElement>(
       '[data-automation-id$="-CheckboxGroup"]',
     )].filter(visible);
@@ -86,12 +93,74 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
       owner.setAttribute("data-hunt-checkbox-group-candidate", String(index));
       const checkboxes = [...owner.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
         .filter(visible);
+      const records: Record<string, unknown>[] = [];
+      const seen = new Set<unknown>();
+      const inspect = (value: unknown): void => {
+        if (typeof value !== "object" || value === null || seen.has(value)) return;
+        seen.add(value);
+        records.push(value as Record<string, unknown>);
+      };
+      const host = owner as unknown as Record<string, unknown>;
+      Object.keys(owner).filter((key) => key.startsWith("__reactProps$"))
+        .forEach((key) => inspect(host[key]));
+      const fiberKey = Object.keys(owner).find((key) =>
+        key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+      );
+      let fiber = fiberKey === undefined ? undefined : host[fiberKey] as {
+        memoizedProps?: unknown;
+        pendingProps?: unknown;
+        return?: unknown;
+      } | undefined;
+      for (let depth = 0; fiber !== undefined && fiber !== null && depth < 20; depth += 1) {
+        inspect(fiber.memoizedProps ?? fiber.pendingProps);
+        fiber = fiber.return as typeof fiber;
+      }
+      const backing = records.flatMap((record) => {
+        if (!Array.isArray(record.options) || record.options.length < 2) return [];
+        const options = record.options.map((option) => {
+          if (typeof option !== "object" || option === null) return undefined;
+          const item = option as Record<string, unknown>;
+          const label = typeof item.label === "string"
+            ? item.label.normalize("NFC").replace(/\s+/gu, " ").trim()
+            : "";
+          if (label === "") return undefined;
+          return { label, id: typeof item.id === "string" ? item.id : undefined };
+        });
+        if (options.some((option) => option === undefined)) return [];
+        const exactOptions = options as { readonly label: string; readonly id?: string }[];
+        const selected = (() => {
+          const value = Array.isArray(record.value) ? record.value[0] : record.value;
+          if (typeof value === "string") {
+            return exactOptions.find((option) => option.id === value || option.label === value)?.label;
+          }
+          if (typeof value === "object" && value !== null) {
+            const selectedRecord = value as Record<string, unknown>;
+            return exactOptions.find((option) =>
+              typeof selectedRecord.id === "string" && option.id === selectedRecord.id ||
+              typeof selectedRecord.label === "string" && option.label === selectedRecord.label
+            )?.label;
+          }
+          return undefined;
+        })();
+        return [{ options: exactOptions.map(({ label }) => label), selected }];
+      });
+      const optionSets = new Map(backing.map(({ options }) => [JSON.stringify(options), options]));
+      const backingOptions = optionSets.size === 1 ? [...optionSets.values()][0]! : [];
+      const selectedOptions = new Set(backing.map(({ selected }) => selected).filter(
+        (selected): selected is string => selected !== undefined,
+      ));
+      if (backingOptions.length >= 2) {
+        owner.setAttribute(optionsAttribute, JSON.stringify(backingOptions));
+      }
+      if (selectedOptions.size === 1) {
+        owner.setAttribute(selectedOptionAttribute, [...selectedOptions][0]!);
+      }
       const names = new Set(checkboxes.map((checkbox) =>
         (checkbox.name ?? "").normalize("NFC").replace(/\s+/gu, " ").trim()
       ).filter(Boolean));
       const explicit = owner.getAttribute("data-hunt-checkbox-selection-mode");
       return {
-        checkboxCount: checkboxes.length,
+        checkboxCount: Math.max(checkboxes.length, backingOptions.length),
         nativeGroup: owner.matches('[data-automation-id$="-CheckboxGroup"]'),
         role: owner.getAttribute("role") ?? "",
         ariaMultiselectable: owner.getAttribute("aria-multiselectable") === "true",
@@ -101,7 +170,11 @@ export async function annotateCheckboxGroups(page: CheckboxGroupingPage): Promis
           .normalize("NFC").replace(/\s+/gu, " ").trim(),
       };
     });
-  }, checkboxGroupKindAttribute);
+  }, {
+    attribute: checkboxGroupKindAttribute,
+    optionsAttribute: checkboxGroupOptionsAttribute,
+    selectedOptionAttribute: checkboxGroupSelectedOptionAttribute,
+  });
   const decisions = evidence.map((item) => classifyCheckboxGroup({
     ...item,
     explicitMode: item.explicitMode === "exclusive" || item.explicitMode === "multiple"

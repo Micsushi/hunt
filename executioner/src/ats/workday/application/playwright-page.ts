@@ -4,6 +4,8 @@ import { browserPageId, fieldId } from "../../../contracts/index.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
+  checkboxGroupOptionsAttribute,
+  checkboxGroupSelectedOptionAttribute,
   supportedControlSelector,
 } from "../../../deterministic/supported-controls.ts";
 import {
@@ -330,6 +332,8 @@ export class PlaywrightWorkdayApplicationPage {
         readApplicationSnapshot, {
           selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
           checkboxGroupAttribute: checkboxGroupKindAttribute,
+          checkboxGroupOptionsAttribute,
+          checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
         },
       );
@@ -695,10 +699,15 @@ async function readApplicationSnapshot(
   input: {
     readonly selectors: typeof WORKDAY_APPLICATION_PAGE_SELECTORS;
     readonly checkboxGroupAttribute: string;
+    readonly checkboxGroupOptionsAttribute: string;
+    readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
   },
 ): Promise<BrowserApplicationSnapshot | BrowserApplicationAmbiguity> {
-  const { selectors, checkboxGroupAttribute, supportedControls } = input;
+  const {
+    selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
+    checkboxGroupSelectedOptionAttribute, supportedControls,
+  } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -1363,7 +1372,8 @@ async function readApplicationSnapshot(
               : "text";
     const catalog: { label: string; value: string; disabled: boolean }[] = [];
     const appendEncodedCatalog = (element: Element) => {
-      const encoded = element.getAttribute("data-hunt-popup-options") ??
+      const encoded = element.getAttribute(checkboxGroupOptionsAttribute) ??
+        element.getAttribute("data-hunt-popup-options") ??
         element.getAttribute("data-hunt-deferred-options");
       if (encoded === null) return;
       try {
@@ -1599,9 +1609,10 @@ async function readApplicationSnapshot(
     ) {
       const checkboxes = [...control.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
       const checked = checkboxes.filter((item) => item.checked).length;
-      verified = verified && checkboxes.length >= 2 && (
+      const backedSelected = text(control.getAttribute(checkboxGroupSelectedOptionAttribute));
+      verified = verified && (backedSelected !== "" || checkboxes.length >= 2 && (
         control.getAttribute(checkboxGroupAttribute) === "multiple" ? checked >= 1 : checked === 1
-      );
+      ));
       const layers = new Map<string, {
         hostTag: string;
         hostAutomationId: string | null;
