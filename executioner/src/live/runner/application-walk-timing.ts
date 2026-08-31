@@ -1,8 +1,15 @@
-import type {
-  ApplicationCheckpoint,
-  ApplicationWalkDependencies,
-} from "../../ats/workday/application/page-walk.ts";
 import type { ApplicationPhaseTimingLedger } from "./application-phase-timing.ts";
+
+type TimedApplicationCheckpoint =
+  | "resume_verified" | "profile_verified" | "questionnaire_verified";
+
+type TimedApplicationObservation =
+  | { readonly ok: false }
+  | { readonly ok: true; readonly value: { readonly pageId: string } };
+
+interface TimedApplicationHandler<Request, Result> {
+  reconcile(request: Request, signal: AbortSignal): Promise<Result>;
+}
 
 export interface Stage2ApplicationWalkTimingClock {
   readonly monotonicNow: () => number;
@@ -24,7 +31,7 @@ export interface CompletedPageTiming {
 }
 
 interface ActivePageTiming {
-  readonly checkpoint: ApplicationCheckpoint;
+  readonly checkpoint: TimedApplicationCheckpoint;
   readonly pageId: string;
   readonly pageReadyAt: string;
   readonly pageReadinessDurationMs: number;
@@ -52,7 +59,7 @@ export class ApplicationWalkTimingCollector {
   }
 
   observed(
-    result: Awaited<ReturnType<ApplicationWalkDependencies["observer"]["observe"]>>,
+    result: TimedApplicationObservation,
     at: string,
     durationMs: number,
   ): void {
@@ -66,13 +73,13 @@ export class ApplicationWalkTimingCollector {
     this.#navigationWaitDurationMs = durationMs;
   }
 
-  handler<Page extends "resume" | "profile" | "questionnaire">(
+  handler<Page extends "resume" | "profile" | "questionnaire", Request, Result>(
     page: Page,
-    handler: ApplicationWalkDependencies["handlers"][Page],
-  ): ApplicationWalkDependencies["handlers"][Page] {
+    handler: TimedApplicationHandler<Request, Result>,
+  ): TimedApplicationHandler<Request, Result> {
     return Object.freeze({
       reconcile: async (
-        request: Parameters<ApplicationWalkDependencies["handlers"][Page]["reconcile"]>[0],
+        request: Request & { readonly pageId: string },
         signal: AbortSignal,
       ) => {
         const checkpoint = page === "resume" ? "resume_verified"
@@ -108,10 +115,10 @@ export class ApplicationWalkTimingCollector {
           active.independentMonitorDurationMs += Math.max(0, monitorEnded - monitorBegan);
         }
       },
-    }) as ApplicationWalkDependencies["handlers"][Page];
+    }) as TimedApplicationHandler<Request, Result>;
   }
 
-  complete(checkpoint: ApplicationCheckpoint): CompletedPageTiming {
+  complete(checkpoint: TimedApplicationCheckpoint): CompletedPageTiming {
     const index = this.#active.findIndex((item) => item.checkpoint === checkpoint);
     const active = index === -1 ? undefined : this.#active.splice(index, 1)[0];
     if (active === undefined) throw new TypeError("application page timing unavailable");

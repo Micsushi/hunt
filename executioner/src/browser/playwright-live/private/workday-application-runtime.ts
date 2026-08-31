@@ -38,8 +38,6 @@ import {
 } from "../../../ats/workday/application/page-walk.ts";
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
-import type { ApplicationPhaseTimingLedger } from
-  "../../../live/runner/application-phase-timing.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
 import {
   annotateCheckboxGroups,
@@ -292,6 +290,10 @@ export interface ReviewExpectedField {
   readonly valueSha256: string;
 }
 
+interface IndependentMonitorTimingSink {
+  recordIndependentMonitor(durationMs: number): void;
+}
+
 export interface OwnedWorkdayApplicationRuntimeOptions {
   readonly request: Stage2ApplicationWalkRuntimeBindingRequest;
   readonly acceptances: { record(value: ApplicationLaneAcceptance): void };
@@ -299,7 +301,7 @@ export interface OwnedWorkdayApplicationRuntimeOptions {
   readonly timeoutMs: number;
   readonly initialReviewExpected: readonly ReviewExpectedField[];
   readonly externalMonitor?: ExternalMonitorPort;
-  readonly phaseTiming?: ApplicationPhaseTimingLedger;
+  readonly phaseTiming?: IndependentMonitorTimingSink;
   readonly authorizationExpiresAt: string;
   readonly now: () => string;
   readonly trace?: (event: string, details?: object) => void;
@@ -313,7 +315,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #nextOperationId: () => OperationId;
   readonly #timeoutMs: number;
   readonly #externalMonitor: ExternalMonitorPort | undefined;
-  readonly #phaseTiming: ApplicationPhaseTimingLedger | undefined;
+  readonly #phaseTiming: IndependentMonitorTimingSink | undefined;
   readonly #authorizationExpiresAt: string;
   readonly #now: () => string;
   readonly #trace: OwnedWorkdayApplicationRuntimeOptions["trace"];
