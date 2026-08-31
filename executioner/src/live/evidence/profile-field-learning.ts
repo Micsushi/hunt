@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  admitApplicationExecutionPolicy,
+  type ApplicationExecutionPolicy,
+} from "../../contracts/application-execution-policy.ts";
 
 import type {
   ProfileCommitRequest,
@@ -161,12 +165,13 @@ export interface ProfileFieldLearningRecordV2 {
 }
 
 export interface ProfileFieldLearningEvidenceV2 {
-  readonly schemaVersion: 5;
-  readonly evidenceRevision: "s2-profile-field-learning-v5";
+  readonly schemaVersion: 6;
+  readonly evidenceRevision: "s2-profile-field-learning-v6";
   readonly page: "profile";
-  readonly executionMode: "live" | "synthetic_test_non_submittable";
-  readonly testOnly: boolean;
-  readonly liveAcceptanceEligible: boolean;
+  readonly browserTransport: ApplicationExecutionPolicy["browserTransport"];
+  readonly answerFallbackPolicy: ApplicationExecutionPolicy["answerFallbackPolicy"];
+  readonly submissionPolicy: ApplicationExecutionPolicy["submissionPolicy"];
+  readonly liveProofEligibility: ApplicationExecutionPolicy["liveProofEligibility"];
   readonly learningConversion?: ProfileLearningConversion;
   readonly syntheticFieldsSha256?: string;
   readonly visibleControlCount: number;
@@ -192,6 +197,7 @@ export interface ProfileFieldLearningCapture {
 export function createProfileFieldLearningCapture(input: {
   readonly page: WorkdayProfilePagePort;
   readonly plan: ProfilePagePlan;
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly root?: string;
   readonly fileName?: "profile-field-learning.json" | "profile-field-learning-02.json";
   readonly sensitiveValues: readonly string[];
@@ -383,18 +389,11 @@ export function createProfileFieldLearningCapture(input: {
         const fields = [...records.entries()]
           .filter(([identity]) => visibleIdentities.has(identity))
           .map(([, record]) => freezeRecord(record));
-        const liveAcceptanceEligible = input.plan.mode === "live" &&
-          fields.every(liveEligibleField);
         const value = admitProfileFieldLearningEvidence({
-          schemaVersion: 5,
-          evidenceRevision: "s2-profile-field-learning-v5",
+          schemaVersion: 6,
+          evidenceRevision: "s2-profile-field-learning-v6",
           page: "profile",
-          executionMode: metadataFailure === undefined
-            ? input.plan.mode
-            : "synthetic_test_non_submittable",
-          testOnly: metadataFailure !== undefined ||
-            input.plan.mode === "synthetic_test_non_submittable",
-          liveAcceptanceEligible: metadataFailure === undefined && liveAcceptanceEligible,
+          ...input.executionPolicy,
           ...(metadataFailure === undefined ? {} : {
             learningConversion: conversion(metadataFailure),
           }),
@@ -537,16 +536,16 @@ export function admitProfileFieldLearningEvidence(
 ): ProfileFieldLearningEvidenceV2 {
   if (
     !exactKeys(value, [
-      "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
-      "liveAcceptanceEligible",
+      "schemaVersion", "evidenceRevision", "page", "browserTransport",
+      "answerFallbackPolicy", "submissionPolicy", "liveProofEligibility",
       ...(value.learningConversion === undefined ? [] : ["learningConversion"]),
       ...(value.syntheticFieldsSha256 === undefined ? [] : ["syntheticFieldsSha256"]),
       "visibleControlCount", "fields",
     ]) ||
-    value.schemaVersion !== 5 ||
-    value.evidenceRevision !== "s2-profile-field-learning-v5" ||
+    value.schemaVersion !== 6 ||
+    value.evidenceRevision !== "s2-profile-field-learning-v6" ||
     value.page !== "profile" ||
-    !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
+    !validExecutionPolicy(value) ||
     (value.syntheticFieldsSha256 !== undefined &&
       !/^[0-9a-f]{64}$/u.test(value.syntheticFieldsSha256)) ||
     value.fields.length < 1 || value.fields.length > 128 ||
@@ -585,7 +584,7 @@ export function admitProfileFieldLearningEvidence(
       (field.answerState === "answered" && field.lane === null) ||
       (field.answerState === "unset" && field.lane !== null) ||
       (field.lane === "synthetic_test_default" &&
-        value.executionMode !== "synthetic_test_non_submittable") ||
+        value.answerFallbackPolicy !== "deterministic_site_valid_editable") ||
       (field.binderStrategy !== null && !binderStrategies.has(field.binderStrategy)) ||
       (field.planBinding !== undefined && field.planBinding !== null &&
         !validPlanBinding(field.planBinding)) ||
@@ -633,8 +632,6 @@ export function admitProfileFieldLearningEvidence(
     monitorBinding === null ? [] : [monitorBinding.operationId]
   ));
   if ([...observationOperations].some((operationId) => mutationOperations.has(operationId))) denied();
-  const eligible = value.executionMode === "live" && value.fields.every(liveEligibleField);
-  if (value.liveAcceptanceEligible !== eligible) denied();
   return Object.freeze({
     ...value,
     fields: Object.freeze(value.fields.map((field) => Object.freeze({
@@ -683,8 +680,7 @@ function validConversion(
         affected.reasons,
         metadataMismatchReasons(mismatches[index]!, mismatches[index]!.planBinding),
       ) && validConvertedField(mismatches[index]!)
-    ) && evidence.executionMode === "synthetic_test_non_submittable" &&
-    evidence.testOnly === true && evidence.liveAcceptanceEligible === false;
+    );
 }
 
 function sameList(left: readonly string[], right: readonly string[]): boolean {
@@ -1228,8 +1224,11 @@ function validMechanicsRelations(field: ProfileFieldLearningRecordV2): boolean {
     )) ||
     (field.terminalDisposition === "verified_without_mutation" && (
       field.driverAttempt !== "none" || isMutationBinding(field.monitorBinding) ||
-      field.answerState !== "answered" || field.lane === null
+      field.answerState !== "answered" || field.lane === null ||
+      !isObservationBinding(field.observationBinding)
     )) ||
+    (field.terminalDisposition === "optional_unset" &&
+      !isObservationBinding(field.observationBinding)) ||
     (field.terminalDisposition === "verified" && (
       !isMutationBinding(field.monitorBinding) ||
       field.mechanics.persistentReadback !== "verified_after_rescan"
@@ -1356,11 +1355,18 @@ function isObservationBinding(
     value.stateObservedAck === true;
 }
 
-function validMode(mode: string, testOnly: boolean, liveAcceptanceEligible: boolean): boolean {
-  return mode === "live"
-    ? testOnly === false
-    : mode === "synthetic_test_non_submittable" &&
-      testOnly === true && liveAcceptanceEligible === false;
+function validExecutionPolicy(value: ProfileFieldLearningEvidenceV2): boolean {
+  try {
+    admitApplicationExecutionPolicy({
+      browserTransport: value.browserTransport,
+      answerFallbackPolicy: value.answerFallbackPolicy,
+      submissionPolicy: value.submissionPolicy,
+      liveProofEligibility: value.liveProofEligibility,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sameCategories(left: ProfileFieldPlan, right: ProfileFieldPlan): boolean {

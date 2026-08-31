@@ -13,13 +13,14 @@ import {
 } from "../../ats/workday/application/page-walk.ts";
 import type { JourneyId } from "../../contracts/index.ts";
 import type { S2StableErrorCode } from "../../contracts/s2-common-wire.ts";
+import type { ApplicationExecutionPolicy } from "../../contracts/application-execution-policy.ts";
 import type {
   ApplicationWalkAcceptanceV1,
 } from "../evidence/application-walk-evidence.ts";
 import type { AccountVerifiedFact } from "./account-verified.ts";
 
 export interface Stage2ApplicationWalkInput {
-  readonly executionMode: "live" | "synthetic_test_non_submittable";
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly sourceRevision: string;
   readonly configSha256: string;
   readonly revisionId: string;
@@ -320,13 +321,12 @@ export async function runStage2ApplicationWalk(
   let acceptance: ApplicationWalkAcceptanceV1;
   try {
     const laneAcceptances = dependencies.laneAcceptances.snapshot(walk.value.checkpoint);
-    const executionMode = input.executionMode;
     acceptance = Object.freeze({
-      schemaVersion: 1,
-      evidenceRevision: "s2-application-walk-acceptance-v1",
+      schemaVersion: 2,
+      evidenceRevision: "s2-application-walk-acceptance-v2",
       checkpoint: walk.value.checkpoint,
       status: "passed",
-      executionMode,
+      ...input.executionPolicy,
       sourceRevision: input.sourceRevision,
       revisionId: input.revisionId,
       approvalId: input.approvalId,

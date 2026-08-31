@@ -20,6 +20,12 @@ import { applicationProfileFactIds as profileFactIds } from
   "../../src/profile/application-profile.ts";
 
 const noProtection = { protect: async () => undefined };
+const liveOwnerPolicy = {
+  browserTransport: "live_browser",
+  answerFallbackPolicy: "owner_facts_only",
+  submissionPolicy: "forbidden",
+  liveProofEligibility: "eligible",
+} as const;
 
 test("live run preparation writes an admitted disposable owner config with the durable recipient binding", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-preparation-"));
@@ -157,6 +163,7 @@ fields: [{
           }],
           repeatables: [],
         },
+        executionPolicy: liveOwnerPolicy,
         narrative: { revision: "narrative-owner-approved" },
       },
     }, noProtection);
@@ -247,6 +254,7 @@ test("preparation rejects source bytes that the production resolver cannot reope
           }],
           repeatables: [],
         },
+        executionPolicy: liveOwnerPolicy,
         narrative: { revision: "narrative-owner-approved" },
       },
     }, noProtection), { name: "Error", message: "run preparation denied" });
@@ -294,6 +302,7 @@ test("post-write source protection failure leaves no admitted run", async () => 
             }],
             repeatables: [],
           },
+          executionPolicy: liveOwnerPolicy,
           narrative: { revision: "narrative-owner-approved" },
         },
       }, {
@@ -355,6 +364,7 @@ test("application source is snapshotted before storage awaits and rejects caller
     },
     profile,
     profilePlan,
+    executionPolicy: liveOwnerPolicy,
     narrative: { revision: "narrative-owner-approved" },
   };
   try {

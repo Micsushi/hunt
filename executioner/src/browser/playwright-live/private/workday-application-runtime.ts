@@ -669,6 +669,7 @@ export class OwnedWorkdayApplicationRuntime {
         learning = createProfileFieldLearningCapture({
           page: profilePage,
           plan: request.ownerSources.profilePlan,
+          executionPolicy: request.ownerSources.executionPolicy,
           root: request.owner?.roots?.evidence?.path,
           fileName: monitorPageName === "profile"
             ? "profile-field-learning.json"
@@ -802,7 +803,7 @@ export class OwnedWorkdayApplicationRuntime {
           schemaVersion: 1,
           checkpoint: "profile_verified",
           pageId: input.pageId,
-          executionMode: request.ownerSources.profilePlan.mode,
+          answerFallbackPolicy: request.ownerSources.executionPolicy.answerFallbackPolicy,
           pageType: result.pageType,
           verifiedFields: result.verifiedFields,
           ...(syntheticFields.length === 0 ? {} : { syntheticFields }),

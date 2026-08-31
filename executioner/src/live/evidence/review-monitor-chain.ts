@@ -139,16 +139,22 @@ function readMonitorChain(
         !enumArray(taxonomy.controlTypes, CONTROL_TYPES) ||
         !enumArray(taxonomy.questionTypes, QUESTION_TYPES) ||
         !enumArray(taxonomy.answerTypes, ANSWER_TYPES) || taxonomy.validationState !== "clear" ||
-        taxonomy.submitPresent !== (page === "review") || taxonomy.submitActivated !== false ||
+        typeof taxonomy.submitPresent !== "boolean" ||
+        page === "review" && moment === "review_readback" && taxonomy.submitPresent !== true ||
+        taxonomy.submitActivated !== false ||
         taxonomy.privacyScan !== "pass"
       ) denied();
       diagnosticStage = "request";
       const request = record(JSON.parse(requestBytes.toString("utf8")));
-      const observerBound = request.requestRevision === "s2-external-monitor-request-v2";
+      const observerBound = request.requestRevision === "s2-external-monitor-request-v2" ||
+        request.requestRevision === "s2-external-monitor-request-v4";
+      const independentSubmit = request.requestRevision === "s2-external-monitor-request-v3" ||
+        request.requestRevision === "s2-external-monitor-request-v4";
       exactKeys(request, [
         "schemaVersion", "requestRevision", "journeyId", "targetHandleId", "operationId",
         "attempt", "ordinal", "page", "moment", "screenshotFile", "screenshotSha256", "taxonomyFile",
-        "taxonomySha256", "previousAckSha256", "processLiveNonceSha256",
+        "taxonomySha256", ...(independentSubmit ? ["expectedSubmitPresent"] : []),
+        "previousAckSha256", "processLiveNonceSha256",
         "processIssuedAt", "processInstanceSha256", "monitorLiveTokenSha256", "issuedAt", "sourceRevision", "configSha256",
         "capturedIdentityDigests",
         ...(observerBound
@@ -159,11 +165,15 @@ function readMonitorChain(
       const processIssuedAt = timestamp(expected.processIssuedAt);
       if (
         request.schemaVersion !== 1 ||
-        !["s2-external-monitor-request-v1", "s2-external-monitor-request-v2"].includes(request.requestRevision as string) ||
+        ![
+          "s2-external-monitor-request-v1", "s2-external-monitor-request-v2",
+          "s2-external-monitor-request-v3", "s2-external-monitor-request-v4",
+        ].includes(request.requestRevision as string) ||
         !sameMoment(request, expected, ordinal, page, moment) ||
         !opaque(request.operationId, "operation") || !attempt(request.attempt) ||
         request.screenshotFile !== screenshotFile || request.screenshotSha256 !== digest(screenshot) ||
         request.taxonomyFile !== taxonomyFile || request.taxonomySha256 !== digest(taxonomyBytes) ||
+        independentSubmit && request.expectedSubmitPresent !== taxonomy.submitPresent ||
         request.previousAckSha256 !== previousAckSha256 ||
         request.processLiveNonceSha256 !== expected.processLiveNonceSha256 ||
         request.processIssuedAt !== expected.processIssuedAt || issuedAt < processIssuedAt ||
@@ -193,10 +203,10 @@ function readMonitorChain(
         : "safe_to_continue";
       const observedAt = timestamp(ack.observedAt);
       if (
-        ack.schemaVersion !== (observerBound ? 3 : 2) ||
-        ack.evidenceRevision !== (observerBound
-          ? "s2-external-monitor-ack-v3"
-          : "s2-external-monitor-ack-v2") ||
+        ack.schemaVersion !== (independentSubmit ? (observerBound ? 5 : 4) : (observerBound ? 3 : 2)) ||
+        ack.evidenceRevision !== (independentSubmit
+          ? (observerBound ? "s2-external-monitor-ack-v5" : "s2-external-monitor-ack-v4")
+          : (observerBound ? "s2-external-monitor-ack-v3" : "s2-external-monitor-ack-v2")) ||
         ack.status !== "acknowledged" || ack.observer !== "independent_visual_monitor" ||
         !sameMoment(ack, expected, ordinal, page, moment) || ack.requestFile !== requestFile ||
         ack.operationId !== request.operationId || ack.attempt !== request.attempt ||
@@ -209,7 +219,7 @@ function readMonitorChain(
           JSON.stringify(request.capturedIdentityDigests) ||
         !structuralIds(ack.structuralDescriptionIds, page) ||
         ack.privacyScan !== (observerBound ? "separate_evidence_required" : "pass") ||
-        ack.submitPresent !== (page === "review") ||
+        ack.submitPresent !== (independentSubmit ? request.expectedSubmitPresent : page === "review") ||
         ack.submitActivated !== false || observedAt < issuedAt ||
         observedAt >= timestamp(expected.processExitObservedAt) ||
         timestamp(expected.processExitObservedAt) > timestamp(expected.processCheckedAt) ||

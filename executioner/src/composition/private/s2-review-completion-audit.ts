@@ -279,9 +279,8 @@ function questionLearningDigest(
     if (
       questionnaires.length !== 1 ||
       questionnaireChecks.length === 0 ||
-      learning.executionMode !== "synthetic_test_non_submittable" ||
-      !learning.testOnly ||
-      learning.liveAcceptanceEligible ||
+      !sameExecutionPolicy(application, learning) ||
+      learning.answerFallbackPolicy !== "deterministic_site_valid_editable" ||
       !learning.questions.some(({ lane }) => lane === "synthetic_test_default") ||
       learning.questions.filter(({ required }) => required).length !== requiredQuestions ||
       learning.questions.some(({ answerState, lane, verificationResult, monitorBinding }) =>
@@ -302,11 +301,8 @@ function questionLearningDigest(
       pendingProfileSha256: digest(pendingBytes),
     });
   }
-  const synthetic = application.executionMode === "synthetic_test_non_submittable";
   if (
-    learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
-    learning.testOnly !== synthetic ||
-    learning.liveAcceptanceEligible !== !synthetic ||
+    !sameExecutionPolicy(application, learning) ||
     learning.questions.length !== expectedAnswers.length ||
     expectedAnswers.some((answer) => {
       const matches = learning.questions.filter((question) =>
@@ -492,16 +488,14 @@ function profileLearningDigest(
     const answeredFields = learning.fields.filter(({ answerState }) =>
       answerState === "answered"
     );
-    const synthetic = application.executionMode === "synthetic_test_non_submittable";
     const matchesVerified = (field: ProfileFieldLearningEvidenceV2["fields"][number]) =>
       profile.verifiedFields.filter((verified) =>
         field.fieldIdentity === `profile.${verified.fieldId}` &&
         field.lane === verified.lane
       ).length === 1;
     if (
-      learning.executionMode !== (synthetic ? "synthetic_test_non_submittable" : "live") ||
-      learning.testOnly !== synthetic ||
-      learning.liveAcceptanceEligible !== !synthetic ||
+      !sameExecutionPolicy(application, learning) ||
+      profile.answerFallbackPolicy !== application.answerFallbackPolicy ||
       learning.syntheticFieldsSha256 !== (profile.syntheticFields === undefined
         ? undefined
         : digestText(JSON.stringify(profile.syntheticFields))) ||
@@ -725,6 +719,18 @@ function readApplicationWalk(root: string): ApplicationWalkAcceptanceV1 {
     64 * 1024,
   ).toString("utf8")) as ApplicationWalkAcceptanceV1;
   return admitApplicationWalkAcceptance(value);
+}
+
+function sameExecutionPolicy(
+  left: Pick<ApplicationWalkAcceptanceV1,
+    "browserTransport" | "answerFallbackPolicy" | "submissionPolicy" | "liveProofEligibility">,
+  right: Pick<ApplicationWalkAcceptanceV1,
+    "browserTransport" | "answerFallbackPolicy" | "submissionPolicy" | "liveProofEligibility">,
+): boolean {
+  return left.browserTransport === right.browserTransport &&
+    left.answerFallbackPolicy === right.answerFallbackPolicy &&
+    left.submissionPolicy === right.submissionPolicy &&
+    left.liveProofEligibility === right.liveProofEligibility;
 }
 
 function readRealEvidence(root: string): {

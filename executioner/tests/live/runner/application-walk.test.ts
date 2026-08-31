@@ -9,6 +9,8 @@ import {
 } from "../../../src/live/runner/application-walk.ts";
 import { dependenciesFor, truth } from "../../integration/s2-application-walk/fakes.ts";
 import { walkFixture } from "../../integration/s2-application-walk/fixtures.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 
 test("writes the exact reconciled checkpoint only after browser cleanup passes", async () => {
   const calls: string[] = [];
@@ -30,7 +32,7 @@ test("writes the exact reconciled checkpoint only after browser cleanup passes",
       snapshot() {
         calls.push("snapshot");
         return [
-          { checkpoint: "profile_verified", executionMode: "live" },
+          { checkpoint: "profile_verified", answerFallbackPolicy: "owner_facts_only" },
           { checkpoint: "resume_verified" },
           { checkpoint: "questionnaire_verified" },
         ] as never;
@@ -247,7 +249,7 @@ test("traces value-free page progress with question, answer, UI, and provenance 
           schemaVersion: 1,
           checkpoint: "profile_verified",
           pageId: "page-profile",
-          executionMode: "live",
+          answerFallbackPolicy: "owner_facts_only",
           pageType: "profile",
           verifiedFields: [{
             fieldId: "identity.given_name",
@@ -336,12 +338,12 @@ test("traced pre_review is a non-page transition without a timing completion", a
   assert.equal(terminal?.kind === "application_walk_terminal" && terminal.checkpoint, "pre_review");
 });
 
-test("admitted execution mode supports profile-less live and synthetic questionnaire walks", async () => {
+test("admitted answer fallback supports profile-less owner-fact and deterministic questionnaire walks", async () => {
   for (const executionMode of ["live", "synthetic_test_non_submittable"] as const) {
     const synthetic = executionMode === "synthetic_test_non_submittable";
     const result = await runStage2ApplicationWalk({
       ...input(),
-      executionMode,
+      executionPolicy: liveApplicationExecutionPolicy(executionMode),
     }, {
       walk: dependenciesFor([
         truth("questionnaire"), truth("questionnaire"), truth("pre_review"),
@@ -370,13 +372,16 @@ test("admitted execution mode supports profile-less live and synthetic questionn
       evidence: { async write() {} },
     }, new AbortController().signal);
     assert.equal(result.ok, true, JSON.stringify(result));
-    if (result.ok) assert.equal(result.acceptance.executionMode, executionMode);
+    if (result.ok) assert.equal(
+      result.acceptance.answerFallbackPolicy,
+      synthetic ? "deterministic_site_valid_editable" : "owner_facts_only",
+    );
   }
 });
 
 function input() {
   return {
-    executionMode: "live" as const,
+    executionPolicy: liveApplicationExecutionPolicy("live"),
     sourceRevision: "0123456789abcdef0123456789abcdef01234567",
     configSha256: "a".repeat(64),
     revisionId: "revision_abcdefghijklmnop",

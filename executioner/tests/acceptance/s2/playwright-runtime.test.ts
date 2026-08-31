@@ -37,6 +37,8 @@ import { PlaywrightPersistentBrowserSession } from
   "../../../src/browser/playwright-live/session.ts";
 import { createQuestionAnswerLearningCapture } from
   "../../../src/live/evidence/question-answer-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 import {
   bindQuestionnaireTargets,
   enrichQuestionnaireFields,
@@ -1522,6 +1524,7 @@ test("questionnaire batches external proof once while every field keeps independ
   const questionLearning = createQuestionAnswerLearningCapture({
     root: questionEvidenceRoot,
     mode: "live",
+    executionPolicy: liveApplicationExecutionPolicy("live"),
   });
   const profilePlan = {
     mode: "live" as "live" | "synthetic_test_non_submittable",
@@ -2707,6 +2710,7 @@ test("full questionnaire reconciliation rehydrates selected same-label popup cla
   const learning = createQuestionAnswerLearningCapture({
     root: evidenceRoot,
     mode: "synthetic_test_non_submittable",
+    executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
   });
   const artifact = resumeArtifact();
   const resumeIntent = createWorkdayResumeFileIntent({
@@ -3405,6 +3409,12 @@ test("one owned Playwright page completes application, recovers, proves Review, 
       ownerSources: {
         resumeIntent: intent.value,
         profilePlan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
+        executionPolicy: {
+          browserTransport: "live_browser",
+          answerFallbackPolicy: "owner_facts_only",
+          submissionPolicy: "forbidden",
+          liveProofEligibility: "eligible",
+        },
         profileId: upstreamProfileId("profile-runtime-fixture"),
         profileRevision: 1,
         profileQuery: {
@@ -3652,6 +3662,12 @@ test("unexpected auth UI fails closed before any application mutation", async ()
       ownerSources: {
         resumeIntent: intent.value,
         profilePlan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
+        executionPolicy: {
+          browserTransport: "live_browser",
+          answerFallbackPolicy: "owner_facts_only",
+          submissionPolicy: "forbidden",
+          liveProofEligibility: "eligible",
+        },
         profileId: upstreamProfileId("profile-auth-stop"),
         profileRevision: 1,
         profileQuery: { async query() { return { ok: true as const, value: { kind: "profile_answer_missing" as const } }; } },

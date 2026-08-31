@@ -14,6 +14,11 @@ import { fileURLToPath } from "node:url";
 
 import { parseApplicationProfile } from "../profile/application-profile.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
+import {
+  admitApplicationExecutionPolicy,
+  answerModeForPolicy,
+  type ApplicationExecutionPolicy,
+} from "../contracts/application-execution-policy.ts";
 import type { RealRunAccountMode, RealRunOwnerInputsV1 } from "../live/preflight/types.ts";
 import {
   protectStage2StoragePaths,
@@ -42,6 +47,7 @@ export interface Stage2ApplicationSourceInput {
   };
   readonly profile: unknown;
   readonly profilePlan: unknown;
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly narrative: { readonly revision: string };
 }
 
@@ -216,6 +222,7 @@ async function writeApplicationSources(request: {
     sourceRevision: "s2-application-owner-profile-v1",
     profile: request.source.profile,
     profilePlan: request.source.profilePlan,
+    executionPolicy: request.source.executionPolicy,
     narrative: request.source.narrative,
   })}\n`, "utf8");
   const resumePayload = Buffer.from(request.source.resume.bytes);
@@ -317,8 +324,12 @@ function validateApplicationSource(value: Stage2ApplicationSourceInput): void {
     denied();
   }
   const plan = value.profilePlan as Record<string, unknown>;
+  let executionPolicy: ApplicationExecutionPolicy;
+  try { executionPolicy = admitApplicationExecutionPolicy(value.executionPolicy); }
+  catch { return denied(); }
   if (
     (plan.mode !== "live" && plan.mode !== "synthetic_test_non_submittable") ||
+    answerModeForPolicy(executionPolicy) !== plan.mode ||
     !Array.isArray(plan.fields) || !Array.isArray(plan.repeatables)
   ) {
     denied();
@@ -358,6 +369,7 @@ function snapshotApplicationSource(
   validateApplicationSource(value);
   const profile = structuredClone(value.profile);
   const profilePlan = structuredClone(value.profilePlan);
+  const executionPolicy = structuredClone(value.executionPolicy);
   const narrative = structuredClone(value.narrative);
   const bytes = Buffer.from(value.resume.bytes);
   const snapshot = Object.freeze({
@@ -370,6 +382,7 @@ function snapshotApplicationSource(
     }),
     profile,
     profilePlan,
+    executionPolicy,
     narrative,
   });
   try {

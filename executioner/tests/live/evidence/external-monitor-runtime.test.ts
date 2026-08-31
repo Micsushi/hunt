@@ -1704,7 +1704,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     [],
     "My Information",
     digest(Buffer.from("My Information", "utf8")),
-  ), "profile");
+  ), "account_entry");
   assert.equal(observedStructurePageWithIdentity(
     staleAccountStructure,
     [],
@@ -1725,9 +1725,12 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   ])), "account_entry");
   assert.equal(observedStructurePage(new Set([
     "Sign In", "Email Address", "Password", "My Information", "Application Questions", "Review",
-  ])), "account_entry");
+  ])), "sign_in");
   assert.equal(observedStructurePage(new Set([
     "Sign In", "Create Account", "Forgot your password?",
+  ])), "sign_in");
+  assert.equal(observedStructurePage(new Set([
+    "Sign In", "Email Address", "Password", "Review", "Submit application",
   ])), "sign_in");
   assert.equal(
     externalMonitorObserverFailureCode(new Error("external monitor observer failed: owned_browser_observation")),
@@ -1739,6 +1742,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.equal(canonicalMonitorIdentityTitle(title), observedTitle);
   assert.doesNotThrow(() => reconcileObservedMonitorSurface({
     page: "job_posting",
+    expectedSubmitPresent: false,
     capturedIdentityDigests: {
       titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
     },
@@ -1747,6 +1751,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   try {
     reconcileObservedMonitorSurface({
       page: "job_posting",
+      expectedSubmitPresent: false,
       capturedIdentityDigests: { titleSha256: "0".repeat(64) },
     }, { title: observedTitle, submitPresent: false });
   } catch (error) {
@@ -1761,6 +1766,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     /Process Tech/u);
   assert.throws(() => reconcileObservedMonitorSurface({
     page: "job_posting",
+    expectedSubmitPresent: false,
     capturedIdentityDigests: {
       titleSha256: digest(Buffer.from(canonicalMonitorIdentityTitle(title), "utf8")),
     },
@@ -1771,6 +1777,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   let waits = 0;
   const reconciled = await waitForReconciledMonitorSurface({
     page: "application_ready",
+    expectedSubmitPresent: false,
     capturedIdentityDigests: {
       titleSha256: digest(Buffer.from(authenticatedTitle, "utf8")),
     },
@@ -1787,6 +1794,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
 
   const experienceSurface = await waitForReconciledMonitorSurface({
     page: "resume",
+    expectedSubmitPresent: false,
     capturedIdentityDigests: {
       titleSha256: digest(Buffer.from("My Experience", "utf8")),
     },
@@ -1807,6 +1815,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   let structureWaits = 0;
   const settledStructure = await waitForReconciledMonitorSurface({
     page: "resume",
+    expectedSubmitPresent: false,
     capturedIdentityDigests: {
       titleSha256: digest(Buffer.from("My Information", "utf8")),
     },
@@ -1824,6 +1833,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   try {
     await waitForReconciledMonitorSurface({
       page: "profile",
+      expectedSubmitPresent: false,
       capturedIdentityDigests: {
         titleSha256: digest(Buffer.from("My Experience", "utf8")),
       },
@@ -1884,8 +1894,8 @@ test("production-bound monitor creates and consumes an independently signed ACK"
     const ackName = readdirSync(join(root, "auth-monitor")).find((name) => name.endsWith(".ack.json"));
     assert.ok(ackName);
     const ack = JSON.parse(readFileSync(join(root, "auth-monitor", ackName), "utf8"));
-    assert.equal(ack.schemaVersion, 3);
-    assert.equal(ack.evidenceRevision, "s2-external-monitor-ack-v3");
+    assert.equal(ack.schemaVersion, 5);
+    assert.equal(ack.evidenceRevision, "s2-external-monitor-ack-v5");
     assert.match(ack.observerSignature, /^[A-Za-z0-9_-]{80,128}$/u);
     runtime.close();
     const chain = readStage2AuthMonitorChain(join(root, "auth-monitor"), {

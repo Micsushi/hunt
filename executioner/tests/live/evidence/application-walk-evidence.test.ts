@@ -305,12 +305,12 @@ test("admits every supported synthetic unknown Profile control shape", async () 
       root,
       acceptance: {
         ...baseline,
-        executionMode: "synthetic_test_non_submittable",
+        answerFallbackPolicy: "deterministic_site_valid_editable",
         laneAcceptances: [{
           schemaVersion: profile.schemaVersion,
           checkpoint: profile.checkpoint,
           pageId: profile.pageId,
-          executionMode: "synthetic_test_non_submittable",
+          answerFallbackPolicy: "deterministic_site_valid_editable",
           pageType: profile.pageType,
           verifiedFields,
           syntheticFields,
@@ -364,7 +364,7 @@ test("writes a bounded multi-page acceptance larger than the generic acceptance 
 
 test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", async () => {
   const cases = [
-    { ...packet(), executionMode: "synthetic_test_non_submittable" },
+    { ...packet(), answerFallbackPolicy: "deterministic_site_valid_editable" },
     { ...packet(), submitActivated: true },
     { ...packet(), completedPages: 2 },
     { ...packet(), pageChecks: packet().pageChecks.slice(0, 2) },
@@ -451,11 +451,14 @@ test("rejects widened, incomplete, duplicate, Submit, and sensitive evidence", a
 
 function packet() {
   return {
-    schemaVersion: 1 as const,
-    evidenceRevision: "s2-application-walk-acceptance-v1" as const,
+    schemaVersion: 2 as const,
+    evidenceRevision: "s2-application-walk-acceptance-v2" as const,
     checkpoint: "pre_review" as const,
     status: "passed" as const,
-    executionMode: "live" as const,
+    browserTransport: "live_browser" as const,
+    answerFallbackPolicy: "owner_facts_only" as const,
+    submissionPolicy: "forbidden" as const,
+    liveProofEligibility: "eligible" as const,
     sourceRevision: "0123456789abcdef0123456789abcdef01234567",
     revisionId: "revision_abcdefghijklmnop",
     approvalId: "approval_abcdefghijklmnop",
@@ -493,7 +496,7 @@ function packet() {
         schemaVersion: 1 as const,
         checkpoint: "profile_verified" as const,
         pageId: "profile-page-1" as never,
-        executionMode: "live" as const,
+        answerFallbackPolicy: "owner_facts_only" as const,
         pageType: "profile" as const,
         verifiedFields: [{
           fieldId: "identity.given_name",

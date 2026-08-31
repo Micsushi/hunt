@@ -20,6 +20,20 @@ import {
   canonicalMonitorIdentityTitle,
   writeStage2ExternalMonitorAcknowledgement,
 } from "./external-monitor-runtime.ts";
+import {
+  observedActiveStageTitles,
+  observedStructureIdentityTitles,
+  observedStructurePage,
+  observedSubmitPresent,
+  type ObservedOwnedControlStructure,
+  type ObservedStageCounts,
+} from "./external-monitor-page-identity.ts";
+export {
+  observedActiveStageTitles,
+  observedStructureIdentityTitles,
+  observedStructurePage,
+  observedSubmitPresent,
+} from "./external-monitor-page-identity.ts";
 
 const DESKTOP_BINDING_FILE = "isolated-desktop.json";
 const OWNER_LIVE_FILE = "external-monitor-live.json";
@@ -166,7 +180,11 @@ interface ObservedMonitorSurface {
 }
 
 export async function waitForReconciledMonitorSurface(
-  request: { readonly page?: unknown; readonly capturedIdentityDigests?: unknown },
+  request: {
+    readonly page?: unknown;
+    readonly capturedIdentityDigests?: unknown;
+    readonly expectedSubmitPresent?: unknown;
+  },
   observe: () => ObservedMonitorSurface | Promise<ObservedMonitorSurface>,
   options: {
     readonly attempts?: number;
@@ -208,7 +226,11 @@ export async function waitForReconciledMonitorSurface(
 }
 
 export function reconcileObservedMonitorSurface(
-  request: { readonly page?: unknown; readonly capturedIdentityDigests?: unknown },
+  request: {
+    readonly page?: unknown;
+    readonly capturedIdentityDigests?: unknown;
+    readonly expectedSubmitPresent?: unknown;
+  },
   observed: {
     readonly title: string;
     readonly titleCandidateSha256s?: readonly string[];
@@ -236,7 +258,8 @@ export function reconcileObservedMonitorSurface(
           }
         : undefined);
   }
-  if (observed.submitPresent !== (request.page === "review")) {
+  if (typeof request.expectedSubmitPresent !== "boolean" ||
+      observed.submitPresent !== request.expectedSubmitPresent) {
     observerFailure("submit_state_reconciliation");
   }
 }
@@ -386,6 +409,8 @@ $allow = @(
   'Upload a file (5MB max)'
 )
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$actionSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$editSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
 $documentTitles = [Collections.Generic.List[string]]::new()
 $stageCounts = [ordered]@{
@@ -401,14 +426,21 @@ foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
     $visible = -not $element.Current.IsOffscreen
-    if ($visible -and $allow -contains $name) { [void]$seen.Add($name) }
+    $controlType = [int]$element.Current.ControlType.Id
+    if ($visible -and $allow -contains $name) {
+      [void]$seen.Add($name)
+      if ($controlType -eq 50000 -or $controlType -eq 50005 -or $controlType -eq 50031) {
+        [void]$actionSeen.Add($name)
+      }
+      if ($controlType -eq 50004) { [void]$editSeen.Add($name) }
+    }
     switch ($name) {
-      'My Information' { $stageCounts.myInformation = 1 + [int]$stageCounts.myInformation }
-      'My Experience' { $stageCounts.myExperience = 1 + [int]$stageCounts.myExperience }
-      'Application Questions' { $stageCounts.applicationQuestions = 1 + [int]$stageCounts.applicationQuestions }
-      'Voluntary Disclosures' { $stageCounts.voluntaryDisclosures = 1 + [int]$stageCounts.voluntaryDisclosures }
-      'Self Identify' { $stageCounts.selfIdentify = 1 + [int]$stageCounts.selfIdentify }
-      'Review' { $stageCounts.review = 1 + [int]$stageCounts.review }
+      'My Information' { if ($visible) { $stageCounts.myInformation = 1 + [int]$stageCounts.myInformation } }
+      'My Experience' { if ($visible) { $stageCounts.myExperience = 1 + [int]$stageCounts.myExperience } }
+      'Application Questions' { if ($visible) { $stageCounts.applicationQuestions = 1 + [int]$stageCounts.applicationQuestions } }
+      'Voluntary Disclosures' { if ($visible) { $stageCounts.voluntaryDisclosures = 1 + [int]$stageCounts.voluntaryDisclosures } }
+      'Self Identify' { if ($visible) { $stageCounts.selfIdentify = 1 + [int]$stageCounts.selfIdentify } }
+      'Review' { if ($visible) { $stageCounts.review = 1 + [int]$stageCounts.review } }
     }
     if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
         $element.Current.ControlType.Id -eq 50019) {
@@ -439,6 +471,8 @@ $payload = [ordered]@{
   stageCounts = $stageCounts
   address = $address
   flags = @($seen | Sort-Object)
+  actionFlags = @($actionSeen | Sort-Object)
+  editFlags = @($editSeen | Sort-Object)
 }
 try {
   [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
@@ -475,6 +509,8 @@ try {
     readonly stageCounts?: unknown;
     readonly address?: unknown;
     readonly flags?: unknown;
+    readonly actionFlags?: unknown;
+    readonly editFlags?: unknown;
   };
   try {
     observed = JSON.parse(Buffer.from(output, "base64").toString("utf8"));
@@ -485,7 +521,11 @@ try {
       !Array.isArray(observed.documentTitles) || observed.documentTitles.length > 8 ||
       observed.documentTitles.some((value) => typeof value !== "string") ||
       !Array.isArray(observed.flags) ||
-      observed.flags.some((value) => typeof value !== "string")) {
+      observed.flags.some((value) => typeof value !== "string") ||
+      !Array.isArray(observed.actionFlags) ||
+      observed.actionFlags.some((value) => typeof value !== "string") ||
+      !Array.isArray(observed.editFlags) ||
+      observed.editFlags.some((value) => typeof value !== "string")) {
     observerFailure("accessibility_payload");
   }
   const stageCounts = admitObservedStageCounts(observed.stageCounts);
@@ -496,42 +536,28 @@ try {
     if (host !== binding.host) observerFailure("address_identity");
   }
   const flags = new Set(observed.flags.map(canonicalObservedFlag));
+  const owned: ObservedOwnedControlStructure = Object.freeze({
+    actionFlags: new Set(observed.actionFlags.map(canonicalObservedFlag)),
+    editFlags: new Set(observed.editFlags.map(canonicalObservedFlag)),
+  });
   const activeStageTitles = observedActiveStageTitles(stageCounts);
-  let title: string;
-  let identityTitles = [
-    ...(observed.selectedTabTitles as string[]),
-    ...(observed.documentTitles as string[]),
-    ...activeStageTitles,
-  ];
-  try {
-    title = selectObservedChromeIdentityTitle(
-      expectedTitleSha256,
-      observed.title,
-      identityTitles,
-    );
-  }
-  catch { return observerFailure("title_identity"); }
   let page: string;
-  try {
-    page = observedStructurePageWithIdentity(
-      flags,
-      activeStageTitles,
-      title,
-      expectedTitleSha256,
-    );
-  }
+  try { page = observedStructurePage(flags, activeStageTitles, owned); }
   catch {
     return observerFailure("structure_classification", structureFailureDiagnostic(
       expectedTitleSha256,
       observed.title,
-      identityTitles,
+      [...observed.selectedTabTitles, ...observed.documentTitles, ...activeStageTitles],
       flags,
       stageCounts,
       activeStageTitles,
     ));
   }
-  identityTitles = [
-    ...identityTitles,
+  let title: string;
+  let identityTitles = [
+    ...(observed.selectedTabTitles as string[]),
+    ...(observed.documentTitles as string[]),
+    ...activeStageTitles,
     ...observedStructureIdentityTitles(page, flags, activeStageTitles),
   ];
   try {
@@ -549,7 +575,7 @@ try {
       identityTitles,
     ),
     page,
-    submitPresent: flags.has("Submit") || flags.has("Submit application"),
+    submitPresent: observedSubmitPresent(owned),
   });
 }
 
@@ -590,52 +616,6 @@ function structureFailureDiagnostic(
   });
 }
 
-export function observedStructurePage(
-  flags: ReadonlySet<string>,
-  activeStageTitles: readonly string[] = [],
-): string {
-  if (flags.has("Review") && (flags.has("Submit") || flags.has("Submit application"))) return "review";
-  const activeApplicationPage = observedActiveApplicationPage(flags, activeStageTitles);
-  if (activeApplicationPage !== undefined &&
-      (flags.has("Next") || flags.has("Save and Continue"))) return activeApplicationPage;
-  if (flags.has("Sign In") && flags.has("Forgot your password?")) return "sign_in";
-  if (flags.has("Create Account") ||
-      (flags.has("Sign In") && flags.has("Email Address") && flags.has("Password"))) {
-    return "account_entry";
-  }
-  if (flags.has("Reset Password")) return "password_reset_set";
-  if (flags.has("Send Verification Email")) return "verification_required";
-  if (flags.has("Forgot Password")) return "password_reset_request";
-  if (flags.has("Sign in with email")) return "email_sign_in_choice";
-  if (activeApplicationPage !== undefined) return activeApplicationPage;
-  if (flags.has("Application Questions") || flags.has("Voluntary Disclosures") || flags.has("Self Identify")) return "questionnaire";
-  if (flags.has("Upload a resume") || flags.has("Upload Resume") ||
-      flags.has("Resume, Cover Letter and References") ||
-      flags.has("Upload a file (5MB max)")) return "resume";
-  if (flags.has("My Information") || flags.has("My Experience")) return "profile";
-  if (flags.has("Apply Manually")) return "apply_choice";
-  if (flags.has("Apply") || flags.has("Apply Now")) return "job_posting";
-  if (flags.has("Sign In")) return "account_entry";
-  denied();
-}
-
-function observedActiveApplicationPage(
-  flags: ReadonlySet<string>,
-  activeStageTitles: readonly string[],
-): string | undefined {
-  if (activeStageTitles.length !== 1) return undefined;
-  const active = activeStageTitles[0]!;
-  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(active)) {
-    return "questionnaire";
-  }
-  if (active === "My Experience" &&
-      (flags.has("Upload a resume") || flags.has("Upload Resume") ||
-        flags.has("Resume, Cover Letter and References") ||
-        flags.has("Upload a file (5MB max)"))) return "resume";
-  if (active === "My Information" || active === "My Experience") return "profile";
-  return undefined;
-}
-
 export function observedStructurePageFromIdentityTitle(title: string): string {
   const normalized = normalizeObservedChromeTitle(title);
   if (normalized === "My Information" || normalized === "My Experience") return "profile";
@@ -649,42 +629,10 @@ export function observedStructurePageFromIdentityTitle(title: string): string {
 export function observedStructurePageWithIdentity(
   flags: ReadonlySet<string>,
   activeStageTitles: readonly string[],
-  title: string,
-  expectedTitleSha256: string | undefined,
+  _title: string,
+  _expectedTitleSha256: string | undefined,
 ): string {
-  const observedTitleSha256 = createHash("sha256")
-    .update(canonicalMonitorIdentityTitle(title), "utf8").digest("hex");
-  if (/^[0-9a-f]{64}$/u.test(expectedTitleSha256 ?? "") &&
-      observedTitleSha256 === expectedTitleSha256) {
-    try { return observedStructurePageFromIdentityTitle(title); }
-    catch { /* Non-stage titles still require structural classification. */ }
-  }
   return observedStructurePage(flags, activeStageTitles);
-}
-
-export function observedStructureIdentityTitles(
-  page: string,
-  flags: ReadonlySet<string>,
-  activeStageTitles: readonly string[] = [],
-): readonly string[] {
-  const titles = page === "profile"
-    ? ["My Information", "My Experience"]
-    : page === "questionnaire"
-      ? ["Application Questions", "Voluntary Disclosures", "Self Identify"]
-      : page === "review"
-        ? ["Review"]
-        : [];
-  const active = new Set(activeStageTitles);
-  return Object.freeze(titles.filter((title) => active.has(title)));
-}
-
-interface ObservedStageCounts {
-  readonly myInformation: number;
-  readonly myExperience: number;
-  readonly applicationQuestions: number;
-  readonly voluntaryDisclosures: number;
-  readonly selfIdentify: number;
-  readonly review: number;
 }
 
 function admitObservedStageCounts(value: unknown): ObservedStageCounts {
@@ -699,21 +647,6 @@ function admitObservedStageCounts(value: unknown): ObservedStageCounts {
         (candidate[key] as number) < 0 || (candidate[key] as number) > 16)) denied();
   return Object.freeze(Object.fromEntries(keys.map((key) => [key, candidate[key]]))) as unknown as
     ObservedStageCounts;
-}
-
-export function observedActiveStageTitles(counts: ObservedStageCounts): readonly string[] {
-  const entries = [
-    ["My Information", counts.myInformation],
-    ["My Experience", counts.myExperience],
-    ["Application Questions", counts.applicationQuestions],
-    ["Voluntary Disclosures", counts.voluntaryDisclosures],
-    ["Self Identify", counts.selfIdentify],
-    ["Review", counts.review],
-  ] as const;
-  const maximum = Math.max(...entries.map(([, count]) => count));
-  if (maximum < 2) return Object.freeze([]);
-  const titles = entries.filter(([, count]) => count === maximum).map(([title]) => title);
-  return Object.freeze(titles.length === 1 ? titles : []);
 }
 
 function compatibleObservedPage(requestPage: string, observedPage: string): boolean {

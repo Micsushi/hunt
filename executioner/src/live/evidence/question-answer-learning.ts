@@ -7,6 +7,10 @@ import type {
   QuestionId,
 } from "../../contracts/index.ts";
 import { isSupportedUiBehavior } from "../../deterministic/supported-controls.ts";
+import {
+  admitApplicationExecutionPolicy,
+  type ApplicationExecutionPolicy,
+} from "../../contracts/application-execution-policy.ts";
 import type {
   ApplicationFieldObservation,
   AnswerExecutionMode,
@@ -101,12 +105,13 @@ export interface QuestionAnswerAttemptV1 {
 }
 
 export interface QuestionAnswerLearningEvidenceV2 {
-  readonly schemaVersion: 5;
-  readonly evidenceRevision: "s2-question-answer-learning-v5";
+  readonly schemaVersion: 6;
+  readonly evidenceRevision: "s2-question-answer-learning-v6";
   readonly page: "questionnaire";
-  readonly executionMode: AnswerExecutionMode;
-  readonly testOnly: boolean;
-  readonly liveAcceptanceEligible: boolean;
+  readonly browserTransport: ApplicationExecutionPolicy["browserTransport"];
+  readonly answerFallbackPolicy: ApplicationExecutionPolicy["answerFallbackPolicy"];
+  readonly submissionPolicy: ApplicationExecutionPolicy["submissionPolicy"];
+  readonly liveProofEligibility: ApplicationExecutionPolicy["liveProofEligibility"];
   readonly questions: readonly QuestionAnswerLearningRecordV2[];
 }
 
@@ -219,6 +224,7 @@ export interface QuestionAnswerLearningCapture {
 export function createQuestionAnswerLearningCapture(input: {
   readonly root: string;
   readonly mode: AnswerExecutionMode;
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly sensitiveValues?: readonly string[];
 }): QuestionAnswerLearningCapture {
   const records = new Map<string, MutableQuestionRecord>();
@@ -408,13 +414,10 @@ export function createQuestionAnswerLearningCapture(input: {
         });
         if (questions.length === 0) return null;
         const evidence = admitQuestionAnswerLearningEvidence({
-          schemaVersion: 5,
-          evidenceRevision: "s2-question-answer-learning-v5",
+          schemaVersion: 6,
+          evidenceRevision: "s2-question-answer-learning-v6",
           page: "questionnaire",
-          executionMode: input.mode,
-          testOnly: input.mode === "synthetic_test_non_submittable",
-          liveAcceptanceEligible: input.mode === "live" &&
-            questions.every(liveEligibleQuestion),
+          ...input.executionPolicy,
           questions,
         });
         return writeAtomicJsonEvidence({
@@ -550,13 +553,13 @@ export function admitQuestionAnswerLearningEvidence(
 ): QuestionAnswerLearningEvidenceV2 {
   if (
     !exactKeys(value, [
-      "schemaVersion", "evidenceRevision", "page", "executionMode", "testOnly",
-      "liveAcceptanceEligible", "questions",
+      "schemaVersion", "evidenceRevision", "page", "browserTransport",
+      "answerFallbackPolicy", "submissionPolicy", "liveProofEligibility", "questions",
     ]) ||
-    value.schemaVersion !== 5 ||
-    value.evidenceRevision !== "s2-question-answer-learning-v5" ||
+    value.schemaVersion !== 6 ||
+    value.evidenceRevision !== "s2-question-answer-learning-v6" ||
     value.page !== "questionnaire" ||
-    !validMode(value.executionMode, value.testOnly, value.liveAcceptanceEligible) ||
+    !validExecutionPolicy(value) ||
     value.questions.length < 1 || value.questions.length > 128
   ) denied();
   const fields = new Set<string>();
@@ -582,7 +585,8 @@ export function admitQuestionAnswerLearningEvidence(
       (record.answerState === "unset" && record.provenance !== null) ||
       (record.answerState === "unset" &&
         (record.chosenAnswer !== null || record.strategy !== "needs_owner_input")) ||
-      (record.lane === "synthetic_test_default" && value.executionMode !== "synthetic_test_non_submittable") ||
+      (record.lane === "synthetic_test_default" &&
+        value.answerFallbackPolicy !== "deterministic_site_valid_editable") ||
       (record.lane === "live_owner_fact" &&
         record.provenance !== "owner_provided" &&
         record.provenance !== "resume_verified" &&
@@ -596,9 +600,6 @@ export function admitQuestionAnswerLearningEvidence(
     ) denied();
     fields.add(questionIdentity(record.pageId, record.fieldId));
   }
-  const eligible = value.executionMode === "live" &&
-    value.questions.every(liveEligibleQuestion);
-  if (value.liveAcceptanceEligible !== eligible) denied();
   return Object.freeze({
     ...value,
     questions: Object.freeze(value.questions.map(freezeRecord)),
@@ -998,11 +999,18 @@ function validFailureCode(value: unknown): value is string {
   return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value);
 }
 
-function validMode(mode: string, testOnly: boolean, liveAcceptanceEligible: boolean): boolean {
-  return mode === "live"
-    ? testOnly === false
-    : mode === "synthetic_test_non_submittable" &&
-      testOnly === true && liveAcceptanceEligible === false;
+function validExecutionPolicy(value: QuestionAnswerLearningEvidenceV2): boolean {
+  try {
+    admitApplicationExecutionPolicy({
+      browserTransport: value.browserTransport,
+      answerFallbackPolicy: value.answerFallbackPolicy,
+      submissionPolicy: value.submissionPolicy,
+      liveProofEligibility: value.liveProofEligibility,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function bounded(value: string, maximum: number): boolean {

@@ -7,17 +7,25 @@ import {
   type ApplicationCheckpoint,
   type ApplicationPageCheck,
 } from "../../ats/workday/application/page-walk-contract.ts";
+import {
+  admitApplicationExecutionPolicy,
+  type AnswerFallbackPolicy,
+  type ApplicationExecutionPolicy,
+} from "../../contracts/application-execution-policy.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 const reviewedStructuralValues = ["social.linkedin"] as const;
 const reviewedSha256Keys = ["profileFieldLearningSha256"] as const;
 
 export interface ApplicationWalkAcceptanceV1 {
-  readonly schemaVersion: 1;
-  readonly evidenceRevision: "s2-application-walk-acceptance-v1";
+  readonly schemaVersion: 2;
+  readonly evidenceRevision: "s2-application-walk-acceptance-v2";
   readonly checkpoint: ApplicationCheckpoint;
   readonly status: "passed";
-  readonly executionMode: "live" | "synthetic_test_non_submittable";
+  readonly browserTransport: ApplicationExecutionPolicy["browserTransport"];
+  readonly answerFallbackPolicy: ApplicationExecutionPolicy["answerFallbackPolicy"];
+  readonly submissionPolicy: ApplicationExecutionPolicy["submissionPolicy"];
+  readonly liveProofEligibility: ApplicationExecutionPolicy["liveProofEligibility"];
   readonly sourceRevision: string;
   readonly revisionId: string;
   readonly approvalId: string;
@@ -55,7 +63,8 @@ export function admitApplicationWalkAcceptance(
   value: ApplicationWalkAcceptanceV1,
 ): ApplicationWalkAcceptanceV1 {
   const expected = [
-    "schemaVersion", "evidenceRevision", "checkpoint", "status", "executionMode",
+    "schemaVersion", "evidenceRevision", "checkpoint", "status", "browserTransport",
+    "answerFallbackPolicy", "submissionPolicy", "liveProofEligibility",
     "sourceRevision", "revisionId", "approvalId", "journeyId",
     "targetHandleId", "completedPages", "pageChecks", "laneAcceptances",
     "submitActivated", "privacyScan", "cleanup",
@@ -63,10 +72,10 @@ export function admitApplicationWalkAcceptance(
   const count = value.pageChecks.length;
   if (!exactKeys(value, expected)) denied("shape");
   if (
-    value.schemaVersion !== 1 ||
-    value.evidenceRevision !== "s2-application-walk-acceptance-v1" ||
+    value.schemaVersion !== 2 ||
+    value.evidenceRevision !== "s2-application-walk-acceptance-v2" ||
     value.status !== "passed" ||
-    !validExecutionMode(value.executionMode, value.laneAcceptances) ||
+    !validExecutionPolicy(value, value.laneAcceptances) ||
     (value.checkpoint !== "pre_review" &&
       value.pageChecks.at(-1)?.checkpoint !== value.checkpoint) ||
     !/^[0-9a-f]{40}$/u.test(value.sourceRevision) ||
@@ -171,12 +180,12 @@ function validProfile(
   value: Extract<ApplicationLaneAcceptance, { checkpoint: "profile_verified" }>,
 ): boolean {
   const requiredKeys = [
-    "schemaVersion", "checkpoint", "pageId", "executionMode", "pageType", "verifiedFields",
+    "schemaVersion", "checkpoint", "pageId", "answerFallbackPolicy", "pageType", "verifiedFields",
     "ownedDuplicateRows", "independentlyVerified", "submitActivated",
     "privacyScan",
   ];
   const learningKeys = [
-    "schemaVersion", "checkpoint", "pageId", "executionMode", "pageType", "verifiedFields",
+    "schemaVersion", "checkpoint", "pageId", "answerFallbackPolicy", "pageType", "verifiedFields",
     "ownedDuplicateRows", "independentlyVerified", "profileFieldLearningSha256",
     "submitActivated", "privacyScan",
   ];
@@ -197,7 +206,8 @@ function validProfile(
   return shape &&
     value.schemaVersion === 1 &&
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value.pageId) &&
-    (value.executionMode === "live" || value.executionMode === "synthetic_test_non_submittable") &&
+    (value.answerFallbackPolicy === "owner_facts_only" ||
+      value.answerFallbackPolicy === "deterministic_site_valid_editable") &&
     (value.pageType === "profile" || value.pageType === "contact") &&
     (!hasSyntheticDefault || hasLearningDigest && hasSyntheticEvidence) &&
     value.verifiedFields.every((field) => {
@@ -282,13 +292,24 @@ function validSyntheticProfileFields(
   );
 }
 
-function validExecutionMode(
-  mode: ApplicationWalkAcceptanceV1["executionMode"],
+function validExecutionPolicy(
+  acceptance: Pick<ApplicationWalkAcceptanceV1,
+    "browserTransport" | "answerFallbackPolicy" | "submissionPolicy" | "liveProofEligibility">,
   lanes: readonly ApplicationLaneAcceptance[],
 ): boolean {
+  let policy: ApplicationExecutionPolicy;
+  try {
+    policy = admitApplicationExecutionPolicy({
+      browserTransport: acceptance.browserTransport,
+      answerFallbackPolicy: acceptance.answerFallbackPolicy,
+      submissionPolicy: acceptance.submissionPolicy,
+      liveProofEligibility: acceptance.liveProofEligibility,
+    });
+  }
+  catch { return false; }
   const profiles = lanes.filter((lane) => lane.checkpoint === "profile_verified");
-  return profiles.every((profile) => profile.executionMode === mode) &&
-    (mode === "synthetic_test_non_submittable" || !lanes.some((lane) =>
+  return profiles.every((profile) => profile.answerFallbackPolicy === policy.answerFallbackPolicy) &&
+    (policy.answerFallbackPolicy === "deterministic_site_valid_editable" || !lanes.some((lane) =>
       lane.checkpoint === "profile_verified"
         ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
         : lane.checkpoint === "questionnaire_verified" &&

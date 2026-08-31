@@ -9,6 +9,10 @@ import {
   type ApplicationProfileFact,
 } from "../profile/application-profile.ts";
 import { retainedDiscoveredIntakeFields } from "../form/questions/catalog.ts";
+import {
+  liveApplicationExecutionPolicy,
+  type ApplicationExecutionPolicy,
+} from "../contracts/application-execution-policy.ts";
 
 import {
   prepareStage2LiveRun,
@@ -143,6 +147,7 @@ async function loadApplicationSource(
     ));
     const derivedPlan = withDerivedProfileCountry(profile, value.profilePlan);
     const profilePlan = normalizeLearningPlan(derivedPlan);
+    const executionPolicy = liveApplicationExecutionPolicy(answerMode(profilePlan));
     const narrative = structuredClone(value.narrative) as { readonly revision: string };
     const bytes = Buffer.from(resumeBytes);
     return Object.freeze({
@@ -155,6 +160,7 @@ async function loadApplicationSource(
       }),
       profile,
       profilePlan,
+      executionPolicy,
       narrative,
     });
   } catch {
@@ -233,6 +239,7 @@ export function migrateTrustedLegacyApplicationProfile(value: unknown): {
   readonly resumeId: string;
   readonly profile: ApplicationProfile;
   readonly profilePlan: unknown;
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly narrative: unknown;
 } {
   const source = exact(value, [
@@ -293,7 +300,7 @@ export function migrateTrustedLegacyApplicationProfile(value: unknown): {
     }];
   });
   const profilePlan = withDerivedProfileCountry(profile, {
-    mode: "live",
+    mode: "synthetic_test_non_submittable",
     pageType: "profile",
     fields,
     repeatables: [],
@@ -304,8 +311,16 @@ export function migrateTrustedLegacyApplicationProfile(value: unknown): {
     resumeId: source.resumeId,
     profile,
     profilePlan,
+    executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
     narrative: Object.freeze({ revision: "trusted-legacy-owner-facts-only-v1" }),
   });
+}
+
+function answerMode(value: unknown): "live" | "synthetic_test_non_submittable" {
+  if (typeof value !== "object" || value === null || Array.isArray(value) ||
+      !("mode" in value) ||
+      (value.mode !== "live" && value.mode !== "synthetic_test_non_submittable")) invalid();
+  return value.mode;
 }
 
 function admitSourcePath(path: string, maximumBytes: number): void {

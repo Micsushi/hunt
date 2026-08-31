@@ -22,6 +22,8 @@ import {
   prepareStage2RunStorage,
 } from "../../../src/composition/private/s2-run-storage.ts";
 import { fieldId, questionId, upstreamResumeId } from "../../../src/contracts/index.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 import { writeLiveEvidencePacket } from "../../../src/evidence/live/packet.ts";
 import { writeAccountVerifiedEvidence } from "../../../src/live/evidence/account-verified-evidence.ts";
 import { writeApplicationWalkEvidence } from "../../../src/live/evidence/application-walk-evidence.ts";
@@ -132,7 +134,6 @@ test("Review completion rejects a required control retained as explicit unset", 
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     const path = join(layout.evidenceRoot, "profile-field-learning.json");
     const learning = JSON.parse(readFileSync(path, "utf8"));
-    learning.liveAcceptanceEligible = false;
     learning.fields[1] = {
       ...learning.fields[1],
       fieldIdentity: "profile.unknown.required.1",
@@ -161,9 +162,7 @@ test("Review completion admits an observed unknown optional control left unset",
     await writeReviewEvidence(layout.evidenceRoot, configSha256);
     const learningPath = join(layout.evidenceRoot, "profile-field-learning.json");
     let learning = JSON.parse(readFileSync(learningPath, "utf8"));
-    learning.executionMode = "synthetic_test_non_submittable";
-    learning.testOnly = true;
-    learning.liveAcceptanceEligible = false;
+    learning.answerFallbackPolicy = "deterministic_site_valid_editable";
     learning.fields[0].lane = "synthetic_test_default";
     const syntheticFields = [syntheticProfileField(
       "profile-page-1", "identity.given_name", "First Name", "Synthetic owner review",
@@ -187,8 +186,8 @@ test("Review completion admits an observed unknown optional control left unset",
     writeFileSync(learningPath, learningBytes);
     const applicationPath = join(layout.evidenceRoot, "application-walk-acceptance.json");
     const application = JSON.parse(readFileSync(applicationPath, "utf8"));
-    application.executionMode = "synthetic_test_non_submittable";
-    application.laneAcceptances[0].executionMode = "synthetic_test_non_submittable";
+    application.answerFallbackPolicy = "deterministic_site_valid_editable";
+    application.laneAcceptances[0].answerFallbackPolicy = "deterministic_site_valid_editable";
     application.laneAcceptances[0].verifiedFields[0].provenance = "generated_default";
     application.laneAcceptances[0].verifiedFields[0].lane = "synthetic_test_default";
     application.laneAcceptances[0].syntheticFields = syntheticFields;
@@ -196,9 +195,7 @@ test("Review completion admits an observed unknown optional control left unset",
     writeFileSync(applicationPath, `${JSON.stringify(application)}\n`);
     const questionPath = join(layout.evidenceRoot, "question-answer-learning.json");
     const questionLearning = JSON.parse(readFileSync(questionPath, "utf8"));
-    questionLearning.executionMode = "synthetic_test_non_submittable";
-    questionLearning.testOnly = true;
-    questionLearning.liveAcceptanceEligible = false;
+    questionLearning.answerFallbackPolicy = "deterministic_site_valid_editable";
     writeFileSync(questionPath, `${JSON.stringify(questionLearning)}\n`);
     const pendingPath = join(layout.evidenceRoot, "pending-profile-questions.json");
     const pending = JSON.parse(readFileSync(pendingPath, "utf8"));
@@ -1166,12 +1163,10 @@ async function writeReviewEvidence(
   combinedResumeProfile = false,
 ): Promise<void> {
   let learningBytes = Buffer.from(`${JSON.stringify({
-    schemaVersion: 5,
-    evidenceRevision: "s2-profile-field-learning-v5",
+    schemaVersion: 6,
+    evidenceRevision: "s2-profile-field-learning-v6",
     page: "profile",
-    executionMode: "live",
-    testOnly: false,
-    liveAcceptanceEligible: true,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 2,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
@@ -1254,9 +1249,7 @@ async function writeReviewEvidence(
   }, null, 2)}\n`, "utf8");
   if (combinedResumeProfile || syntheticQuestionnaire) {
     let learning = JSON.parse(learningBytes.toString("utf8"));
-    learning.executionMode = "synthetic_test_non_submittable";
-    learning.testOnly = true;
-    learning.liveAcceptanceEligible = false;
+    learning.answerFallbackPolicy = "deterministic_site_valid_editable";
     if (combinedResumeProfile) {
       learning.fields[0].lane = "synthetic_test_default";
       learning = bindSyntheticProfileLearning(learning, [
@@ -1360,12 +1353,12 @@ async function writeReviewEvidence(
   if (!directReview) {
     const syntheticRun = syntheticQuestionnaire || combinedResumeProfile;
     writeFileSync(join(root, "question-answer-learning.json"), `${JSON.stringify({
-      schemaVersion: 5,
-      evidenceRevision: "s2-question-answer-learning-v5",
+      schemaVersion: 6,
+      evidenceRevision: "s2-question-answer-learning-v6",
       page: "questionnaire",
-      executionMode: syntheticRun ? "synthetic_test_non_submittable" : "live",
-      testOnly: syntheticRun,
-      liveAcceptanceEligible: !syntheticRun,
+      ...liveApplicationExecutionPolicy(syntheticRun
+        ? "synthetic_test_non_submittable"
+        : "live"),
       questions: [{
         pageId: "questionnaire-page-1",
         questionId: "s1-question-work-authorization",
@@ -2074,13 +2067,16 @@ function applicationWalk(
     };
   }
   return {
-    schemaVersion: 1 as const,
-    evidenceRevision: "s2-application-walk-acceptance-v1" as const,
+    schemaVersion: 2 as const,
+    evidenceRevision: "s2-application-walk-acceptance-v2" as const,
     checkpoint: "pre_review" as const,
     status: "passed" as const,
-    executionMode: syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined
-      ? "synthetic_test_non_submittable" as const
-      : "live" as const,
+    browserTransport: "live_browser" as const,
+    answerFallbackPolicy: syntheticQuestionnaire || combinedProfileFieldLearningSha256 !== undefined
+      ? "deterministic_site_valid_editable" as const
+      : "owner_facts_only" as const,
+    submissionPolicy: "forbidden" as const,
+    liveProofEligibility: "eligible" as const,
     sourceRevision,
     revisionId,
     approvalId,
@@ -2114,7 +2110,9 @@ function profileAcceptance(
     schemaVersion: 1 as const,
     checkpoint: "profile_verified" as const,
     pageId: field === "social.linkedin" ? "profile-page-2" as never : "profile-page-1" as never,
-    executionMode: syntheticMode ? "synthetic_test_non_submittable" as const : "live" as const,
+    answerFallbackPolicy: syntheticMode
+      ? "deterministic_site_valid_editable" as const
+      : "owner_facts_only" as const,
     pageType: "profile" as const,
     verifiedFields: [{
       fieldId: field,

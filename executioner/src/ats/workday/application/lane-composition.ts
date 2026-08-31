@@ -1,5 +1,6 @@
 import { s2StableErrorPolicy } from "../../../contracts/s2-common-wire.ts";
 import type { BrowserPageId } from "../../../contracts/index.ts";
+import type { AnswerFallbackPolicy } from "../../../contracts/application-execution-policy.ts";
 import {
   completeWorkdayProfilePage,
   type ProfilePageCompletionResult,
@@ -105,7 +106,7 @@ export type ApplicationLaneAcceptance =
       readonly schemaVersion: 1;
       readonly checkpoint: "profile_verified";
       readonly pageId: BrowserPageId;
-      readonly executionMode: "live" | "synthetic_test_non_submittable";
+      readonly answerFallbackPolicy: AnswerFallbackPolicy;
       readonly pageType: VerifiedProfilePage["pageType"];
       readonly verifiedFields: VerifiedProfilePage["verifiedFields"];
       readonly syntheticFields?: readonly ProfileSyntheticFieldEvidence[];
@@ -267,7 +268,9 @@ function profileHandler(
         schemaVersion: 1,
         checkpoint: "profile_verified",
         pageId: request.pageId,
-        executionMode: dependencies.sources.profilePlan().mode,
+        answerFallbackPolicy: dependencies.sources.profilePlan().mode === "live"
+          ? "owner_facts_only"
+          : "deterministic_site_valid_editable",
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
         ...(result.committedFields.length === 0 ? {} : {

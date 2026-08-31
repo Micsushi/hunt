@@ -6,10 +6,12 @@ import test from "node:test";
 
 import {
   admitProfileFieldLearningEvidence,
-  createProfileFieldLearningCapture,
+  createProfileFieldLearningCapture as createProfileFieldLearningCaptureWithPolicy,
   type ProfileFieldLearningEvidenceV2,
   type ProfileFieldLearningRecordV2,
 } from "../../../src/live/evidence/profile-field-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -31,6 +33,15 @@ interface MutableObservationBinding {
   stateObservedAck: boolean;
 }
 
+function createProfileFieldLearningCapture(
+  input: Omit<Parameters<typeof createProfileFieldLearningCaptureWithPolicy>[0], "executionPolicy">,
+) {
+  return createProfileFieldLearningCaptureWithPolicy({
+    ...input,
+    executionPolicy: liveApplicationExecutionPolicy(input.plan.mode),
+  });
+}
+
 type MutableLearningRecord = Omit<
   ProfileFieldLearningRecordV2,
   "driverAttempt" | "observationBinding" | "visibleOptionIds"
@@ -42,9 +53,8 @@ type MutableLearningRecord = Omit<
 
 type MutableLearningEvidence = Omit<
   ProfileFieldLearningEvidenceV2,
-  "fields" | "liveAcceptanceEligible" | "learningConversion"
+  "fields" | "learningConversion"
 > & {
-  liveAcceptanceEligible: boolean;
   fields: MutableLearningRecord[];
   learningConversion?: Omit<ProfileLearningConversion, "affected" | "defaultsGenerated" | "fieldIds"> & {
     defaultsGenerated: boolean;
@@ -104,10 +114,10 @@ test("retains value-free field learning through prefill, driver, and readback", 
       "Software Engineer", "C:\\private\\resume.pdf",
     ]) assert.equal(text.includes(forbidden), false);
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
-    assert.equal(evidence.schemaVersion, 5);
-    assert.equal(evidence.evidenceRevision, "s2-profile-field-learning-v5");
+    assert.equal(evidence.schemaVersion, 6);
+    assert.equal(evidence.evidenceRevision, "s2-profile-field-learning-v6");
     assert.equal(evidence.visibleControlCount, 3);
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(new Set(evidence.fields.map(({ observationBinding }) =>
       observationBinding?.operationId
     )).size, 3);
@@ -342,9 +352,9 @@ test("returns all value-free metadata mismatches for learning conversion", async
     ]);
     assert.equal(capture.write() !== null, true);
     const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
-    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
-    assert.equal(evidence.testOnly, true);
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.answerFallbackPolicy, "owner_facts_only");
+    assert.equal(evidence.browserTransport, "live_browser");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.learningConversion, {
       kind: "profile_ui_learning",
       executionMode: "synthetic_test_non_submittable",
@@ -567,9 +577,9 @@ fields: [{
     assert.equal(text.includes('"None"'), false);
     assert.equal(text.includes("profile.social.linkedin"), true);
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
-    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
-    assert.equal(evidence.testOnly, true);
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
+    assert.equal(evidence.browserTransport, "live_browser");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(evidence.fields[0]?.lane, "synthetic_test_default");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -636,9 +646,9 @@ test("admits a synthetic non-submittable page with only owner facts and optional
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(
       readFileSync(join(root, "profile-field-learning.json"), "utf8"),
     ));
-    assert.equal(evidence.executionMode, "synthetic_test_non_submittable");
-    assert.equal(evidence.testOnly, true);
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
+    assert.equal(evidence.browserTransport, "live_browser");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(evidence.fields.some(({ lane }) => lane === "synthetic_test_default"), false);
     assert.deepEqual(evidence.fields.map(({ fieldIdentity }) => fieldIdentity), [
       "profile.social.linkedin",
@@ -751,12 +761,10 @@ test("reconciles the retained My Experience skills control", async () => {
 
 test("admits reviewed website repeatable identities", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 5,
-    evidenceRevision: "s2-profile-field-learning-v5",
+    schemaVersion: 6,
+    evidenceRevision: "s2-profile-field-learning-v6",
     page: "profile",
-    executionMode: "live",
-    testOnly: false,
-    liveAcceptanceEligible: true,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.websites.1.website.url",
@@ -816,12 +824,10 @@ test("retains the maximum admitted field inventory", async () => {
 
 test("admits reviewed owner-input source and prior-employment controls", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 5,
-    evidenceRevision: "s2-profile-field-learning-v5",
+    schemaVersion: 6,
+    evidenceRevision: "s2-profile-field-learning-v6",
     page: "profile",
-    executionMode: "live",
-    testOnly: false,
-    liveAcceptanceEligible: true,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 2,
     fields: [
       learningField({
@@ -846,12 +852,10 @@ test("admits reviewed owner-input source and prior-employment controls", () => {
 
 test("admits a reviewed v2 variant for a duplicated scalar field identity", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 5,
-    evidenceRevision: "s2-profile-field-learning-v5",
+    schemaVersion: 6,
+    evidenceRevision: "s2-profile-field-learning-v6",
     page: "profile",
-    executionMode: "live",
-    testOnly: false,
-    liveAcceptanceEligible: false,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
@@ -879,12 +883,10 @@ test("admits a reviewed v2 variant for a duplicated scalar field identity", () =
 
 test("admits privacy-safe optional checkbox and required file inventory", () => {
   const admitted = admitProfileFieldLearningEvidence({
-    schemaVersion: 5,
-    evidenceRevision: "s2-profile-field-learning-v5",
+    schemaVersion: 6,
+    evidenceRevision: "s2-profile-field-learning-v6",
     page: "profile",
-    executionMode: "live",
-    testOnly: false,
-    liveAcceptanceEligible: false,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 2,
     fields: [
       {
@@ -940,12 +942,10 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
 
 test("denies widened, duplicate, and non-opaque learning records", () => {
   const base = {
-    schemaVersion: 5 as const,
-    evidenceRevision: "s2-profile-field-learning-v5" as const,
+    schemaVersion: 6 as const,
+    evidenceRevision: "s2-profile-field-learning-v6" as const,
     page: "profile" as const,
-    executionMode: "live" as const,
-    testOnly: false as const,
-    liveAcceptanceEligible: false as const,
+    ...liveApplicationExecutionPolicy("live"),
     visibleControlCount: 1,
     fields: [{
       fieldIdentity: "profile.identity.given_name",
@@ -1146,7 +1146,7 @@ test("already-correct and optional-unset controls require truthful observation b
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
       join(root, "profile-field-learning.json"), "utf8",
     )));
-    assert.equal(evidence.liveAcceptanceEligible, true);
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.fields.map(({ terminalDisposition }) => terminalDisposition), [
       "verified_without_mutation", "optional_unset",
     ]);
@@ -1157,7 +1157,6 @@ test("already-correct and optional-unset controls require truthful observation b
     const mutations: readonly ((value: MutableLearningEvidence) => void)[] = [
       (value) => {
         value.fields[0]!.observationBinding = null;
-        value.liveAcceptanceEligible = true;
       },
       (value) => { mutableObservationBinding(value, 0).operationId = "bad"; },
       (value) => { mutableObservationBinding(value, 0).stateObservedAck = false; },

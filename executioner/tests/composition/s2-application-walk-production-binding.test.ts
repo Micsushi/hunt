@@ -55,7 +55,7 @@ test("production binding resolves opaque owner sources without value leakage", a
         schemaVersion: 1,
         checkpoint: "profile_verified",
         pageId: "profile-page-1" as never,
-        executionMode: "live",
+        answerFallbackPolicy: "owner_facts_only",
           pageType: "profile",
           verifiedFields: [],
           ownedDuplicateRows: 0,
@@ -205,7 +205,12 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       checkpoint: "pre_review",
     }, AbortSignal.any([]));
     assert.equal(admittedMode, "synthetic_test_non_submittable");
-    assert.equal(resolved.input.executionMode, "synthetic_test_non_submittable");
+    assert.deepEqual(resolved.input.executionPolicy, {
+      browserTransport: "live_browser",
+      answerFallbackPolicy: "deterministic_site_valid_editable",
+      submissionPolicy: "forbidden",
+      liveProofEligibility: "eligible",
+    });
     assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([])), true);
   } finally {
     fixture.cleanup();
@@ -372,7 +377,7 @@ test("production application graph routes approval expiry through release cleanu
       schemaVersion: 1,
       checkpoint: "profile_verified",
       pageId: "profile-page-1" as never,
-      executionMode: "live",
+      answerFallbackPolicy: "owner_facts_only",
       pageType: "profile",
       verifiedFields: [],
       ownedDuplicateRows: 0,
@@ -742,7 +747,7 @@ test("outer Review binding resolves owner sources and retains only live browser 
         schemaVersion: 1,
         checkpoint: "profile_verified",
         pageId: "profile-page-1" as never,
-        executionMode: "live",
+        answerFallbackPolicy: "owner_facts_only",
           pageType: "profile",
           verifiedFields: [],
           ownedDuplicateRows: 0,

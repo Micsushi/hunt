@@ -150,6 +150,7 @@ export function createStage2ApplicationWalkProductionBinding(
         const questionLearning = createQuestionAnswerLearningCapture({
           root: owner.roots.evidence.path,
           mode: resolvedOwnerSources.profilePlan.mode,
+          executionPolicy: resolvedOwnerSources.executionPolicy,
           sensitiveValues: resolvedOwnerSources.sensitiveValues,
         });
         runtime = await dependencies.runtime.bind({
@@ -169,7 +170,7 @@ export function createStage2ApplicationWalkProductionBinding(
       const { account, ...walkRuntime } = runtime;
       return Object.freeze({
         input: Object.freeze({
-          executionMode: resolvedOwnerSources.profilePlan.mode,
+          executionPolicy: resolvedOwnerSources.executionPolicy,
           sourceRevision: source.sourceRevision,
           configSha256,
           revisionId: owner.revisionId,

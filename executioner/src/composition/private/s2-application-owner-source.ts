@@ -20,6 +20,11 @@ import {
   type ResolvedResumeArtifact,
 } from "../../contracts/index.ts";
 import {
+  admitApplicationExecutionPolicy,
+  answerModeForPolicy,
+  type ApplicationExecutionPolicy,
+} from "../../contracts/application-execution-policy.ts";
+import {
   createApplicationProfileQuery,
   parseApplicationProfile,
   type ApplicationProfileQuery,
@@ -76,6 +81,7 @@ export interface Stage2ApplicationOwnerSourceRequest {
 export interface Stage2ApplicationOwnerSources {
   readonly resumeIntent: WorkdayResumeFileIntent;
   readonly profilePlan: ProfilePagePlan;
+  readonly executionPolicy: ApplicationExecutionPolicy;
   readonly profileId: ProfileId;
   readonly profileRevision: number;
   readonly profileQuery: ApplicationProfileQuery;
@@ -159,6 +165,8 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         manifest.profilePlan,
         profile.facts,
       );
+      const executionPolicy = admitApplicationExecutionPolicy(manifest.executionPolicy);
+      if (answerModeForPolicy(executionPolicy) !== profilePlan.mode) denied();
       const narrativeFact = profile.facts.find(({ factId }) =>
         factId === "configured_narrative"
       );
@@ -173,6 +181,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
       return Object.freeze({
         resumeIntent: intent.value,
         profilePlan,
+        executionPolicy,
         profileId: profile.profileId,
         profileRevision: profile.revision,
         profileQuery: createApplicationProfileQuery(profile),
@@ -201,6 +210,7 @@ interface ParsedManifest {
   };
   readonly profile: unknown;
   readonly profilePlan: unknown;
+  readonly executionPolicy: unknown;
   readonly narrative: { readonly revision: string };
 }
 
@@ -217,7 +227,7 @@ function parseManifest(
   const manifest = exact(value, [
     "schemaVersion", "sourceRevision", "scope", "revisionId", "approvalId",
     "journeyId", "targetHandleId", "profileRef", "resumeRef", "approvedAt", "resume",
-    "profile", "profilePlan", "narrative",
+    "profile", "profilePlan", "executionPolicy", "narrative",
   ]);
   if (
     manifest.schemaVersion !== 1 ||
@@ -248,6 +258,7 @@ function parseManifest(
     resume: resume as unknown as ParsedManifest["resume"],
     profile: manifest.profile,
     profilePlan: manifest.profilePlan,
+    executionPolicy: manifest.executionPolicy,
     narrative: narrative as unknown as ParsedManifest["narrative"],
   };
 }
@@ -259,7 +270,7 @@ function parsePreparedManifest(
   profileSha256: string,
 ): ParsedManifest {
   const profile = exact(value, [
-    "schemaVersion", "sourceRevision", "profile", "profilePlan", "narrative",
+    "schemaVersion", "sourceRevision", "profile", "profilePlan", "executionPolicy", "narrative",
   ]);
   if (
     profile.schemaVersion !== 1 ||
@@ -309,6 +320,7 @@ function parsePreparedManifest(
     resume: resume as unknown as ParsedManifest["resume"],
     profile: profile.profile,
     profilePlan: profile.profilePlan,
+    executionPolicy: profile.executionPolicy,
     narrative: narrative as unknown as ParsedManifest["narrative"],
   };
 }

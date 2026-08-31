@@ -91,13 +91,12 @@ export function createStage2RealJourneyProductionBinding(
               const laneAcceptances = resolved.dependencies.laneAcceptances.snapshot(
                 walk.value.checkpoint,
               );
-              const executionMode = resolved.input.executionMode;
               applicationAcceptance = Object.freeze({
-                schemaVersion: 1,
-                evidenceRevision: "s2-application-walk-acceptance-v1",
+                schemaVersion: 2,
+                evidenceRevision: "s2-application-walk-acceptance-v2",
                 checkpoint: walk.value.checkpoint,
                 status: "passed",
-                executionMode,
+                ...resolved.input.executionPolicy,
                 sourceRevision: resolved.input.sourceRevision,
                 revisionId: resolved.input.revisionId,
                 approvalId: resolved.input.approvalId,

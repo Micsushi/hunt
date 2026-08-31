@@ -72,6 +72,16 @@ test("trusted legacy preparation preserves only owner-bound resume facts and mak
   ), true);
   assert.equal(JSON.stringify(current).includes("generated_default"), false);
   assert.equal(JSON.stringify(current).includes("previously_worked_for_organization"), true);
+  assert.deepEqual(current.executionPolicy, {
+    browserTransport: "live_browser",
+    answerFallbackPolicy: "deterministic_site_valid_editable",
+    submissionPolicy: "forbidden",
+    liveProofEligibility: "eligible",
+  });
+  assert.equal(
+    (current.profilePlan as { mode: string }).mode,
+    "synthetic_test_non_submittable",
+  );
   assert.equal((current.profilePlan as { fields: Array<{ fieldId: string }> }).fields.some(
     ({ fieldId }) => fieldId === "employment.previously_worked_for_organization"
   ), false);

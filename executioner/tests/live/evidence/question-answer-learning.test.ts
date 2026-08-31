@@ -14,11 +14,22 @@ import {
 import {
   admitPendingProfileQuestionsEvidence,
   admitQuestionAnswerLearningEvidence,
-  createQuestionAnswerLearningCapture,
+  createQuestionAnswerLearningCapture as createQuestionAnswerLearningCaptureWithPolicy,
   type QuestionAnswerLearningCapture,
 } from "../../../src/live/evidence/question-answer-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 import type { ApplicationFieldObservation } from
   "../../../src/form/answers/application-types.ts";
+
+function createQuestionAnswerLearningCapture(
+  input: Omit<Parameters<typeof createQuestionAnswerLearningCaptureWithPolicy>[0], "executionPolicy">,
+) {
+  return createQuestionAnswerLearningCaptureWithPolicy({
+    ...input,
+    executionPolicy: liveApplicationExecutionPolicy(input.mode),
+  });
+}
 
 test("question learning stores observed choices, fallback, provenance, and replacement intent", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-"));
@@ -244,8 +255,9 @@ test("question learning proves explicit unset without applicant values", () => {
     const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
       readFileSync(join(root, "question-answer-learning.json"), "utf8"),
     ));
-    assert.equal(evidence.executionMode, "live");
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.browserTransport, "live_browser");
+    assert.equal(evidence.answerFallbackPolicy, "owner_facts_only");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.questions.map(({ answerState, lane, provenance }) => ({
       answerState,
       lane,
@@ -286,12 +298,10 @@ test("question learning strictly rejects absent, invalid, extra, or synthetic li
     }],
   } as const;
   const base = {
-    schemaVersion: 5 as const,
-    evidenceRevision: "s2-question-answer-learning-v5" as const,
+    schemaVersion: 6 as const,
+    evidenceRevision: "s2-question-answer-learning-v6" as const,
     page: "questionnaire" as const,
-    executionMode: "live" as const,
-    testOnly: false,
-    liveAcceptanceEligible: true,
+    ...liveApplicationExecutionPolicy("live"),
     questions: [record],
   };
   const { lane: _lane, ...missingLane } = record;
@@ -335,12 +345,10 @@ test("question learning rejects hostile failure codes and retryable verified att
     }],
   } as const;
   const base = {
-    schemaVersion: 5 as const,
-    evidenceRevision: "s2-question-answer-learning-v5" as const,
+    schemaVersion: 6 as const,
+    evidenceRevision: "s2-question-answer-learning-v6" as const,
     page: "questionnaire" as const,
-    executionMode: "live" as const,
-    testOnly: false,
-    liveAcceptanceEligible: true,
+    ...liveApplicationExecutionPolicy("live"),
     questions: [verified],
   };
   const failed = {
@@ -361,7 +369,6 @@ test("question learning rejects hostile failure codes and retryable verified att
   for (const failureCode of hostileCodes) {
     assert.throws(() => admitQuestionAnswerLearningEvidence({
       ...base,
-      liveAcceptanceEligible: false,
       questions: [{
         ...failed,
         failureCode,
@@ -398,7 +405,7 @@ test("question learning retains sanitized driver failure at occurrence", () => {
     const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
       readFileSync(join(root, "question-answer-learning.json"), "utf8"),
     ));
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.questions.map((record) => ({
       verificationResult: record.verificationResult,
       failureCode: record.failureCode,
@@ -439,7 +446,7 @@ test("question learning retains bounded retry history without accepting a recove
     const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
       join(root, "question-answer-learning.json"), "utf8",
     )));
-    assert.equal(evidence.liveAcceptanceEligible, false);
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.deepEqual(evidence.questions[0]?.attemptHistory, [
       {
         ...binding(6),
@@ -759,7 +766,7 @@ test("question learning admits one page monitor batch for independently verified
       join(root, "question-answer-learning.json"),
       "utf8",
     )));
-    assert.equal(evidence.liveAcceptanceEligible, true);
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(evidence.questions.length, 2);
     assert.deepEqual(
       evidence.questions.map(({ monitorBinding }) => monitorBinding?.operationId),
