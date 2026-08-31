@@ -286,6 +286,44 @@ test("questionnaire exception trace retains value-free reconciliation context", 
   }
 });
 
+test("multi-select ownership trace retains only structural counts", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-multi-select-ownership-trace-"));
+  try {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    trace("profile_multi_select_readback_ownership", {
+      selectedItemCount: 2,
+      productionOwnerCount: 1,
+      productionOwnedSelectedItemCount: 1,
+      unownedSelectedItemCount: 1,
+      canonicalItemCount: 1,
+      fallbackItemCount: 0,
+      chosenItemCount: 1,
+      chosenUniqueCount: 1,
+      usedProductionOwners: true,
+      selectedLabels: ["private-skill-sentinel"],
+      applicantValue: "private-profile-sentinel",
+    });
+    const path = join(root, "value-free-trace.ndjson");
+    assert.deepEqual(readValueFreeRunTrace(path)[0]?.details, {
+      selectedItemCount: 2,
+      productionOwnerCount: 1,
+      productionOwnedSelectedItemCount: 1,
+      unownedSelectedItemCount: 1,
+      canonicalItemCount: 1,
+      fallbackItemCount: 0,
+      chosenItemCount: 1,
+      chosenUniqueCount: 1,
+      usedProductionOwners: true,
+    });
+    assert.doesNotMatch(
+      readFileSync(path, "utf8"),
+      /private-skill-sentinel|private-profile-sentinel/iu,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("trace observer and invalid details never alter runtime behavior", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-value-free-trace-failure-"));
   try {

@@ -627,6 +627,7 @@ export class OwnedWorkdayApplicationRuntime {
         const playwrightProfilePage = new PlaywrightWorkdayProfilePage(page, {
           pageType: request.ownerSources.profilePlan.pageType,
           timeoutMs: this.#timeoutMs,
+          trace: this.#trace,
         });
         const profilePage: WorkdayProfilePagePort = {
           inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),

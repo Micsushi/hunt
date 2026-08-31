@@ -2755,6 +2755,7 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
 test("My Experience owns a remounted skill by its production list-item wrapper", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  const traces: Array<{ readonly event: string; readonly details?: object }> = [];
   try {
     await page.setContent(`
       <body data-hunt-profile-page-type="profile">
@@ -2804,7 +2805,10 @@ test("My Experience owns a remounted skill by its production list-item wrapper",
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      trace: (event, details) => traces.push({ event, details }),
+    });
     const plan = {
       mode: "live" as const,
       pageType: "profile" as const,
@@ -2823,6 +2827,21 @@ test("My Experience owns a remounted skill by its production list-item wrapper",
         .find(({ fieldId }) => fieldId === "skills.values")?.readback,
       "Python",
     );
+    assert.equal(traces.some(({ event, details }) =>
+      event === "profile_multi_select_readback_ownership" &&
+      JSON.stringify(details) === JSON.stringify({
+        selectedItemCount: 2,
+        productionOwnerCount: 1,
+        productionOwnedSelectedItemCount: 1,
+        unownedSelectedItemCount: 1,
+        canonicalItemCount: 1,
+        fallbackItemCount: 0,
+        chosenItemCount: 1,
+        chosenUniqueCount: 1,
+        usedProductionOwners: true,
+      })
+    ), true, JSON.stringify(traces));
+    assert.equal(JSON.stringify(traces).includes("Python"), false);
   } finally {
     await browser.close();
   }

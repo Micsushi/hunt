@@ -51,12 +51,14 @@ interface MutableInteraction {
 export interface PlaywrightWorkdayProfilePageOptions {
   readonly pageType: ProfilePageType;
   readonly timeoutMs?: number;
+  readonly trace?: (event: string, details?: object) => void;
 }
 
 export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #page: Page;
   readonly #pageType: ProfilePageType;
   readonly #timeoutMs: number;
+  readonly #trace: PlaywrightWorkdayProfilePageOptions["trace"];
   readonly #controls = new Map<string, ResolvedControl>();
   readonly #interactions = new Map<string, MutableInteraction>();
   #selectionDiagnosticOrdinal = 0;
@@ -70,6 +72,26 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     this.#page = page;
     this.#pageType = options.pageType;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
+    this.#trace = options.trace;
+  }
+
+  #readback(
+    locator: Locator,
+    behavior: ProfileControlSnapshot["uiBehavior"],
+  ): Promise<string | null> {
+    return readback(locator, behavior, this.#trace);
+  }
+
+  #resolvedReadback(control: ResolvedControl): Promise<string | null> {
+    return resolvedReadback(control, this.#trace);
+  }
+
+  #selectionReadbackIncludes(
+    locator: Locator,
+    behavior: "search_select" | "select" | "multi_select",
+    value: string,
+  ): Promise<boolean> {
+    return selectionReadbackIncludes(locator, behavior, value, this.#trace);
   }
 
   async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
@@ -342,7 +364,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (controls.length === 0) {
         throw new TypeError("profile control observation target unavailable");
       }
-      const before = await resolvedReadback(resolved);
+      const before = await this.#resolvedReadback(resolved);
       const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
       const label = await observedControlLabel(controls[0]!, resolved.uiBehavior);
       const optionLabels = await this.#observeOptionLabels(
@@ -360,7 +382,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           // is sufficient and reopening the covered input is not read-only.
           (resolved.fieldId !== "source.how_did_you_hear" || before === null),
       );
-      const after = await resolvedReadback(resolved);
+      const after = await this.#resolvedReadback(resolved);
       const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
       if (before !== after || validationBefore !== validationAfter) {
         throw new TypeError("profile control observation changed backing state");
@@ -411,7 +433,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ));
     }
     if (!inspectInteractiveOptions) return [];
-    const before = await resolvedReadback(resolved);
+    const before = await this.#resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
     await control.focus({ timeout: this.#timeoutMs });
     await control.click({ timeout: this.#timeoutMs });
@@ -433,7 +455,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await this.#page.keyboard.press("Escape");
       await control.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
-      if (before !== await resolvedReadback(resolved) ||
+      if (before !== await this.#resolvedReadback(resolved) ||
           validationBefore !== await validationCleared(control)) {
         throw new TypeError("profile option observation changed backing state");
       }
@@ -463,7 +485,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           request.syntheticFile.bytes.byteLength,
         ),
       }, { timeout: this.#timeoutMs });
-      interaction.backingValueCommitted = await readback(resolved.locator, "file") === request.value;
+      interaction.backingValueCommitted = await this.#readback(resolved.locator, "file") === request.value;
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
         throw new TypeError("Workday profile file did not commit");
@@ -484,7 +506,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.visibleOptionCount = await resolved.locator.locator("option").count();
       interaction.selectedOptionOrdinal = null;
       interaction.backingValueCommitted = exactOptionListReadback(
-        await readback(resolved.locator, "multi_select"),
+        await this.#readback(resolved.locator, "multi_select"),
         options,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
@@ -495,7 +517,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await resolved.locator.getAttribute("role") === "listbox") {
       const options = parseOptionList(request.value);
       for (const option of options) {
-        if (await selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
+        if (await this.#selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
         const matches = resolved.locator.getByRole("option", { name: option, exact: true });
         if (await matches.count() !== 1) {
           throw new TypeError("Workday ARIA multi-select option is missing or ambiguous");
@@ -509,7 +531,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.visibleOptionCount = await resolved.locator.getByRole("option").count();
       interaction.selectedOptionOrdinal = null;
       interaction.backingValueCommitted = exactOptionListReadback(
-        await readback(resolved.locator, "multi_select"),
+        await this.#readback(resolved.locator, "multi_select"),
         options,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
@@ -519,11 +541,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     } else if (request.uiBehavior === "multi_select") {
       const options = parseOptionList(request.value);
       for (const option of options) {
-        if (await selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
+        if (await this.#selectionReadbackIncludes(resolved.locator, "multi_select", option)) continue;
         await this.#selectSearchOption(resolved.locator, option, interaction, "multi_select");
       }
       interaction.backingValueCommitted = exactOptionListReadback(
-        await readback(resolved.locator, "multi_select"),
+        await this.#readback(resolved.locator, "multi_select"),
         options,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
@@ -562,7 +584,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await this.#page.waitForTimeout(25);
       interaction.backingValueCommitted = scalarReadbackMatches(
         request.uiBehavior,
-        await readback(resolved.locator, request.uiBehavior),
+        await this.#readback(resolved.locator, request.uiBehavior),
         request.value,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
@@ -733,7 +755,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
       });
-      const currentReadback = await readback(match, entry.uiBehavior);
+      const currentReadback = await this.#readback(match, entry.uiBehavior);
       const valid = await validationCleared(match);
       snapshots.push({
         controlId,
@@ -955,7 +977,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const uiBehavior = await unknownUiBehavior(candidate);
       const allowedOptions = await unknownAllowedOptions(candidate);
       const constraints = await unknownConstraints(candidate);
-      const currentReadback = await readback(candidate, uiBehavior).catch(() => null);
+      const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
       const label = await observedControlLabel(candidate, uiBehavior) ?? stableKey;
       unknown.push({
         controlId: `unknown-required:${ordinal}`,
@@ -2353,6 +2375,7 @@ async function unknownMachineKey(locator: Locator): Promise<string | null> {
 async function readback(
   locator: Locator,
   behavior: ProfileControlSnapshot["uiBehavior"],
+  trace?: (event: string, details?: object) => void,
 ): Promise<string | null> {
   if (behavior === "checkbox") {
     return await checkboxReadback(locator) ? "true" : "false";
@@ -2383,7 +2406,7 @@ async function readback(
     return value === "" ? null : value;
   }
   const committed = behavior === "multi_select"
-    ? await committedMultiSelectReadback(locator)
+    ? await committedMultiSelectReadback(locator, trace)
     : null;
   if (committed !== null) return committed;
   const ariaValue = (await locator.getAttribute("aria-valuetext"))?.trim() ?? "";
@@ -2427,11 +2450,14 @@ async function readback(
     : labels.length === 1 ? labels[0]! : null;
 }
 
-async function resolvedReadback(control: ResolvedControl): Promise<string | null> {
+async function resolvedReadback(
+  control: ResolvedControl,
+  trace?: (event: string, details?: object) => void,
+): Promise<string | null> {
   if (control.uiBehavior === "radio_group") {
     return radioReadback(await visibleLocators(control.locator));
   }
-  return readback(control.locator, control.uiBehavior);
+  return readback(control.locator, control.uiBehavior, trace);
 }
 
 async function observedControlLabel(
@@ -2532,8 +2558,9 @@ async function selectionReadbackIncludes(
   locator: Locator,
   behavior: "search_select" | "select" | "multi_select",
   value: string,
+  trace?: (event: string, details?: object) => void,
 ): Promise<boolean> {
-  const observed = await readback(locator, behavior);
+  const observed = await readback(locator, behavior, trace);
   return behavior === "multi_select"
     ? optionReadbackList(observed).some((option) => equivalentOption(option, value))
     : equivalentOption(observed ?? "", value);

@@ -124,6 +124,9 @@ const NUMBER_KEYS = new Set([
   "profileInspectionAttemptCount", "profileInspectionFrameCount", "profileMetadataMismatchCount",
   "profileInspectionProfileRootCandidateCount", "profileInspectionProfileRootVisibleCount",
   "profileInspectionDomOwnerCandidateCount", "profileInspectionControlCandidateCount",
+  "selectedItemCount", "productionOwnerCount", "productionOwnedSelectedItemCount",
+  "unownedSelectedItemCount", "canonicalItemCount", "fallbackItemCount",
+  "chosenItemCount", "chosenUniqueCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",
@@ -138,6 +141,7 @@ const BOOLEAN_KEYS = new Set([
   "learningPresent", "committedReadbackMatches",
   "activeFillWithinSlo",
   "phasePassed",
+  "usedProductionOwners",
 ]);
 const TIMESTAMP_KEYS = new Set([
   "startedAt", "pageReadyAt", "pageFillCompletedAt",
