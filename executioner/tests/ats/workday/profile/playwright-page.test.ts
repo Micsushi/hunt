@@ -2752,6 +2752,73 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
   }
 });
 
+test("My Experience excludes a selected skill delete affordance from committed readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+                aria-expanded="false" placeholder="Search">
+              <ul data-automation-id="selectedItemList"></ul>
+              <div id="skills-options" role="listbox" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const item = document.createElement("li");
+            item.setAttribute("data-automation-id", "selectedItem");
+            item.setAttribute("role", "presentation");
+            item.innerHTML = '<span data-automation-id="promptOption">Python' +
+              '<button type="button" data-automation-id="DELETE_charm">Python</button></span>';
+            selected.replaceChildren(item);
+            input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const plan = {
+      mode: "live" as const,
+      pageType: "profile" as const,
+      fields: [field(
+        "skills.values", "skill", "multi_select", '["Python"]', '["Python"]',
+      )],
+      repeatables: [],
+    };
+
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience reconciles a committed skill after its prompt activation target remounts", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

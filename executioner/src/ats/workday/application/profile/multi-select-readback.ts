@@ -14,10 +14,13 @@ export async function committedMultiSelectReadback(
       .normalize("NFC").replace(/\s+/gu, " ").trim();
     const labels = [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
       .filter((item) => item.closest(fieldSelector) === owner)
-      .map((item) => normalize(
-        item.querySelector('[data-automation-id="promptOption"]')?.textContent ??
-          item.textContent,
-      ))
+      .map((item) => {
+        const semantic = item.querySelector('[data-automation-id="promptOption"]') ?? item;
+        const copy = semantic.cloneNode(true) as Element;
+        copy.querySelectorAll('[data-automation-id="DELETE_charm"]')
+          .forEach((affordance) => affordance.remove());
+        return normalize(copy.textContent);
+      })
       .filter(Boolean);
 
     // Workday can remount one semantic selection into both a collapsed list
