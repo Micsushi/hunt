@@ -373,11 +373,13 @@ test("Review completion rejects bound non-submittable synthetic questionnaire le
   }
 });
 
-test("Review completion independently rejects freshly sealed inconsistent active-fill SLO facts", async () => {
+test("Review completion independently rejects inconsistent active-fill and phase timing facts", async () => {
   const cases = [
     { activeFillDurationMs: 60_001, activeFillSloMs: 60_000, activeFillWithinSlo: true },
     { activeFillDurationMs: 500, activeFillSloMs: 60_001, activeFillWithinSlo: true },
     { activeFillDurationMs: 500, activeFillSloMs: 60_000, activeFillWithinSlo: false },
+    { independentMonitorDurationMs: -1 },
+    { reconciliationDurationMs: 601 },
   ];
   for (const [index, inconsistent] of cases.entries()) {
     const storageRoot = mkdtempSync(join(tmpdir(), `hunt-s2-review-slo-${index}-`));
@@ -1614,8 +1616,9 @@ function timingDetails(ordinal: number) {
     pageReadinessDurationMs: 100,
     navigationWaitDurationMs: ordinal === 1 ? 0 : 200,
     activeFillDurationMs: 500,
+    independentMonitorDurationMs: 100,
     committedReadbackDurationMs: 100,
-    reconciliationDurationMs: 400,
+    reconciliationDurationMs: 600,
     activeFillSloMs: 60_000,
     activeFillWithinSlo: true,
     monotonicClock: "performance_now",

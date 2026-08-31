@@ -336,7 +336,10 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   if (progress?.kind !== "application_walk_progress") return;
   assert.equal(progress.activeFillSloMs, 60_000);
   assert.equal(progress.activeFillWithinSlo, true);
-  assert.equal(progress.activeFillDurationMs >= progress.reconciliationDurationMs, true);
+  assert.equal(
+    progress.activeFillDurationMs + progress.independentMonitorDurationMs,
+    progress.reconciliationDurationMs,
+  );
   assert.equal(progress.committedReadbackDurationMs >= 0, true);
   assert.equal(progress.pageReadinessDurationMs >= 0, true);
   assert.equal(progress.navigationWaitDurationMs, 0);
@@ -346,6 +349,49 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   if (terminal?.kind === "application_walk_terminal") {
     assert.equal(terminal.applicationWalkDurationMs > 0, true);
   }
+});
+
+test("excludes independently measured monitor work from active fill", async () => {
+  const trace: Stage2ApplicationWalkTraceEvent[] = [];
+  let monitorDurationMs = 0;
+  let monotonic = 0;
+  const dependencies = dependenciesFor([truth("profile"), truth("profile")], []);
+  const profile = dependencies.handlers.profile;
+  const result = await runObservedApplicationPageWalk({
+    walk: {
+      ...dependencies,
+      handlers: {
+        ...dependencies.handlers,
+        profile: {
+          async reconcile(request, signal) {
+            monitorDurationMs += 40;
+            return profile.reconcile(request, signal);
+          },
+        },
+      },
+    },
+    laneAcceptances: { snapshot: () => [] },
+    phaseTiming: {
+      recordIndependentMonitor(durationMs) { monitorDurationMs += durationMs; },
+      independentMonitorDurationMs: () => monitorDurationMs,
+    },
+    trace: (event) => trace.push(event),
+  }, {
+    journeyId: walkFixture.journeyId,
+    stopAfter: "profile_verified",
+  }, new AbortController().signal, {
+    timingClock: {
+      monotonicNow: () => monotonic += 100,
+      wallNow: () => "2026-08-31T12:00:00.000Z",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  const progress = trace.find(({ kind }) => kind === "application_walk_progress");
+  assert.equal(progress?.kind, "application_walk_progress");
+  if (progress?.kind !== "application_walk_progress") return;
+  assert.equal(progress.independentMonitorDurationMs, 40);
+  assert.equal(progress.activeFillDurationMs + 40, progress.reconciliationDurationMs);
 });
 
 test("traced pre_review is a non-page transition without a timing completion", async () => {

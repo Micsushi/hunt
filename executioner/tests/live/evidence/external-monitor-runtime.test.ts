@@ -1714,6 +1714,31 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "My Information",
     digest(Buffer.from("My Information", "utf8")),
   ), "account_entry");
+  const railLessQuestionnaireOwned = {
+    actionFlags: new Set(["Save and Continue"]),
+    editFlags: new Set<string>(),
+  };
+  assert.equal(observedStructurePageWithIdentity(
+    new Set(["Save and Continue"]),
+    [],
+    "Application Questions - Google Chrome for Testing",
+    digest(Buffer.from("Application Questions", "utf8")),
+    railLessQuestionnaireOwned,
+  ), "questionnaire");
+  assert.throws(() => observedStructurePageWithIdentity(
+    new Set(["Save and Continue"]),
+    [],
+    "My Experience - Google Chrome for Testing",
+    digest(Buffer.from("My Experience", "utf8")),
+    railLessQuestionnaireOwned,
+  ), /external monitor observer denied/u);
+  assert.throws(() => observedStructurePageWithIdentity(
+    new Set(["Save and Continue"]),
+    [],
+    "Application Questions - Google Chrome for Testing",
+    digest(Buffer.from("Application Questions", "utf8")),
+    { actionFlags: new Set(), editFlags: new Set() },
+  ), /external monitor observer denied/u);
   assert.equal(observedStructurePageWithIdentity(
     staleAccountStructure,
     [],

@@ -690,12 +690,14 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
         !Number.isSafeInteger(details.pageReadinessDurationMs) ||
         !Number.isSafeInteger(details.navigationWaitDurationMs) ||
         !Number.isSafeInteger(details.activeFillDurationMs) ||
+        !Number.isSafeInteger(details.independentMonitorDurationMs) ||
         !Number.isSafeInteger(details.committedReadbackDurationMs) ||
         !Number.isSafeInteger(details.reconciliationDurationMs) ||
         !Number.isSafeInteger(details.activeFillSloMs) ||
         (details.pageReadinessDurationMs as number) < 0 ||
         (details.navigationWaitDurationMs as number) < 0 ||
         (details.activeFillDurationMs as number) < 0 ||
+        (details.independentMonitorDurationMs as number) < 0 ||
         (details.committedReadbackDurationMs as number) < 0 ||
         (details.reconciliationDurationMs as number) < 0 ||
         (details.activeFillSloMs as number) <= 0 ||
@@ -708,7 +710,9 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
         details.monotonicClock !== "performance_now" ||
         typeof details.pageReadyAt !== "string" ||
         typeof details.pageFillCompletedAt !== "string" ||
-        (details.reconciliationDurationMs as number) > (details.activeFillDurationMs as number)
+        (details.activeFillDurationMs as number) +
+          (details.independentMonitorDurationMs as number) !==
+          (details.reconciliationDurationMs as number)
       ) ||
       requiredPhases.some((event) => {
         const phases = records.filter((record) => record.event === event);

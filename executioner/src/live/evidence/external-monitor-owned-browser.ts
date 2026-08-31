@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   normalizeObservedAddressHost,
   observedChromeIdentityTitleSha256s,
+  observedStructurePageWithIdentity,
   selectObservedChromeIdentityTitle,
 } from "./external-monitor-browser-identity.ts";
 import type { ExternalMonitorDesktopBinding } from "./external-monitor-desktop-binding.ts";
@@ -13,7 +14,6 @@ import {
 import {
   observedActiveStageTitles,
   observedStructureIdentityTitles,
-  observedStructurePage,
   observedSubmitPresent,
   type ObservedOwnedControlStructure,
   type ObservedStageCounts,
@@ -228,7 +228,15 @@ try {
   });
   const activeStageTitles = observedActiveStageTitles(stageCounts);
   let page: string;
-  try { page = observedStructurePage(flags, activeStageTitles, owned); }
+  try {
+    page = observedStructurePageWithIdentity(
+      flags,
+      activeStageTitles,
+      observed.title,
+      expectedTitleSha256,
+      owned,
+    );
+  }
   catch {
     return observerFailure("structure_classification", structureFailureDiagnostic(
       expectedTitleSha256,

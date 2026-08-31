@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 
 import { canonicalMonitorIdentityTitle } from "./external-monitor-runtime.ts";
-import { observedStructurePage } from "./external-monitor-page-identity.ts";
+import {
+  observedStructurePage,
+  type ObservedOwnedControlStructure,
+} from "./external-monitor-page-identity.ts";
 
 export function normalizeObservedAddressHost(address: string): string {
   const normalized = address.normalize("NFC").trim();
@@ -28,10 +31,18 @@ export function observedStructurePageFromIdentityTitle(title: string): string {
 export function observedStructurePageWithIdentity(
   flags: ReadonlySet<string>,
   activeStageTitles: readonly string[],
-  _title: string,
+  title: string,
   _expectedTitleSha256: string | undefined,
+  owned?: ObservedOwnedControlStructure,
 ): string {
-  return observedStructurePage(flags, activeStageTitles);
+  try {
+    return observedStructurePage(flags, activeStageTitles, owned);
+  } catch {
+    if (!owned?.actionFlags.has("Save and Continue")) denied();
+    const titlePage = observedStructurePageFromIdentityTitle(title);
+    if (titlePage !== "questionnaire") denied();
+    return titlePage;
+  }
 }
 
 export function normalizeObservedChromeTitle(windowTitle: string): string {

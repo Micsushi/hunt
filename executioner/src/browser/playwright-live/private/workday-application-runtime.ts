@@ -38,6 +38,8 @@ import {
 } from "../../../ats/workday/application/page-walk.ts";
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
+import type { ApplicationPhaseTimingLedger } from
+  "../../../live/runner/application-phase-timing.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
 import {
   annotateCheckboxGroups,
@@ -297,6 +299,7 @@ export interface OwnedWorkdayApplicationRuntimeOptions {
   readonly timeoutMs: number;
   readonly initialReviewExpected: readonly ReviewExpectedField[];
   readonly externalMonitor?: ExternalMonitorPort;
+  readonly phaseTiming?: ApplicationPhaseTimingLedger;
   readonly authorizationExpiresAt: string;
   readonly now: () => string;
   readonly trace?: (event: string, details?: object) => void;
@@ -310,6 +313,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #nextOperationId: () => OperationId;
   readonly #timeoutMs: number;
   readonly #externalMonitor: ExternalMonitorPort | undefined;
+  readonly #phaseTiming: ApplicationPhaseTimingLedger | undefined;
   readonly #authorizationExpiresAt: string;
   readonly #now: () => string;
   readonly #trace: OwnedWorkdayApplicationRuntimeOptions["trace"];
@@ -330,6 +334,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#nextOperationId = options.nextOperationId;
     this.#timeoutMs = options.timeoutMs;
     this.#externalMonitor = options.externalMonitor;
+    this.#phaseTiming = options.phaseTiming;
     this.#authorizationExpiresAt = options.authorizationExpiresAt;
     this.#now = options.now;
     this.#trace = options.trace;
@@ -987,31 +992,40 @@ export class OwnedWorkdayApplicationRuntime {
     signal: AbortSignal,
   ): Promise<void> {
     if (this.#externalMonitor === undefined) return;
-    if (moment === "transition") {
-      const observed = await waitForApplicationObservation(
-        page,
-        Math.max(this.#timeoutMs, 30_000),
+    const started = performance.now();
+    try {
+      if (moment === "transition") {
+        const observed = await waitForApplicationObservation(
+          page,
+          Math.max(this.#timeoutMs, 30_000),
+          signal,
+          0,
+        );
+        if (
+          !observed.ok || observed.value.submitActivated ||
+          monitorPage(observed.value.page) !== pageName
+        ) throw new TypeError("application transition monitor state denied");
+        applicationMonitorDiagnostic("transition_guard_succeeded");
+      }
+      applicationMonitorDiagnostic("taxonomy_started", moment);
+      const taxonomy = await monitorTaxonomy(page, pageName);
+      applicationMonitorDiagnostic("taxonomy_succeeded", moment);
+      await this.#externalMonitor.application(
+        applicationMonitorPage(page, pageName),
+        pageName,
+        moment,
+        taxonomy,
+        { operationId, attempt },
         signal,
-        0,
       );
-      if (
-        !observed.ok || observed.value.submitActivated ||
-        monitorPage(observed.value.page) !== pageName
-      ) throw new TypeError("application transition monitor state denied");
-      applicationMonitorDiagnostic("transition_guard_succeeded");
+      applicationMonitorDiagnostic("external_monitor_succeeded", moment);
+    } finally {
+      try {
+        this.#phaseTiming?.recordIndependentMonitor(monotonicDuration(started));
+      } catch {
+        // Timing diagnostics never replace the browser or observer result.
+      }
     }
-    applicationMonitorDiagnostic("taxonomy_started", moment);
-    const taxonomy = await monitorTaxonomy(page, pageName);
-    applicationMonitorDiagnostic("taxonomy_succeeded", moment);
-    await this.#externalMonitor.application(
-      applicationMonitorPage(page, pageName),
-      pageName,
-      moment,
-      taxonomy,
-      { operationId, attempt },
-      signal,
-    );
-    applicationMonitorDiagnostic("external_monitor_succeeded", moment);
   }
 
   #nextNavigationMonitorAttempt(from: string): number {

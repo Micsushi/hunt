@@ -114,6 +114,8 @@ import { readStage2ExternalMonitorObserverBinding } from
   "../live/evidence/external-monitor-authority.ts";
 import type { Stage2ApplicationWalkTraceEvent } from
   "../live/runner/application-walk.ts";
+import { createApplicationPhaseTimingLedger } from
+  "../live/runner/application-phase-timing.ts";
 import type {
   Stage2RealJourneyLiveRuntimeBinding,
 } from "./s2-production-binding.ts";
@@ -188,6 +190,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         accountProofScopeFor(request),
       );
       const acceptances = createApplicationLaneAcceptanceCollector();
+      const phaseTiming = createApplicationPhaseTimingLedger();
       const valueFreeTrace = process.env.HUNT_C3_RETAINED_VALUE_FREE_TRACE === "1"
         ? createValueFreeRunTrace(request.owner.roots.evidence.path)
         : undefined;
@@ -203,6 +206,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         timeoutMs,
         initialReviewExpected: initialRecovery?.reviewExpected ?? [],
         externalMonitor,
+        phaseTiming,
         authorizationExpiresAt: request.owner.approval.expiresAt,
         now,
         trace: valueFreeTrace,
@@ -380,6 +384,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         }),
         walk: Object.freeze({ observer, navigation, handlers, progress }),
         laneAcceptances: acceptances,
+        phaseTiming,
         ...(valueFreeTrace === undefined ? {} : {
           trace: (event: Stage2ApplicationWalkTraceEvent) => valueFreeTrace(event.kind, event),
         }),
