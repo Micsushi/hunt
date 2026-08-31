@@ -912,6 +912,45 @@ test("Profile-only pending evidence keeps exact page row and field occurrences",
   }
 });
 
+test("generated Profile fallback remains exact evidence when owner-source privacy values overlap", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-generated-pending-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "live",
+      sensitiveValues: ["Deterministic test response"],
+    });
+    capture.recordPendingProfile?.({
+      pageId: "profile-page-1",
+      rowKey: null,
+      questionId: "question.profile.synthetic.required.1",
+      fieldId: "synthetic.required.1",
+      exactQuestion: "Additional required information",
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      options: [],
+      constraints: null,
+      conditionalReveal: false,
+      testDefault: "Deterministic test response",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "generated_default",
+      validation: "verified",
+      committedReadback: "Deterministic test response",
+    });
+    assert.equal(capture.write(), null);
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"), "utf8",
+    )));
+    assert.equal(pending.pendingProfileQuestions[0]?.testDefault, "Deterministic test response");
+    assert.equal(pending.pendingProfileQuestions[0]?.provenance, "generated_default");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function recordVerified(
   capture: QuestionAnswerLearningCapture,
   value: Omit<Parameters<QuestionAnswerLearningCapture["record"]>[0], "operationId">,

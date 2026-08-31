@@ -1483,6 +1483,8 @@ export class OwnedWorkdayApplicationRuntime {
       if (!completed.ok && new Set([
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",
       ]).has(completed.error.code)) {
+        this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
+        this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_uncertain", {
           code: completed.error.code,
           learningPresent: questionLearning !== undefined,
@@ -3621,7 +3623,7 @@ async function popupSelectedValue(target: import("playwright").Locator): Promise
 }
 
 async function checkboxFailureDiagnostics(page: Page): Promise<object> {
-  return await page.locator(
+  const grouped = await page.locator(
     '[data-automation-id$="-CheckboxGroup"], [data-hunt-exclusive-checkbox-group="true"]',
   ).evaluateAll((groups) => {
     const probeRecord = document.documentElement as unknown as Record<string, unknown>;
@@ -3676,6 +3678,17 @@ async function checkboxFailureDiagnostics(page: Page): Promise<object> {
       exactThrowCount: probe.exactThrowCount ?? 0,
     };
   });
+  const independent = await page.locator(
+    'input[type="checkbox"][data-hunt-target-token], [role="checkbox"][data-hunt-target-token]',
+  ).evaluateAll((controls) => ({
+    independentControlCount: controls.length,
+    independentCheckedCount: controls.filter((control) =>
+      control instanceof HTMLInputElement
+        ? control.checked
+        : control.getAttribute("aria-checked") === "true"
+    ).length,
+  }));
+  return { ...grouped, ...independent };
 }
 
 async function dateFailureDiagnostics(page: Page): Promise<object> {

@@ -19,6 +19,7 @@ import {
   checkboxGroupKindAttribute,
   supportedControlSelector,
 } from "../deterministic/supported-controls.ts";
+import { commitSingleCheckbox } from "./single-checkbox-commit.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
@@ -256,6 +257,15 @@ export async function applyMutation(
     await targetLocator.evaluate((element) => !(element instanceof HTMLInputElement))
   ) {
     locator = targetLocator.locator('input:not([type="hidden"])');
+  }
+  if (mutation.kind === "set_checked") {
+    if (
+      target.control.kind !== "choice" ||
+      (target.control.choice === "radio" && mutation.checked === false)
+    ) {
+      return "invalid";
+    }
+    return await commitSingleCheckbox(page, target, mutation.checked, timeoutMs);
   }
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
@@ -801,18 +811,6 @@ export async function applyMutation(
     }
     await locator.fill(mutation.isoDate, { timeout: timeoutMs });
     await locator.blur({ timeout: timeoutMs });
-    return "applied";
-  }
-  if (mutation.kind === "set_checked") {
-    if (
-      target.control.kind !== "choice" ||
-      (target.control.choice === "radio" && mutation.checked === false)
-    ) {
-      return "invalid";
-    }
-    for (let index = 0; index < locatorCount; index += 1) {
-      await locator.nth(index).setChecked(mutation.checked, { timeout: timeoutMs });
-    }
     return "applied";
   }
   if (mutation.kind === "select") {

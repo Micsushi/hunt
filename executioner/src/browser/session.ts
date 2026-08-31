@@ -230,11 +230,14 @@ export class PlaywrightBrowserSession implements BrowserSession {
     if (fresh === undefined) return failure("browser_target_stale");
     const matches = fresh.targets.get(mutation.target);
     const observedTarget = observed[0];
-    const mayRebindExclusiveChoice = mutation.kind === "select" &&
-      (observedTarget?.interaction === "exclusive-checkbox-group" ||
-        observedTarget?.interaction === "multi-checkbox-group") &&
-      compatible(observedTarget, mutation);
-    if ((matches === undefined || matches.length === 0) && !mayRebindExclusiveChoice) {
+    const mayRebindInsideAdapter = observedTarget !== undefined && compatible(observedTarget, mutation) && (
+      mutation.kind === "set_checked" ||
+      mutation.kind === "select" && (
+        observedTarget.interaction === "exclusive-checkbox-group" ||
+        observedTarget.interaction === "multi-checkbox-group"
+      )
+    );
+    if ((matches === undefined || matches.length === 0) && !mayRebindInsideAdapter) {
       return failure("browser_target_stale");
     }
     if (matches !== undefined && matches.length > 1) return failure("browser_target_ambiguous");
@@ -253,10 +256,12 @@ export class PlaywrightBrowserSession implements BrowserSession {
           );
           const current = rebound.targets.get(mutation.target);
           const mayRebindInsideAdapter = (current === undefined || current.length === 0) &&
-            compatible(target, mutation) && [
-              "formatted-date", "exclusive-checkbox-group", "multi-checkbox-group",
-              "field-popup", "owned-popup",
-            ].includes(target.interaction ?? "");
+            compatible(target, mutation) && (
+              mutation.kind === "set_checked" || [
+                "formatted-date", "exclusive-checkbox-group", "multi-checkbox-group",
+                "field-popup", "owned-popup",
+              ].includes(target.interaction ?? "")
+            );
           const currentTarget = current?.length === 1
             ? current[0]!
             : mayRebindInsideAdapter ? target : undefined;

@@ -382,6 +382,12 @@ export function createQuestionAnswerLearningCapture(input: {
       written = true;
       try {
         const questions = [...records.values()].map(freezeRecord);
+        const pendingQuestions = [
+          ...profilePending.values(),
+          ...[...records.values()]
+            .filter(needsPendingProfileQuestion)
+            .map(pendingProfileQuestion),
+        ];
         const publicUiStrings = questions.flatMap((question) => [
           question.label,
           ...question.possibleAnswers,
@@ -390,16 +396,18 @@ export function createQuestionAnswerLearningCapture(input: {
               question.provenance !== "configured_template"
             ? [question.chosenAnswer]
             : []),
-        ]);
+        ]).concat(pendingQuestions.flatMap((question) => [
+          question.exactQuestion,
+          ...question.options,
+          ...(question.provenance === "generated_default"
+            ? [question.testDefault, question.committedReadback]
+              .filter((value): value is string => value !== null)
+            : []),
+        ]));
         const pending = admitPendingProfileQuestionsEvidence({
           schemaVersion: 2,
           evidenceRevision: "s2-pending-profile-questions-v2",
-          pendingProfileQuestions: [
-            ...profilePending.values(),
-            ...[...records.values()]
-              .filter(needsPendingProfileQuestion)
-              .map(pendingProfileQuestion),
-          ],
+          pendingProfileQuestions: pendingQuestions,
         });
         const sensitiveValues = (input.sensitiveValues ?? []).filter((sensitive) =>
           !publicUiStrings.some((value) => value.includes(sensitive))

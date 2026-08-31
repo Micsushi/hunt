@@ -2907,6 +2907,71 @@ test("questionnaire binding distinguishes independent, exclusive, and multi chec
   }
 });
 
+test("single checkbox commit survives controlled remount and keeps an existing commit idempotent", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+      <div data-automation-id="formField-termsConsent" id="terms-field"></div>
+    </main>
+    <script>
+      let trusted = 0;
+      let native = 0;
+      const mount = () => {
+        const field = document.querySelector('#terms-field');
+        field.innerHTML = '<label for="terms-consent"><input id="terms-consent" type="checkbox" required> Yes, I have read and consent to the terms and conditions</label>';
+        const input = field.querySelector('input');
+        input.addEventListener('click', event => {
+          if (event.isTrusted) {
+            trusted += 1;
+            setTimeout(mount, 1600);
+          } else {
+            native += 1;
+            input.dataset.nativeOwnerAccepted = 'true';
+          }
+        });
+      };
+      mount();
+      window.checkboxAttempts = () => ({ trusted, native });
+    </script>`);
+    const pageId = "page-single-checkbox-remount" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const before = await inspectPage(
+      page,
+      "live_session_single_checkbox_01" as never,
+      pageId,
+      new Map(),
+    );
+    const observed = before.observation.targets.find(({ name }) =>
+      String(name) === "Yes, I have read and consent to the terms and conditions"
+    );
+    assert.ok(observed !== undefined);
+    const target = before.targets.get(observed.token)?.[0];
+    assert.ok(target !== undefined);
+    assert.equal(await applyMutation(page, target, {
+      kind: "set_checked",
+      target: observed.token,
+      checked: true,
+    }, undefined, 5_000), "applied");
+    assert.equal(await page.locator("#terms-consent").isChecked(), true);
+    assert.equal(await page.locator("#terms-consent").getAttribute("data-native-owner-accepted"), "true");
+    assert.deepEqual(await page.evaluate(() =>
+      (window as unknown as { checkboxAttempts(): object }).checkboxAttempts()
+    ), { trusted: 1, native: 1 });
+
+    assert.equal(await applyMutation(page, target, {
+      kind: "set_checked",
+      target: observed.token,
+      checked: true,
+    }, undefined, 500), "applied");
+    assert.deepEqual(await page.evaluate(() =>
+      (window as unknown as { checkboxAttempts(): object }).checkboxAttempts()
+    ), { trusted: 1, native: 1 });
+  } finally {
+    await browser.close();
+  }
+});
+
 test("semantic adapter covers ARIA controls, contenteditable, multiselect, and readonly constraints", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
