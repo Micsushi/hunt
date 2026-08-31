@@ -1741,6 +1741,43 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.equal(observedStructurePage(new Set([
     "Sign In", "Email Address", "Password", "Review", "Submit application",
   ])), "sign_in");
+  const filledInformationFooter = {
+    actionFlags: new Set(["Save and Continue"]),
+    editFlags: new Set(["Email Address"]),
+  };
+  const filledInformationFlags = new Set([
+    "Email Address", "Phone", "Phone Device Type", "Country Phone Code", "Phone Number",
+    "Save and Continue",
+  ]);
+  assert.equal(observedStructurePage(
+    filledInformationFlags,
+    [],
+    { actionFlags: new Set(), editFlags: new Set() },
+  ), "profile");
+  assert.deepEqual(observedStructureIdentityTitles(
+    "profile",
+    filledInformationFlags,
+    [],
+  ), ["My Information"]);
+  assert.equal(selectObservedChromeIdentityTitle(
+    digest(Buffer.from("My Information", "utf8")),
+    "Quality Engineer - Google Chrome for Testing",
+    observedStructureIdentityTitles(
+      "profile",
+      filledInformationFlags,
+      [],
+    ),
+  ), "My Information");
+  assert.equal(observedStructurePage(
+    filledInformationFlags,
+    [],
+    filledInformationFooter,
+  ), "profile");
+  assert.throws(() => observedStructurePage(
+    new Set(["Email Address"]),
+    [],
+    { actionFlags: new Set(), editFlags: new Set(["Email Address"]) },
+  ), /external monitor observer denied/u);
   assert.equal(compatibleObservedStructure("account_entry", "sign_in"), true);
   assert.equal(compatibleObservedStructure("sign_in", "account_entry"), false);
   assert.equal(compatibleObservedStructure("account_entry", "profile"), false);

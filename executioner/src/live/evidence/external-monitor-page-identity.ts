@@ -33,6 +33,7 @@ export function observedStructurePage(
       (owned.editFlags.has("Password") || flags.has("Forgot your password?"))) {
     return "sign_in";
   }
+  if (observedMyInformationBody(flags)) return "profile";
   if (activeApplicationPage !== undefined &&
       (owned.actionFlags.has("Next") || owned.actionFlags.has("Save and Continue"))) {
     return activeApplicationPage;
@@ -67,9 +68,13 @@ export function observedSubmitPresent(owned: ObservedOwnedControlStructure): boo
 
 export function observedStructureIdentityTitles(
   page: string,
-  _flags: ReadonlySet<string>,
+  flags: ReadonlySet<string>,
   activeStageTitles: readonly string[] = [],
 ): readonly string[] {
+  if (page === "profile" && activeStageTitles.length === 0 &&
+      observedMyInformationBody(flags)) {
+    return Object.freeze(["My Information"]);
+  }
   const titles = page === "profile"
     ? ["My Information", "My Experience"]
     : page === "questionnaire"
@@ -121,6 +126,11 @@ function inferredOwnedStructure(flags: ReadonlySet<string>): ObservedOwnedContro
     actionFlags: new Set(actions.filter((value) => flags.has(value))),
     editFlags: new Set(edits.filter((value) => flags.has(value))),
   });
+}
+
+function observedMyInformationBody(flags: ReadonlySet<string>): boolean {
+  return ["Email Address", "Phone", "Phone Device Type", "Country Phone Code", "Phone Number"]
+    .every((flag) => flags.has(flag));
 }
 
 function denied(): never {

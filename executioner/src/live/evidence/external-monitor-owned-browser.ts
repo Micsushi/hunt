@@ -26,7 +26,7 @@ const observedFlagCatalog = [
   "Send Verification Email", "My Information", "My Experience", "Application Questions",
   "Voluntary Disclosures", "Self Identify", "Review", "Submit", "Submit application", "Next",
   "Save and Continue", "Upload a resume", "Upload Resume", "Resume, Cover Letter and References",
-  "Upload a file (5MB max)",
+  "Upload a file (5MB max)", "Phone", "Phone Device Type", "Country Phone Code", "Phone Number",
 ] as const;
 const observedFlagSet = new Set<string>(observedFlagCatalog);
 
@@ -92,7 +92,7 @@ $allow = @(
   'My Information', 'My Experience', 'Application Questions', 'Voluntary Disclosures',
   'Self Identify', 'Review', 'Submit', 'Submit application', 'Next', 'Save and Continue',
   'Upload a resume', 'Upload Resume', 'Resume, Cover Letter and References',
-  'Upload a file (5MB max)'
+  'Upload a file (5MB max)', 'Phone', 'Phone Device Type', 'Country Phone Code', 'Phone Number'
 )
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $actionSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
