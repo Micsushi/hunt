@@ -13,7 +13,11 @@ import {
   upstreamResumeId,
 } from "../../../src/contracts/index.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
-import { applyMutation, type ResolvedBrowserTarget } from "../../../src/browser/adapter.ts";
+import {
+  applyMutation,
+  inspectPage,
+  type ResolvedBrowserTarget,
+} from "../../../src/browser/adapter.ts";
 import { admittedMutation, dataPage, testIds, testJourneyId } from "../playwright-fixture.ts";
 
 async function loopbackPage(body: string): Promise<{
@@ -220,12 +224,10 @@ test("commits a controlled Workday formatted date through its visible calendar",
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
       let accepted = '';
+      const controlledDateProps = { value: '', onChange: () => {} };
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: {
-          value: '',
-          onChange: () => {},
-        },
+        value: controlledDateProps,
       });
       input.addEventListener('input', () => { input.value = accepted; });
       input.addEventListener('blur', () => { input.value = accepted; });
@@ -234,6 +236,7 @@ test("commits a controlled Workday formatted date through its visible calendar",
       });
       document.querySelector('[aria-label="Tuesday, September 1, 2026"]').addEventListener('click', () => {
         accepted = '09/01/2026';
+        controlledDateProps.value = accepted;
         input.value = accepted;
         document.querySelector('[role="dialog"]').hidden = true;
       });
@@ -289,6 +292,78 @@ test("commits a controlled Workday formatted date through its visible calendar",
       await page.locator('[data-hunt-target-token="target-formatted-date"]').inputValue(),
       "09/01/2026",
     );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("does not accept a formatted date whose DOM value outruns controlled backing", async () => {
+  const fixture = await loopbackPage(`
+    <div data-automation-id="formField-dateSignedOn">
+      <label>Date <input type="tel" placeholder="MM/DD/YYYY"
+        data-hunt-target-token="target-surface-only-date"></label>
+    </div>
+    <script>
+      const input = document.querySelector('[data-hunt-target-token="target-surface-only-date"]');
+      Object.defineProperty(input, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: { value: '', onChange: () => {} },
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("bcbcbcbcbcbcba90") });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("date target missing");
+
+    const page = context.pages()[0];
+    assert.ok(page !== undefined);
+    const inspection = await inspectPage(
+      page,
+      started.value.sessionId,
+      started.value.pageId,
+      new Map(),
+    );
+    const resolved = inspection.targets.get(target);
+    assert.equal(resolved?.length, 1);
+    const result = await applyMutation(page, resolved![0]!, {
+      kind: "set_date",
+      target,
+      isoDate: "2026-08-31" as never,
+    }, undefined, 5_000);
+    assert.equal(result, "invalid");
+    const after = await inspectPage(
+      page,
+      started.value.sessionId,
+      started.value.pageId,
+      new Map(),
+    );
+    assert.deepEqual(after.observation.targets.find(({ token }) => token === target)?.readback, {
+      kind: "empty",
+    });
+    assert.equal(
+      await page.locator('[data-hunt-target-token="target-surface-only-date"]').inputValue(),
+      "08/31/2026",
+    );
+    assert.equal(await page.locator('[data-hunt-target-token="target-surface-only-date"]')
+      .evaluate((element) => {
+        const key = Object.keys(element).find((candidate) =>
+          candidate.startsWith("__reactProps$")
+        );
+        return key === undefined ? undefined :
+          ((element as unknown as Record<string, Record<string, unknown>>)[key]?.value);
+      }), "");
   } finally {
     await context.close();
     await browser.close();
@@ -379,7 +454,7 @@ test("commits a controlled Workday formatted date through an unlabeled overlaid 
         ((document.documentElement as unknown as Record<string, unknown>)
           .__huntDateProbe as Record<string, number>).formattedDateReboundCount
       ),
-      0,
+      1,
     );
   } finally {
     await context.close();
@@ -407,9 +482,10 @@ test("commits a Workday formatted date through an adjacent calendar segment", as
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-adjacent-date"]');
       let accepted = '';
+      const controlledDateProps = { value: '', onChange: () => {} };
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: { value: '', onChange: () => {} },
+        value: controlledDateProps,
       });
       input.addEventListener('input', () => { input.value = accepted; });
       input.addEventListener('blur', () => { input.value = accepted; });
@@ -418,6 +494,7 @@ test("commits a Workday formatted date through an adjacent calendar segment", as
       });
       document.querySelector('[aria-label="Thursday, August 20, 2026"]').addEventListener('click', () => {
         accepted = '08/20/2026';
+        controlledDateProps.value = accepted;
         input.value = accepted;
         document.querySelector('[role="dialog"]').hidden = true;
       });
@@ -564,19 +641,23 @@ test("commits a Workday formatted date after the control rebounds to a native da
     </div>
     <script>
       const input = document.querySelector('[data-hunt-target-token="target-rebound-date"]');
+      const controlledDateProps = { value: '', onChange: () => {
+        input.type = 'date';
+        input.removeAttribute('placeholder');
+        input.value = '2020-08-08';
+      } };
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
-        value: { value: '', onChange: () => {
-          input.type = 'date';
-          input.removeAttribute('placeholder');
-          input.value = '2020-08-08';
-        } },
+        value: controlledDateProps,
       });
       input.addEventListener('input', () => {
         if (input.type === 'tel') input.value = '08/08/2020';
       });
       input.addEventListener('blur', () => {
         if (input.type === 'tel') input.value = '08/08/2020';
+      });
+      input.addEventListener('change', () => {
+        if (input.type === 'date') controlledDateProps.value = input.value;
       });
     </script>
   `);

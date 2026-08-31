@@ -22,6 +22,7 @@ import {
   supportedControlSelector,
 } from "../deterministic/supported-controls.ts";
 import { commitSingleCheckbox } from "./single-checkbox-commit.ts";
+import { formattedDateBackingCommitted } from "./formatted-date-backing.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
@@ -517,7 +518,8 @@ export async function applyMutation(
         await page.waitForTimeout(50);
         await reboundFormattedDate();
         const calendarReadback = await activeFormattedDate.inputValue({ timeout: timeoutMs });
-        const accepted = acceptedDateReadback(calendarReadback);
+        const accepted = acceptedDateReadback(calendarReadback) &&
+          await formattedDateBackingCommitted(activeFormattedDate, mutation.isoDate);
         await recordAccepted("calendarAccepted", accepted);
         return accepted;
       };
@@ -644,21 +646,27 @@ export async function applyMutation(
       await page.keyboard.type(digits, { delay: 20 });
       await page.keyboard.press("Tab");
       const readback = await locator.inputValue({ timeout: timeoutMs });
-      await recordAccepted("digitAccepted", acceptedDateReadback(readback));
-      if (!acceptedDateReadback(readback)) {
+      const digitAccepted = acceptedDateReadback(readback) &&
+        await formattedDateBackingCommitted(activeFormattedDate, mutation.isoDate);
+      await recordAccepted("digitAccepted", digitAccepted);
+      if (!digitAccepted) {
         await locator.fill(formatted, { timeout: timeoutMs });
         await locator.blur({ timeout: timeoutMs });
         const committed = await locator.inputValue({ timeout: timeoutMs });
-        await recordAccepted("fillAccepted", acceptedDateReadback(committed));
-        if (!acceptedDateReadback(committed)) {
+        const fillAccepted = acceptedDateReadback(committed) &&
+          await formattedDateBackingCommitted(activeFormattedDate, mutation.isoDate);
+        await recordAccepted("fillAccepted", fillAccepted);
+        if (!fillAccepted) {
           await locator.focus({ timeout: timeoutMs });
           await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
           await page.keyboard.press("Backspace");
           await page.keyboard.type(formatted, { delay: 20 });
           await page.keyboard.press("Tab");
           const typed = await locator.inputValue({ timeout: timeoutMs });
-          await recordAccepted("sequentialAccepted", acceptedDateReadback(typed));
-          if (!acceptedDateReadback(typed)) {
+          const sequentialAccepted = acceptedDateReadback(typed) &&
+            await formattedDateBackingCommitted(activeFormattedDate, mutation.isoDate);
+          await recordAccepted("sequentialAccepted", sequentialAccepted);
+          if (!sequentialAccepted) {
             await locator.focus({ timeout: timeoutMs });
             await locator.evaluate((element, value) => {
               if (!(element instanceof HTMLInputElement)) return false;
@@ -712,7 +720,8 @@ export async function applyMutation(
             await activeFormattedDate.blur({ timeout: timeoutMs });
             await reboundFormattedDate();
             const ownerReadback = await activeFormattedDate.inputValue({ timeout: timeoutMs });
-            const ownerAccepted = acceptedDateReadback(ownerReadback);
+            const ownerAccepted = acceptedDateReadback(ownerReadback) &&
+              await formattedDateBackingCommitted(activeFormattedDate, mutation.isoDate);
             await recordAccepted("ownerAccepted", ownerAccepted);
             if (!ownerAccepted) {
               await reboundFormattedDate();
@@ -791,10 +800,9 @@ export async function applyMutation(
                   if (await nativeDate.isEditable()) {
                     await nativeDate.fill(mutation.isoDate, { timeout: timeoutMs });
                     await nativeDate.blur({ timeout: timeoutMs });
-                    await recordAccepted(
-                      "nativeDateAccepted",
-                      await nativeDate.inputValue({ timeout: timeoutMs }) === mutation.isoDate,
-                    );
+                    await recordAccepted("nativeDateAccepted",
+                      await nativeDate.inputValue({ timeout: timeoutMs }) === mutation.isoDate &&
+                      await formattedDateBackingCommitted(nativeDate, mutation.isoDate));
                   }
                 }
               }
@@ -2173,9 +2181,40 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         ? /^\d{4}-\d{2}-\d{2}$/u.test(value) ? value : ""
         : `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
       const date = new Date(`${isoDate}T00:00:00.000Z`);
-      return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === isoDate
+      if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== isoDate) {
+        return { kind: "unavailable" };
+      }
+      const record = element as unknown as Record<string, unknown>;
+      const controlled = Object.keys(element)
+        .filter((key) => key.startsWith("__reactProps$"))
+        .map((key) => record[key])
+        .filter((value): value is Record<string, unknown> => {
+          if (typeof value !== "object" || value === null) return false;
+          const props = value as Record<string, unknown>;
+          return Object.hasOwn(props, "value") &&
+            (typeof props.onChange === "function" || typeof props.onDatePicked === "function");
+        });
+      const backingCommitted = controlled.length === 0 || controlled.some((props) => {
+        if (typeof props.value === "string") {
+          const backing = normalize(props.value).replace(
+            /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
+            "",
+          );
+          if (backing === isoDate) return true;
+          const backingMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(backing);
+          return backingMatch !== null &&
+            `${backingMatch[3]}-${backingMatch[1]!.padStart(2, "0")}-${
+              backingMatch[2]!.padStart(2, "0")}` === isoDate;
+        }
+        if (typeof props.value !== "object" || props.value === null) return false;
+        const backing = props.value as Record<string, unknown>;
+        return `${String(backing.year).padStart(4, "0")}-${
+          String(backing.month).padStart(2, "0")}-${String(backing.day).padStart(2, "0")}` ===
+          isoDate;
+      });
+      return backingCommitted
         ? { kind: "text", value: isoDate as never }
-        : { kind: "unavailable" };
+        : { kind: "empty" };
     };
     const formattedDateInput = (element: Element): HTMLInputElement | undefined => {
       const inputs = [...element.querySelectorAll<HTMLInputElement>(
