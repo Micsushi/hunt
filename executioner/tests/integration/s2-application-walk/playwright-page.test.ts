@@ -1112,7 +1112,7 @@ test("historical loader class visibility is measured at the exact structural pos
         </script>`);
       const application = new PlaywrightWorkdayApplicationPage(page, {
         timeoutMs: 1_000,
-        navigationSettleTimeoutMs: 3_000,
+        navigationSettleTimeoutMs: 1_000,
       });
       const before = await application.observe(new AbortController().signal);
       assert.equal(before.ok, true, `${variant.name}:${JSON.stringify(before)}`);
@@ -1125,8 +1125,31 @@ test("historical loader class visibility is measured at the exact structural pos
       }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
       const after = await application.observe(new AbortController().signal);
       assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
+      const witnessState = await page.evaluate(() => {
+        const state = (globalThis as unknown as Record<string, unknown>)
+          .__huntWorkdayNavigationAction as {
+            instrumentationComplete?: boolean;
+            busySeen?: boolean;
+            settled?: boolean;
+            frozen?: boolean;
+            activeBusy?: Map<object, unknown>;
+            settledPairs?: readonly unknown[];
+            styleContextVersion?: number;
+            armedStyleContextToken?: string;
+          } | undefined;
+        return {
+          instrumentationComplete: state?.instrumentationComplete,
+          busySeen: state?.busySeen,
+          settled: state?.settled,
+          frozen: state?.frozen,
+          activeCount: state?.activeBusy?.size,
+          pairCount: state?.settledPairs?.length,
+          styleContextVersion: state?.styleContextVersion,
+          styleContextArmed: state?.armedStyleContextToken !== undefined,
+        };
+      });
       if (after.ok) assert.equal(after.value.pageId !== before.value.pageId,
-        variant.expectedAdvance, variant.name);
+        variant.expectedAdvance, `${variant.name}:${JSON.stringify(witnessState)}`);
       if (variant.name === "adopted-list-restored") {
         assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(
           document, "adoptedStyleSheets",
