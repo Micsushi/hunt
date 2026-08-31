@@ -8,6 +8,7 @@ import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
 } from "../../deterministic/supported-controls.ts";
+import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 const evidenceRevision = "s2-page-local-inspection-v3";
 const recordLimit = 128;
 const sensitiveTextKeys = new Set(["label", "optionLabel", "placeholder"]);
@@ -56,6 +57,11 @@ export function createPageLocalInspection(evidenceRoot: string): {
     const page = input as Page;
     await prepare(page);
     await annotateCheckboxGroups(page);
+    await mkdir(evidenceRoot, { recursive: true });
+    await page.screenshot({
+      path: join(evidenceRoot, MONITOR_SCREENSHOT_FILE),
+      animations: "disabled",
+    });
     const pageRecord = records.get(page)!;
     const live = await page.evaluate(readPageLocalSnapshot, checkboxGroupKindAttribute);
     const ariaSnapshotSha256: string[] = [];
@@ -69,7 +75,6 @@ export function createPageLocalInspection(evidenceRoot: string): {
         await ariaOwners.nth(index).ariaSnapshot({ timeout: 5_000 }),
       ));
     }
-    await mkdir(evidenceRoot, { recursive: true });
     const value = Object.freeze({
       schemaVersion: 1,
       evidenceRevision,

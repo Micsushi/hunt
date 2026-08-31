@@ -2039,7 +2039,11 @@ test("WD-UI-SCALAR-COMPOSITE-V1 supports a shared owner that selects by exact op
         'data-automation-id': 'disabilityStatus',
         onRemove: optionId => { group.dataset.removedOption = String(optionId ?? ''); },
         onSelect: optionId => {
-          if (typeof optionId !== 'string') return;
+          if (typeof optionId !== 'string') {
+            inputs[2].checked = true;
+            setTimeout(() => { inputs[2].checked = false; }, 1200);
+            return;
+          }
           const selectedIndex = options.findIndex(option => option.id === optionId);
           if (selectedIndex < 0) return;
           const replacement = group.cloneNode(true);

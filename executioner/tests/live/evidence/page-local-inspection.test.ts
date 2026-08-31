@@ -139,6 +139,10 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
     assert.ok(evidence.mutations.some(({ attribute }) => attribute === "aria-invalid"));
     const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
     assert.doesNotMatch(serialized, /Please check|I do not want|Self-identification help/u);
+    assert.deepEqual(
+      readFileSync(join(evidenceRoot, "monitor-visible.png")).subarray(0, 8),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
     assert.equal(existsSync(join(evidenceRoot, "external-monitor.png")), false);
   } finally {
     await browser.close();

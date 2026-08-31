@@ -1046,7 +1046,7 @@ export async function applyMutation(
               const props = fiber?.memoizedProps ?? fiber?.pendingProps;
               return typeof props?.checked === "boolean" ? props.checked : undefined;
             };
-            const liveOnlyChecked = (): boolean => {
+            const liveOnlyChecked = (requireControlledState = false): boolean => {
               const ownerAutomationId = checkboxOwner?.getAttribute("data-automation-id") ?? null;
               const desiredLabel = input.getAttribute("aria-label");
               const liveOwner = ownerAutomationId === null
@@ -1061,7 +1061,8 @@ export async function applyMutation(
               return liveInputs.filter((candidate) => candidate.checked).length === 1 &&
                 liveInputs.some((candidate) =>
                   candidate.checked && candidate.getAttribute("aria-label") === desiredLabel
-                );
+                ) && (!requireControlledState || liveOwner !== checkboxOwner ||
+                  reactHostChecked() === true);
             };
             const invokeSharedIndexedListSelect = async (
               mode: "exact_option" | "row_item",
@@ -1149,13 +1150,13 @@ export async function applyMutation(
                       await Promise.resolve(select(exactPayload));
                       const deadline = Date.now() + 1_000;
                       do {
-                        if (liveOnlyChecked() || reactHostChecked() === true || input.checked) {
+                        if (liveOnlyChecked(true)) {
                           incrementCheckboxProbe("exactCommitCount");
                           return true;
                         }
                         await new Promise<void>((resolve) => setTimeout(resolve, 50));
                       } while (Date.now() < deadline);
-                      if (liveOnlyChecked() || reactHostChecked() === true || input.checked) {
+                      if (liveOnlyChecked(true)) {
                         incrementCheckboxProbe("exactCommitCount");
                         return true;
                       }
