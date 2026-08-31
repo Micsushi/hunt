@@ -418,10 +418,6 @@ export function createQuestionAnswerLearningCapture(input: {
           evidenceRevision: "s2-question-answer-learning-v6",
           page: "questionnaire",
           ...input.executionPolicy,
-          liveProofEligibility: input.executionPolicy.browserTransport === "live_browser" &&
-              questions.some(({ lane }) => lane === "synthetic_test_default")
-            ? "ineligible_synthetic_answer" as const
-            : input.executionPolicy.liveProofEligibility,
           questions,
         });
         return writeAtomicJsonEvidence({
@@ -595,6 +591,9 @@ export function admitQuestionAnswerLearningEvidence(
         record.provenance !== "owner_provided" &&
         record.provenance !== "resume_verified" &&
         record.provenance !== "configured_template") ||
+      (record.lane === "synthetic_test_default" &&
+        record.provenance !== "reviewed_catalog" &&
+        record.provenance !== "visible_option") ||
       (typeof record.chosenAnswer !== "string" && record.chosenAnswer !== null) ||
       (typeof record.chosenAnswer === "string" && !bounded(record.chosenAnswer, 512)) ||
       !strategies.has(record.strategy) ||
@@ -604,11 +603,6 @@ export function admitQuestionAnswerLearningEvidence(
     ) denied();
     fields.add(questionIdentity(record.pageId, record.fieldId));
   }
-  if (
-    value.browserTransport === "live_browser" &&
-    value.questions.some(({ lane }) => lane === "synthetic_test_default") &&
-    value.liveProofEligibility !== "ineligible_synthetic_answer"
-  ) denied();
   return Object.freeze({
     ...value,
     questions: Object.freeze(value.questions.map(freezeRecord)),

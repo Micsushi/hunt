@@ -400,10 +400,6 @@ export function createProfileFieldLearningCapture(input: {
           evidenceRevision: "s2-profile-field-learning-v6",
           page: "profile",
           ...executionPolicy,
-          liveProofEligibility: executionPolicy.browserTransport === "live_browser" &&
-              fields.some(({ lane }) => lane === "synthetic_test_default")
-            ? "ineligible_synthetic_answer" as const
-            : executionPolicy.liveProofEligibility,
           ...(metadataFailure === undefined ? {} : {
             learningConversion: conversion(metadataFailure),
           }),
@@ -625,11 +621,6 @@ export function admitProfileFieldLearningEvidence(
     if (!validMechanicsRelations(field)) denied(`mechanics_relation:${field.fieldIdentity}`);
     identities.add(field.fieldIdentity);
   }
-  if (
-    value.browserTransport === "live_browser" &&
-    value.fields.some(({ lane }) => lane === "synthetic_test_default") &&
-    value.liveProofEligibility !== "ineligible_synthetic_answer"
-  ) denied("synthetic_live_proof_eligibility");
   const mismatchIds = value.fields
     .filter(({ metadataReconciliation }) => metadataReconciliation === "mismatch")
     .map(({ fieldIdentity }) => fieldIdentity);

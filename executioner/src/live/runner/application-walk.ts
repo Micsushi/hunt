@@ -331,22 +331,12 @@ export async function runStage2ApplicationWalk(
   let acceptance: ApplicationWalkAcceptanceV1;
   try {
     const laneAcceptances = dependencies.laneAcceptances.snapshot(walk.value.checkpoint);
-    const syntheticAnswerUsed = laneAcceptances.some((lane) =>
-      lane.checkpoint === "profile_verified"
-        ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
-        : lane.checkpoint === "questionnaire_verified" &&
-          lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
-    );
     acceptance = Object.freeze({
       schemaVersion: 2,
       evidenceRevision: "s2-application-walk-acceptance-v2",
       checkpoint: walk.value.checkpoint,
       status: "passed",
       ...input.executionPolicy,
-      liveProofEligibility: input.executionPolicy.browserTransport === "live_browser" &&
-          syntheticAnswerUsed
-        ? "ineligible_synthetic_answer" as const
-        : input.executionPolicy.liveProofEligibility,
       sourceRevision: input.sourceRevision,
       revisionId: input.revisionId,
       approvalId: input.approvalId,

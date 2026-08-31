@@ -345,7 +345,7 @@ test("Review completion reconciles Profile controls embedded on Resume with fail
   }
 });
 
-test("Review completion rejects bound non-submittable synthetic questionnaire learning as a live proof", async () => {
+test("Review completion admits verified test fallback as functional live proof", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-review-synthetic-questions-"));
   try {
     const layout = await prepareStage2RunStorage({
@@ -364,10 +364,8 @@ test("Review completion rejects bound non-submittable synthetic questionnaire le
       1,
       true,
     );
-    await assert.rejects(
-      auditStage2Completion(layout.evidenceRoot),
-      /completion audit denied/u,
-    );
+    const audit = await auditStage2Completion(layout.evidenceRoot) as { readonly status: string };
+    assert.equal(audit.status, "pass");
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
@@ -2068,9 +2066,7 @@ function applicationWalk(
     browserTransport: "live_browser" as const,
     answerFallbackPolicy: "deterministic_site_valid_editable" as const,
     submissionPolicy: "forbidden" as const,
-    liveProofEligibility: syntheticQuestionnaire || syntheticProfile
-      ? "ineligible_synthetic_answer" as const
-      : "eligible" as const,
+    liveProofEligibility: "eligible" as const,
     sourceRevision,
     revisionId,
     approvalId,

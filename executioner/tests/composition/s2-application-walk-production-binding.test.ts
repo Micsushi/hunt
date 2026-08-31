@@ -174,7 +174,7 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       browserTransport: "live_browser",
       answerFallbackPolicy: "deterministic_site_valid_editable",
       submissionPolicy: "forbidden",
-      liveProofEligibility: "ineligible_synthetic_answer",
+      liveProofEligibility: "eligible",
     };
     writeFileSync(sourcePath, JSON.stringify(source));
     let admittedMode: string | undefined;
@@ -215,7 +215,7 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       browserTransport: "live_browser",
       answerFallbackPolicy: "deterministic_site_valid_editable",
       submissionPolicy: "forbidden",
-      liveProofEligibility: "ineligible_synthetic_answer",
+      liveProofEligibility: "eligible",
     });
     assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([])), true);
   } finally {

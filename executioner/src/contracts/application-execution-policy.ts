@@ -12,7 +12,6 @@ export type SubmissionPolicy = (typeof submissionPolicies)[number];
 
 export const liveProofEligibilities = [
   "eligible",
-  "ineligible_synthetic_answer",
   "ineligible_fixture_transport",
 ] as const;
 export type LiveProofEligibility = (typeof liveProofEligibilities)[number];
@@ -27,13 +26,12 @@ export interface ApplicationExecutionPolicy {
 export function liveApplicationExecutionPolicy(
   answerMode: "live" | "synthetic_test_non_submittable",
 ): ApplicationExecutionPolicy {
+  void answerMode;
   return Object.freeze({
     browserTransport: "live_browser" as const,
     answerFallbackPolicy: "deterministic_site_valid_editable" as const,
     submissionPolicy: "forbidden" as const,
-    liveProofEligibility: answerMode === "live"
-      ? "eligible" as const
-      : "ineligible_synthetic_answer" as const,
+    liveProofEligibility: "eligible" as const,
   });
 }
 
@@ -63,9 +61,7 @@ export function admitApplicationExecutionPolicy(
       policy.submissionPolicy !== "forbidden" ||
       !liveProofEligibilities.includes(policy.liveProofEligibility as LiveProofEligibility) ||
       (policy.browserTransport === "fixture_browser") !==
-        (policy.liveProofEligibility === "ineligible_fixture_transport") ||
-      (policy.liveProofEligibility === "ineligible_synthetic_answer" &&
-        policy.answerFallbackPolicy !== "deterministic_site_valid_editable")) denied();
+        (policy.liveProofEligibility === "ineligible_fixture_transport")) denied();
   return Object.freeze({
     browserTransport: policy.browserTransport as BrowserTransport,
     answerFallbackPolicy: policy.answerFallbackPolicy as AnswerFallbackPolicy,

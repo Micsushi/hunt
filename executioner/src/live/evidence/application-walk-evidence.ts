@@ -315,10 +315,8 @@ function validExecutionPolicy(
         lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
   );
   return profiles.every((profile) => profile.answerFallbackPolicy === policy.answerFallbackPolicy) &&
-    (!syntheticAnswer || (
-      policy.answerFallbackPolicy === "deterministic_site_valid_editable" &&
-      policy.liveProofEligibility === "ineligible_synthetic_answer"
-    ));
+    (!syntheticAnswer || policy.answerFallbackPolicy === "deterministic_site_valid_editable") &&
+    (policy.browserTransport !== "live_browser" || policy.liveProofEligibility === "eligible");
 }
 
 function validQuestionnaire(

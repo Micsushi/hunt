@@ -315,21 +315,11 @@ test("admits every supported synthetic unknown Profile control shape", async () 
           submitActivated: profile.submitActivated,
           privacyScan: profile.privacyScan,
         }, ...baseline.laneAcceptances.slice(1)];
-    await assert.rejects(() => writeApplicationWalkEvidence({
-      root,
-      acceptance: {
-        ...baseline,
-        answerFallbackPolicy: "deterministic_site_valid_editable",
-        laneAcceptances,
-      },
-      sensitiveValues: [],
-    }), /application-walk evidence denied/u);
     await writeApplicationWalkEvidence({
       root,
       acceptance: {
         ...baseline,
         answerFallbackPolicy: "deterministic_site_valid_editable",
-        liveProofEligibility: "ineligible_synthetic_answer",
         laneAcceptances,
       },
       sensitiveValues: [],

@@ -453,7 +453,7 @@ test("admitted answer fallback supports profile-less owner-fact and deterministi
     );
     if (result.ok) assert.equal(
       result.acceptance.liveProofEligibility,
-      synthetic ? "ineligible_synthetic_answer" : "eligible",
+      "eligible",
     );
   }
 });

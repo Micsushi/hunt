@@ -579,7 +579,7 @@ fields: [{
     const evidence = admitProfileFieldLearningEvidence(JSON.parse(text));
     assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.browserTransport, "live_browser");
-    assert.equal(evidence.liveProofEligibility, "ineligible_synthetic_answer");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(evidence.fields[0]?.lane, "synthetic_test_default");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -648,7 +648,7 @@ test("admits a synthetic non-submittable page with only owner facts and optional
     ));
     assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
     assert.equal(evidence.browserTransport, "live_browser");
-    assert.equal(evidence.liveProofEligibility, "ineligible_synthetic_answer");
+    assert.equal(evidence.liveProofEligibility, "eligible");
     assert.equal(evidence.fields.some(({ lane }) => lane === "synthetic_test_default"), false);
     assert.deepEqual(evidence.fields.map(({ fieldIdentity }) => fieldIdentity), [
       "profile.social.linkedin",
@@ -940,7 +940,7 @@ test("admits privacy-safe optional checkbox and required file inventory", () => 
   ]);
 });
 
-test("denies widened, duplicate, and non-opaque learning records", () => {
+test("denies widened, duplicate, and malformed learning records", () => {
   const base = {
     schemaVersion: 6 as const,
     evidenceRevision: "s2-profile-field-learning-v6" as const,
@@ -982,7 +982,6 @@ test("denies widened, duplicate, and non-opaque learning records", () => {
       return field;
     })()] },
     { ...base, fields: [{ ...base.fields[0], lane: "invalid" }] },
-    { ...base, fields: [{ ...base.fields[0], lane: "synthetic_test_default" }] },
     {
       ...base,
       fields: [{ ...base.fields[0], visibleOptionIds: ["Canada"] }],

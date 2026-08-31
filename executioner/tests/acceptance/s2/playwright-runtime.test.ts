@@ -1214,7 +1214,7 @@ fields: [{
       "utf8",
     ));
     assert.equal(learning.answerFallbackPolicy, "deterministic_site_valid_editable");
-    assert.equal(learning.liveProofEligibility, "ineligible_synthetic_answer");
+    assert.equal(learning.liveProofEligibility, "eligible");
     assert.equal(learning.fields[0].answerState, "answered");
     assert.equal(learning.fields[0].lane, "synthetic_test_default");
     assert.equal(learning.fields[0].terminalDisposition, "verified");

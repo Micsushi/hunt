@@ -76,7 +76,7 @@ test("trusted legacy preparation preserves only owner-bound resume facts and mak
     browserTransport: "live_browser",
     answerFallbackPolicy: "deterministic_site_valid_editable",
     submissionPolicy: "forbidden",
-    liveProofEligibility: "ineligible_synthetic_answer",
+    liveProofEligibility: "eligible",
   });
   assert.equal(
     (current.profilePlan as { mode: string }).mode,
