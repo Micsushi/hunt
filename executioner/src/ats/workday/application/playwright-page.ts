@@ -370,9 +370,7 @@ export class PlaywrightWorkdayApplicationPage {
         let rawCurrentActionWitness = navigationActionId !== undefined && rawAfter.ok &&
           rawAfter.value.navigationWitness === navigationActionId;
         const rawCandidateChanged = rawAfter.ok && (
-          rawAfter.value.page !== before.page ||
-          rawAfter.value.rootSelector !== before.rootSelector ||
-          rawAfter.value.transitionKey !== before.transitionKey ||
+          hasIndependentDestinationEvidence(before, rawAfter.value) ||
           rawAfter.value.requiredFields.length > before.requiredFields.length ||
           hasValidationDowngrade(before, rawAfter.value)
         );
@@ -396,8 +394,7 @@ export class PlaywrightWorkdayApplicationPage {
         );
         if (
           after.ok && (after.value.signature !== before.signature || currentActionWitness) &&
-          (after.value.page !== before.page ||
-            after.value.rootSelector !== before.rootSelector ||
+          (hasIndependentDestinationEvidence(before, after.value) ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
               currentActionWitness) ||
             after.value.requiredFields.length > before.requiredFields.length ||
@@ -690,8 +687,7 @@ function hasIndependentDestinationEvidence(
   before: BrowserApplicationSnapshot,
   after: BrowserApplicationSnapshot,
 ): boolean {
-  if (after.page !== before.page || after.rootSelector !== before.rootSelector ||
-      after.transitionKey !== before.transitionKey) return true;
+  if (after.page !== before.page || after.rootSelector !== before.rootSelector) return true;
   return before.semanticDestinationComparable && after.semanticDestinationComparable &&
     after.semanticDestinationFingerprint !== before.semanticDestinationFingerprint;
 }

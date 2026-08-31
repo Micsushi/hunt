@@ -511,6 +511,42 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
   });
 });
 
+test("same-selector questionnaire remount accepts the new active structural step", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+        <div data-automation-id="progressBarActiveStep">Voluntary Disclosures</div>
+        <label>Gender <input required value="ready"></label>
+        <label>Race <input required value="ready"></label>
+        <button id="next">Save and Continue</button>
+      </main>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          const destination = document.createElement('main');
+          destination.dataset.automationId = 'applyFlowVoluntaryDisclosuresPage';
+          destination.innerHTML = ` + "`" + `
+            <div data-automation-id="progressBarActiveStep">Self Identify</div>
+            <label>Name <input required value="ready" data-hunt-field-id="self-identify-name"></label>
+            <button>Save and Continue</button>
+          ` + "`" + `;
+          document.querySelector('main').replaceWith(destination);
+        });
+      </script>
+    `);
+    const adapter = application(page);
+    const result = await adapter.next(await questionnaireRequest(
+      adapter,
+      ["questionnaire", "pre_review"],
+    ), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+    const observed = await adapter.observe(signal());
+    assert.equal(
+      observed.ok && observed.value.requiredFields[0]?.fieldId,
+      "self-identify-name",
+    );
+  });
+});
+
 test("Self Identify counts composite date and exclusive disability status once", async () => {
   await withPage(async (page) => {
     await page.setContent(`
