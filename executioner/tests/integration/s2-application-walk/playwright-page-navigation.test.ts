@@ -821,6 +821,28 @@ test("required Workday listbox buttons use non-placeholder visible text as verif
   });
 });
 
+test("a selected Workday None option is a committed value rather than a placeholder", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+        <div data-automation-id="formField-gender">
+          <span data-automation-id="required"></span>
+          <button id="gender" aria-haspopup="listbox" data-selected-label="None">None</button>
+        </div>
+        <div data-automation-id="formField-unanswered">
+          <span data-automation-id="required"></span>
+          <button id="unanswered" aria-haspopup="listbox">Select One</button>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [
+      { fieldId: "gender", page: "questionnaire", verification: "verified" },
+      { fieldId: "unanswered", page: "questionnaire", verification: "unverified" },
+    ]);
+  });
+});
+
 test("a filled Workday textarea ignores an uncorroborated stale aria-invalid flag", async () => {
   await withPage(async (page) => {
     await page.setContent(`

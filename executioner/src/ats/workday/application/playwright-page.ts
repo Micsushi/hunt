@@ -1753,11 +1753,11 @@ async function readApplicationSnapshot(
       "phoneNumber--phoneType",
     ].includes(safeId)) {
       const declared = text(control.getAttribute("aria-valuetext"));
-      const declaredPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
+      const declaredPlaceholder = /^(?:select one|select|choose|choose one)$/u.test(
         declared.toLocaleLowerCase("en-US"),
       );
       const selectedLabel = text(control.getAttribute("data-selected-label"));
-      const selectedLabelPlaceholder = /^(?:select one|select|choose|choose one|none)$/u.test(
+      const selectedLabelPlaceholder = /^(?:select one|select|choose|choose one)$/u.test(
         selectedLabel.toLocaleLowerCase("en-US"),
       );
       const value = control instanceof HTMLInputElement
@@ -1768,7 +1768,7 @@ async function readApplicationSnapshot(
             ? selectedLabel
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
-      const placeholder = /^(?:select one|select|choose|choose one|none)$/u.test(normalizedValue);
+      const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
       );
