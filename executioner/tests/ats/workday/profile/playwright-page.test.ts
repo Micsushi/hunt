@@ -2752,6 +2752,82 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
   }
 });
 
+test("My Experience owns a remounted skill by its production list-item wrapper", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+                aria-expanded="false" placeholder="Search">
+              <ul data-automation-id="selectedItemList"></ul>
+              <div id="presentation-mirror"></div>
+              <div id="skills-options" role="listbox" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          const mirrorHost = document.getElementById("presentation-mirror");
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const owner = document.createElement("li");
+            owner.setAttribute("data-uxi-widget-type", "selectinputlistitem");
+            owner.setAttribute("data-uxi-multiselect-id", "skills--uid1");
+            owner.setAttribute("data-uxi-selectinputlistitem-index", "");
+            owner.innerHTML = '<div data-automation-id="selectedItem">' +
+              '<p data-automation-id="promptOption">Python</p></div>';
+            selected.replaceChildren(owner);
+            input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+            setTimeout(() => {
+              const mirror = document.createElement("div");
+              mirror.setAttribute("data-automation-id", "selectedItem");
+              mirror.innerHTML = '<p data-automation-id="promptOption">Python Presentation</p>';
+              mirrorHost.replaceChildren(mirror);
+            }, 10);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const plan = {
+      mode: "live" as const,
+      pageType: "profile" as const,
+      fields: [field(
+        "skills.values", "skill", "multi_select", '["Python"]', '["Python"]',
+      )],
+      repeatables: [],
+    };
+
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience excludes a selected skill delete affordance from committed readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -10,21 +10,49 @@ export async function committedMultiSelectReadback(
 
   const committed = await field.evaluate((owner) => {
     const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
+    const itemOwnerSelector = [
+      '[data-uxi-widget-type="selectinputlistitem"]',
+      '[data-uxi-multiselect-id]',
+      '[data-uxi-selectinputlistitem-index]',
+    ].join("");
     const normalize = (value: string | null | undefined) => (value ?? "")
       .normalize("NFC").replace(/\s+/gu, " ").trim();
-    const items = [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
-      .filter((item) => item.closest(fieldSelector) === owner)
-      .map((item) => {
-        const promptOptions = item.querySelectorAll('[data-automation-id="promptOption"]');
-        if (promptOptions.length > 1) {
-          throw new TypeError("Workday selected item has ambiguous semantic text");
+    const readItem = (item: Element) => {
+      const promptOptions = item.querySelectorAll('[data-automation-id="promptOption"]');
+      if (promptOptions.length > 1) {
+        throw new TypeError("Workday selected item has ambiguous semantic text");
+      }
+      const semantic = promptOptions[0] ?? item;
+      const copy = semantic.cloneNode(true) as Element;
+      copy.querySelectorAll('[data-automation-id="DELETE_charm"]')
+        .forEach((affordance) => affordance.remove());
+      return { canonical: promptOptions.length === 1, label: normalize(copy.textContent) };
+    };
+    const productionOwners = [...owner.querySelectorAll(itemOwnerSelector)]
+      .filter((itemOwner) => itemOwner.closest(fieldSelector) === owner);
+    const ownerIds = new Set(productionOwners.map((itemOwner) =>
+      itemOwner.getAttribute("data-uxi-multiselect-id")
+    ));
+    const ownerIndexes = productionOwners.map((itemOwner) =>
+      itemOwner.getAttribute("data-uxi-selectinputlistitem-index")
+    );
+    if (productionOwners.length > 0 &&
+        (ownerIds.size !== 1 || new Set(ownerIndexes).size !== ownerIndexes.length)) {
+      throw new TypeError("Workday selected-item ownership is ambiguous");
+    }
+    const items = (productionOwners.length > 0
+      ? productionOwners.map((itemOwner) => {
+        const selectedItems = [...itemOwner.querySelectorAll(
+          '[data-automation-id="selectedItem"]',
+        )].filter((item) => item.closest(itemOwnerSelector) === itemOwner);
+        if (selectedItems.length !== 1) {
+          throw new TypeError("Workday selected-item owner is incomplete or ambiguous");
         }
-        const semantic = promptOptions[0] ?? item;
-        const copy = semantic.cloneNode(true) as Element;
-        copy.querySelectorAll('[data-automation-id="DELETE_charm"]')
-          .forEach((affordance) => affordance.remove());
-        return { canonical: promptOptions.length === 1, label: normalize(copy.textContent) };
+        return readItem(selectedItems[0]!);
       })
+      : [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
+        .filter((item) => item.closest(fieldSelector) === owner)
+        .map(readItem))
       .filter(({ label }) => label !== "");
 
     // Production Workday pills expose their semantic text as promptOption.
