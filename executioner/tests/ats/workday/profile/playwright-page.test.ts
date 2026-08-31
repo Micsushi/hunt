@@ -2669,7 +2669,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-test("My Experience accepts a committed skill whose selected-item list collapses after selection", async () => {
+test("My Experience trusts a collapsed selected-item over its presentation-only accessibility summary", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2707,6 +2707,7 @@ test("My Experience accepts a committed skill whose selected-item list collapses
             selected.replaceChildren(item);
             selected.hidden = true;
             input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
             listbox.hidden = true;
             input.setAttribute("aria-expanded", "false");
           });
