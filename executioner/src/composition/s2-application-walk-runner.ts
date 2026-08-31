@@ -7,6 +7,11 @@ import {
   disposeResumeArtifact,
 } from "../contracts/index.ts";
 import {
+  earliestStage2Cause,
+  stage2CausalCode,
+  stage2CausalError,
+} from "../contracts/s2-causal-error.ts";
+import {
   s2StableErrorPolicy,
   type S2StableErrorCode,
 } from "../contracts/s2-common-wire.ts";
@@ -100,7 +105,9 @@ export function createStage2ApplicationWalkProductionBinding(
       options: Stage2ApplicationWalkProductionOptions,
       signal: AbortSignal,
     ) {
-      if (signal.aborted) throw new TypeError("application binding denied");
+      if (signal.aborted) {
+        throw stage2CausalError("cancellation", "operation_cancelled");
+      }
       const executionerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
       const source = (dependencies.inspectSource ?? (() =>
         inspectCleanSourceRevision(executionerRoot)))();
@@ -161,11 +168,15 @@ export function createStage2ApplicationWalkProductionBinding(
           configSha256,
           questionLearning,
         }, signal);
-      } catch {
+      } catch (error) {
         disposeOwnerResume(resolvedOwnerSources);
         ownerSources = undefined;
         sensitiveValues = undefined;
-        throw new TypeError("application binding denied");
+        throw stage2CausalError(
+          signal.aborted ? "cancellation" : "browser_launch_binding",
+          signal.aborted ? "operation_cancelled" : "browser_session_missing",
+          error,
+        );
       }
       const { account, ...walkRuntime } = runtime;
       return Object.freeze({
@@ -284,18 +295,19 @@ export async function runStage2ApplicationWalkFromOwnerConfig(
     );
   } catch (error) {
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-      const stage = error instanceof TypeError && error.message === "external monitor process binding denied"
-        ? "external_monitor_process_binding"
-        : error instanceof TypeError && error.message.startsWith("Playwright runtime binding denied:")
-        ? `browser_${error.message.split(":").at(-1)}`
-        : error instanceof TypeError && error.message === "application owner source denied"
-        ? "owner_sources"
-        : "preflight_or_storage";
+      const stage = earliestStage2Cause(error)?.layer ??
+        (error instanceof TypeError && error.message === "external monitor process binding denied"
+          ? "observer_evidence"
+          : error instanceof TypeError && error.message === "application owner source denied"
+          ? "source_admission"
+          : "source_admission");
       try { process.stderr.write(`${JSON.stringify({ applicationBindingFailure: stage })}\n`); } catch {}
     }
     return {
       ok: false,
-      code: signal.aborted ? "operation_cancelled" : "owner_config_invalid",
+      code: signal.aborted
+        ? "operation_cancelled"
+        : stage2CausalCode(error, "owner_config_invalid"),
     };
   }
 }

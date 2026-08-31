@@ -10,6 +10,7 @@ import {
   type S2StableErrorCode,
   type TerminalResultV4,
 } from "../contracts/index.ts";
+import { stage2CausalCode } from "../contracts/s2-causal-error.ts";
 import type { ReviewStopRequest, ReviewReadOnlyPage } from "../interaction/review/index.ts";
 import { inspectWorkdayReview, stopAtVerifiedReview } from "../interaction/review/index.ts";
 import {
@@ -179,9 +180,9 @@ export async function runStage2RealJourney(
       });
       const retained = await closeRuntime(runtime, false);
       result = retained
-        ? errorFailure(invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3)
+        ? errorFailure(invocation.config.journeyId, "evidence_failed", "evidence_unavailable", 3)
         : withCleanupFailure(errorFailure(
-          invocation.config.journeyId, "evidence_failed", "mcp_internal_error", 3,
+          invocation.config.journeyId, "evidence_failed", "evidence_unavailable", 3,
         ));
     }
     if (result === undefined) {
@@ -220,9 +221,10 @@ export async function runStage2RealJourney(
 }
 
 function runtimeBindingErrorCode(error: unknown): S2StableErrorCode {
-  return error instanceof TypeError && error.message === "application owner source denied"
+  return stage2CausalCode(error,
+    error instanceof TypeError && error.message === "application owner source denied"
     ? "owner_config_invalid"
-    : "mcp_internal_error";
+    : "browser_session_missing");
 }
 
 async function persistTerminalArtifact(
@@ -246,13 +248,13 @@ async function persistTerminalArtifact(
       await ports.writeTerminalArtifact(invocation.args.evidenceRoot, artifact);
     }
     return result;
-  } catch {
+  } catch (error) {
     if (result.ok) {
       return Object.freeze({
         ...errorFailure(
           invocation.config.journeyId,
           "evidence_failed",
-          "mcp_internal_error",
+          "evidence_unavailable",
           result.terminal.completedPages,
         ),
         terminalArtifactErrorCode: "terminal_artifact_persistence_failed" as const,
@@ -284,7 +286,7 @@ async function closeRuntime(
       new AbortController().signal,
       accepted,
     );
-  } catch {
+  } catch (error) {
     cleaned = false;
   }
   return cleaned;
@@ -321,13 +323,13 @@ async function executeBoundJourney(
         0,
       );
     }
-  } catch {
+  } catch (error) {
     return signal.aborted
       ? cancelled(invocation.config.journeyId, 0)
       : errorFailure(
           invocation.config.journeyId,
           "account_verification_failed",
-          "mcp_internal_error",
+          stage2CausalCode(error, "verification_input_invalid"),
           0,
         );
   }
@@ -373,13 +375,13 @@ async function executeBoundJourney(
       }
       resume = plan.resume(recovered.value.state);
     }
-  } catch {
+  } catch (error) {
     return signal.aborted
       ? cancelled(invocation.config.journeyId, 0)
       : errorFailure(
           invocation.config.journeyId,
           "recovery_failed",
-          "mcp_internal_error",
+          stage2CausalCode(error, "recovery_checkpoint_unavailable"),
           0,
         );
   }
@@ -411,13 +413,13 @@ async function executeBoundJourney(
       );
     }
     application = result;
-  } catch {
+  } catch (error) {
     return signal.aborted
       ? cancelled(invocation.config.journeyId, 0)
       : errorFailure(
           invocation.config.journeyId,
           "pre_review_failed",
-          "mcp_internal_error",
+          stage2CausalCode(error, "page_observation_invalid"),
           0,
         );
   }
@@ -434,7 +436,7 @@ async function executeBoundJourney(
       durationMs: journeyDuration(reviewStarted),
       phasePassed: review.kind === "review_confirmed",
     });
-  } catch {
+  } catch (error) {
     runtime.timing?.record("runtime_review_verification_completed", {
       durationMs: journeyDuration(reviewStarted),
       phasePassed: false,
@@ -444,7 +446,7 @@ async function executeBoundJourney(
       : errorFailure(
           invocation.config.journeyId,
           "review_failed",
-          "mcp_internal_error",
+          stage2CausalCode(error, "page_observation_invalid"),
           completedPages,
         );
   }
@@ -540,11 +542,11 @@ async function executeBoundJourney(
       unknownCandidate: null,
       forbiddenTokens,
     });
-  } catch {
+  } catch (error) {
     return errorFailure(
       invocation.config.journeyId,
       "evidence_failed",
-      "mcp_internal_error",
+      stage2CausalCode(error, "evidence_unavailable"),
       completedPages,
     );
   }

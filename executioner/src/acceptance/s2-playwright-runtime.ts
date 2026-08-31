@@ -53,6 +53,7 @@ import {
   type FieldId,
   type OperationId,
 } from "../contracts/index.ts";
+import { stage2CausalError } from "../contracts/s2-causal-error.ts";
 import type { SemanticPageSnapshot } from "../contracts/index.ts";
 import { createValueFreeRunTrace } from
   "../live/evidence/value-free-run-trace.ts";
@@ -170,7 +171,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
       signal: AbortSignal,
     ) {
       const setupStarted = performance.now();
-      if (signal.aborted) throw new TypeError("Playwright runtime binding denied");
+      if (signal.aborted) {
+        throw stage2CausalError("cancellation", "operation_cancelled");
+      }
       const target = targetFor(request);
       const revisionId = request.owner.revisionId;
       const accountEvidenceRoot = request.owner.roots.evidence.path;
@@ -252,7 +255,11 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           phasePassed: false,
         });
         externalMonitor?.close();
-        throw error;
+        throw stage2CausalError(
+          signal.aborted ? "cancellation" : "browser_launch_binding",
+          signal.aborted ? "operation_cancelled" : "browser_session_missing",
+          error,
+        );
       }
       if (!opened.ok) {
         valueFreeTrace?.("runtime_browser_open_failed", {
@@ -261,7 +268,10 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           phasePassed: false,
         });
         externalMonitor?.close();
-        throw new TypeError("Playwright runtime binding denied");
+        throw stage2CausalError(
+          "browser_launch_binding",
+          opened.error.code,
+        );
       }
       valueFreeTrace?.("runtime_setup_completed", {
         durationMs: monotonicDuration(setupStarted),

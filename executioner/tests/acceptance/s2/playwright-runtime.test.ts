@@ -1055,6 +1055,7 @@ test("a profile preflight owner-input block remains a deterministic page failure
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
       ownerSources: {
+        executionPolicy: liveApplicationExecutionPolicy("live"),
         profilePlan: {
           mode: "live",
           pageType: "profile",
@@ -1157,6 +1158,7 @@ test("generated prior-employment defaults fail closed before mutation", async ()
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
       ownerSources: {
+        executionPolicy: liveApplicationExecutionPolicy("live"),
         profilePlan: {
           mode: "live",
           pageType: "profile",
@@ -1296,6 +1298,7 @@ test("a profile block after a commit remains browser-effect uncertain", async ()
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       ownerSources: {
+        executionPolicy: liveApplicationExecutionPolicy("live"),
         profilePlan: {
           mode: "live",
           pageType: "profile",
@@ -1377,6 +1380,7 @@ test("profile batches external proof once while every field keeps independent re
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       ownerSources: {
+        executionPolicy: liveApplicationExecutionPolicy("live"),
         profilePlan: {
           mode: "live",
           pageType: "profile",

@@ -652,7 +652,15 @@ test("a stale terminal artifact fails closed without being overwritten", async (
   }
 });
 
-test("arbitrary stage exceptions use only the truthful internal terminal code", async () => {
+test("arbitrary stage exceptions use their truthful non-MCP phase codes", async () => {
+  const expected = {
+    bind: "browser_session_missing",
+    account: "verification_input_invalid",
+    recovery: "recovery_checkpoint_unavailable",
+    application: "page_observation_invalid",
+    review: "page_observation_invalid",
+    evidence: "evidence_unavailable",
+  } as const;
   for (const stage of ["bind", "account", "recovery", "application", "review", "evidence"] as const) {
     const root = mkdtempSync(join(tmpdir(), `hunt-s2-internal-${stage}-`));
     const evidenceRoot = resolve(root, "evidence");
@@ -673,7 +681,8 @@ test("arbitrary stage exceptions use only the truthful internal terminal code", 
       );
       assert.equal(result.ok, false);
       if (result.ok || result.terminal.status !== "failed") continue;
-      assert.equal(result.terminal.errorCode, "mcp_internal_error");
+      assert.equal(result.terminal.errorCode, expected[stage]);
+      assert.notEqual(result.terminal.errorCode, "mcp_internal_error");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

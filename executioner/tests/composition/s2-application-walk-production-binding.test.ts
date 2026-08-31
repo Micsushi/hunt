@@ -170,6 +170,12 @@ test("production binding carries admitted synthetic mode without requiring a Pro
     const source = JSON.parse(readFileSync(sourcePath, "utf8"));
     source.profilePlan.mode = "synthetic_test_non_submittable";
     source.profilePlan.fields = [];
+    source.executionPolicy = {
+      browserTransport: "live_browser",
+      answerFallbackPolicy: "deterministic_site_valid_editable",
+      submissionPolicy: "forbidden",
+      liveProofEligibility: "eligible",
+    };
     writeFileSync(sourcePath, JSON.stringify(source));
     let admittedMode: string | undefined;
     const binding = createStage2ApplicationWalkProductionBinding({
@@ -286,6 +292,7 @@ test("production owner source admits catalog-bound resume fields outside flat pr
     const manifestPath = join(dirname(fixture.configPath), "runtime", "application-profile.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
       profilePlan: Record<string, unknown>;
+      executionPolicy: Record<string, unknown>;
     };
     manifest.profilePlan = {
       mode: "synthetic_test_non_submittable",
@@ -336,6 +343,12 @@ test("production owner source admits catalog-bound resume fields outside flat pr
           }],
         }],
       }],
+    };
+    manifest.executionPolicy = {
+      browserTransport: "live_browser",
+      answerFallbackPolicy: "deterministic_site_valid_editable",
+      submissionPolicy: "forbidden",
+      liveProofEligibility: "eligible",
     };
     writeFileSync(manifestPath, JSON.stringify(manifest));
 
@@ -714,7 +727,7 @@ test("production binding disposes the immutable resume snapshot when runtime ass
       evidenceRoot: fixture.evidenceRoot,
       checkpoint: "resume_verified",
     }, AbortSignal.any([]), binding);
-    assert.deepEqual(result, { ok: false, code: "owner_config_invalid" });
+    assert.deepEqual(result, { ok: false, code: "browser_session_missing" });
     assert.notEqual(artifact, undefined);
     const reused = await useResumeArtifactUpload(artifact!, () => ({
       ok: true as const,
@@ -933,6 +946,12 @@ fields: [{
         answer: { kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" },
       }],
       repeatables: [],
+    },
+    executionPolicy: {
+      browserTransport: "live_browser",
+      answerFallbackPolicy: "owner_facts_only",
+      submissionPolicy: "forbidden",
+      liveProofEligibility: "eligible",
     },
     narrative: { revision: "narrative-v1" },
   }));

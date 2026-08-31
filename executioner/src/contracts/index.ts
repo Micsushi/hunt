@@ -3,6 +3,7 @@ export * from "./lifecycle.ts";
 export * from "./live/index.ts";
 export * from "./ports.ts";
 export * from "./resume-artifact.ts";
+export * from "./s2-causal-error.ts";
 export * from "./s2-common-schemas.ts";
 export * from "./s2-common-serialized.ts";
 export * from "./s2-common-wire.ts";
