@@ -8,7 +8,7 @@ export async function committedMultiSelectReadback(
   );
   if (await field.count() !== 1) return null;
 
-  const committed = await field.evaluate((owner) => {
+  const observed = await field.evaluate((owner) => {
     const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
     const itemOwnerSelector = [
       '[data-uxi-widget-type="selectinputlistitem"]',
@@ -30,6 +30,9 @@ export async function committedMultiSelectReadback(
     };
     const productionOwners = [...owner.querySelectorAll(itemOwnerSelector)]
       .filter((itemOwner) => itemOwner.closest(fieldSelector) === owner);
+    const fieldSelectedItems = [...owner.querySelectorAll(
+      '[data-automation-id="selectedItem"]',
+    )].filter((item) => item.closest(fieldSelector) === owner);
     const ownerIds = new Set(productionOwners.map((itemOwner) =>
       itemOwner.getAttribute("data-uxi-multiselect-id")
     ));
@@ -50,9 +53,7 @@ export async function committedMultiSelectReadback(
         }
         return readItem(selectedItems[0]!);
       })
-      : [...owner.querySelectorAll('[data-automation-id="selectedItem"]')]
-        .filter((item) => item.closest(fieldSelector) === owner)
-        .map(readItem))
+      : fieldSelectedItems.map(readItem))
       .filter(({ label }) => label !== "");
 
     // Production Workday pills expose their semantic text as promptOption.
@@ -71,9 +72,33 @@ export async function committedMultiSelectReadback(
       const key = label.toLocaleLowerCase("en-US");
       if (!unique.has(key)) unique.set(key, label);
     }
-    return [...unique.values()];
+    const productionOwnerSet = new Set(productionOwners);
+    const productionOwnedSelectedItemCount = fieldSelectedItems.filter((item) => {
+      const itemOwner = item.closest(itemOwnerSelector);
+      return itemOwner !== null && productionOwnerSet.has(itemOwner);
+    }).length;
+    return {
+      labels: [...unique.values()],
+      diagnostics: {
+        selectedItemCount: fieldSelectedItems.length,
+        productionOwnerCount: productionOwners.length,
+        productionOwnedSelectedItemCount,
+        unownedSelectedItemCount: fieldSelectedItems.length - productionOwnedSelectedItemCount,
+        canonicalItemCount: items.filter((item) => item.canonical).length,
+        fallbackItemCount: items.filter((item) => !item.canonical).length,
+        chosenItemCount: labels.length,
+        chosenUniqueCount: unique.size,
+        usedProductionOwners: productionOwners.length > 0,
+      },
+    };
   });
 
-  if (committed.length === 0) return null;
-  return committed.length === 1 ? committed[0]! : JSON.stringify(committed);
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    process.stderr.write(`${JSON.stringify({
+      multiSelectReadbackOwnership: observed.diagnostics,
+    })}\n`);
+  }
+
+  if (observed.labels.length === 0) return null;
+  return observed.labels.length === 1 ? observed.labels[0]! : JSON.stringify(observed.labels);
 }
