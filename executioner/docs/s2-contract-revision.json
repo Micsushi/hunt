@@ -5,7 +5,7 @@
   "s2ContractSource": "b3bda9517656f9352cd9fd50cdb1715049b0c378",
   "s2ContractSourceTree": "e2651d236bf0f2e6c3e73ffd4d1882ee67782886",
   "contractTreeOids": {
-    "executioner/src/contracts": "e9e455f56b11b0f812fb888ccf0a0d8dda9bbb6b",
+    "executioner/src/contracts": "d9bc5f9aec6337743296684718dd619db3ae75d1",
     "executioner/src/contracts/live": "ac3971aae2a1ceb3703b0f8c8f171c884c4059d9",
     "executioner/src/control/orchestrator/live": "6b38b5dee5a63989719045ef0de22df2a3f50590",
     "executioner/src/testing/live": "377d167ace83fa4d95798c221f4f776d86f209ac",
