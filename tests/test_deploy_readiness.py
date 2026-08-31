@@ -607,6 +607,7 @@ def test_server2_deploy_wrapper_allows_only_active_stages():
     assert "Unsupported Hunt stage" in script_text
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only deploy wrapper")
 def test_server2_deploy_wrapper_rejects_retired_c3_c4_stages(tmp_path):
     ansible_repo = tmp_path / "ansible_homelab"
     ansible_repo.mkdir()
