@@ -18,6 +18,8 @@ import {
   type LiveSessionId,
   type ProfileLeaseId,
 } from "../../../src/contracts/index.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
 import {
   retainedIntakeControlGuide,
   retainedIntakeTextSha256,
@@ -101,6 +103,7 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
       request: {
         owner: { roots: { evidence: { path: evidenceRoot } } },
         ownerSources: {
+          executionPolicy: liveApplicationExecutionPolicy("live"),
           profilePlan: {
             mode: "live",
             pageType: "profile",
@@ -189,7 +192,7 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
     const learning = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
       join(evidenceRoot, "profile-field-learning.json"), "utf8",
     )));
-    assert.equal(learning.schemaVersion, 5);
+    assert.equal(learning.schemaVersion, 6);
     assert.equal(learning.browserTransport, "live_browser");
     assert.equal(learning.answerFallbackPolicy, "owner_facts_only");
     assert.equal(learning.liveProofEligibility, "eligible");

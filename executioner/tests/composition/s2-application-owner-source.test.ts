@@ -735,6 +735,12 @@ fields: [{
       }],
       repeatables: [],
     },
+    executionPolicy: {
+      browserTransport: "live_browser",
+      answerFallbackPolicy: "owner_facts_only",
+      submissionPolicy: "forbidden",
+      liveProofEligibility: "eligible",
+    },
     narrative: { revision: "narrative-v1" },
   }));
 }
