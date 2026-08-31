@@ -188,8 +188,7 @@ export function createStage2PlaywrightLiveRuntimeBinding(
         accountProofScopeFor(request),
       );
       const acceptances = createApplicationLaneAcceptanceCollector();
-      const valueFreeTrace: ((event: string, details?: object) => void) | undefined =
-        process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1"
+      const valueFreeTrace = process.env.HUNT_C3_RETAINED_VALUE_FREE_TRACE === "1"
         ? createValueFreeRunTrace(request.owner.roots.evidence.path)
         : undefined;
       const externalMonitor = options.externalMonitor?.(request) ??
@@ -373,6 +372,9 @@ export function createStage2PlaywrightLiveRuntimeBinding(
           timing: Object.freeze({
             record(event: string, details: object) {
               valueFreeTrace(event, details);
+            },
+            seal() {
+              valueFreeTrace.seal();
             },
           }),
         }),

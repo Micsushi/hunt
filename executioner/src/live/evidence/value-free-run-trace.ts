@@ -12,7 +12,12 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 const FILE_NAME = "value-free-trace.ndjson";
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_EVENTS = 4_096;
-const states = new Map<string, { sequence: number; bytes: number }>();
+const states = new Map<string, { sequence: number; bytes: number; sealed: boolean }>();
+
+export interface ValueFreeRunTrace {
+  (event: string, details?: object): void;
+  seal(): void;
+}
 
 export interface ValueFreeRunTraceRecordV1 {
   readonly schemaVersion: 1;
@@ -25,14 +30,14 @@ export interface ValueFreeRunTraceRecordV1 {
 export function createValueFreeRunTrace(
   rootValue: string,
   stream: (line: string) => void = (line) => process.stderr.write(line),
-): (event: string, details?: object) => void {
+): ValueFreeRunTrace {
   const root = admittedRoot(rootValue);
   const path = join(root, FILE_NAME);
   const state = states.get(path) ?? loadState(path);
   states.set(path, state);
-  return (event, details) => {
+  const trace = ((event: string, details?: object) => {
     try {
-      if (!identifier(event) || state.sequence >= MAX_EVENTS) return;
+      if (state.sealed || !identifier(event) || state.sequence >= MAX_EVENTS) return;
       const record: ValueFreeRunTraceRecordV1 = Object.freeze({
         schemaVersion: 1,
         traceRevision: "c3-value-free-run-trace-v1",
@@ -51,7 +56,14 @@ export function createValueFreeRunTrace(
     } catch {
       // Diagnostics never alter behavior.
     }
+  }) as ValueFreeRunTrace;
+  trace.seal = () => {
+    state.sealed = true;
+    if (existsSync(path)) {
+      try { chmodSync(path, 0o400); } catch { /* best-effort platform hardening */ }
+    }
   };
+  return trace;
 }
 
 export function readValueFreeRunTrace(pathValue: string): readonly ValueFreeRunTraceRecordV1[] {
@@ -63,10 +75,10 @@ export function readValueFreeRunTrace(pathValue: string): readonly ValueFreeRunT
   return Object.freeze(lines.map((line, index) => admitRecord(JSON.parse(line), index + 1)));
 }
 
-function loadState(path: string): { sequence: number; bytes: number } {
-  if (!existsSync(path)) return { sequence: 0, bytes: 0 };
+function loadState(path: string): { sequence: number; bytes: number; sealed: boolean } {
+  if (!existsSync(path)) return { sequence: 0, bytes: 0, sealed: false };
   const records = readValueFreeRunTrace(path);
-  return { sequence: records.length, bytes: statSync(path).size };
+  return { sequence: records.length, bytes: statSync(path).size, sealed: false };
 }
 
 const STRING_KEYS = new Set([

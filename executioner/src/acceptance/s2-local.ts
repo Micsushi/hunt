@@ -70,8 +70,10 @@ export function createLocalStage2AcceptancePorts(
           signal,
           runnerPath,
           environment: {
-            ...process.env,
-            HUNT_C3_VALUE_FREE_ACCOUNT_TRACE: "1",
+            ...Object.fromEntries(Object.entries(process.env).filter(
+              ([name]) => name !== "HUNT_C3_VALUE_FREE_ACCOUNT_TRACE",
+            )),
+            HUNT_C3_RETAINED_VALUE_FREE_TRACE: "1",
             HUNT_C3_OUTER_PROCESS_CLEANUP: "1",
           },
         });
@@ -117,6 +119,10 @@ export function createLocalStage2AcceptancePorts(
         });
       },
       sealFailure: async (args, code, admission) => {
+        if (code === "cleanup_finalize_failed") {
+          await completionAudit(args.evidenceRoot);
+          throw new TypeError("exact finalization unavailable");
+        }
         const terminal = readStage2TerminalArtifact(args.evidenceRoot);
         writeStage2ApplicationFailureBinding(args.evidenceRoot, {
           schemaVersion: 1,

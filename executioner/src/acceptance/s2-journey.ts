@@ -53,6 +53,7 @@ export interface Stage2RealJourneyRecoveryPlan {
 export interface Stage2RealJourneyRuntime {
   readonly timing?: {
     record(event: string, details: object): void;
+    seal?(): void;
   };
   readonly account: {
     verify(signal: AbortSignal): Promise<Stage2UnsealedAccountProofResult>;
@@ -218,14 +219,18 @@ export async function runStage2RealJourney(
     }
   }
   if (result === undefined) throw new Error("journey terminal result unavailable");
-  const persisted = await persistTerminalArtifact(invocation, ports, result);
-  runtime.timing?.record("runtime_total_completed", {
-    totalWallDurationMs: journeyDuration(journeyStarted),
-    phasePassed: persisted.ok,
-    monotonicClock: "performance_now",
-    submitActivated: false,
-  });
-  return persisted;
+  try {
+    const persisted = await persistTerminalArtifact(invocation, ports, result);
+    runtime.timing?.record("runtime_total_completed", {
+      totalWallDurationMs: journeyDuration(journeyStarted),
+      phasePassed: persisted.ok,
+      monotonicClock: "performance_now",
+      submitActivated: false,
+    });
+    return persisted;
+  } finally {
+    runtime.timing?.seal?.();
+  }
 }
 
 function runtimeBindingErrorCode(error: unknown): S2StableErrorCode {

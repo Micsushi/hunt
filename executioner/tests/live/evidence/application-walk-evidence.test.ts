@@ -301,16 +301,11 @@ test("admits every supported synthetic unknown Profile control shape", async () 
         provenance: "generated_default" as const,
       };
     });
-    await writeApplicationWalkEvidence({
-      root,
-      acceptance: {
-        ...baseline,
-        answerFallbackPolicy: "deterministic_site_valid_editable",
-        laneAcceptances: [{
+    const laneAcceptances = [{
           schemaVersion: profile.schemaVersion,
           checkpoint: profile.checkpoint,
           pageId: profile.pageId,
-          answerFallbackPolicy: "deterministic_site_valid_editable",
+          answerFallbackPolicy: "deterministic_site_valid_editable" as const,
           pageType: profile.pageType,
           verifiedFields,
           syntheticFields,
@@ -319,7 +314,23 @@ test("admits every supported synthetic unknown Profile control shape", async () 
           profileFieldLearningSha256: "a".repeat(64),
           submitActivated: profile.submitActivated,
           privacyScan: profile.privacyScan,
-        }, ...baseline.laneAcceptances.slice(1)],
+        }, ...baseline.laneAcceptances.slice(1)];
+    await assert.rejects(() => writeApplicationWalkEvidence({
+      root,
+      acceptance: {
+        ...baseline,
+        answerFallbackPolicy: "deterministic_site_valid_editable",
+        laneAcceptances,
+      },
+      sensitiveValues: [],
+    }), /application-walk evidence denied/u);
+    await writeApplicationWalkEvidence({
+      root,
+      acceptance: {
+        ...baseline,
+        answerFallbackPolicy: "deterministic_site_valid_editable",
+        liveProofEligibility: "ineligible_synthetic_answer",
+        laneAcceptances,
       },
       sensitiveValues: [],
     });

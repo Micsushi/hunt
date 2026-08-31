@@ -202,7 +202,7 @@ test("drift first observed after the live journey blocks reconciliation and fina
   }
 });
 
-test("exact finalizer failure cannot produce a passing gate", async () => {
+test("exact finalizer failure is routed through terminal failure sealing", async () => {
   const calls: string[] = [];
   const dependencies = ports(calls);
   dependencies.cleanup.finalize = async () => {
@@ -214,7 +214,24 @@ test("exact finalizer failure cannot produce a passing gate", async () => {
     code: "cleanup_finalize_failed",
     cleanup: "retained_for_exact_reconciliation",
   });
+  assert.equal(calls.filter((call) => call === "finalize").length, 2);
+  assert.equal(calls.filter((call) => call === "seal-failure").length, 1);
   assert.equal(calls.some((call) => call === "discard"), false);
+});
+
+test("one transient exact finalizer failure is retried without changing the accepted manifest", async () => {
+  const calls: string[] = [];
+  const dependencies = ports(calls);
+  let attempt = 0;
+  dependencies.cleanup.finalize = async (_args, manifest) => {
+    calls.push("finalize");
+    assert.equal(manifest.submitActivated, false);
+    if (++attempt === 1) throw new Error("transient denial");
+  };
+  const result = await runStage2RealAcceptance(layout("abcdefghijklmnop"), dependencies);
+  assert.equal(result.ok, true);
+  assert.equal(calls.filter((call) => call === "finalize").length, 2);
+  assert.equal(calls.includes("seal-failure"), false);
 });
 
 test("journey failure, cancellation, and Review mismatch seal retained evidence without success finalization", async () => {

@@ -2669,6 +2669,68 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
+test("My Experience bounds a large optional owner skill set to one derived site-valid fact", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              aria-expanded="false" placeholder="Search">
+            <div id="selected-skills"></div>
+            <div id="skills-options" role="listbox" hidden><div role="option">Skill 01</div></div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const pill = document.createElement("div");
+            pill.setAttribute("data-automation-id", "selectedItem");
+            pill.textContent = option.textContent;
+            document.getElementById("selected-skills").append(pill);
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const options = JSON.stringify(Array.from({ length: 9 }, (_, index) =>
+      `Skill ${String(index + 1).padStart(2, "0")}`
+    ));
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    if (result.kind !== "verified") return;
+    const effective = result.effectivePlan.fields[0]!;
+    assert.equal(effective.answer.kind, "answered");
+    if (effective.answer.kind !== "answered") return;
+    assert.equal(effective.answer.provenance, "journey_derived");
+    assert.equal(effective.answer.lane, "live_owner_fact");
+    assert.equal(effective.answer.value, '["Skill 01"]');
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Skill 01"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience trusts a collapsed selected-item over its presentation-only accessibility summary", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

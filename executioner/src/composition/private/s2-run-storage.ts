@@ -34,6 +34,7 @@ import {
   admitQuestionAnswerLearningEvidence,
 } from
   "../../live/evidence/question-answer-learning.ts";
+import { verifyManifestRetainedFiles } from "./s2-retained-file-integrity.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import { inspectStage2ReviewCompletion } from "./s2-review-completion-audit.ts";
 import { inspectStage2ApplicationFailureCompletion } from
@@ -543,6 +544,7 @@ export function rebuildStage2StorageCatalog(storageRootValue: string): Stage2Sto
       disposal.transientCleanup !== "pass" ||
       disposal.completedAt !== manifest.completedAt
     ) denied("storage catalog rebuild denied");
+    verifyManifestRetainedFiles(evidenceRoot, manifest.retainedFiles);
     entries.push(exactCatalogEntry({
       runKey,
       target,

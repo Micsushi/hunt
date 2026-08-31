@@ -286,6 +286,41 @@ test("questionnaire exception trace retains value-free reconciliation context", 
   }
 });
 
+test("sealed run trace rejects retained callbacks without changing terminal bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-value-free-trace-"));
+  try {
+    const trace = createValueFreeRunTrace(root, () => undefined);
+    trace("runtime_total_completed", { submitActivated: false });
+    trace.seal();
+    const path = join(root, "value-free-trace.ndjson");
+    const before = readFileSync(path);
+    trace("late_mutation", { submitActivated: true });
+    assert.deepEqual(readFileSync(path), before);
+    assert.equal(readValueFreeRunTrace(path).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production acceptance enables only the sanitized retained trace gate", () => {
+  const local = readFileSync(
+    new URL("../../../src/acceptance/s2-local.ts", import.meta.url),
+    "utf8",
+  );
+  const runtime = readFileSync(
+    new URL("../../../src/acceptance/s2-playwright-runtime.ts", import.meta.url),
+    "utf8",
+  );
+  const profile = readFileSync(
+    new URL("../../../src/ats/workday/application/profile/playwright-page.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(local, /name !== "HUNT_C3_VALUE_FREE_ACCOUNT_TRACE"/u);
+  assert.match(local, /HUNT_C3_RETAINED_VALUE_FREE_TRACE: "1"/u);
+  assert.match(runtime, /HUNT_C3_RETAINED_VALUE_FREE_TRACE === "1"/u);
+  assert.doesNotMatch(profile, /HUNT_C3_RETAINED_VALUE_FREE_TRACE/u);
+});
+
 test("multi-select ownership trace retains only structural counts", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-multi-select-ownership-trace-"));
   try {

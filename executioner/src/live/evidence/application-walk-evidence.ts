@@ -308,12 +308,16 @@ function validExecutionPolicy(
   }
   catch { return false; }
   const profiles = lanes.filter((lane) => lane.checkpoint === "profile_verified");
+  const syntheticAnswer = lanes.some((lane) =>
+    lane.checkpoint === "profile_verified"
+      ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+      : lane.checkpoint === "questionnaire_verified" &&
+        lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+  );
   return profiles.every((profile) => profile.answerFallbackPolicy === policy.answerFallbackPolicy) &&
-    (policy.answerFallbackPolicy === "deterministic_site_valid_editable" || !lanes.some((lane) =>
-      lane.checkpoint === "profile_verified"
-        ? lane.verifiedFields.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
-        : lane.checkpoint === "questionnaire_verified" &&
-          lane.answers.some(({ lane: answerLane }) => answerLane === "synthetic_test_default")
+    (!syntheticAnswer || (
+      policy.answerFallbackPolicy === "deterministic_site_valid_editable" &&
+      policy.liveProofEligibility === "ineligible_synthetic_answer"
     ));
 }
 

@@ -189,7 +189,14 @@ export async function runStage2RealAcceptance(
   try {
     await ports.cleanup.finalize(args, manifest);
   } catch {
-    return failed("cleanup_finalize_failed");
+    try {
+      await ports.cleanup.finalize(args, manifest);
+    } catch {
+      return await failedAfterJourney(args, ports, "cleanup_finalize_failed", {
+        source: initialSource,
+        config: initialConfig,
+      });
+    }
   }
   return Object.freeze({ ok: true, manifest });
 }

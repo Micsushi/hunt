@@ -96,6 +96,30 @@ test("run storage physically separates disposable state from retained evidence a
   }
 });
 
+test("catalog rebuild rejects a mutated retained terminal file", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-storage-"));
+  try {
+    const layout = await prepareStage2RunStorage(
+      { storageRoot, runKey: "run_20260803_tamperdetectedxx" },
+      noProtection,
+    );
+    writeOwnerConfig(layout, "blackrock.wd1.myworkdayjobs.com", "blackrock", "R265422");
+    writeCompletedEvidence(layout.evidenceRoot, "2026-08-03T22:00:00.000Z");
+    await finalizeStage2RunStorage({
+      storageRoot,
+      ownerConfigPath: layout.ownerConfigPath,
+      evidenceRoot: layout.evidenceRoot,
+    });
+    writeFileSync(join(layout.evidenceRoot, "process-audit.json"), "{}\n", "utf8");
+    assert.throws(
+      () => rebuildStage2StorageCatalog(storageRoot),
+      /storage catalog rebuild denied/u,
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test("run preparation reuses one protected opaque recipient binding without retaining an address", async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), "hunt-s2-storage-"));
   try {

@@ -27,6 +27,7 @@ import { answerLaneAdmitted } from "../../../../form/answers/application-types.t
 import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-value.ts";
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
+import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
 
 const reviewedVariants = new Set([
   "workday_text_v1",
@@ -852,7 +853,7 @@ function routeSiteAnswers(
 ): ProfilePagePlan {
   const canonicalPlan: ProfilePagePlan = {
     ...plan,
-    fields: plan.fields.map(canonicalSiteField),
+    fields: plan.fields.map((field) => boundedOptionalSkillFacts(canonicalSiteField(field), snapshot)),
     repeatables: plan.repeatables.map((repeatable) => ({
       ...repeatable,
       rows: repeatable.rows.map((row) => ({
