@@ -309,6 +309,7 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   assert.equal(progress.activeFillSloMs, 60_000);
   assert.equal(progress.activeFillWithinSlo, true);
   assert.equal(progress.activeFillDurationMs >= progress.reconciliationDurationMs, true);
+  assert.equal(progress.committedReadbackDurationMs >= 0, true);
   assert.equal(progress.pageReadinessDurationMs >= 0, true);
   assert.equal(progress.navigationWaitDurationMs, 0);
   assert.match(progress.pageReadyAt, /Z$/u);

@@ -646,6 +646,13 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
   const started = records.filter(({ event }) => event === "application_walk_started");
   const progress = records.filter(({ event }) => event === "application_walk_progress");
   const terminal = records.filter(({ event }) => event === "application_walk_terminal");
+  const monitorTimings = records.filter(({ event }) =>
+    event === "external_monitor_capture_completed"
+  );
+  const applicationMonitorTimings = monitorTimings.filter(({ details }) =>
+    details.chain === "application"
+  );
+  const authMonitorTimings = monitorTimings.filter(({ details }) => details.chain === "auth");
   const requiredPhases = [
     "runtime_setup_completed",
     "runtime_authentication_completed",
@@ -657,6 +664,12 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
   ];
   if (started.length !== 1 || terminal.length !== 1 ||
       progress.length !== application.pageChecks.length ||
+      applicationMonitorTimings.length < Math.max(1, application.pageChecks.length) ||
+      authMonitorTimings.length < 1 ||
+      monitorTimings.some(({ details }) =>
+        details.phasePassed !== true || !Number.isSafeInteger(details.durationMs) ||
+        (details.durationMs as number) < 0
+      ) ||
       started[0]?.details.journeyId !== application.journeyId ||
       typeof started[0]?.details.startedAt !== "string" ||
       started[0]?.details.monotonicClock !== "performance_now" ||
@@ -669,11 +682,13 @@ function validateValueFreeTrace(path: string, application: ApplicationWalkAccept
         !Number.isSafeInteger(details.pageReadinessDurationMs) ||
         !Number.isSafeInteger(details.navigationWaitDurationMs) ||
         !Number.isSafeInteger(details.activeFillDurationMs) ||
+        !Number.isSafeInteger(details.committedReadbackDurationMs) ||
         !Number.isSafeInteger(details.reconciliationDurationMs) ||
         !Number.isSafeInteger(details.activeFillSloMs) ||
         (details.pageReadinessDurationMs as number) < 0 ||
         (details.navigationWaitDurationMs as number) < 0 ||
         (details.activeFillDurationMs as number) < 0 ||
+        (details.committedReadbackDurationMs as number) < 0 ||
         (details.reconciliationDurationMs as number) < 0 ||
         (details.activeFillSloMs as number) <= 0 ||
         details.activeFillSloMs !== 60_000 ||

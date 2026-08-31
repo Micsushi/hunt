@@ -104,6 +104,7 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly pageReadinessDurationMs: number;
       readonly navigationWaitDurationMs: number;
       readonly activeFillDurationMs: number;
+      readonly committedReadbackDurationMs: number;
       readonly reconciliationDurationMs: number;
       readonly activeFillSloMs: 60_000;
       readonly activeFillWithinSlo: boolean;
@@ -408,6 +409,7 @@ interface CompletedPageTiming {
   readonly pageReadinessDurationMs: number;
   readonly navigationWaitDurationMs: number;
   readonly activeFillDurationMs: number;
+  readonly committedReadbackDurationMs: number;
   readonly reconciliationDurationMs: number;
   readonly activeFillSloMs: 60_000;
   readonly activeFillWithinSlo: boolean;
@@ -421,6 +423,7 @@ interface ActivePageTiming {
   readonly pageReadyAt: string;
   readonly pageReadinessDurationMs: number;
   readonly navigationWaitDurationMs: number;
+  committedReadbackDurationMs: number;
   reconciliationDurationMs: number;
 }
 
@@ -435,7 +438,10 @@ class ApplicationWalkTimingCollector {
   }
 
   observed(result: Awaited<ReturnType<ApplicationWalkDependencies["observer"]["observe"]>>, at: string, durationMs: number): void {
-    if (result.ok) this.#ready.set(result.value.pageId, { at, durationMs });
+    if (!result.ok) return;
+    const active = this.#active.find(({ pageId }) => pageId === result.value.pageId);
+    if (active === undefined) this.#ready.set(result.value.pageId, { at, durationMs });
+    else active.committedReadbackDurationMs += durationMs;
   }
 
   navigated(durationMs: number): void {
@@ -468,6 +474,7 @@ class ApplicationWalkTimingCollector {
             pageReadyAt: ready.at,
             pageReadinessDurationMs: ready.durationMs,
             navigationWaitDurationMs: this.#navigationWaitDurationMs,
+            committedReadbackDurationMs: 0,
             reconciliationDurationMs: 0,
           };
           this.#active.push(active);
@@ -487,13 +494,14 @@ class ApplicationWalkTimingCollector {
     const index = this.#active.findIndex((item) => item.checkpoint === checkpoint);
     const active = index === -1 ? undefined : this.#active.splice(index, 1)[0];
     if (active === undefined) throw new TypeError("application page timing unavailable");
-    const activeFillDurationMs = elapsed(this.#clock, active.activeStarted);
+    const activeFillDurationMs = active.reconciliationDurationMs;
     return Object.freeze({
       pageReadyAt: active.pageReadyAt,
       pageFillCompletedAt: this.#clock.wallNow(),
       pageReadinessDurationMs: active.pageReadinessDurationMs,
       navigationWaitDurationMs: active.navigationWaitDurationMs,
       activeFillDurationMs,
+      committedReadbackDurationMs: active.committedReadbackDurationMs,
       reconciliationDurationMs: active.reconciliationDurationMs,
       activeFillSloMs: ACTIVE_FILL_SLO_MS,
       activeFillWithinSlo: activeFillDurationMs <= ACTIVE_FILL_SLO_MS,

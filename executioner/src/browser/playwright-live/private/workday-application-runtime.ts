@@ -1138,12 +1138,12 @@ export class OwnedWorkdayApplicationRuntime {
       });
       semanticSessionId = activeSemanticSessionId;
       semantic = activeSemantic;
-      const semanticObservationStartedAt = Date.now();
+      const semanticObservationStartedAt = performance.now();
       const observed = await activeSemantic.observe(
         { sessionId: activeSemanticSessionId, pageId: input.pageId }, signal,
       );
       this.#trace?.("questionnaire_semantic_observation_completed", {
-        durationMs: Date.now() - semanticObservationStartedAt,
+        durationMs: monotonicDuration(semanticObservationStartedAt),
         status: observed.ok ? "succeeded" : "failed",
       });
       if (!observed.ok) return applicationFailure(observed.error.code, "question_control", "ui_behavior");
@@ -1233,7 +1233,7 @@ export class OwnedWorkdayApplicationRuntime {
           driveRequest: Parameters<FieldDriver["drive"]>[0],
           innerSignal: AbortSignal,
         ) => {
-          const driveStartedAt = Date.now();
+            const driveStartedAt = performance.now();
           this.#trace?.("questionnaire_field_drive_started", {
             fieldId: driveRequest.intent.fieldId,
             kind: driveRequest.intent.kind,
@@ -1271,7 +1271,7 @@ export class OwnedWorkdayApplicationRuntime {
             kind: driveRequest.intent.kind,
             uiBehavior: driveRequest.intent.behavior,
             status: driven.ok ? "succeeded" : "failed",
-            durationMs: Date.now() - driveStartedAt,
+            durationMs: monotonicDuration(driveStartedAt),
             ...(!driven.ok ? { code: driven.error.code } : {}),
           });
           return driven;
@@ -1282,7 +1282,7 @@ export class OwnedWorkdayApplicationRuntime {
           verificationRequest: Parameters<FieldVerifier["verify"]>[0],
           innerSignal: AbortSignal,
         ) => {
-          const verificationStartedAt = Date.now();
+          const verificationStartedAt = performance.now();
           // Workday may replace a control (or the entire questionnaire root)
           // after blur/selection. Restore the deterministic semantic bindings
           // before the independent readback so the original intent can still
@@ -1297,7 +1297,7 @@ export class OwnedWorkdayApplicationRuntime {
             kind: verified.ok ? verified.value.kind : "failed",
             uiBehavior: verificationRequest.intent.behavior,
             status: verified.ok && verified.value.kind === "verified" ? "succeeded" : "failed",
-            durationMs: Date.now() - verificationStartedAt,
+            durationMs: monotonicDuration(verificationStartedAt),
             ...(!verified.ok ? { code: verified.error.code } : {}),
           });
           this.#assertAuthorized(innerSignal);
@@ -1508,13 +1508,13 @@ export class OwnedWorkdayApplicationRuntime {
         return applicationFailure("page_incomplete", "question_control", "question");
       }
       await bindQuestionnaireTargets(page, input.pageId);
-      const completionObservationStartedAt = Date.now();
+      const completionObservationStartedAt = performance.now();
       const completion = await new PlaywrightWorkdayApplicationPage(
         page,
         { timeoutMs: this.#timeoutMs },
       ).observe(signal);
       this.#trace?.("questionnaire_completion_observation_completed", {
-        durationMs: Date.now() - completionObservationStartedAt,
+        durationMs: monotonicDuration(completionObservationStartedAt),
         status: completion.ok ? "succeeded" : "failed",
       });
       if (!completion.ok || completion.value.page !== "questionnaire" ||
@@ -3302,17 +3302,21 @@ async function prepareQuestionnaireTargets(
     const targetToken = (await questionnairePopupHydrationTargets(page))[0];
     if (targetToken === undefined) break;
     assertAuthorized();
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     await hydrateQuestionnairePopupOptions(page, pageId, targetToken, timeoutMs);
     trace?.("questionnaire_popup_hydration_completed", {
       targetToken,
-      durationMs: Date.now() - startedAt,
+      durationMs: monotonicDuration(startedAt),
     });
   }
   if ((await questionnairePopupHydrationTargets(page)).length !== 0) {
     throw new TypeError("questionnaire popup hydration limit exceeded");
   }
   await bindQuestionnaireTargets(page, pageId);
+}
+
+function monotonicDuration(started: number): number {
+  return Math.max(0, Math.round(performance.now() - started));
 }
 
 async function prepareNavigationQuestionnaireSnapshot(

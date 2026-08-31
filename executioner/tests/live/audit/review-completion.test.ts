@@ -1648,6 +1648,7 @@ function timingDetails(ordinal: number) {
     pageReadinessDurationMs: 100,
     navigationWaitDurationMs: ordinal === 1 ? 0 : 200,
     activeFillDurationMs: 500,
+    committedReadbackDurationMs: 100,
     reconciliationDurationMs: 400,
     activeFillSloMs: 60_000,
     activeFillWithinSlo: true,
@@ -1657,6 +1658,17 @@ function timingDetails(ordinal: number) {
 }
 
 function writePhaseTimings(trace: (event: string, details?: object) => void): void {
+  trace("external_monitor_capture_completed", {
+    chain: "auth", page: "application_ready", moment: "state_observed",
+    durationMs: 100, phasePassed: true, submitActivated: false,
+  });
+  for (const page of ["profile", "resume", "questionnaire", "review"]) {
+    trace("external_monitor_capture_completed", {
+      chain: "application", page,
+      moment: page === "review" ? "review_readback" : "after_readback",
+      durationMs: 100, phasePassed: true, submitActivated: false,
+    });
+  }
   for (const event of [
     "runtime_setup_completed",
     "runtime_authentication_completed",

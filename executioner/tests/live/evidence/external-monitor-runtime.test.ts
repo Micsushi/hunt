@@ -660,6 +660,7 @@ test("external monitor traces the exact capture boundary without changing behavi
       "external_monitor_request_written",
       "external_monitor_evidence_published",
       "external_monitor_acknowledged",
+      "external_monitor_capture_completed",
     ]);
     assert.equal(details.length, trace.length);
     assert.deepEqual(details[0], {
@@ -671,7 +672,9 @@ test("external monitor traces the exact capture boundary without changing behavi
       attempt: 1,
       submitActivated: false,
     });
-    assert.deepEqual(details.at(-1), {
+    const { durationMs, ...completed } = details.at(-1)!;
+    assert.equal(Number.isSafeInteger(durationMs) && (durationMs ?? -1) >= 0, true);
+    assert.deepEqual(completed, {
       ...details[0],
       fieldCount: 2,
       requiredFieldCount: 2,
@@ -680,6 +683,7 @@ test("external monitor traces the exact capture boundary without changing behavi
       answerTypes: ["text"],
       validationState: "clear",
       submitPresent: false,
+      phasePassed: true,
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

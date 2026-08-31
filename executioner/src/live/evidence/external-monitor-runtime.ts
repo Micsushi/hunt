@@ -141,6 +141,8 @@ export interface Stage2ExternalMonitorTraceDetails {
   readonly operationId: string;
   readonly attempt: number;
   readonly failureStage?: string;
+  readonly durationMs?: number;
+  readonly phasePassed?: boolean;
   readonly fieldCount?: number;
   readonly requiredFieldCount?: number;
   readonly controlTypes?: readonly string[];
@@ -256,6 +258,7 @@ export class Stage2ExternalMonitorRuntime {
     });
     let failureStage = "capture_started";
     let taxonomyTrace: Stage2ExternalMonitorTraceDetails = traceContext;
+    const captureStarted = performance.now();
     this.#active = true;
     try {
       emitMonitorTrace(this.#options.trace, "external_monitor_capture_started", traceContext);
@@ -401,10 +404,17 @@ export class Stage2ExternalMonitorRuntime {
         this.#previousApplicationAck = ackSha256;
       }
       this.#commitMoment(chain, pageName, moment, event);
+      emitMonitorTrace(this.#options.trace, "external_monitor_capture_completed", Object.freeze({
+        ...taxonomyTrace,
+        durationMs: monotonicDuration(captureStarted),
+        phasePassed: true,
+      }));
     } catch (error) {
       emitMonitorTrace(this.#options.trace, "external_monitor_capture_failed", Object.freeze({
         ...taxonomyTrace,
         failureStage,
+        durationMs: monotonicDuration(captureStarted),
+        phasePassed: false,
       }));
       this.close();
       throw error;
@@ -1038,6 +1048,10 @@ function validateLiveFile(path: string, expected: Record<string, unknown>): void
 function observerBoundRequest(value: Record<string, unknown>): boolean {
   return value.requestRevision === "s2-external-monitor-request-v2" ||
     value.requestRevision === "s2-external-monitor-request-v4";
+}
+
+function monotonicDuration(started: number): number {
+  return Math.max(0, Math.round(performance.now() - started));
 }
 
 function exactExpectedSubmitPresent(value: Record<string, unknown>): boolean {
