@@ -34,6 +34,7 @@ import {
   observedStructurePage,
   observedStructurePageFromIdentityTitle,
   observedStructurePageWithIdentity,
+  observedSubmitPresent,
   reconcileObservedMonitorSurface,
   selectObservedChromeIdentityTitle,
   waitForReconciledMonitorSurface,
@@ -1611,7 +1612,10 @@ test("ACK CLI denies an abrupt Node producer exit before process audit", async (
 });
 
 test("authenticated Workday Chrome title normalization preserves the identity title", async () => {
-  const observerSource = readFileSync("src/live/evidence/external-monitor-observer.ts", "utf8");
+  const observerSource = [
+    "src/live/evidence/external-monitor-observer.ts",
+    "src/live/evidence/external-monitor-owned-browser.ts",
+  ].map((path) => readFileSync(path, "utf8")).join("\n");
   assert.match(observerSource, /\$visible = -not \$element\.Current\.IsOffscreen/u);
   assert.match(observerSource, /if \(\$visible -and \$allow -contains \$name\)/u);
   assert.doesNotMatch(observerSource, /if \(\$visible\) \{\s*switch \(\$name\)/u);
@@ -1736,6 +1740,14 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
   assert.equal(observedStructurePage(new Set([
     "Sign In", "Email Address", "Password", "Review", "Submit application",
   ])), "sign_in");
+  const visibleSignIn = {
+    actionFlags: new Set(["Sign In"]),
+    editFlags: new Set(["Email Address", "Password"]),
+  };
+  assert.equal(observedStructurePage(new Set([
+    "Sign In", "Email Address", "Password", "Review", "Submit application",
+  ]), [], visibleSignIn), "sign_in");
+  assert.equal(observedSubmitPresent(visibleSignIn), false);
   assert.equal(
     externalMonitorObserverFailureCode(new Error("external monitor observer failed: owned_browser_observation")),
     "owned_browser_observation",
