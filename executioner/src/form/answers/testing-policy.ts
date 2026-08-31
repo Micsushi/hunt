@@ -46,9 +46,10 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
   return "unknown";
 }
 
-export function semanticSyntheticTestDefault(label: string): boolean | undefined {
+export function semanticSyntheticTestDefault(label: string): boolean | string | undefined {
   const type = testingQuestionSemanticType(label);
   if (type === "qualification_requirement") return true;
   if (type === "employee_referral" || type === "prior_employment") return false;
+  if (type === "identity" && normalized(label) === "language") return "English";
   return undefined;
 }

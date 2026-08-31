@@ -434,7 +434,9 @@ export function createApplicationAnswerResolver(
         if (!fallbackAllowed) {
           return failure(protectedCategory === null ? "question_unknown" : "protected_answer_denied");
         }
-        const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
+        const generated = semanticLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        ) ??
           generatedLearningIntent(
             field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
@@ -446,7 +448,9 @@ export function createApplicationAnswerResolver(
         if (!fallbackAllowed) {
           return failure(protectedCategory === null ? "question_ambiguous" : "protected_answer_denied");
         }
-        const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
+        const generated = semanticLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        ) ??
           generatedLearningIntent(
             field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
@@ -463,7 +467,9 @@ export function createApplicationAnswerResolver(
             ? unsupported(field)
             : failure("protected_answer_denied");
         }
-        const generated = semanticLearningIntent(field, request.resumeArtifact, generatedDate) ??
+        const generated = semanticLearningIntent(
+          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
+        ) ??
           generatedLearningIntent(
             field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
           );
@@ -650,6 +656,7 @@ function semanticLearningIntent(
   field: ApplicationFieldObservation,
   resumeArtifact: ApplicationAnswerResolutionRequest["resumeArtifact"],
   generatedDate: string,
+  selectRandomIndex: (length: number) => number,
 ): ApplicationAnswerResolutionResult | undefined {
   const value = semanticSyntheticTestDefault(field.label);
   if (value === undefined) return undefined;
@@ -662,7 +669,7 @@ function semanticLearningIntent(
   );
   return intended.kind === "resolved"
     ? intended
-    : generatedLearningIntent(field, resumeArtifact, generatedDate, () => 0);
+    : generatedLearningIntent(field, resumeArtifact, generatedDate, selectRandomIndex);
 }
 
 /** Frozen F6 compatibility boundary. Live Workday code must use the application resolver. */

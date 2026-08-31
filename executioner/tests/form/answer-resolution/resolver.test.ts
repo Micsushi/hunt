@@ -998,6 +998,71 @@ test("semantic testing defaults distinguish qualifications from sponsorship", as
   }
 });
 
+test("missing self-identification language prefers English without becoming an owner fact", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let randomSelections = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => {
+      randomSelections += 1;
+      return 0;
+    },
+  );
+  const result = await resolver.resolve(syntheticRequest(field("Language", "listbox", [
+    { id: optionId("language-spanish"), label: boundedText("Spanish") },
+    { id: optionId("language-english"), label: boundedText("English") },
+  ])), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: {
+      kind: "resolved",
+      lane: "synthetic_test_default",
+      intent: {
+        kind: "choice",
+        behavior: "listbox",
+        fieldId: "s1-field-given-name",
+        target: "target-1",
+        optionId: "language-english",
+        expectedOption: "English",
+        provenance: "reviewed_catalog",
+      },
+    },
+  });
+  assert.equal(randomSelections, 0);
+});
+
+test("missing self-identification language keeps site-valid fallback when English is absent", async () => {
+  const profile = createProfileQueryFake({
+    query: { ok: true, value: { kind: "profile_answer_missing" } },
+  });
+  let randomSelections = 0;
+  const resolver = createAnswerResolver(
+    profile.port,
+    "I am interested in this role.",
+    "2026-08-20",
+    () => {
+      randomSelections += 1;
+      return 0;
+    },
+  );
+  const result = await resolver.resolve(syntheticRequest(field("Language", "listbox", [
+    { id: optionId("language-french"), label: boundedText("French") },
+  ])), new AbortController().signal);
+
+  assert.equal(result.ok && result.value.kind, "resolved");
+  if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice") {
+    assert.equal(result.value.lane, "synthetic_test_default");
+    assert.equal(result.value.intent.expectedOption, "French");
+    assert.equal(result.value.intent.provenance, "visible_option");
+  }
+  assert.equal(randomSelections, 1);
+});
+
 test("missing prior-employment and employee-referral facts use semantic No defaults", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
