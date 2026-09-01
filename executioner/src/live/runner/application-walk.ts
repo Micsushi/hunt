@@ -122,6 +122,15 @@ export type Stage2ApplicationWalkTraceEvent =
       readonly submitActivated: false;
     }
   | {
+      readonly kind: "application_observer_required_field_projection";
+      readonly page: string;
+      readonly requiredFields: number;
+      readonly verifiedFields: number;
+      readonly unverifiedFieldIds: readonly string[];
+      readonly unverifiedFieldReasons: readonly string[];
+      readonly submitActivated: false;
+    }
+  | {
       readonly kind: "application_walk_terminal";
       readonly journeyId: string;
       readonly status: "passed" | "blocked" | "failed";
@@ -172,6 +181,19 @@ export async function runObservedApplicationPageWalk(
         const began = clock.monotonicNow();
         const result = await dependencies.walk.observer.observe(observeSignal);
         timing.observed(result, clock.wallNow(), elapsed(clock, began));
+        if (result.ok) {
+          const fields = result.value.requiredFields as readonly ProjectedRequiredField[];
+          const unverified = fields.filter(({ verification }) => verification !== "verified");
+          emitTrace(dependencies.trace, {
+            kind: "application_observer_required_field_projection",
+            page: result.value.page,
+            requiredFields: fields.length,
+            verifiedFields: fields.length - unverified.length,
+            unverifiedFieldIds: unique(unverified.map(({ fieldId }) => fieldId)),
+            unverifiedFieldReasons: unique(unverified.map(projectionReason)),
+            submitActivated: false,
+          });
+        }
         return result;
       },
     },
@@ -408,6 +430,21 @@ function emitProgress(
   } catch {
     // Diagnostics never change application behavior.
   }
+}
+
+interface ProjectedRequiredField {
+  readonly fieldId: string;
+  readonly verification: "verified" | "unverified";
+  readonly uiState?: {
+    readonly blockedBy?: string | null;
+    readonly type?: string;
+  };
+}
+
+function projectionReason(field: ProjectedRequiredField): string {
+  const type = field.uiState?.type ?? "unknown_type";
+  const blockedBy = field.uiState?.blockedBy ?? "semantic_verification";
+  return `${field.fieldId}.${type}.${blockedBy}`;
 }
 
 function unique(values: readonly string[]): readonly string[] {

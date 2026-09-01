@@ -80,6 +80,20 @@ test("durable run trace retains ordered structural state and drops applicant val
       submitPresent: false,
       submitActivated: false,
     });
+    trace("application_observer_required_field_projection", {
+      page: "profile",
+      requiredFields: 2,
+      verifiedFields: 1,
+      unverifiedFieldIds: ["profile.phone.number"],
+      unverifiedFieldReasons: ["profile.phone.number.phone.backing"],
+      applicantValue: "private observer value",
+    });
+    trace("profile_post_verification_phase", {
+      phase: "stable_page",
+      status: "failed",
+      failureName: "TypeError",
+      applicantValue: "private phase value",
+    });
     trace("questionnaire_checkbox_diagnostics", {
       groupCount: 1,
       checkboxCount: 3,
@@ -160,11 +174,25 @@ test("durable run trace retains ordered structural state and drops applicant val
     assert.deepEqual(records.map(({ sequence, event }) => [sequence, event]), [
       [1, "application_walk_progress"],
       [2, "external_monitor_acknowledged"],
-      [3, "questionnaire_checkbox_diagnostics"],
-      [4, "questionnaire_date_diagnostics"],
+      [3, "application_observer_required_field_projection"],
+      [4, "profile_post_verification_phase"],
+      [5, "questionnaire_checkbox_diagnostics"],
+      [6, "questionnaire_date_diagnostics"],
     ]);
     assert.deepEqual(records[0]?.details.questionTypes, ["authorization", "employment"]);
     assert.deepEqual(records[2]?.details, {
+      page: "profile",
+      requiredFields: 2,
+      verifiedFields: 1,
+      unverifiedFieldIds: ["profile.phone.number"],
+      unverifiedFieldReasons: ["profile.phone.number.phone.backing"],
+    });
+    assert.deepEqual(records[3]?.details, {
+      phase: "stable_page",
+      status: "failed",
+      failureName: "TypeError",
+    });
+    assert.deepEqual(records[4]?.details, {
       groupCount: 1,
       checkboxCount: 3,
       checkedCount: 0,
@@ -174,7 +202,7 @@ test("durable run trace retains ordered structural state and drops applicant val
       exactObjectCallCount: 2,
       exactCommitCount: 0,
     });
-    assert.deepEqual(records[3]?.details, {
+    assert.deepEqual(records[5]?.details, {
       dateInputCount: 1,
       allTextTelInputCount: 4,
       maskedInputCount: 1,

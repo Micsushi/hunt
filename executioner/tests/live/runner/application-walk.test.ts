@@ -94,13 +94,15 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
       requiredFields: [{
         ...truth("profile").requiredFields[0]!,
         verification: "unverified",
-      }],
+        uiState: { type: "phone", blockedBy: "backing" },
+      } as never],
     }, {
       ...truth("profile"),
       requiredFields: [{
         ...truth("profile").requiredFields[0]!,
         verification: "unverified",
-      }],
+        uiState: { type: "phone", blockedBy: "backing" },
+      } as never],
     }], calls),
     laneAcceptances: { snapshot: () => [] },
     cleanup: {
@@ -128,7 +130,24 @@ test("returns only the sanitized page failure after guaranteed cleanup", async (
   assert.equal(calls.includes("write"), false);
   assert.deepEqual(trace.map(({ kind }) => kind), [
     "application_walk_started",
+    "application_observer_required_field_projection",
+    "application_observer_required_field_projection",
+    "application_observer_required_field_projection",
     "application_walk_terminal",
+  ]);
+  const projections = trace.filter((event): event is Extract<
+    Stage2ApplicationWalkTraceEvent,
+    { readonly kind: "application_observer_required_field_projection" }
+  > => event.kind === "application_observer_required_field_projection");
+  assert.deepEqual(projections.map(({ unverifiedFieldIds }) => unverifiedFieldIds), [
+    [],
+    ["contact-email"],
+    ["contact-email"],
+  ]);
+  assert.deepEqual(projections.map(({ unverifiedFieldReasons }) => unverifiedFieldReasons), [
+    [],
+    ["contact-email.phone.backing"],
+    ["contact-email.phone.backing"],
   ]);
   const terminal = trace.at(-1);
   assert.equal(terminal?.kind, "application_walk_terminal");

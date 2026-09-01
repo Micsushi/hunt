@@ -85,6 +85,7 @@ const STRING_KEYS = new Set([
   "chain", "page", "moment", "operationId", "failureStage", "validationState",
   "code", "fieldId", "uiBehavior", "uiVariant", "kind", "journeyId", "stopAfter",
   "checkpoint", "browserPage", "status", "classifier", "primitive", "unknownLayer",
+  "phase", "failureName",
   "profileInspectionClassification", "profileInspectionPhase",
   "profileInspectionDeadlineOutcome", "profileInspectionProfilePortState",
   "profileInspectionSessionState", "profileInspectionCleanupState",
@@ -164,6 +165,7 @@ const ARRAY_KEYS = new Set([
   "profileMetadataMismatchFields", "profileMetadataMismatchReasons", "learningFieldIds",
   "learningFieldReasons", "conditionalAdded", "conditionalRemoved",
   "secondaryFailures",
+  "unverifiedFieldIds", "unverifiedFieldReasons",
 ]);
 const PROFILE_INSPECTION_ARRAY_KEYS = new Set([
   "profileInspectionBindingIds", "profileInspectionBindingPaths", "profileInspectionBindingDigests",
