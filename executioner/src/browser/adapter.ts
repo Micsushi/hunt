@@ -111,6 +111,17 @@ export async function inspectPage(
         100,
       )
     ) readback = { kind: "empty" };
+    if (item.interaction === "formatted-date" && readback.kind === "text") {
+      const declared = page.locator(`[data-hunt-target-token="${item.declaredToken}"]`);
+      const formattedInput = await declared.count() === 1 &&
+          await declared.evaluate((element) => element instanceof HTMLInputElement)
+        ? declared
+        : declared.locator('input:not([type="hidden"])');
+      if (
+        await formattedInput.count() !== 1 ||
+        !await formattedDateBackingCommitted(formattedInput, readback.value, 100)
+      ) readback = { kind: "empty" };
+    }
     const target = {
       ...item,
       name,
@@ -2205,37 +2216,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== isoDate) {
         return { kind: "unavailable" };
       }
-      const record = element as unknown as Record<string, unknown>;
-      const controlled = Object.keys(element)
-        .filter((key) => key.startsWith("__reactProps$"))
-        .map((key) => record[key])
-        .filter((value): value is Record<string, unknown> => {
-          if (typeof value !== "object" || value === null) return false;
-          const props = value as Record<string, unknown>;
-          return Object.hasOwn(props, "value") &&
-            (typeof props.onChange === "function" || typeof props.onDatePicked === "function");
-        });
-      const backingCommitted = controlled.length === 0 || controlled.some((props) => {
-        if (typeof props.value === "string") {
-          const backing = normalize(props.value).replace(
-            /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
-            "",
-          );
-          if (backing === isoDate) return true;
-          const backingMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(backing);
-          return backingMatch !== null &&
-            `${backingMatch[3]}-${backingMatch[1]!.padStart(2, "0")}-${
-              backingMatch[2]!.padStart(2, "0")}` === isoDate;
-        }
-        if (typeof props.value !== "object" || props.value === null) return false;
-        const backing = props.value as Record<string, unknown>;
-        return `${String(backing.year).padStart(4, "0")}-${
-          String(backing.month).padStart(2, "0")}-${String(backing.day).padStart(2, "0")}` ===
-          isoDate;
-      });
-      return backingCommitted
-        ? { kind: "text", value: isoDate as never }
-        : { kind: "empty" };
+      return { kind: "text", value: isoDate as never };
     };
     const formattedDateInput = (element: Element): HTMLInputElement | undefined => {
       const inputs = [...element.querySelectorAll<HTMLInputElement>(

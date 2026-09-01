@@ -358,9 +358,18 @@ test("commits a Date-backed Workday formatted date through its visible calendar"
       const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
       let accepted = '';
       const controlledDateProps = { value: '', onChange: () => {} };
+      const dateOwnerFiber = {
+        memoizedProps: { value: '', onChange: () => {} },
+        pendingProps: { value: '', onChange: () => {} },
+        return: null,
+      };
       Object.defineProperty(input, '__reactProps$controlledDate', {
         enumerable: true,
         value: controlledDateProps,
+      });
+      Object.defineProperty(input, '__reactFiber$controlledDate', {
+        enumerable: true,
+        value: { memoizedProps: controlledDateProps, return: dateOwnerFiber },
       });
       input.addEventListener('input', () => { input.value = accepted; });
       input.addEventListener('blur', () => { input.value = accepted; });
@@ -369,7 +378,8 @@ test("commits a Date-backed Workday formatted date through its visible calendar"
       });
       document.querySelector('[aria-label="Tuesday, September 1, 2026"]').addEventListener('click', () => {
         accepted = '09/01/2026';
-        controlledDateProps.value = new Date('2026-09-01T00:00:00.000Z');
+        dateOwnerFiber.memoizedProps.value = new Date('2026-09-01T00:00:00.000Z');
+        dateOwnerFiber.pendingProps.value = dateOwnerFiber.memoizedProps.value;
         input.value = accepted;
         document.querySelector('[role="dialog"]').hidden = true;
       });
@@ -424,6 +434,11 @@ test("commits a Date-backed Workday formatted date through its visible calendar"
     assert.equal(
       await page.locator('[data-hunt-target-token="target-formatted-date"]').inputValue(),
       "09/01/2026",
+    );
+    const readback = await provider.observe(started.value, new AbortController().signal);
+    assert.deepEqual(
+      readback.ok && readback.value.targets.find(({ name }) => name === "Date")?.readback,
+      { kind: "text", value: "2026-09-01" },
     );
   } finally {
     await context.close();
