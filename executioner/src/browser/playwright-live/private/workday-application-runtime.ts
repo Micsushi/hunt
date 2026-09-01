@@ -99,6 +99,7 @@ import { createQuestionnaireSemanticAuthority } from
   "./questionnaire-semantic-authority.ts";
 import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 import type { PersistentPage } from "./types.ts";
+import { completeProfilePostVerification } from "./profile-post-verification.ts";
 
 const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
 
@@ -819,50 +820,55 @@ export class OwnedWorkdayApplicationRuntime {
           }
           throw new TypeError("profile reconciliation denied");
         }
-        this.#acceptances.record(Object.freeze({
-          schemaVersion: 1,
-          checkpoint: "profile_verified",
-          pageId: input.pageId,
-          answerFallbackPolicy: request.ownerSources.executionPolicy?.answerFallbackPolicy ??
-            "deterministic_site_valid_editable",
-          pageType: result.pageType,
-          verifiedFields: result.verifiedFields,
-          ...(syntheticFields.length === 0 ? {} : { syntheticFields }),
-          ownedDuplicateRows: 0,
-          independentlyVerified: true,
-          ...(learningSha256 === null
-            ? {}
-            : { profileFieldLearningSha256: learningSha256 }),
-          submitActivated: false,
-          privacyScan: "pass",
-        }));
-        for (const field of result.committedFields.filter(({ synthetic }) => synthetic)) {
-          request.questionLearning?.recordPendingProfile?.({
+        await completeProfilePostVerification({
+          recordAcceptance: () => this.#acceptances.record(Object.freeze({
+            schemaVersion: 1,
+            checkpoint: "profile_verified",
             pageId: input.pageId,
-            rowKey: field.rowKey ?? null,
-            questionId: `question.profile.${field.fieldId}`,
-            fieldId: field.fieldId,
-            exactQuestion: field.label,
-            required: field.required,
-            semanticQuestionType: "unknown",
-            answerType: profilePendingAnswerType(field.answerType),
-            controlType: profilePendingControlType(field.uiBehavior),
-            options: field.allowedOptions,
-            constraints: profilePendingConstraints(field),
-            conditionalReveal: false,
-            testDefault: field.committedReadback,
-            actualOwnerValue: null,
-            needsUserValue: true,
-            provenance: "generated_default",
-            validation: "verified",
-            committedReadback: field.committedReadback,
-          });
-        }
-        this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields);
-        if (await this.#monitorPageForLane(page, "profile") !== monitorPageName) {
-          throw new TypeError("profile reconciliation page drift denied");
-        }
-        this.#assertAuthorized(signal);
+            answerFallbackPolicy: request.ownerSources.executionPolicy?.answerFallbackPolicy ??
+              "deterministic_site_valid_editable",
+            pageType: result.pageType,
+            verifiedFields: result.verifiedFields,
+            ...(syntheticFields.length === 0 ? {} : { syntheticFields }),
+            ownedDuplicateRows: 0,
+            independentlyVerified: true,
+            ...(learningSha256 === null
+              ? {}
+              : { profileFieldLearningSha256: learningSha256 }),
+            submitActivated: false,
+            privacyScan: "pass",
+          })),
+          recordPendingOwnerLearning: () => {
+            for (const field of result.committedFields.filter(({ synthetic }) => synthetic)) {
+              request.questionLearning?.recordPendingProfile?.({
+                pageId: input.pageId,
+                rowKey: field.rowKey ?? null,
+                questionId: `question.profile.${field.fieldId}`,
+                fieldId: field.fieldId,
+                exactQuestion: field.label,
+                required: field.required,
+                semanticQuestionType: "unknown",
+                answerType: profilePendingAnswerType(field.answerType),
+                controlType: profilePendingControlType(field.uiBehavior),
+                options: field.allowedOptions,
+                constraints: profilePendingConstraints(field),
+                conditionalReveal: false,
+                testDefault: field.committedReadback,
+                actualOwnerValue: null,
+                needsUserValue: true,
+                provenance: "generated_default",
+                validation: "verified",
+                committedReadback: field.committedReadback,
+              });
+            }
+          },
+          recordReviewExpectations: () =>
+            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields),
+          verifyStablePage: async () =>
+            await this.#monitorPageForLane(page, "profile") === monitorPageName,
+          assertAuthorized: () => this.#assertAuthorized(signal),
+          trace: this.#trace,
+        });
         return verified("profile", "profile_verified", input.pageId);
       }
       case "reconcile_questionnaire": {

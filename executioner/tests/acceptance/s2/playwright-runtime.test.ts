@@ -1141,10 +1141,17 @@ test("a generated prior-employment fallback remains explicit and non-submittable
   const accepted: string[] = [];
   const monitored: string[] = [];
   const traces: { readonly event: string; readonly details?: object }[] = [];
+  const questionLearning = createQuestionAnswerLearningCapture({
+    root: evidenceRoot,
+    mode: "synthetic_test_non_submittable",
+    executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
+    sensitiveValues: ["false", "No"],
+  });
   let nextOperation = 0;
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       owner: { roots: { evidence: { path: evidenceRoot } } },
+      questionLearning,
       ownerSources: {
         executionPolicy: liveApplicationExecutionPolicy("live"),
         profilePlan: {
@@ -1219,6 +1226,24 @@ fields: [{
     assert.equal(learning.fields[0].lane, "synthetic_test_default");
     assert.equal(learning.fields[0].terminalDisposition, "verified");
     assert.equal(learning.fields[0].mechanics.persistentReadback, "verified_after_rescan");
+    assert.equal(questionLearning.write(), null);
+    const pending = JSON.parse(readFileSync(
+      join(evidenceRoot, "pending-profile-questions.json"),
+      "utf8",
+    ));
+    assert.deepEqual(pending.pendingProfileQuestions.map((field: {
+      readonly fieldId: string;
+      readonly provenance: string;
+      readonly validation: string;
+    }) => ({
+      fieldId: field.fieldId,
+      provenance: field.provenance,
+      validation: field.validation,
+    })), [{
+      fieldId: "employment.previously_worked_for_organization",
+      provenance: "generated_default",
+      validation: "verified",
+    }]);
     assert.equal(traces.some(({ event }) => event === "profile_reconciliation_blocked"), false);
   } finally {
     runtime.dispose();
