@@ -46,6 +46,8 @@ import {
   sharedProfileUiTypes,
   sharedUiTypeForBehavior,
 } from "../../deterministic/ui-state-model.ts";
+import { profileKnownAliasMatches } from
+  "../../ats/workday/application/profile/semantic-readback.ts";
 
 const uiTypes = new Set<string>(sharedProfileUiTypes);
 const questionCategories = new Set([
@@ -1051,7 +1053,11 @@ function learn(
   }
   const expected = pending.get(identity);
   if (expected !== undefined) {
-    record.mechanics.persistentReadback = sameValue(expected, control.readback)
+    record.mechanics.persistentReadback = sameValue(
+      expected,
+      control.readback,
+      plan?.fieldId,
+    )
       ? "verified_after_rescan"
       : "unverified_after_rescan";
     if (record.mechanics.persistentReadback === "verified_after_rescan") {
@@ -1287,10 +1293,9 @@ function prefillDisposition(
   if (plan === undefined || plan.answer.kind === "profile_answer_missing") {
     return "needs_owner_input";
   }
-  if (plan.answer.lane !== "live_owner_fact") return "needs_owner_input";
   if (readback === null || normalize(readback) === "") return "blank";
   const expected = plan.optionMapping?.visibleOption ?? plan.answer.value;
-  return sameValue(expected, readback) ? "already_correct" : "conflict";
+  return sameValue(expected, readback, plan.fieldId) ? "already_correct" : "conflict";
 }
 
 function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
@@ -1391,8 +1396,12 @@ function sameCategories(left: ProfileFieldPlan, right: ProfileFieldPlan): boolea
   return left.questionType === right.questionType && left.answerType === right.answerType;
 }
 
-function sameValue(expected: string, actual: string | null): boolean {
+function sameValue(expected: string, actual: string | null, fieldId?: string): boolean {
   if (actual === null) return false;
+  if (fieldId !== undefined) {
+    const aliasMatch = profileKnownAliasMatches(fieldId, actual, expected);
+    if (aliasMatch !== undefined) return aliasMatch;
+  }
   const expectedOptions = optionList(expected);
   if (expectedOptions === undefined) return normalize(expected) === normalize(actual);
   const actualOptions = optionList(actual) ?? [actual];

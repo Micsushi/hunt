@@ -28,6 +28,7 @@ import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
 import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
+import { profileKnownAliasMatches } from "./semantic-readback.ts";
 import {
   evaluateSharedUiState,
   sharedUiTypeForBehavior,
@@ -1196,7 +1197,8 @@ async function reconcileField(
   }
   const expected = visibleValue(effectiveField);
   const syntheticCommitProofRequired = effectiveField.answer.kind === "answered" &&
-    effectiveField.answer.lane === "synthetic_test_default";
+    effectiveField.answer.lane === "synthetic_test_default" &&
+    effectiveField.fieldId !== "phone.country_code";
   if (syntheticCommitProofRequired ||
       !readbackMatches(effectiveField, control.readback, expected)) {
     const syntheticFile = control.uiBehavior === "file" &&
@@ -1321,12 +1323,8 @@ function readbackMatches(
   expected: string,
 ): boolean {
   if (actual === null) return false;
-  if (field.fieldId === "phone.device_type" && field.answerType === "option") {
-    return phoneDeviceTypeEquivalent(actual, expected);
-  }
-  if (field.fieldId === "source.how_did_you_hear" && field.answerType === "option") {
-    return sourceOptionEquivalent(actual, expected);
-  }
+  const aliasMatch = profileKnownAliasMatches(field.fieldId, actual, expected);
+  if (aliasMatch !== undefined) return aliasMatch;
   if (field.answerType === "phone") {
     return sharedUiValueMatches("phone", expected, actual);
   }
@@ -1367,25 +1365,6 @@ function profileInteractionEligible(
     readbackState: interaction.backingValueCommitted ? "matches" : "empty",
     validationState: interaction.validationCleared ? "clear" : "invalid",
   }).navigationEligible;
-}
-
-function sourceOptionEquivalent(actual: string, expected: string): boolean {
-  const pair = new Set([
-    normalize(actual).toLocaleLowerCase("en-US"),
-    normalize(expected).toLocaleLowerCase("en-US"),
-  ]);
-  return equivalentOption(actual, expected) || (
-    pair.size === 2 && pair.has("recruiter") &&
-    (pair.has("direct sourcing") || pair.has("recruiter outreach"))
-  );
-}
-
-function phoneDeviceTypeEquivalent(actual: string, expected: string): boolean {
-  const pair = new Set([
-    normalize(actual).toLocaleLowerCase("en-US"),
-    normalize(expected).toLocaleLowerCase("en-US"),
-  ]);
-  return pair.size === 1 || (pair.size === 2 && pair.has("mobile") && pair.has("cell"));
 }
 
 function optionList(value: string): readonly string[] | undefined {
