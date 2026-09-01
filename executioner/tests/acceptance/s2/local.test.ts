@@ -30,6 +30,11 @@ import {
   prepareStage2RunStorage,
   readStage2StorageCatalog,
 } from "../../../src/composition/private/s2-run-storage.ts";
+import {
+  writeOperatorMonitorAcknowledgement,
+  writeOperatorMonitorRequest,
+} from
+  "../../../src/live/evidence/operator-monitor-ack.ts";
 
 const secret = "never-retain-this-password";
 const targetUrl = "https://tenant.wd5.myworkdayjobs.com/en-US/Careers/job/Title_R12345";
@@ -289,7 +294,8 @@ test("real local failure composition seals terminal, process, disposal, and reta
 
 test("real gate-to-local composition seals every post-journey terminal against its admitted source", async () => {
   const scenarios = [
-    { key: "failterminal0001", terminal: "failed", journeyCode: 1, expected: "real_journey_failed" },
+    { key: "failterminal0001", terminal: "failed", journeyCode: 1,
+      expected: "real_journey_failed", inspection: true },
     { key: "blockterminal001", terminal: "blocked", journeyCode: 1, expected: "real_journey_failed" },
     { key: "cancelterminal01", terminal: "cancelled", journeyCode: 130, expected: "operation_cancelled" },
     { key: "sourcedrift00000", terminal: "review_reached", journeyCode: 0, expected: "source_changed" },
@@ -327,7 +333,13 @@ test("real gate-to-local composition seals every post-journey terminal against i
         },
         command: { run: async () => 0 },
         live: { run: async () => {
-          seedFailureEvidence(layout, owner, admittedConfig, scenario.terminal);
+          seedFailureEvidence(
+            layout,
+            owner,
+            admittedConfig,
+            scenario.terminal,
+            "inspection" in scenario && scenario.inspection,
+          );
           return scenario.journeyCode;
         } },
         resultRead: () => ({
@@ -522,6 +534,7 @@ function seedFailureEvidence(
   owner: ReturnType<typeof failureOwner>,
   config: ReturnType<typeof captureStage2Config>,
   status: "review_reached" | "blocked" | "cancelled" | "failed",
+  inspection = false,
 ): void {
   mkdirSync(join(layout.evidenceRoot, "monitor"));
   writeFileSync(
@@ -563,6 +576,25 @@ function seedFailureEvidence(
     monitorChainSha256: "b".repeat(64),
     checkedAt: "2026-08-28T12:01:01.000Z",
   }), "utf8");
+  if (inspection) {
+    const request = writeOperatorMonitorRequest({
+      root: layout.runtimeRoot,
+      journeyId: owner.journeyId,
+      targetHandleId: owner.target.handleId,
+      host: owner.target.host,
+      tenant: owner.target.tenant,
+      posting: owner.target.posting,
+    });
+    writeFileSync(join(layout.evidenceRoot, "monitor-visible.png"), Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]));
+    writeOperatorMonitorAcknowledgement({
+      root: layout.evidenceRoot,
+      monitorRequestPath: request.path,
+      classification: "manual_action_required",
+      observedAt: "2026-08-28T12:00:59.000Z",
+    });
+  }
 }
 
 function reviewPacket() {

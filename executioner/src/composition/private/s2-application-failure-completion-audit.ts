@@ -15,6 +15,8 @@ import {
   admitPendingProfileQuestionsEvidence,
   admitQuestionAnswerLearningEvidence,
 } from "../../live/evidence/question-answer-learning.ts";
+import { readOperatorMonitorAcknowledgement } from
+  "../../live/evidence/operator-monitor-ack.ts";
 import { readWindowsProcessAudit } from "../../live/evidence/windows-process-audit.ts";
 import type { Stage2AcceptanceFailureCode } from "../../acceptance/s2-gate.ts";
 
@@ -24,6 +26,7 @@ const ROOT_FILES = new Set([
   "profile-field-learning-02.json", "question-answer-learning.json", "terminal-artifact.json",
   "value-free-trace.ndjson", "failure-source-binding.json",
   "external-monitor-observer-failure.json",
+  "monitor-ack.json", "monitor-visible.png",
 ]);
 const NESTED_DIRECTORIES = new Set(["auth-monitor", "monitor"]);
 
@@ -121,6 +124,7 @@ export function inspectStage2ApplicationFailureCompletion(
   if (terminal.terminal.status !== binding.terminalStatus ||
       !failureShapeAllowed(binding.gateFailureCode, binding.terminalStatus)) denied();
   validateLearning(root);
+  validateOperatorInspection(root);
   const inventory = evidenceInventory(root);
   if (inventory.monitorFileCount !== processAudit.monitorFileCount) denied();
   const terminalBytes = readStable(join(root, "terminal-artifact.json"), 16 * 1024);
@@ -149,6 +153,18 @@ export function inspectStage2ApplicationFailureCompletion(
     if (JSON.stringify(stored) !== JSON.stringify(audit)) denied();
   }
   return Object.freeze({ root, audit, nestedEvidenceFiles: inventory.nestedFiles });
+}
+
+function validateOperatorInspection(root: string): void {
+  const files = readdirSync(root, { withFileTypes: true });
+  const acknowledgementPresent = files.some((entry) =>
+    entry.isFile() && entry.name === "monitor-ack.json"
+  );
+  const screenshotPresent = files.some((entry) =>
+    entry.isFile() && entry.name === "monitor-visible.png"
+  );
+  if (acknowledgementPresent !== screenshotPresent) denied();
+  if (acknowledgementPresent) readOperatorMonitorAcknowledgement(root);
 }
 
 function evidenceInventory(root: string): {

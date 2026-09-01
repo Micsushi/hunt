@@ -23,6 +23,10 @@ import {
 } from "../deterministic/supported-controls.ts";
 import { commitSingleCheckbox } from "./single-checkbox-commit.ts";
 import { formattedDateBackingCommitted } from "./formatted-date-backing.ts";
+import {
+  applyCompositeDateMutation,
+  compositeDateBackingCommitted,
+} from "./composite-date.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
@@ -89,9 +93,17 @@ export async function inspectPage(
     const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token);
-    const readback = item.control.kind === "file"
+    let readback = item.control.kind === "file"
       ? await inspectUploadReadback(page, item.index, uploaded)
       : normalizeReadback(item.readback);
+    if (
+      item.interaction === "composite-date" && readback.kind === "text" &&
+      !await compositeDateBackingCommitted(
+        page.locator(`[data-hunt-target-token="${item.declaredToken}"]`),
+        readback.value,
+        100,
+      )
+    ) readback = { kind: "empty" };
     const target = {
       ...item,
       name,
@@ -288,37 +300,9 @@ export async function applyMutation(
       return "invalid";
     }
     if (target.interaction === "composite-date") {
-      const parts = [
-        ["dateSectionMonth", "dateSectionMonth-input", mutation.isoDate.slice(5, 7)],
-        ["dateSectionDay", "dateSectionDay-input", mutation.isoDate.slice(8, 10)],
-        ["dateSectionYear", "dateSectionYear-input", mutation.isoDate.slice(0, 4)],
-      ] as const;
-      const locators = parts.map(([legacyId, currentId]) =>
-        locator.locator(
-          `[data-automation-id="${legacyId}"], [data-automation-id="${currentId}"]`,
-        )
-      );
-      const ready = await Promise.all(locators.map(async (part) =>
-        await part.count() === 1 && await part.isVisible() && await part.isEditable()
-      ));
-      if (ready.some((value) => !value)) {
-        return "invalid";
-      }
-      const previous = await Promise.all(locators.map((part) => part.inputValue()));
-      try {
-        for (const [index, part] of locators.entries()) {
-          await part.fill(parts[index]![2], { timeout: timeoutMs });
-        }
-        await locators[2]!.blur({ timeout: timeoutMs });
-      } catch {
-        for (const [index, part] of locators.entries()) {
-          if (await part.count() === 1 && await part.isEditable()) {
-            await part.fill(previous[index]!, { timeout: timeoutMs }).catch(() => undefined);
-          }
-        }
-        return "invalid";
-      }
-      return "applied";
+      return await applyCompositeDateMutation(page, locator, mutation.isoDate, timeoutMs)
+        ? "applied"
+        : "invalid";
     }
     if (target.interaction === "formatted-date") {
       await page.evaluate(() => {

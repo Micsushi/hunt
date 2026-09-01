@@ -211,6 +211,139 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
+test("commits a controlled Workday composite date through its owned calendar", async () => {
+  const fixture = await loopbackPage(`
+    <div data-automation-id="formField-dateSignedOn">
+      <label>Date</label>
+      <div aria-label="Date" data-automation-id="dateInputWrapper"
+        data-hunt-target-token="target-composite-date">
+        <input data-automation-id="dateSectionMonth-input">
+        <input data-automation-id="dateSectionDay-input">
+        <input data-automation-id="dateSectionYear-input">
+      </div>
+      <button type="button" aria-label="Open date picker"><svg></svg></button>
+      <div role="dialog" hidden>
+        <button type="button" aria-label="Monday, August 31, 2026">31</button>
+      </div>
+    </div>
+    <script>
+      const owner = document.querySelector('[data-automation-id="dateInputWrapper"]');
+      const dateProps = { value: null, onDatePicked() {} };
+      Object.defineProperty(owner, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: dateProps,
+      });
+      document.querySelector('[aria-label="Open date picker"]').addEventListener('click', () => {
+        document.querySelector('[role="dialog"]').hidden = false;
+      });
+      document.querySelector('[aria-label="Monday, August 31, 2026"]').addEventListener('click', () => {
+        dateProps.value = { year: 2026, month: 8, day: 31 };
+        document.querySelector('[data-automation-id="dateSectionMonth-input"]').value = '08';
+        document.querySelector('[data-automation-id="dateSectionDay-input"]').value = '31';
+        document.querySelector('[data-automation-id="dateSectionYear-input"]').value = '2026';
+        document.querySelector('[role="dialog"]').hidden = true;
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("bcbcbcbcbcbcb012"),
+  });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("composite date target missing");
+
+    const result = await provider.mutate(admittedMutation(
+      started.value.sessionId,
+      started.value.pageId,
+      { kind: "set_date", target, isoDate: "2026-08-31" },
+      "bcbcbcbcbcbcb013",
+    ), new AbortController().signal);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const readback = await provider.observe(started.value, new AbortController().signal);
+    assert.deepEqual(
+      readback.ok && readback.value.targets.find(({ name }) => name === "Date")?.readback,
+      { kind: "text", value: "2026-08-31" },
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("does not accept composite date segments whose controlled backing stays empty", async () => {
+  const fixture = await loopbackPage(`
+    <div data-automation-id="formField-dateSignedOn">
+      <label>Date</label>
+      <div aria-label="Date" data-automation-id="dateInputWrapper"
+        data-hunt-target-token="target-surface-only-composite-date">
+        <input data-automation-id="dateSectionMonth-input">
+        <input data-automation-id="dateSectionDay-input">
+        <input data-automation-id="dateSectionYear-input">
+      </div>
+    </div>
+    <script>
+      const owner = document.querySelector('[data-automation-id="dateInputWrapper"]');
+      Object.defineProperty(owner, '__reactProps$controlledDate', {
+        enumerable: true,
+        value: { value: null, onDatePicked() {} },
+      });
+    </script>
+  `);
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({
+    context,
+    ids: testIds("bcbcbcbcbcbcb014"),
+  });
+  try {
+    const started = await provider.start({
+      journeyId: testJourneyId,
+      target: fixture.target,
+    }, new AbortController().signal);
+    if (!started.ok) throw new Error("start failed");
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    if (!observed.ok) throw new Error("observe failed");
+    const target = observed.value.targets.find(({ name }) => name === "Date")?.token;
+    if (target === undefined) throw new Error("composite date target missing");
+    const page = context.pages()[0];
+    if (page === undefined) throw new Error("page missing");
+    const inspection = await inspectPage(
+      page,
+      started.value.sessionId,
+      started.value.pageId,
+      new Map(),
+    );
+    const resolved = inspection.targets.get(target);
+    assert.equal(resolved?.length, 1);
+
+    assert.equal(await applyMutation(page, resolved![0]!, {
+      kind: "set_date",
+      target,
+      isoDate: "2026-08-31" as never,
+    }, undefined, 5_000), "invalid");
+    const after = await provider.observe(started.value, new AbortController().signal);
+    assert.deepEqual(
+      after.ok && after.value.targets.find(({ name }) => name === "Date")?.readback,
+      { kind: "empty" },
+    );
+  } finally {
+    await context.close();
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("commits a controlled Workday formatted date through its visible calendar", async () => {
   const fixture = await loopbackPage(`
     <div data-automation-id="formField-dateSignedOn">

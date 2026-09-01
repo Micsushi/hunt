@@ -83,6 +83,8 @@ const APPLICATION_FAILURE_RETAINED_FILES = new Set([
   "completion-audit.json",
   "external-monitor-observer-failure.json",
   "failure-source-binding.json",
+  "monitor-ack.json",
+  "monitor-visible.png",
   "page-local-inspection.json",
   "pending-profile-questions.json",
   "process-audit.json",
