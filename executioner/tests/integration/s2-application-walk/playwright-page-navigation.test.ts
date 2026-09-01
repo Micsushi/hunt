@@ -1031,6 +1031,32 @@ test("derived phone country code rejects ambiguous upstream country owners", asy
   });
 });
 
+test("derived phone country code ignores a hidden stale upstream owner", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-country-active">
+          <button id="country--country" aria-required="true"
+            data-selected-label="United States">United States</button>
+        </div>
+        <div data-automation-id="formField-country-stale" hidden>
+          <button id="country--country" aria-required="true">Select One</button>
+        </div>
+        <div data-automation-id="formField-country-phone-code">
+          <span data-automation-id="selectedItem">United States (+1)</span>
+          <input id="phoneNumber--countryPhoneCode" role="combobox"
+            aria-required="true">
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.equal(observed.ok, true);
+    assert.equal(observed.ok && observed.value.requiredFields.find(
+      ({ fieldId }) => fieldId === "phoneNumber--countryPhoneCode",
+    )?.verification, "verified");
+  });
+});
+
 test("the physical My Information then My Experience lane sequence is valid", () => {
   assert.equal(isAllowedApplicationTransition("profile", "profile", ["profile"]), true);
   assert.equal(isValidApplicationPageSequence(["profile", "profile"]), true);

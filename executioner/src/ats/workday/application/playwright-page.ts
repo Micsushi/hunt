@@ -1874,7 +1874,8 @@ async function readApplicationSnapshot(
       const upstreamMatches = derivedRule === undefined
         ? []
         : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
-          (candidate) => candidate.id === derivedRule.upstreamBrowserFieldId,
+          (candidate) => candidate.id === derivedRule.upstreamBrowserFieldId &&
+            visible(candidate),
         );
       const upstream = upstreamMatches.length === 1 ? upstreamMatches[0] : undefined;
       const upstreamOwner = upstream?.parentElement?.closest<HTMLElement>(
@@ -1883,7 +1884,7 @@ async function readApplicationSnapshot(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       ) ?? null;
       const derivedBackingCommitted = derivedRule !== undefined && upstream != null &&
-        root.contains(upstream) && visible(upstream) && fieldOwnerSelectedItems.length === 1 &&
+        root.contains(upstream) && fieldOwnerSelectedItems.length === 1 &&
         controlledBackingCommitted(upstream, upstreamOwner);
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
