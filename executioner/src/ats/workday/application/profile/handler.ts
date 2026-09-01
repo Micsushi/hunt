@@ -1,7 +1,6 @@
-import { randomInt } from "node:crypto";
-
 import {
   profileOwnerInputCatalog,
+  retainedProfileControlGuide,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
 } from "./catalog.ts";
@@ -422,16 +421,39 @@ function withSupportedSyntheticUnknowns(
   snapshot: ProfilePageSnapshot,
   fallbacks: Map<string, ProfileFieldPlan>,
 ): ProfilePagePlan {
-  const planned = new Set(plan.fields.map(({ fieldId }) => fieldId));
+  const controls = new Map(snapshot.controls.map((control) => [control.fieldId, control]));
+  const prepared = plan.fields.map((field): ProfileFieldPlan => {
+    if (field.answer.kind !== "profile_answer_missing") return field;
+    const control = controls.get(field.fieldId);
+    return control === undefined
+      ? field
+      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field) ?? field;
+  });
+  const planned = new Set(prepared.map(({ fieldId }) => fieldId));
   const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
-    if (!control.required || planned.has(control.fieldId) ||
-        !control.fieldId.startsWith("unknown.required.")) return [];
-    const field = syntheticProfileField(control, fallbacks, `scalar\u0000${control.fieldId}`);
+    if (planned.has(control.fieldId)) return [];
+    const guide = retainedProfileControlGuide.find(({ identity }) => identity === control.fieldId);
+    if (guide === undefined && (!control.required ||
+        !control.fieldId.startsWith("unknown.required."))) return [];
+    const template = guide === undefined ? undefined : Object.freeze({
+      fieldId: control.fieldId,
+      questionType: guide.normalizedQuestionType,
+      answerType: syntheticProfileAnswerType(control.uiBehavior, guide.answerType) ?? guide.answerType,
+      allowedOptions: Object.freeze([...(control.allowedOptions ?? guide.allowedOptions)]),
+      answer: Object.freeze({ kind: "profile_answer_missing" as const }),
+    });
+    const field = syntheticProfileField(
+      control,
+      fallbacks,
+      `scalar\u0000${control.fieldId}`,
+      template,
+    );
     return field === undefined ? [] : [field];
   });
-  return generated.length === 0 ? plan : {
+  const changed = prepared.some((field, index) => field !== plan.fields[index]);
+  return generated.length === 0 && !changed ? plan : {
     ...plan,
-    fields: Object.freeze([...plan.fields, ...generated]),
+    fields: Object.freeze([...prepared, ...generated]),
   };
 }
 
@@ -439,8 +461,11 @@ function syntheticProfileField(
   control: ProfileControlSnapshot,
   fallbacks: Map<string, ProfileFieldPlan> = new Map(),
   slot = control.fieldId,
+  template?: ProfileFieldPlan,
 ): ProfileFieldPlan | undefined {
-  if (!control.required || !control.fieldId.startsWith("unknown.required.")) return undefined;
+  const unknownRequired = control.required && control.fieldId.startsWith("unknown.required.");
+  if (!unknownRequired && (template === undefined ||
+      template.answer.kind !== "profile_answer_missing")) return undefined;
   const options = [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "");
   const prior = fallbacks.get(slot);
   if (prior?.answer.kind === "answered") {
@@ -454,13 +479,13 @@ function syntheticProfileField(
     : syntheticProfileSelectedValues(control.readback).find((value) =>
       options.some((option) => normalize(option) === normalize(value))
     );
-  const choice = committed ?? (options.length === 0 ? undefined : options[randomInt(options.length)]);
-  const answer = syntheticProfileValue(control, choice);
-  const answerType = syntheticProfileAnswerType(control.uiBehavior);
+  const choice = committed ?? syntheticProfileOption(control.fieldId, options);
+  const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
+  const answer = syntheticProfileValue(control, choice, answerType);
   if (answer === undefined || answerType === undefined) return undefined;
   const field = Object.freeze({
     fieldId: control.fieldId,
-    questionType: "unknown" as const,
+    questionType: template?.questionType ?? "unknown" as const,
     answerType,
     allowedOptions: Object.freeze(options),
     answer: Object.freeze({
@@ -486,12 +511,14 @@ function registerGeneratedFields(
   prepared: ProfilePagePlan,
   page: WorkdayProfilePagePort,
 ): void {
-  const originalIds = new Set([
+  const originalAnsweredIds = new Set([
     ...original.fields,
     ...original.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
-  ].map(({ fieldId }) => fieldId));
+  ].filter(({ answer }) => answer.kind === "answered").map(({ fieldId }) => fieldId));
   for (const field of prepared.fields) {
-    if (!originalIds.has(field.fieldId)) page.registerSyntheticField?.(field);
+    if (!originalAnsweredIds.has(field.fieldId) && field.answer.kind === "answered") {
+      page.registerSyntheticField?.(field);
+    }
   }
 }
 
@@ -636,7 +663,9 @@ function repeatableRowKeys(
 
 function syntheticProfileAnswerType(
   behavior: ProfileControlSnapshot["uiBehavior"],
+  requested?: ProfileFieldPlan["answerType"],
 ): ProfileFieldPlan["answerType"] | undefined {
+  if (requested === "url" && (behavior === "url" || behavior === "text")) return "url";
   if (behavior === "text" || behavior === "textarea") return "text";
   if (behavior === "phone") return "phone";
   if (behavior === "date") return "date";
@@ -662,22 +691,26 @@ function syntheticProfileBlockCode(control: ProfileControlSnapshot): BlockedResu
 function syntheticProfileValue(
   control: ProfileControlSnapshot,
   choice: string | undefined,
+  answerType = syntheticProfileAnswerType(control.uiBehavior),
 ): string | undefined {
-  if (control.uiBehavior === "checkbox") return "true";
+  if (control.uiBehavior === "checkbox") {
+    return control.fieldId === "identity.has_preferred_name" ? "false" : "true";
+  }
   if (control.uiBehavior === "file") {
     const file = syntheticProfileFile(control);
     const name = file?.name;
     file?.bytes.fill(0);
     return name;
   }
-  if (control.uiBehavior === "date") return control.readback ?? new Date().toISOString().slice(0, 10);
+  if (control.uiBehavior === "date") return control.readback ?? "2000-01-01";
   if (control.uiBehavior === "month") return control.readback ?? "1";
-  if (control.uiBehavior === "year") return control.readback ?? String(new Date().getFullYear());
+  if (control.uiBehavior === "year") return control.readback ?? "2000";
   if (["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior)) {
     return choice;
   }
-  if (control.readback !== null) return control.readback;
+  if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
   if (control.uiBehavior === "phone") return "5550100";
+  if (answerType === "url") return "https://example.invalid/owner-review";
   if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
       control.uiBehavior !== "number" && control.uiBehavior !== "url") return undefined;
   const generated = generateSyntheticTextValue(control.constraints === undefined
@@ -692,6 +725,26 @@ function syntheticProfileValue(
         pattern: control.constraints.pattern,
       });
   return generated.kind === "generated" ? generated.value : undefined;
+}
+
+function syntheticProfileOption(fieldId: string, options: readonly string[]): string | undefined {
+  if (options.length === 0) return undefined;
+  const preferred = fieldId === "employment.previously_worked_for_organization"
+    ? [/^no$/iu]
+    : fieldId === "source.how_did_you_hear"
+    ? [/company.*website/iu, /career.*site/iu, /website/iu]
+    : fieldId === "phone.device_type"
+    ? [/mobile/iu, /cell/iu]
+    : fieldId === "phone.country_code"
+    ? [/united states.*\+?1/iu, /\+1.*united states/iu, /^\+?1$/u]
+    : [];
+  for (const pattern of preferred) {
+    const match = options.find((option) => pattern.test(normalize(option)));
+    if (match !== undefined) return match;
+  }
+  return [...options].sort((left, right) =>
+    normalize(left).localeCompare(normalize(right), "en-US")
+  )[0];
 }
 
 function syntheticProfileFile(control: ProfileControlSnapshot): {

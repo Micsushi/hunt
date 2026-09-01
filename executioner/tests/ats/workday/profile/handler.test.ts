@@ -319,44 +319,48 @@ for (const missing of [
     questionType: "application_source",
     uiBehavior: "search_select",
     uiVariant: "workday_source_select_v1",
+    options: ["Referral", "Company Website"],
+    expected: "Company Website",
   },
   {
     fieldId: "employment.previously_worked_for_organization",
     questionType: "prior_employment",
     uiBehavior: "radio_group",
     uiVariant: "workday_previous_worker_radio_v1",
+    options: ["Yes", "No"],
+    expected: "No",
   },
 ] as const) {
-  test(`requires owner input for ${missing.fieldId} before browser mutation`, async () => {
+  test(`uses a non-submittable deterministic fallback for ${missing.fieldId}`, async () => {
     const port = new MemoryProfilePage({
       pageType: "profile",
-      controls: [control(
+      controls: [{ ...control(
         missing.fieldId,
         missing.uiBehavior,
         null,
         missing.uiVariant,
-      )],
+      ), allowedOptions: missing.options }],
       rows: [],
     });
 
-    assert.deepEqual(await completeWorkdayProfilePage({
+    const result = await completeWorkdayProfilePage({
       mode: "live",
       pageType: "profile",
       fields: [{
         fieldId: missing.fieldId,
         questionType: missing.questionType,
         answerType: "option",
-        allowedOptions: missing.questionType === "prior_employment" ? ["Yes", "No"] : [],
+        allowedOptions: missing.options,
         answer: { kind: "profile_answer_missing" },
       }],
       repeatables: [],
-    }, port, AbortSignal.any([])), {
-      kind: "blocked",
-      code: "profile_answer_missing",
-      fieldId: missing.fieldId,
-    });
-    assert.equal(port.inspections, 1);
-    assert.equal(port.commits.length, 0);
+    }, port, AbortSignal.any([]), "deterministic_site_valid_editable");
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(port.commits[0]?.value, missing.expected);
+    if (result.kind !== "verified") return;
+    assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+    assert.equal(result.verifiedFields[0]?.provenance, "generated_default");
+    assert.equal(result.committedFields[0]?.synthetic, true);
   });
 }
 
@@ -1714,7 +1718,7 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
   ]);
 });
 
-test("leaves recognized unplanned optional social controls untouched", async () => {
+test("fills recognized unplanned optional controls with explicit test fallbacks", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [
@@ -1732,7 +1736,16 @@ test("leaves recognized unplanned optional social controls untouched", async () 
   }, port, AbortSignal.any([]));
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
-  assert.equal(port.commits.length, 0);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "Test response pending owner review.",
+    "Test response pending owner review.",
+  ]);
+  if (result.kind !== "verified") return;
+  assert.equal(result.committedFields.length, 2);
+  assert.ok(result.committedFields.every(({ synthetic }) => synthetic));
+  assert.ok(result.verifiedFields.every(({ provenance, lane }) =>
+    provenance === "generated_default" && lane === "synthetic_test_default"
+  ));
 });
 
 test("canonicalizes a bare LinkedIn host for Workday URL validation", async () => {
