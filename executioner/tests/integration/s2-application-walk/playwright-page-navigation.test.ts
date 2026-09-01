@@ -1004,6 +1004,44 @@ test("derived phone country code requires one committed upstream country owner",
   });
 });
 
+test("derived backing canonicalizes boxed live DOM identifiers", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-country">
+          <button id="country--country" aria-required="true"
+            data-selected-label="United States">United States</button>
+        </div>
+        <div data-automation-id="formField-country-phone-code">
+          <span data-automation-id="selectedItem">United States (+1)</span>
+          <input id="phoneNumber--countryPhoneCode" role="combobox"
+            aria-required="true">
+        </div>
+      </main>
+    `);
+    await page.evaluate(() => {
+      const phone = document.querySelector<HTMLInputElement>(
+        '#phoneNumber--countryPhoneCode',
+      );
+      const country = document.querySelector<HTMLButtonElement>('#country--country');
+      if (phone === null || country === null) throw new Error("fixture missing");
+      Object.defineProperty(phone, "id", {
+        configurable: true,
+        get: () => new String("phoneNumber--countryPhoneCode"),
+      });
+      Object.defineProperty(country, "id", {
+        configurable: true,
+        get: () => new String("country--country"),
+      });
+    });
+    const observed = await application(page).observe(signal());
+    assert.equal(observed.ok, true);
+    assert.equal(observed.ok && observed.value.requiredFields.find(
+      ({ fieldId }) => fieldId === "phoneNumber--countryPhoneCode",
+    )?.verification, "verified");
+  });
+});
+
 test("derived phone country code rejects ambiguous upstream country owners", async () => {
   await withPage(async (page) => {
     await page.setContent(`

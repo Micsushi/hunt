@@ -1346,7 +1346,10 @@ async function readApplicationSnapshot(
       control.getAttribute("data-automation-id"),
       control.id,
       input?.name,
-    ].find((value): value is string => typeof value === "string" && value !== "") ??
+    ].map((value) => value === undefined || value === null
+      ? ""
+      : `${value}`.normalize("NFC"))
+      .find((value) => value !== "") ??
       (completionRequired ? `required-field-${Math.max(0, requiredIndex)}` : `semantic-field-${index}`);
     const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(rawId)
       ? rawId
@@ -1568,7 +1571,8 @@ async function readApplicationSnapshot(
     let checkboxReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
     const derivedBackingRuleCount = sharedUiDerivedBackingRuleCount;
-    const derivedBackingRuleBrowserFieldId = sharedUiDerivedBackingBrowserFieldId;
+    const derivedBackingRuleBrowserFieldId =
+      `${sharedUiDerivedBackingBrowserFieldId}`.normalize("NFC");
     let derivedBackingRuleMatched = false;
     let derivedVisibleUpstreamCount = 0;
     let derivedUpstreamBackingCommitted = false;
@@ -1911,7 +1915,8 @@ async function readApplicationSnapshot(
       const upstreamMatches = !derivedBackingRuleMatched
         ? []
         : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
-          (candidate) => candidate.id === sharedUiDerivedBackingUpstreamBrowserFieldId &&
+          (candidate) => `${candidate.id}`.normalize("NFC") ===
+              `${sharedUiDerivedBackingUpstreamBrowserFieldId}`.normalize("NFC") &&
             visible(candidate),
         );
       derivedVisibleUpstreamCount = upstreamMatches.length;
