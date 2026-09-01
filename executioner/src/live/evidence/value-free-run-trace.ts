@@ -141,7 +141,7 @@ const NUMBER_KEYS = new Set([
   "selectedItemCount", "productionOwnerCount", "productionOwnedSelectedItemCount",
   "unownedSelectedItemCount", "canonicalItemCount", "fallbackItemCount",
   "chosenItemCount", "chosenUniqueCount", "fieldOwnerSelectedItemCount",
-  "derivedVisibleUpstreamCount",
+  "derivedBackingRuleCount", "derivedVisibleUpstreamCount",
 ]);
 const BOOLEAN_KEYS = new Set([
   "submitPresent", "submitActivated", "mutationAttempted", "requiredErrorVisible",

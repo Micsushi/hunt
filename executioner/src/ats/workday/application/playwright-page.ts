@@ -68,6 +68,7 @@ interface BrowserApplicationSnapshot {
       readonly ownedValidation: boolean;
       readonly unownedValidation: boolean;
       readonly fieldOwnerInputNonEmptyCount: number;
+      readonly derivedBackingRuleCount: number;
       readonly derivedBackingRuleMatched: boolean;
       readonly derivedVisibleUpstreamCount: number;
       readonly derivedUpstreamBackingCommitted: boolean;
@@ -156,6 +157,7 @@ export class PlaywrightWorkdayApplicationPage {
           uiBehavior: field.uiState.type,
           selectedItemCount: field.diagnostic.nearestSelectedItemCount,
           fieldOwnerSelectedItemCount: field.diagnostic.fieldOwnerSelectedItemCount,
+          derivedBackingRuleCount: field.diagnostic.derivedBackingRuleCount,
           derivedBackingRuleMatched: field.diagnostic.derivedBackingRuleMatched,
           derivedVisibleUpstreamCount: field.diagnostic.derivedVisibleUpstreamCount,
           derivedUpstreamBackingCommitted:
@@ -370,10 +372,10 @@ export class PlaywrightWorkdayApplicationPage {
           checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
           sharedUiBackingAttribute,
-          sharedUiDerivedBackingRules: sharedUiDerivedBackingRules.map((rule) => [
+          sharedUiDerivedBackingRulesJson: JSON.stringify(sharedUiDerivedBackingRules.map((rule) => [
             rule.browserFieldId,
             rule.upstreamBrowserFieldId,
-          ] as const),
+          ])),
           sharedUiStateRevisionAttribute,
           sharedUiTypeAttribute,
           sharedUiTypes,
@@ -763,9 +765,7 @@ async function readApplicationSnapshot(
     readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
     readonly sharedUiBackingAttribute: string;
-    readonly sharedUiDerivedBackingRules: readonly (
-      readonly [browserFieldId: string, upstreamBrowserFieldId: string]
-    )[];
+    readonly sharedUiDerivedBackingRulesJson: string;
     readonly sharedUiStateRevisionAttribute: string;
     readonly sharedUiTypeAttribute: string;
     readonly sharedUiTypes: readonly SharedUiType[];
@@ -775,8 +775,11 @@ async function readApplicationSnapshot(
     selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
     checkboxGroupSelectedOptionAttribute, supportedControls,
     sharedUiBackingAttribute, sharedUiStateRevisionAttribute,
-    sharedUiTypeAttribute, sharedUiTypes, sharedUiDerivedBackingRules,
+    sharedUiTypeAttribute, sharedUiTypes, sharedUiDerivedBackingRulesJson,
   } = input;
+  const sharedUiDerivedBackingRules = JSON.parse(
+    sharedUiDerivedBackingRulesJson,
+  ) as readonly (readonly [browserFieldId: string, upstreamBrowserFieldId: string])[];
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
         element.getAttribute("aria-hidden") === "true") return false;
@@ -1556,6 +1559,7 @@ async function readApplicationSnapshot(
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["dateReactHandlerLayers"];
     let checkboxReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
+    const derivedBackingRuleCount = sharedUiDerivedBackingRules.length;
     let derivedBackingRuleMatched = false;
     let derivedVisibleUpstreamCount = 0;
     let derivedUpstreamBackingCommitted = false;
@@ -2018,6 +2022,7 @@ async function readApplicationSnapshot(
           [...fieldOwner.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
             "input, textarea",
           )].filter((candidate) => candidate.value.trim() !== "").length,
+        derivedBackingRuleCount,
         derivedBackingRuleMatched,
         derivedVisibleUpstreamCount,
         derivedUpstreamBackingCommitted,

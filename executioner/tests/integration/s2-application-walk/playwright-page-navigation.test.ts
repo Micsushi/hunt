@@ -1086,6 +1086,7 @@ test("derived backing failure emits only retained structural predicates", async 
         uiBehavior: "search_select",
         selectedItemCount: 1,
         fieldOwnerSelectedItemCount: 1,
+        derivedBackingRuleCount: 1,
         derivedBackingRuleMatched: true,
         derivedVisibleUpstreamCount: 1,
         derivedUpstreamBackingCommitted: false,
