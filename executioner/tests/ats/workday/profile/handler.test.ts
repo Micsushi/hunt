@@ -999,6 +999,50 @@ test("a live profile transport traverses supported unknowns under the explicit f
   assert.notEqual(result.verifiedFields[0]?.provenance, "owner_provided");
 });
 
+test("a matching synthetic prefill still proves backing commit in the current run", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control(
+        "source.how_did_you_hear",
+        "search_select",
+        "Recruiter",
+        "workday_source_select_v1",
+      ),
+      allowedOptions: ["Recruiter", "Company Website"],
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [{
+      fieldId: "source.how_did_you_hear",
+      questionType: "application_source",
+      answerType: "option",
+      allowedOptions: ["Recruiter"],
+      answer: {
+        kind: "answered",
+        value: "recruiter",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "recruiter",
+        visibleOption: "Recruiter",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), ["Recruiter"]);
+  if (result.kind !== "verified") return;
+  assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  assert.equal(result.committedFields[0]?.synthetic, true);
+});
+
 test("synthetic unknown values honor native constraints", async () => {
   const port = new MemoryProfilePage({
     pageType: "contact",
@@ -1108,7 +1152,7 @@ test("synthetic unknown choice rebind adopts a committed option when its cached 
   }, page, AbortSignal.any([]));
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
-  assert.deepEqual(commits, []);
+  assert.deepEqual(commits, ["New option"]);
   const firstAnswer = registered[0]?.answer;
   const finalAnswer = registered.at(-1)?.answer;
   assert.equal(firstAnswer?.kind === "answered" ? firstAnswer.value : null, "Old option");

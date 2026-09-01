@@ -1195,7 +1195,10 @@ async function reconcileField(
     return blocked("profile_ui_behavior_mismatch", { fieldId: field.fieldId });
   }
   const expected = visibleValue(effectiveField);
-  if (!readbackMatches(effectiveField, control.readback, expected)) {
+  const syntheticCommitProofRequired = effectiveField.answer.kind === "answered" &&
+    effectiveField.answer.lane === "synthetic_test_default";
+  if (syntheticCommitProofRequired ||
+      !readbackMatches(effectiveField, control.readback, expected)) {
     const syntheticFile = control.uiBehavior === "file" &&
         effectiveField.answer.kind === "answered" &&
         effectiveField.answer.lane === "synthetic_test_default"
