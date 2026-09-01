@@ -48,6 +48,8 @@ export interface AtomicJsonEvidenceRequest {
     | "question-answer-learning.json"
     | "pending-profile-questions.json"
     | "terminal-artifact.json"
+    | "page-local-terminal-pending.json"
+    | "page-local-terminal.json"
     | "failure-source-binding.json"
     | "retained-fixture-control-learning.json";
 }

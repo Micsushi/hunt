@@ -3,6 +3,7 @@ import {
   type Stage2AcceptanceArgs,
 } from "../src/live/runner/args.ts";
 import { formatStage2TerminalResult } from "../src/live/runner/terminal.ts";
+import { resolve } from "node:path";
 
 const controller = new AbortController();
 const cancel = () => controller.abort();
@@ -42,7 +43,7 @@ async function runApplicationSlice(
 ) {
   const application = await import("../src/composition/s2-application-walk-runner.ts");
   const runtime = await import("../src/acceptance/s2-playwright-runtime.ts");
-  return application.runStage2ApplicationWalkFromOwnerConfig({
+  const result = await application.runStage2ApplicationWalkFromOwnerConfig({
       checkpoint,
       configPath: args.configPath,
       evidenceRoot: args.evidenceRoot,
@@ -51,6 +52,11 @@ async function runApplicationSlice(
         monitorAuthentication: false,
       }),
     }));
+  const source = (await import("../src/composition/private/s2-clean-source-revision.ts"))
+    .inspectCleanSourceRevision(resolve(import.meta.dirname, ".."));
+  (await import("../src/composition/private/s2-page-local-terminal.ts"))
+    .writePageLocalPendingTerminal(args, source.sourceRevision, result);
+  return result;
 }
 
 function isApplicationCheckpoint(
