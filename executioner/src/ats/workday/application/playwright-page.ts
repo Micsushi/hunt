@@ -1898,9 +1898,15 @@ async function readApplicationSnapshot(
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
-      const derivedRule = sharedUiDerivedBackingRules.find(([browserFieldId]) =>
-        browserFieldId === safeId
-      );
+      let derivedRule: readonly [browserFieldId: string, upstreamBrowserFieldId: string] |
+        undefined;
+      for (let ruleIndex = 0; ruleIndex < sharedUiDerivedBackingRules.length; ruleIndex += 1) {
+        const candidate = sharedUiDerivedBackingRules[ruleIndex];
+        if (candidate !== undefined && candidate[0] === safeId) {
+          derivedRule = candidate;
+          break;
+        }
+      }
       derivedBackingRuleMatched = derivedRule !== undefined;
       const upstreamMatches = derivedRule === undefined
         ? []
