@@ -41,6 +41,8 @@ import {
   retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
+import { advanceProfileFieldTerminalState } from
+  "./private/profile-field-terminal-state.ts";
 import {
   evaluateSharedUiState,
   sharedProfileUiTypes,
@@ -1051,24 +1053,22 @@ function learn(
     records.set(identity, record);
   }
   const expected = pending.get(identity);
-  if (expected !== undefined) {
-    record.mechanics.persistentReadback = sameValue(
+  const advanced = advanceProfileFieldTerminalState({
+    mutationExpected: expected !== undefined,
+    readbackMatches: expected !== undefined && sameValue(
       expected,
       control.readback,
       plan?.fieldId,
-    )
-      ? "verified_after_rescan"
-      : "unverified_after_rescan";
-    if (record.mechanics.persistentReadback === "verified_after_rescan") {
-      pending.delete(identity);
-      record.terminalDisposition = "verified";
-    } else {
-      record.terminalDisposition = "verification_failed";
-    }
-  } else if (record.answerState === "answered" &&
-      record.prefillDisposition === "already_correct") {
-    record.terminalDisposition = "verified_without_mutation";
-  }
+    ),
+    driverAttempted: record.driverAttempt !== "none",
+    answered: record.answerState === "answered",
+    prefillAlreadyCorrect: record.prefillDisposition === "already_correct",
+    persistentReadback: record.mechanics.persistentReadback,
+    terminalDisposition: record.terminalDisposition,
+  });
+  record.mechanics.persistentReadback = advanced.persistentReadback;
+  record.terminalDisposition = advanced.terminalDisposition;
+  if (advanced.mutationVerified) pending.delete(identity);
 }
 
 function snapshotControls(snapshot: ProfilePageSnapshot): readonly ProfileControlSnapshot[] {

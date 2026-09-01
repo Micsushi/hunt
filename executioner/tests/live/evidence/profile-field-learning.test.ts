@@ -264,6 +264,87 @@ test("admits dynamic search catalogs when selection reveals more options", async
   }
 });
 
+test("keeps a deterministic alias commit verified after a later rescan", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-alias-rescan-"));
+  const sourceControl = (readback: string): ProfilePageSnapshot => ({
+    pageType: "profile",
+    controls: [{
+      controlId: "source-control",
+      fieldId: "source.how_did_you_hear",
+      required: true,
+      uiBehavior: "search_select",
+      uiVariant: "workday_source_select_v1",
+      readback,
+    }],
+    rows: [],
+  });
+  const port = new FakeProfilePort(sourceControl("Direct Sourcing"));
+  const baseObserver = observer();
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: {
+      mode: "live",
+      pageType: "profile",
+      fields: [{
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        allowedOptions: [],
+        answer: {
+          kind: "answered",
+          value: "Recruiter",
+          provenance: "generated_default",
+          lane: "synthetic_test_default",
+        },
+        optionMapping: {
+          canonicalValue: "Recruiter",
+          visibleOption: "Recruiter",
+          provenance: "visible_option",
+        },
+      }],
+      repeatables: [],
+    },
+    root,
+    sensitiveValues: ["Recruiter", "Direct Sourcing"],
+    observeControl: async (control) => {
+      const observed = await baseObserver(control);
+      return {
+        ...observed,
+        observation: {
+          ...observed.observation,
+          optionCatalogState: "observed" as const,
+          visibleOptionIds: optionIds(["Recruiter", "Direct Sourcing"]),
+          selectedOptionId: optionIds(["Direct Sourcing"])[0]!,
+        },
+      };
+    },
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("source-control", 8, "before_mutation"));
+    await capture.page.commit({
+      controlId: "source-control",
+      uiBehavior: "search_select",
+      value: "Recruiter",
+    }, AbortSignal.any([]));
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.monitorAck(monitor("source-control", 8, "after_readback"));
+    await capture.page.inspect(AbortSignal.any([]));
+
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(
+      join(root, "profile-field-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.fields[0]!.prefillDisposition, "already_correct");
+    assert.equal(evidence.fields[0]!.driverAttempt, "search_select");
+    assert.equal(evidence.fields[0]!.terminalDisposition, "verified");
+    assert.equal(evidence.fields[0]!.mechanics.persistentReadback, "verified_after_rescan");
+    assert.equal(evidence.fields[0]!.monitorBinding?.operationId, operation(8));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("returns all value-free metadata mismatches for learning conversion", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-metadata-mismatch-"));
   const fields = [
