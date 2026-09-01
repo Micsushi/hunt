@@ -15,7 +15,14 @@ import {
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
 const reviewedStructuralValues = ["social.linkedin"] as const;
-const reviewedSha256Keys = ["profileFieldLearningSha256"] as const;
+const reviewedSha256Keys = [
+  "profileFieldLearningSha256",
+  "occurrenceId",
+  "labelSha256",
+  "optionsSha256",
+  "constraintsSha256",
+  "committedReadbackSha256",
+] as const;
 
 export interface ApplicationWalkAcceptanceV1 {
   readonly schemaVersion: 2;

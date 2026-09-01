@@ -11,6 +11,7 @@ import { dependenciesFor, truth } from "../../integration/s2-application-walk/fa
 import { walkFixture } from "../../integration/s2-application-walk/fixtures.ts";
 import { liveApplicationExecutionPolicy } from
   "../../../src/contracts/application-execution-policy.ts";
+import { stage2CausalError } from "../../../src/contracts/s2-causal-error.ts";
 
 test("writes the exact reconciled checkpoint only after browser cleanup passes", async () => {
   const calls: string[] = [];
@@ -368,6 +369,42 @@ test("retains monotonic active-fill timing separately from readiness and navigat
   if (terminal?.kind === "application_walk_terminal") {
     assert.equal(terminal.applicationWalkDurationMs > 0, true);
   }
+});
+
+test("preserves evidence denial as the earliest causal result", async () => {
+  const result = await runStage2ApplicationWalk({
+    ...input(),
+    stopAfter: "profile_verified",
+  }, {
+    walk: dependenciesFor([truth("profile"), truth("profile")], []),
+    laneAcceptances: {
+      snapshot: () => [{
+        schemaVersion: 1,
+        checkpoint: "profile_verified",
+        pageId: "page-profile" as never,
+        answerFallbackPolicy: "owner_facts_only",
+        pageType: "profile",
+        verifiedFields: [],
+        ownedDuplicateRows: 0,
+        independentlyVerified: true,
+        submitActivated: false,
+        privacyScan: "pass",
+      }],
+    },
+    cleanup: { async close() { return true; } },
+    evidence: {
+      async write() {
+        throw stage2CausalError(
+          "observer_evidence",
+          "evidence_denied",
+          new Error("private evidence detail"),
+        );
+      },
+    },
+  }, new AbortController().signal);
+
+  assert.deepEqual(result, { ok: false, code: "evidence_denied" });
+  assert.doesNotMatch(JSON.stringify(result), /private|detail|error/iu);
 });
 
 test("excludes independently measured monitor work from active fill", async () => {

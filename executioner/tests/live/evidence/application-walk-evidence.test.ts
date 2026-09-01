@@ -211,6 +211,66 @@ test("admits a short private token collision inside the reviewed profile learnin
   }
 });
 
+test("admits short private token collisions inside synthetic profile digests", async () => {
+  const digestKeys = [
+    "occurrenceId", "labelSha256", "optionsSha256", "constraintsSha256",
+    "committedReadbackSha256",
+  ] as const;
+  const baseline = packet();
+  const profile = baseline.laneAcceptances[0];
+  if (profile?.checkpoint !== "profile_verified") throw new Error("profile fixture unavailable");
+  const safeDigest = "a".repeat(64);
+  const collidingDigest = `${"a".repeat(30)}143${"b".repeat(31)}`;
+  for (const digestKey of digestKeys) {
+    const syntheticField: ProfileSyntheticFieldEvidence = {
+      occurrenceId: safeDigest,
+      questionId: "question.profile.address.line1",
+      fieldId: "address.line1",
+      rowKey: null,
+      labelSha256: safeDigest,
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      uiVariant: "workday_text_v2",
+      optionsSha256: safeDigest,
+      constraintsSha256: safeDigest,
+      committedReadbackSha256: safeDigest,
+      provenance: "generated_default",
+      [digestKey]: collidingDigest,
+    };
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-synthetic-digest-"));
+    try {
+      await writeApplicationWalkEvidence({
+        root,
+        acceptance: {
+          ...baseline,
+          answerFallbackPolicy: "deterministic_site_valid_editable",
+          laneAcceptances: [{
+            ...profile,
+            answerFallbackPolicy: "deterministic_site_valid_editable",
+            verifiedFields: [{
+              fieldId: "address.line1",
+              questionType: "address",
+              answerType: "text",
+              uiBehavior: "text",
+              uiVariant: "workday_text_v2",
+              provenance: "generated_default",
+              lane: "synthetic_test_default",
+            }],
+            syntheticFields: [syntheticField],
+            profileFieldLearningSha256: safeDigest,
+          }, ...baseline.laneAcceptances.slice(1)],
+        },
+        sensitiveValues: ["143"],
+      });
+      assert.equal(statSync(join(root, "application-walk-acceptance.json")).isFile(), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("rejects synthetic defaults from live Workday v2 acceptance", async () => {
   const baseline = packet();
   const profile = baseline.laneAcceptances[0];

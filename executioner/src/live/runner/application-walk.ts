@@ -374,8 +374,11 @@ export async function runStage2ApplicationWalk(
       cleanup: "pass",
     });
     await dependencies.evidence.write(acceptance);
-  } catch {
-    return { ok: false, code: "evidence_unavailable" };
+  } catch (error) {
+    return {
+      ok: false,
+      code: stage2CausalCode(error, "evidence_unavailable"),
+    };
   }
   return { ok: true, acceptance };
 }

@@ -255,14 +255,29 @@ export function createStage2ApplicationWalkProductionBinding(
               >[0],
             ): Promise<void> {
               if (sensitiveValues === undefined) {
-                throw new TypeError("application evidence source revoked");
+                throw stage2CausalError(
+                  "observer_evidence",
+                  "evidence_unavailable",
+                  new TypeError("application evidence source revoked"),
+                );
               }
               try {
-                await writeApplicationWalkEvidence({
-                  root: options.evidenceRoot,
-                  acceptance,
-                  sensitiveValues,
-                });
+                try {
+                  await writeApplicationWalkEvidence({
+                    root: options.evidenceRoot,
+                    acceptance,
+                    sensitiveValues,
+                  });
+                } catch (error) {
+                  throw stage2CausalError(
+                    "observer_evidence",
+                    error instanceof Error &&
+                        error.message.startsWith("application-walk evidence denied")
+                      ? "evidence_denied"
+                      : "evidence_unavailable",
+                    error,
+                  );
+                }
               } finally {
                 sensitiveValues = undefined;
               }
