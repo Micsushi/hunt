@@ -344,7 +344,7 @@ test("does not accept composite date segments whose controlled backing stays emp
   }
 });
 
-test("commits a controlled Workday formatted date through its visible calendar", async () => {
+test("commits a Date-backed Workday formatted date through its visible calendar", async () => {
   const fixture = await loopbackPage(`
     <div data-automation-id="formField-dateSignedOn">
       <label>Date <input type="tel" placeholder="MM/DD/YYYY"
@@ -369,7 +369,7 @@ test("commits a controlled Workday formatted date through its visible calendar",
       });
       document.querySelector('[aria-label="Tuesday, September 1, 2026"]').addEventListener('click', () => {
         accepted = '09/01/2026';
-        controlledDateProps.value = accepted;
+        controlledDateProps.value = new Date('2026-09-01T00:00:00.000Z');
         input.value = accepted;
         document.querySelector('[role="dialog"]').hidden = true;
       });

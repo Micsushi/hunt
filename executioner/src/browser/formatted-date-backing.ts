@@ -25,6 +25,9 @@ export async function formattedDateBackingCommitted(
       };
       const acceptedValue = (value: unknown): boolean => {
         if (typeof value === "string") return acceptedString(value);
+        if (value instanceof Date && !Number.isNaN(value.valueOf())) {
+          return value.toISOString().slice(0, 10) === expectedIso;
+        }
         if (typeof value !== "object" || value === null) return false;
         const record = value as Record<string, unknown>;
         for (const key of ["value", "displayValue", "formattedValue", "dateValue"] as const) {
