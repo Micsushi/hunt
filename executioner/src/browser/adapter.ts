@@ -53,6 +53,7 @@ const controlSelector = [
 ].join(",");
 
 const nextName = /^(?:next|continue|save(?:\s+and)?\s+continue)$/iu;
+const formattedDateInputSelector = 'input[type="text"]:visible, input[type="tel"]:visible';
 
 interface RawControl {
   readonly index: number;
@@ -116,7 +117,7 @@ export async function inspectPage(
       const formattedInput = await declared.count() === 1 &&
           await declared.evaluate((element) => element instanceof HTMLInputElement)
         ? declared
-        : declared.locator('input:not([type="hidden"])');
+        : declared.locator(formattedDateInputSelector);
       if (
         await formattedInput.count() !== 1 ||
         !await formattedDateBackingCommitted(formattedInput, readback.value, 100)
@@ -319,7 +320,7 @@ async function applyMutationUnchecked(
     await targetLocator.count() === 1 &&
     await targetLocator.evaluate((element) => !(element instanceof HTMLInputElement))
   ) {
-    locator = targetLocator.locator('input:not([type="hidden"])');
+    locator = targetLocator.locator(formattedDateInputSelector);
   }
   if (mutation.kind === "set_checked") {
     if (
@@ -396,7 +397,7 @@ async function applyMutationUnchecked(
       const reboundFormattedDate = async (): Promise<void> => {
         if (await activeFormattedDate.count() === 1 && await activeFormattedDate.isVisible()) return;
         const candidates = page.locator(
-          'input[type="text"]:visible, input[type="tel"]:visible',
+          formattedDateInputSelector,
         );
         const matches = await candidates.evaluateAll((elements, expectedName) => {
           const normalize = (value: string | null | undefined) =>

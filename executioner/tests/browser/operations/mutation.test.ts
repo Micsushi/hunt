@@ -347,15 +347,18 @@ test("does not accept composite date segments whose controlled backing stays emp
 test("commits a Date-backed Workday formatted date through its visible calendar", async () => {
   const fixture = await loopbackPage(`
     <div data-automation-id="formField-dateSignedOn">
-      <label>Date <input type="tel" placeholder="MM/DD/YYYY"
-        data-hunt-target-token="target-formatted-date"></label>
+      <div aria-label="Date" data-automation-id="dateInputWrapper"
+        data-hunt-target-token="target-formatted-date">
+        <label>Date <input type="tel" placeholder="MM/DD/YYYY"></label>
+        <input type="text" style="display: none" aria-hidden="true">
+      </div>
       <div data-automation-id="datePickerIcon">Calendar</div>
     </div>
     <div role="dialog" hidden>
       <button type="button" aria-label="Tuesday, September 1, 2026">1</button>
     </div>
     <script>
-      const input = document.querySelector('[data-hunt-target-token="target-formatted-date"]');
+      const input = document.querySelector('[data-hunt-target-token="target-formatted-date"] input[type="tel"]');
       let accepted = '';
       const controlledDateProps = { value: '', onChange: () => {} };
       const dateOwnerFiber = {
@@ -432,7 +435,7 @@ test("commits a Date-backed Workday formatted date through its visible calendar"
       },
     );
     assert.equal(
-      await page.locator('[data-hunt-target-token="target-formatted-date"]').inputValue(),
+      await page.locator('[data-hunt-target-token="target-formatted-date"] input[type="tel"]').inputValue(),
       "09/01/2026",
     );
     const readback = await provider.observe(started.value, new AbortController().signal);
