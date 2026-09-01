@@ -32,6 +32,7 @@ import {
   evaluateSharedUiState,
   sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBehavior,
+  sharedUiUsesDerivedBacking,
   sharedUiValueMatches,
 } from "../../../../deterministic/ui-state-model.ts";
 
@@ -1196,8 +1197,13 @@ async function reconcileField(
     return blocked("profile_ui_behavior_mismatch", { fieldId: field.fieldId });
   }
   const expected = visibleValue(effectiveField);
+  const sharedType = sharedUiTypeForBehavior(control.uiBehavior);
   const syntheticCommitProofRequired = effectiveField.answer.kind === "answered" &&
-    effectiveField.answer.lane === "synthetic_test_default";
+    effectiveField.answer.lane === "synthetic_test_default" &&
+    !(sharedType !== undefined && sharedUiUsesDerivedBacking(
+      sharedType,
+      effectiveField.fieldId,
+    ));
   if (syntheticCommitProofRequired ||
       !readbackMatches(effectiveField, control.readback, expected)) {
     const syntheticFile = control.uiBehavior === "file" &&

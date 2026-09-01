@@ -1043,7 +1043,7 @@ test("a matching synthetic prefill still proves backing commit in the current ru
   assert.equal(result.committedFields[0]?.synthetic, true);
 });
 
-test("a matching derived country-code mirror still proves controlled backing", async () => {
+test("a matching derived country-code mirror defers to independent upstream backing", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [{
@@ -1081,7 +1081,7 @@ test("a matching derived country-code mirror still proves controlled backing", a
   }, port, AbortSignal.any([]));
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
-  assert.deepEqual(port.commits.map(({ value }) => value), ["United States (+1)"]);
+  assert.deepEqual(port.commits, []);
 });
 
 test("synthetic unknown values honor native constraints", async () => {

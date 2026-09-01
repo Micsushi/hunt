@@ -32,6 +32,12 @@ export type SharedUiType = (typeof sharedUiTypes)[number];
 export const sharedUiStateRevisionAttribute = "data-hunt-shared-ui-state-revision";
 export const sharedUiTypeAttribute = "data-hunt-shared-ui-type";
 export const sharedUiBackingAttribute = "data-hunt-shared-ui-backing-state";
+export const sharedUiDerivedBackingRules = Object.freeze([Object.freeze({
+  type: "search_select" as const,
+  canonicalFieldId: "phone.country_code",
+  browserFieldId: "phoneNumber--countryPhoneCode",
+  upstreamBrowserFieldId: "country--country",
+})]);
 export const sharedProfileUiTypes = [
   "checkbox",
   "file",
@@ -141,6 +147,15 @@ export function isSharedUiType(value: unknown): value is SharedUiType {
 export function sharedUiTypeForBehavior(value: unknown): SharedUiType | undefined {
   if (value === "file") return "file_upload";
   return isSharedUiType(value) ? value : undefined;
+}
+
+export function sharedUiUsesDerivedBacking(
+  type: SharedUiType,
+  canonicalFieldId: string,
+): boolean {
+  return sharedUiDerivedBackingRules.some((rule) =>
+    rule.type === type && rule.canonicalFieldId === canonicalFieldId
+  );
 }
 
 export function isSharedProfileUiType(value: unknown): value is SharedProfileUiType {

@@ -27,6 +27,7 @@ import {
 import {
   evaluateSharedUiState,
   sharedUiBackingAttribute,
+  sharedUiDerivedBackingRules,
   sharedUiStateRevisionAttribute,
   sharedUiTypeAttribute,
   sharedUiTypes,
@@ -347,6 +348,7 @@ export class PlaywrightWorkdayApplicationPage {
           checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
           sharedUiBackingAttribute,
+          sharedUiDerivedBackingRules,
           sharedUiStateRevisionAttribute,
           sharedUiTypeAttribute,
           sharedUiTypes,
@@ -736,6 +738,11 @@ async function readApplicationSnapshot(
     readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
     readonly sharedUiBackingAttribute: string;
+    readonly sharedUiDerivedBackingRules: readonly {
+      readonly type: SharedUiType;
+      readonly browserFieldId: string;
+      readonly upstreamBrowserFieldId: string;
+    }[];
     readonly sharedUiStateRevisionAttribute: string;
     readonly sharedUiTypeAttribute: string;
     readonly sharedUiTypes: readonly SharedUiType[];
@@ -745,7 +752,7 @@ async function readApplicationSnapshot(
     selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
     checkboxGroupSelectedOptionAttribute, supportedControls,
     sharedUiBackingAttribute, sharedUiStateRevisionAttribute,
-    sharedUiTypeAttribute, sharedUiTypes,
+    sharedUiTypeAttribute, sharedUiTypes, sharedUiDerivedBackingRules,
   } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
@@ -1861,9 +1868,27 @@ async function readApplicationSnapshot(
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
+      const derivedRule = sharedUiDerivedBackingRules.find((rule) =>
+        rule.type === "search_select" && rule.browserFieldId === safeId
+      );
+      const upstreamMatches = derivedRule === undefined
+        ? []
+        : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
+          (candidate) => candidate.id === derivedRule.upstreamBrowserFieldId,
+        );
+      const upstream = upstreamMatches.length === 1 ? upstreamMatches[0] : undefined;
+      const upstreamOwner = upstream?.parentElement?.closest<HTMLElement>(
+        '[data-automation-id]',
+      ) ?? upstream?.closest<HTMLElement>(
+        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+      ) ?? null;
+      const derivedBackingCommitted = derivedRule !== undefined && upstream != null &&
+        root.contains(upstream) && visible(upstream) && fieldOwnerSelectedItems.length === 1 &&
+        controlledBackingCommitted(upstream, upstreamOwner);
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
-      ) && controlledBackingCommitted(semanticLeaf, selectionOwner);
+      ) && (controlledBackingCommitted(semanticLeaf, selectionOwner) ||
+        derivedBackingCommitted);
     } else if (selectedItems.length === 1) {
       // A presentation token is not backing state. Require the owning control
       // or its controlled component state to retain the selection.

@@ -9,6 +9,7 @@ import {
   sharedUiIntentMatchesReadback,
   sharedUiTypeForBrowserControl,
   sharedUiTypes,
+  sharedUiUsesDerivedBacking,
   sharedUiValueMatches,
   sharedUiVariant,
   type SharedUiStateInput,
@@ -56,6 +57,12 @@ test("native, controlled, custom ARIA, masked, segmented, tokenized, and repeata
   assert.deepEqual(sharedUiVariant("repeatable", "workday_rows"), {
     owner: "composite", variant: "repeatable", mutation: "row_action",
   });
+});
+
+test("derived presentation backing is narrowly routed through the shared model", () => {
+  assert.equal(sharedUiUsesDerivedBacking("search_select", "phone.country_code"), true);
+  assert.equal(sharedUiUsesDerivedBacking("search_select", "phone.number"), false);
+  assert.equal(sharedUiUsesDerivedBacking("text", "phone.country_code"), false);
 });
 
 test("known predecessor state failures cannot permit navigation", () => {
