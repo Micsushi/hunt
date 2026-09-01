@@ -712,6 +712,12 @@ function syntheticProfileValue(
   }
   if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
   if (control.uiBehavior === "phone") return "5550100";
+  if (control.fieldId === "social.facebook") {
+    return "https://www.facebook.com/hunt.test.owner.review";
+  }
+  if (control.fieldId === "social.twitter") {
+    return "https://x.com/hunt_test_owner_review";
+  }
   if (answerType === "url") return "https://example.invalid/owner-review";
   if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
       control.uiBehavior !== "number" && control.uiBehavior !== "url") return undefined;

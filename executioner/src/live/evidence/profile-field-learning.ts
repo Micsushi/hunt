@@ -271,7 +271,10 @@ export function createProfileFieldLearningCapture(input: {
       for (const control of snapshotControls(snapshot)) {
         const identity = controlBindings.get(control.controlId);
         const record = identity === undefined ? undefined : records.get(identity);
-        if (record === undefined || record.observationBinding !== null) continue;
+        if (
+          record === undefined ||
+          record.observationBinding !== null && record.driverAttempt === "none"
+        ) continue;
         if (input.observeControl === undefined) {
           observationFailed ||= input.plan.mode === "live";
           continue;
@@ -321,6 +324,19 @@ export function createProfileFieldLearningCapture(input: {
         }
         throw error;
       }
+    },
+    interaction(controlId) {
+      const interaction = input.page.interaction?.(controlId);
+      if (interaction === undefined) return undefined;
+      const identity = controlBindings.get(controlId);
+      const record = identity === undefined ? undefined : records.get(identity);
+      return Object.freeze({
+        ...interaction,
+        backingValueCommitted: interaction.backingValueCommitted &&
+          record?.backingState === "set",
+        validationCleared: interaction.validationCleared &&
+          record?.validationState === "clear",
+      });
     },
     addOwnedRow(section, signal) {
       return input.page.addOwnedRow(section, signal);
@@ -1254,8 +1270,11 @@ function validMechanicsRelations(field: ProfileFieldLearningRecordV2): boolean {
       !isObservationBinding(field.observationBinding)) ||
     (field.terminalDisposition === "verified" && (
       !isMutationBinding(field.monitorBinding) ||
-      field.mechanics.persistentReadback !== "verified_after_rescan"
+      field.mechanics.persistentReadback !== "verified_after_rescan" ||
+      field.backingState !== "set" || field.validationState !== "clear"
     )) ||
+    (field.terminalDisposition === "verified_without_mutation" &&
+      (field.backingState !== "set" || field.validationState !== "clear")) ||
     (field.terminalDisposition === "driver_failed" &&
       field.mechanics.persistentReadback !== "driver_failed") ||
     (field.terminalDisposition === "verification_failed" &&

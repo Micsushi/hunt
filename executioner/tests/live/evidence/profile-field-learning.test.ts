@@ -44,9 +44,10 @@ function createProfileFieldLearningCapture(
 
 type MutableLearningRecord = Omit<
   ProfileFieldLearningRecordV2,
-  "driverAttempt" | "observationBinding" | "visibleOptionIds"
+  "driverAttempt" | "observationBinding" | "visibleOptionIds" | "backingState"
 > & {
   driverAttempt: string;
+  backingState: ProfileFieldLearningRecordV2["backingState"];
   observationBinding: MutableObservationBinding | null;
   visibleOptionIds: readonly string[];
 };
@@ -126,6 +127,9 @@ test("retains value-free field learning through prefill, driver, and readback", 
     assert.equal(evidence.fields[1]!.visibleOptionIds.length, 2);
     assert.match(evidence.fields[1]!.selectedOptionId ?? "", /^option_sha256_[0-9a-f]{64}$/u);
     assert.equal(evidence.fields[1]!.monitorBinding?.operationId, operation(1));
+    const emptyBacking = mutableEvidence(evidence);
+    emptyBacking.fields[1]!.backingState = "unset";
+    assert.throws(() => admitMutableEvidence(emptyBacking), /mechanics_relation/u);
     assert.equal(evidence.fields[2]!.metadataReconciliation, "unresolved");
     assert.equal(evidence.fields[2]!.terminalDisposition, "required_unset");
   } finally {
@@ -262,6 +266,35 @@ test("admits dynamic search catalogs when selection reveals more options", async
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("routes post-mutation backing truth through the learning page interaction", async () => {
+  const port = new FakeProfilePort(snapshot(null));
+  const baseObserver = observer();
+  const capture = createProfileFieldLearningCapture({
+    page: port,
+    plan: profilePlan(),
+    sensitiveValues: [],
+    observeControl: async (control) => {
+      const observed = await baseObserver(control);
+      return control.controlId !== "country-control" ? observed : {
+        ...observed,
+        observation: { ...observed.observation, backingState: "unset" as const },
+      };
+    },
+  });
+
+  await capture.page.inspect(AbortSignal.any([]));
+  await capture.page.commit({
+    controlId: "country-control",
+    uiBehavior: "search_select",
+    value: "United States",
+  }, AbortSignal.any([]));
+  port.current = snapshot("United States");
+  await capture.page.inspect(AbortSignal.any([]));
+
+  assert.equal(capture.page.interaction?.("country-control")?.backingValueCommitted, false);
+  assert.equal(capture.page.interaction?.("country-control")?.validationCleared, true);
 });
 
 test("keeps a deterministic alias commit verified after a later rescan", async () => {
