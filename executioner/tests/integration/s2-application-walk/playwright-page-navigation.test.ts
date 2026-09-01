@@ -983,8 +983,7 @@ test("derived phone country code requires one committed upstream country owner",
         </div>
         <div data-automation-id="formField-country-phone-code">
           <span data-automation-id="selectedItem">United States (+1)</span>
-          <input id="phoneNumber--countryPhoneCode" role="combobox"
-            aria-required="true">
+          <input id="phoneNumber--countryPhoneCode" aria-required="true">
         </div>
       </main>
     `);

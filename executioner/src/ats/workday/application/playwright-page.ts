@@ -1646,6 +1646,28 @@ async function readApplicationSnapshot(
       [...fieldOwner.querySelectorAll<HTMLElement>(
         '[data-automation-id="selectedItem"]',
       )].filter((item) => visible(item) && text(item.textContent) !== "");
+    derivedBackingRuleMatched = safeId === derivedBackingRuleBrowserFieldId;
+    const derivedUpstreamMatches = !derivedBackingRuleMatched
+      ? []
+      : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
+        (candidate) => `${candidate.id}` ===
+            `${sharedUiDerivedBackingUpstreamBrowserFieldId}` &&
+          visible(candidate),
+      );
+    derivedVisibleUpstreamCount = derivedUpstreamMatches.length;
+    const derivedUpstream = derivedUpstreamMatches.length === 1
+      ? derivedUpstreamMatches[0]
+      : undefined;
+    const derivedUpstreamOwner = derivedUpstream?.parentElement?.closest<HTMLElement>(
+      '[data-automation-id]',
+    ) ?? derivedUpstream?.closest<HTMLElement>(
+      '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+    ) ?? null;
+    derivedUpstreamBackingCommitted = derivedUpstream != null && root.contains(derivedUpstream) &&
+      controlledBackingCommitted(derivedUpstream, derivedUpstreamOwner);
+    const derivedBackingCommitted = derivedBackingRuleMatched && derivedUpstream != null &&
+      root.contains(derivedUpstream) && fieldOwnerSelectedItems.length === 1 &&
+      derivedUpstreamBackingCommitted;
     if (control.matches(
       '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
     )) {
@@ -1910,26 +1932,6 @@ async function readApplicationSnapshot(
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
-      derivedBackingRuleMatched = safeId === sharedUiDerivedBackingBrowserFieldId;
-      const upstreamMatches = !derivedBackingRuleMatched
-        ? []
-        : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
-          (candidate) => `${candidate.id}` ===
-              `${sharedUiDerivedBackingUpstreamBrowserFieldId}` &&
-            visible(candidate),
-        );
-      derivedVisibleUpstreamCount = upstreamMatches.length;
-      const upstream = upstreamMatches.length === 1 ? upstreamMatches[0] : undefined;
-      const upstreamOwner = upstream?.parentElement?.closest<HTMLElement>(
-        '[data-automation-id]',
-      ) ?? upstream?.closest<HTMLElement>(
-        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
-      ) ?? null;
-      derivedUpstreamBackingCommitted = upstream != null && root.contains(upstream) &&
-        controlledBackingCommitted(upstream, upstreamOwner);
-      const derivedBackingCommitted = derivedBackingRuleMatched && upstream != null &&
-        root.contains(upstream) && fieldOwnerSelectedItems.length === 1 &&
-        derivedUpstreamBackingCommitted;
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
       ) && (controlledBackingCommitted(semanticLeaf, selectionOwner) ||
@@ -1937,7 +1939,9 @@ async function readApplicationSnapshot(
     } else if (selectedItems.length === 1) {
       // A presentation token is not backing state. Require the owning control
       // or its controlled component state to retain the selection.
-      verified = verified && controlledBackingCommitted(semanticLeaf, selectionOwner);
+      verified = verified && (
+        controlledBackingCommitted(semanticLeaf, selectionOwner) || derivedBackingCommitted
+      );
     } else if (
       control instanceof HTMLInputElement ||
       control instanceof HTMLTextAreaElement
