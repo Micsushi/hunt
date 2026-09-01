@@ -370,7 +370,10 @@ export class PlaywrightWorkdayApplicationPage {
           checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
           sharedUiBackingAttribute,
-          sharedUiDerivedBackingRules,
+          sharedUiDerivedBackingRules: sharedUiDerivedBackingRules.map((rule) => [
+            rule.browserFieldId,
+            rule.upstreamBrowserFieldId,
+          ] as const),
           sharedUiStateRevisionAttribute,
           sharedUiTypeAttribute,
           sharedUiTypes,
@@ -760,11 +763,9 @@ async function readApplicationSnapshot(
     readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
     readonly sharedUiBackingAttribute: string;
-    readonly sharedUiDerivedBackingRules: readonly {
-      readonly type: SharedUiType;
-      readonly browserFieldId: string;
-      readonly upstreamBrowserFieldId: string;
-    }[];
+    readonly sharedUiDerivedBackingRules: readonly (
+      readonly [browserFieldId: string, upstreamBrowserFieldId: string]
+    )[];
     readonly sharedUiStateRevisionAttribute: string;
     readonly sharedUiTypeAttribute: string;
     readonly sharedUiTypes: readonly SharedUiType[];
@@ -1893,14 +1894,14 @@ async function readApplicationSnapshot(
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
-      const derivedRule = sharedUiDerivedBackingRules.find((rule) =>
-        rule.type === "search_select" && rule.browserFieldId === safeId
+      const derivedRule = sharedUiDerivedBackingRules.find(([browserFieldId]) =>
+        browserFieldId === safeId
       );
       derivedBackingRuleMatched = derivedRule !== undefined;
       const upstreamMatches = derivedRule === undefined
         ? []
         : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
-          (candidate) => candidate.id === derivedRule.upstreamBrowserFieldId &&
+          (candidate) => candidate.id === derivedRule[1] &&
             visible(candidate),
         );
       derivedVisibleUpstreamCount = upstreamMatches.length;
