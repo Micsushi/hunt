@@ -91,7 +91,7 @@ const STRING_KEYS = new Set([
   "profileInspectionSessionState", "profileInspectionCleanupState",
   "profileInspectionPreservationReason", "learningConversion", "executionMode",
   "errorType", "priorCommittedState", "observedState", "underlyingError",
-  "operation", "replacementReason",
+  "operation", "replacementReason", "derivedBackingRuleBrowserFieldId",
   "monotonicClock",
 ]);
 const NUMBER_KEYS = new Set([

@@ -69,6 +69,7 @@ interface BrowserApplicationSnapshot {
       readonly unownedValidation: boolean;
       readonly fieldOwnerInputNonEmptyCount: number;
       readonly derivedBackingRuleCount: number;
+      readonly derivedBackingRuleBrowserFieldId: string;
       readonly derivedBackingRuleMatched: boolean;
       readonly derivedVisibleUpstreamCount: number;
       readonly derivedUpstreamBackingCommitted: boolean;
@@ -158,6 +159,8 @@ export class PlaywrightWorkdayApplicationPage {
           selectedItemCount: field.diagnostic.nearestSelectedItemCount,
           fieldOwnerSelectedItemCount: field.diagnostic.fieldOwnerSelectedItemCount,
           derivedBackingRuleCount: field.diagnostic.derivedBackingRuleCount,
+          derivedBackingRuleBrowserFieldId:
+            field.diagnostic.derivedBackingRuleBrowserFieldId,
           derivedBackingRuleMatched: field.diagnostic.derivedBackingRuleMatched,
           derivedVisibleUpstreamCount: field.diagnostic.derivedVisibleUpstreamCount,
           derivedUpstreamBackingCommitted:
@@ -364,6 +367,10 @@ export class PlaywrightWorkdayApplicationPage {
       }
       if (signal.aborted) return failure("operation_cancelled", "none");
       await annotateCheckboxGroups(this.#page);
+      const derivedBackingRule = sharedUiDerivedBackingRules[0];
+      if (derivedBackingRule === undefined || sharedUiDerivedBackingRules.length !== 1) {
+        return failure("browser_target_stale", "ui_behavior");
+      }
       const snapshot = await this.#page.evaluate(
         readApplicationSnapshot, {
           selectors: WORKDAY_APPLICATION_PAGE_SELECTORS,
@@ -372,13 +379,11 @@ export class PlaywrightWorkdayApplicationPage {
           checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
           sharedUiBackingAttribute,
-          sharedUiDerivedBackingByBrowserFieldId: Object.fromEntries(
-            sharedUiDerivedBackingRules.map((rule) => [
-              rule.browserFieldId,
-              rule.upstreamBrowserFieldId,
-            ]),
-          ),
+          sharedUiDerivedBackingBrowserFieldId:
+            derivedBackingRule.browserFieldId,
           sharedUiDerivedBackingRuleCount: sharedUiDerivedBackingRules.length,
+          sharedUiDerivedBackingUpstreamBrowserFieldId:
+            derivedBackingRule.upstreamBrowserFieldId,
           sharedUiStateRevisionAttribute,
           sharedUiTypeAttribute,
           sharedUiTypes,
@@ -768,8 +773,9 @@ async function readApplicationSnapshot(
     readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
     readonly sharedUiBackingAttribute: string;
-    readonly sharedUiDerivedBackingByBrowserFieldId: Readonly<Record<string, string>>;
+    readonly sharedUiDerivedBackingBrowserFieldId: string;
     readonly sharedUiDerivedBackingRuleCount: number;
+    readonly sharedUiDerivedBackingUpstreamBrowserFieldId: string;
     readonly sharedUiStateRevisionAttribute: string;
     readonly sharedUiTypeAttribute: string;
     readonly sharedUiTypes: readonly SharedUiType[];
@@ -779,8 +785,8 @@ async function readApplicationSnapshot(
     selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
     checkboxGroupSelectedOptionAttribute, supportedControls,
     sharedUiBackingAttribute, sharedUiStateRevisionAttribute,
-    sharedUiTypeAttribute, sharedUiTypes, sharedUiDerivedBackingByBrowserFieldId,
-    sharedUiDerivedBackingRuleCount,
+    sharedUiTypeAttribute, sharedUiTypes, sharedUiDerivedBackingBrowserFieldId,
+    sharedUiDerivedBackingRuleCount, sharedUiDerivedBackingUpstreamBrowserFieldId,
   } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
@@ -1562,6 +1568,7 @@ async function readApplicationSnapshot(
     let checkboxReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
     const derivedBackingRuleCount = sharedUiDerivedBackingRuleCount;
+    const derivedBackingRuleBrowserFieldId = sharedUiDerivedBackingBrowserFieldId;
     let derivedBackingRuleMatched = false;
     let derivedVisibleUpstreamCount = 0;
     let derivedUpstreamBackingCommitted = false;
@@ -1900,13 +1907,11 @@ async function readApplicationSnapshot(
             : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
-      const derivedUpstreamBrowserFieldId =
-        sharedUiDerivedBackingByBrowserFieldId[safeId];
-      derivedBackingRuleMatched = derivedUpstreamBrowserFieldId !== undefined;
-      const upstreamMatches = derivedUpstreamBrowserFieldId === undefined
+      derivedBackingRuleMatched = safeId === sharedUiDerivedBackingBrowserFieldId;
+      const upstreamMatches = !derivedBackingRuleMatched
         ? []
         : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
-          (candidate) => candidate.id === derivedUpstreamBrowserFieldId &&
+          (candidate) => candidate.id === sharedUiDerivedBackingUpstreamBrowserFieldId &&
             visible(candidate),
         );
       derivedVisibleUpstreamCount = upstreamMatches.length;
@@ -1918,7 +1923,7 @@ async function readApplicationSnapshot(
       ) ?? null;
       derivedUpstreamBackingCommitted = upstream != null && root.contains(upstream) &&
         controlledBackingCommitted(upstream, upstreamOwner);
-      const derivedBackingCommitted = derivedUpstreamBrowserFieldId !== undefined && upstream != null &&
+      const derivedBackingCommitted = derivedBackingRuleMatched && upstream != null &&
         root.contains(upstream) && fieldOwnerSelectedItems.length === 1 &&
         derivedUpstreamBackingCommitted;
       verified = verified && (
@@ -2024,6 +2029,7 @@ async function readApplicationSnapshot(
             "input, textarea",
           )].filter((candidate) => candidate.value.trim() !== "").length,
         derivedBackingRuleCount,
+        derivedBackingRuleBrowserFieldId,
         derivedBackingRuleMatched,
         derivedVisibleUpstreamCount,
         derivedUpstreamBackingCommitted,

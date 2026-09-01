@@ -1087,6 +1087,7 @@ test("derived backing failure emits only retained structural predicates", async 
         selectedItemCount: 1,
         fieldOwnerSelectedItemCount: 1,
         derivedBackingRuleCount: 1,
+        derivedBackingRuleBrowserFieldId: "phoneNumber--countryPhoneCode",
         derivedBackingRuleMatched: true,
         derivedVisibleUpstreamCount: 1,
         derivedUpstreamBackingCommitted: false,
