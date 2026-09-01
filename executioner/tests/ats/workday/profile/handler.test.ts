@@ -1823,7 +1823,7 @@ test("fills recognized unplanned optional controls with explicit test fallbacks"
   assert.equal(result.kind, "verified", JSON.stringify(result));
   assert.deepEqual(port.commits.map(({ value }) => value), [
     "https://www.facebook.com/hunt.test.owner.review",
-    "https://x.com/hunt_test_owner_review",
+    "https://twitter.com/hunt_test_26",
   ]);
   if (result.kind !== "verified") return;
   assert.equal(result.committedFields.length, 2);

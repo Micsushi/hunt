@@ -716,7 +716,7 @@ function syntheticProfileValue(
     return "https://www.facebook.com/hunt.test.owner.review";
   }
   if (control.fieldId === "social.twitter") {
-    return "https://x.com/hunt_test_owner_review";
+    return "https://twitter.com/hunt_test_26";
   }
   if (answerType === "url") return "https://example.invalid/owner-review";
   if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
