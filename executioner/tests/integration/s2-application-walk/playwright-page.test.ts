@@ -90,7 +90,7 @@ test("Intermountain retained Profile button selects agree with the completion ga
           <div data-automation-id="formField-country">
             <label>Country<span data-automation-id="required">*</span></label>
             <button id="country--country" type="button" aria-required="true"
-              aria-describedby="country-description">Canada</button>
+              aria-describedby="country-description" aria-valuetext="Canada">Canada</button>
             <span id="country-description">Select your country of residence.</span>
             <input style="display:none">
           </div>
@@ -98,7 +98,7 @@ test("Intermountain retained Profile button selects agree with the completion ga
           <div data-automation-id="formField-phoneNumber--phoneType">
             <label>Phone Device Type<span data-automation-id="required">*</span></label>
             <button data-automation-id="phoneNumber--phoneType" type="button"
-              aria-required="true">Mobile</button>
+              aria-required="true" aria-valuetext="Mobile">Mobile</button>
             <input style="display:none">
           </div>
           <button id="continue" type="button">Save and Continue</button>
