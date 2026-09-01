@@ -1043,6 +1043,47 @@ test("a matching synthetic prefill still proves backing commit in the current ru
   assert.equal(result.committedFields[0]?.synthetic, true);
 });
 
+test("a matching derived country-code mirror still proves controlled backing", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control(
+        "phone.country_code",
+        "search_select",
+        "United States (+1)",
+        "workday_search_select_v2",
+      ),
+      allowedOptions: ["United States (+1)"],
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [{
+      fieldId: "phone.country_code",
+      questionType: "phone",
+      answerType: "option",
+      allowedOptions: ["United States (+1)"],
+      answer: {
+        kind: "answered",
+        value: "US-1",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "US-1",
+        visibleOption: "United States (+1)",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), ["United States (+1)"]);
+});
+
 test("synthetic unknown values honor native constraints", async () => {
   const port = new MemoryProfilePage({
     pageType: "contact",

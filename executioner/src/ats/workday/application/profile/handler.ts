@@ -1197,8 +1197,7 @@ async function reconcileField(
   }
   const expected = visibleValue(effectiveField);
   const syntheticCommitProofRequired = effectiveField.answer.kind === "answered" &&
-    effectiveField.answer.lane === "synthetic_test_default" &&
-    effectiveField.fieldId !== "phone.country_code";
+    effectiveField.answer.lane === "synthetic_test_default";
   if (syntheticCommitProofRequired ||
       !readbackMatches(effectiveField, control.readback, expected)) {
     const syntheticFile = control.uiBehavior === "file" &&

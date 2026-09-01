@@ -2523,6 +2523,70 @@ fields: [
   }
 });
 
+test("derived country-code presentation mirror is reselected into controlled backing", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-phone-country-code">
+            <label for="phoneNumber--countryPhoneCode">Country Phone Code</label>
+            <span data-automation-id="selectedItem">United States (+1)</span>
+            <input id="phoneNumber--countryPhoneCode" role="combobox"
+              aria-required="true" aria-controls="phone-code-options">
+            <div id="phone-code-options" role="listbox" hidden>
+              <div role="option">United States (+1)</div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const control = document.getElementById("phoneNumber--countryPhoneCode");
+          const options = document.getElementById("phone-code-options");
+          const option = options.querySelector('[role="option"]');
+          control.addEventListener("click", () => { options.hidden = false; });
+          option.addEventListener("click", () => {
+            control.value = option.textContent;
+            control.setAttribute("data-selected-label", option.textContent);
+            control.setAttribute("data-test-backed", "true");
+            options.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [{
+        fieldId: "phone.country_code",
+        questionType: "phone",
+        answerType: "option",
+        allowedOptions: ["United States (+1)"],
+        answer: {
+          kind: "answered",
+          value: "US-1",
+          provenance: "generated_default",
+          lane: "synthetic_test_default",
+        },
+        optionMapping: {
+          canonicalValue: "US-1",
+          visibleOption: "United States (+1)",
+          provenance: "visible_option",
+        },
+      }],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const control = page.locator("#phoneNumber--countryPhoneCode");
+    assert.equal(await control.getAttribute("data-test-backed"), "true");
+    assert.equal(await control.inputValue(), "United States (+1)");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("My Experience native degree select commits the unique exact tenant label", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
