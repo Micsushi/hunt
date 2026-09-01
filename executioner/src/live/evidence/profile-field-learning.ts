@@ -44,10 +44,9 @@ import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 import {
   evaluateSharedUiState,
   sharedProfileUiTypes,
+  sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBehavior,
 } from "../../deterministic/ui-state-model.ts";
-import { profileKnownAliasMatches } from
-  "../../ats/workday/application/profile/semantic-readback.ts";
 
 const uiTypes = new Set<string>(sharedProfileUiTypes);
 const questionCategories = new Set([
@@ -1399,7 +1398,7 @@ function sameCategories(left: ProfileFieldPlan, right: ProfileFieldPlan): boolea
 function sameValue(expected: string, actual: string | null, fieldId?: string): boolean {
   if (actual === null) return false;
   if (fieldId !== undefined) {
-    const aliasMatch = profileKnownAliasMatches(fieldId, actual, expected);
+    const aliasMatch = sharedUiKnownSemanticAliasMatches(fieldId, actual, expected);
     if (aliasMatch !== undefined) return aliasMatch;
   }
   const expectedOptions = optionList(expected);

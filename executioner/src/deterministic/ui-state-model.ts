@@ -307,6 +307,26 @@ export function sharedUiValueMatches(
   return normalizeScalar(expected) === normalizeScalar(actual);
 }
 
+export function sharedUiKnownSemanticAliasMatches(
+  fieldId: string,
+  actual: string,
+  expected: string,
+): boolean | undefined {
+  const pair = new Set([normalizeOption(actual), normalizeOption(expected)]);
+  if (fieldId === "phone.device_type") {
+    if (pair.size === 1) return true;
+    return pair.size === 2 && pair.has("mobile") && pair.has("cell") ? true : undefined;
+  }
+  if (fieldId === "source.how_did_you_hear") {
+    if (pair.size === 1) return true;
+    return pair.size === 2 && pair.has("recruiter") &&
+        (pair.has("direct sourcing") || pair.has("recruiter outreach"))
+      ? true
+      : undefined;
+  }
+  return undefined;
+}
+
 function contract(
   type: SharedUiType,
   mutation: SharedUiMutation,

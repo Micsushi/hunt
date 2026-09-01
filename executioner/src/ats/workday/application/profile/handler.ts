@@ -28,9 +28,9 @@ import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
 import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
-import { profileKnownAliasMatches } from "./semantic-readback.ts";
 import {
   evaluateSharedUiState,
+  sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBehavior,
   sharedUiValueMatches,
 } from "../../../../deterministic/ui-state-model.ts";
@@ -1323,7 +1323,7 @@ function readbackMatches(
   expected: string,
 ): boolean {
   if (actual === null) return false;
-  const aliasMatch = profileKnownAliasMatches(field.fieldId, actual, expected);
+  const aliasMatch = sharedUiKnownSemanticAliasMatches(field.fieldId, actual, expected);
   if (aliasMatch !== undefined) return aliasMatch;
   if (field.answerType === "phone") {
     return sharedUiValueMatches("phone", expected, actual);

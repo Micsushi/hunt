@@ -563,6 +563,7 @@ test("Integer source select maps LinkedIn to its unique corporate-page leaf", as
             document.body.append(listbox);
             listbox.firstElementChild.addEventListener('click', event => {
               source.textContent = event.currentTarget.textContent.trim();
+              source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
               source.setAttribute('aria-expanded', 'false');
               listbox.hidden = true;
             });
@@ -594,7 +595,11 @@ fields: [field(
     }, adapter, AbortSignal.any([]));
 
     const after = await adapter.inspect(AbortSignal.any([]));
-    assert.equal(result.kind, "verified", JSON.stringify({ result, after }));
+    assert.equal(result.kind, "verified", JSON.stringify({
+      result,
+      after,
+      interaction: adapter.interaction(after.controls[0]!.controlId),
+    }));
     assert.equal(await page.locator('#source--source').innerText(), "LinkedIn corporate page");
   } finally {
     await browser.close();
