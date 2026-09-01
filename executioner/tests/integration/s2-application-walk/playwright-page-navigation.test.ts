@@ -1033,6 +1033,13 @@ test("derived backing canonicalizes boxed live DOM identifiers", async () => {
         configurable: true,
         get: () => new String("country--country"),
       });
+      const normalize = String.prototype.normalize;
+      Object.defineProperty(String.prototype, "normalize", {
+        configurable: true,
+        value(this: string, form?: "NFC" | "NFD" | "NFKC" | "NFKD") {
+          return new String(normalize.call(this, form));
+        },
+      });
     });
     const observed = await application(page).observe(signal());
     assert.equal(observed.ok, true);
