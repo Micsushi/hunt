@@ -4,6 +4,8 @@ import type {
   JourneyId,
   PortResult,
 } from "../../../contracts/index.ts";
+import type { SharedUiStateFact } from
+  "../../../deterministic/ui-state-model.ts";
 import type { S2StableErrorCode } from "../../../contracts/s2-common-wire.ts";
 
 export const applicationPages = [
@@ -78,9 +80,18 @@ export interface ApplicationPageTruth {
     readonly fieldId: FieldId;
     readonly page?: ApplicationHandlerPage;
     readonly verification: "verified" | "unverified";
+    readonly uiState?: SharedUiStateFact;
   }[];
   readonly c3OwnedDuplicateRows: number;
   readonly submitActivated: boolean;
+}
+
+export function isApplicationFieldNavigationEligible(
+  field: ApplicationPageTruth["requiredFields"][number],
+): boolean {
+  return field.verification === "verified" &&
+    (field.uiState === undefined ||
+      field.uiState.revision === "shared-ui-state-v1" && field.uiState.navigationEligible);
 }
 
 export interface ApplicationPortFailure {

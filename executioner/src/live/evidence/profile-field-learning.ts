@@ -41,11 +41,13 @@ import {
   retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
+import {
+  evaluateSharedUiState,
+  sharedProfileUiTypes,
+  sharedUiTypeForBehavior,
+} from "../../deterministic/ui-state-model.ts";
 
-const uiTypes = new Set([
-  "checkbox", "file", "text", "textarea", "phone", "date", "month", "year",
-  "number", "url", "select", "multi_select", "search_select", "radio_group",
-]);
+const uiTypes = new Set<string>(sharedProfileUiTypes);
 const questionCategories = new Set([
   "identity", "address", "phone", "application_source", "prior_employment",
   "employment", "experience", "education", "skill", "language", "website",
@@ -1157,6 +1159,15 @@ function applyInteraction(
     interaction.backingValueCommitted,
   );
   record.mechanics.validationCleared = mechanicStatus(interaction.validationCleared);
+  const sharedType = sharedUiTypeForBehavior(record.uiType);
+  if (sharedType === undefined || !evaluateSharedUiState({
+    type: sharedType,
+    ownerState: "exact",
+    backingState: interaction.backingValueCommitted ? "committed" : "empty",
+    stabilizationState: "stable",
+    readbackState: interaction.backingValueCommitted ? "matches" : "empty",
+    validationState: interaction.validationCleared ? "clear" : "invalid",
+  }).navigationEligible) record.terminalDisposition = "verification_failed";
   if (
     Number.isInteger(interaction.visibleOptionCount) &&
     interaction.visibleOptionCount !== null &&

@@ -3801,6 +3801,8 @@ function traced(
     get(target, property) {
       const value = Reflect.get(target, property, target) as unknown;
       if (typeof value !== "function") return value;
+      if (property === "interaction") return (...args: unknown[]) =>
+        Reflect.apply(value, target, args);
       return async (...args: unknown[]) => {
         try {
           return await Reflect.apply(value, target, args);

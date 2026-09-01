@@ -15,6 +15,7 @@ import {
   verifyStage2ExternalMonitorAcknowledgement,
 } from "./external-monitor-authority.ts";
 import { compatibleObservedStructure } from "./external-monitor-page-identity.ts";
+import { sharedUiTypes } from "../../deterministic/ui-state-model.ts";
 
 const MAX_RECORDS = 512;
 const AUTH_PAGES = new Set([
@@ -32,10 +33,7 @@ const APPLICATION_MOMENTS = new Set([
   "before_mutation", "after_readback", "before_navigation", "transition",
   "state_observed", "recovery_observed", "review_readback",
 ]);
-const CONTROL_TYPES = new Set([
-  "text", "textarea", "select", "radio", "checkbox", "date", "phone", "address",
-  "file_upload", "repeatable", "number", "search_select", "radio_group", "month", "year",
-]);
+const CONTROL_TYPES = new Set<string>(sharedUiTypes);
 const QUESTION_TYPES = new Set([
   "identity", "contact", "address", "phone", "application_source", "prior_employment",
   "employment", "education", "authorization", "legal",

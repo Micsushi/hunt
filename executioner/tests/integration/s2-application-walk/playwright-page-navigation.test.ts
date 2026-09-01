@@ -929,7 +929,8 @@ test("required Workday radio groups and tokenized comboboxes verify their commit
         <div data-automation-id="formField-country-phone-code">
           <div data-automation-id="country-phone-code-owner">
             <span data-automation-id="selectedItem">Canada (+1)</span>
-            <input id="phoneNumber--countryPhoneCode" aria-required="true">
+            <input id="phoneNumber--countryPhoneCode" aria-required="true"
+              data-selected-label="Canada (+1)">
           </div>
           <span data-automation-id="selectedItem">Unrelated outer token</span>
         </div>
@@ -948,6 +949,27 @@ test("required Workday radio groups and tokenized comboboxes verify their commit
         verification: "verified",
       },
     ]);
+  });
+});
+
+test("a token presentation mirror cannot verify an empty controlled backing value", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-country-phone-code">
+          <div data-automation-id="country-phone-code-owner">
+            <span data-automation-id="selectedItem">Canada (+1)</span>
+            <input id="phoneNumber--countryPhoneCode" aria-required="true">
+          </div>
+        </div>
+      </main>
+    `);
+    const observed = await application(page).observe(signal());
+    assert.deepEqual(observed.ok && observed.value.requiredFields, [{
+      fieldId: "phoneNumber--countryPhoneCode",
+      page: "profile",
+      verification: "unverified",
+    }]);
   });
 });
 

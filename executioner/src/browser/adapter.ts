@@ -27,6 +27,13 @@ import {
   applyCompositeDateMutation,
   compositeDateBackingCommitted,
 } from "./composite-date.ts";
+import {
+  sharedUiAcceptsBrowserMutation,
+  sharedUiBackingAttribute,
+  sharedUiStateRevisionAttribute,
+  sharedUiTypeAttribute,
+  sharedUiTypeForBrowserControl,
+} from "../deterministic/ui-state-model.ts";
 
 const controlSelector = [
   '[data-automation-id="dateSection"][data-hunt-target-token]',
@@ -230,6 +237,36 @@ export async function applyMutation(
   upload: Uint8Array | undefined,
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
+  const result = await applyMutationUnchecked(page, target, mutation, upload, timeoutMs);
+  if (result !== "applied") return result;
+  const sharedType = sharedUiTypeForBrowserControl(target.control);
+  const owner = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
+  if (sharedType === undefined || await owner.count() !== 1 ||
+      !("evaluate" in owner) || typeof owner.evaluate !== "function") return "applied";
+  await owner.evaluate((element, state) => {
+    element.setAttribute(state.revisionAttribute, "shared-ui-state-v1");
+    element.setAttribute(state.typeAttribute, state.type);
+    element.setAttribute(state.backingAttribute, "committed");
+  }, {
+    revisionAttribute: sharedUiStateRevisionAttribute,
+    typeAttribute: sharedUiTypeAttribute,
+    backingAttribute: sharedUiBackingAttribute,
+    type: sharedType,
+  });
+  return "applied";
+}
+
+async function applyMutationUnchecked(
+  page: Page,
+  target: ResolvedBrowserTarget,
+  mutation: BrowserMutation,
+  upload: Uint8Array | undefined,
+  timeoutMs: number,
+): Promise<"applied" | "ambiguous" | "invalid"> {
+  const sharedType = sharedUiTypeForBrowserControl(target.control);
+  if (sharedType === undefined || !sharedUiAcceptsBrowserMutation(sharedType, mutation.kind)) {
+    return "invalid";
+  }
   if (mutation.kind === "select") {
     if (target.interaction === "multi-checkbox-group") {
       if (target.control.kind !== "select" || !target.radioOptions?.includes(mutation.option)) {

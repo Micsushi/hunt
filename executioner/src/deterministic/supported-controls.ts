@@ -1,4 +1,5 @@
 import { uiBehaviorIds, type UiBehaviorId } from "../contracts/types.ts";
+import { isSharedProfileUiType } from "./ui-state-model.ts";
 
 export const supportedControlSelector = [
   'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"])',
@@ -17,10 +18,7 @@ export function isSupportedUiBehavior(value: unknown): value is UiBehaviorId {
 }
 
 export function isSupportedProfileUiBehavior(value: unknown): boolean {
-  return isSupportedUiBehavior(value) || [
-    "file", "phone", "month", "year", "number", "url", "multi_select",
-    "search_select", "radio_group",
-  ].includes(String(value));
+  return isSharedProfileUiType(value);
 }
 
 export const checkboxGroupKindAttribute = "data-hunt-checkbox-group-kind";

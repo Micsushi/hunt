@@ -6,62 +6,18 @@ import type {
   VerificationRequest,
   VerificationResult,
 } from "../../contracts/index.ts";
+import { sharedUiIntentMatchesReadback } from "../../deterministic/ui-state-model.ts";
 
 const cancelled = {
   ok: false,
   error: { code: "operation_cancelled", retryable: false },
 } as const;
 
-function normalizeScalar(value: string): string {
-  return value.normalize("NFC").trim();
-}
-
-function normalizeOption(value: string): string {
-  return normalizeScalar(value).replace(/\s+/gu, " ");
-}
-
-function normalizeTextarea(value: string): string {
-  return value.normalize("NFC").replace(/\r\n?/gu, "\n");
-}
-
 export function fieldIntentMatchesReadback(
   intent: FieldIntent,
   readback: BrowserReadback,
 ): boolean {
-  switch (intent.kind) {
-    case "text":
-      return (
-        readback.kind === "text" &&
-        (intent.behavior === "textarea"
-          ? normalizeTextarea(readback.value) ===
-            normalizeTextarea(intent.value)
-          : normalizeScalar(readback.value) ===
-            normalizeScalar(intent.value))
-      );
-    case "choice":
-      return (
-        readback.kind === "selected" &&
-        readback.option !== null &&
-        normalizeOption(readback.option) ===
-          normalizeOption(intent.expectedOption)
-      );
-    case "toggle":
-      return (
-        readback.kind === "checked" &&
-        readback.checked === intent.checked
-      );
-    case "date":
-      return (
-        readback.kind === "text" &&
-        normalizeScalar(readback.value) === intent.isoDate
-      );
-    case "resume_upload":
-      return (
-        readback.kind === "upload" &&
-        readback.resumeId === intent.artifact.resumeId &&
-        readback.sha256 === intent.artifact.sha256
-      );
-  }
+  return sharedUiIntentMatchesReadback(intent, readback);
 }
 
 function validRequest(request: VerificationRequest): boolean {

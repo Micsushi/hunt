@@ -10,6 +10,7 @@ import {
 } from "../../../deterministic/supported-controls.ts";
 import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
+  isApplicationFieldNavigationEligible,
   type ApplicationHandlerPage,
   type ApplicationPage,
   type ApplicationPageTruth,
@@ -23,6 +24,15 @@ import {
   markNavigationWitnessClicked,
   readNavigationActionBusySeen,
 } from "./navigation-witness.ts";
+import {
+  evaluateSharedUiState,
+  sharedUiBackingAttribute,
+  sharedUiStateRevisionAttribute,
+  sharedUiTypeAttribute,
+  sharedUiTypes,
+  type SharedUiStateInput,
+  type SharedUiType,
+} from "../../../deterministic/ui-state-model.ts";
 export interface PlaywrightWorkdayApplicationPageOptions { readonly timeoutMs?: number;
   readonly navigationSettleTimeoutMs?: number;
   readonly pageIds?: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
@@ -37,6 +47,7 @@ interface BrowserApplicationSnapshot {
     readonly semanticKey: string;
     readonly page?: ApplicationHandlerPage;
     readonly verification: "verified" | "unverified";
+    readonly uiState: SharedUiStateInput;
     readonly diagnostic: {
       readonly tag: string;
       readonly role: string | null;
@@ -153,8 +164,8 @@ export class PlaywrightWorkdayApplicationPage {
       beforeTruth.pageId !== request.fromPageId ||
       beforeTruth.submitActivated ||
       beforeTruth.c3OwnedDuplicateRows !== 0 ||
-      beforeTruth.requiredFields.some(({ verification }) =>
-        verification !== "verified"
+      beforeTruth.requiredFields.some((field) =>
+        !isApplicationFieldNavigationEligible(field)
       )
     ) {
       navigationDiagnostic("source_guard_failed", {
@@ -162,8 +173,8 @@ export class PlaywrightWorkdayApplicationPage {
         pageIdMatched: beforeTruth.pageId === request.fromPageId,
         submitActivated: beforeTruth.submitActivated,
         duplicateRows: beforeTruth.c3OwnedDuplicateRows,
-        unverifiedRequiredCount: beforeTruth.requiredFields.filter(({ verification }) =>
-          verification !== "verified"
+        unverifiedRequiredCount: beforeTruth.requiredFields.filter((field) =>
+          !isApplicationFieldNavigationEligible(field)
         ).length,
       });
       return failure("navigation_illegal", "navigation");
@@ -335,6 +346,10 @@ export class PlaywrightWorkdayApplicationPage {
           checkboxGroupOptionsAttribute,
           checkboxGroupSelectedOptionAttribute,
           supportedControls: supportedControlSelector,
+          sharedUiBackingAttribute,
+          sharedUiStateRevisionAttribute,
+          sharedUiTypeAttribute,
+          sharedUiTypes,
         },
       );
       if ("ambiguity" in snapshot) {
@@ -540,7 +555,10 @@ export class PlaywrightWorkdayApplicationPage {
       current.value.transitionKey === before.transitionKey &&
       !current.value.submitActivated &&
       current.value.requiredFields.length === before.requiredFields.length &&
-      current.value.requiredFields.every(({ verification }) => verification === "verified") &&
+      current.value.requiredFields.every((field) =>
+        field.verification === "verified" &&
+        evaluateSharedUiState(field.uiState).navigationEligible
+      ) &&
       !hasValidationDowngrade(before, current.value);
   }
   async #waitForActionableNext(
@@ -608,13 +626,23 @@ export class PlaywrightWorkdayApplicationPage {
           ? browserPageId(`s2-${snapshot.page.replace("_", "-")}`)
           : browserPageId(snapshot.pageId)
       ),
-      requiredFields: Object.freeze(snapshot.requiredFields.map((item) =>
-        Object.freeze({
+      requiredFields: Object.freeze(snapshot.requiredFields.map((item) => {
+        const uiState = evaluateSharedUiState(item.uiState);
+        const fieldTruth: ApplicationPageTruth["requiredFields"][number] = {
           fieldId: fieldId(item.fieldId),
           ...(item.page === undefined ? {} : { page: item.page }),
-          verification: item.verification,
-        })
-      )),
+          verification: item.verification === "verified" && uiState.navigationEligible
+            ? "verified" as const
+            : "unverified" as const,
+        };
+        Object.defineProperty(fieldTruth, "uiState", {
+          value: uiState,
+          enumerable: false,
+          configurable: false,
+          writable: false,
+        });
+        return Object.freeze(fieldTruth);
+      })),
       c3OwnedDuplicateRows: snapshot.c3OwnedDuplicateRows,
       submitActivated: snapshot.submitActivated,
     });
@@ -673,14 +701,19 @@ function hasValidationDowngrade(
   ) return false;
   const beforeFields = new Map(before.requiredFields.map((item) => [
     `${item.page ?? ""}:${item.fieldId}`,
-    item.verification,
+    evaluateSharedUiState(item.uiState).navigationEligible,
   ]));
   const afterKeys = new Set(after.requiredFields.map((item) =>
     `${item.page ?? ""}:${item.fieldId}`
   ));
   const regressed = after.requiredFields.some((item) =>
-    item.verification === "unverified" &&
-    beforeFields.get(`${item.page ?? ""}:${item.fieldId}`) === "verified"
+    item.verification === "unverified" && evaluateSharedUiState({
+      ...item.uiState,
+      navigationEffect: item.uiState.validationState === "invalid"
+        ? "validation_appeared"
+        : "not_attempted",
+    }).navigationEligible === false &&
+    beforeFields.get(`${item.page ?? ""}:${item.fieldId}`) === true
   );
   if (regressed) return true;
   const newField = [...afterKeys].some((key) => !beforeFields.has(key));
@@ -702,11 +735,17 @@ async function readApplicationSnapshot(
     readonly checkboxGroupOptionsAttribute: string;
     readonly checkboxGroupSelectedOptionAttribute: string;
     readonly supportedControls: string;
+    readonly sharedUiBackingAttribute: string;
+    readonly sharedUiStateRevisionAttribute: string;
+    readonly sharedUiTypeAttribute: string;
+    readonly sharedUiTypes: readonly SharedUiType[];
   },
 ): Promise<BrowserApplicationSnapshot | BrowserApplicationAmbiguity> {
   const {
     selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
     checkboxGroupSelectedOptionAttribute, supportedControls,
+    sharedUiBackingAttribute, sharedUiStateRevisionAttribute,
+    sharedUiTypeAttribute, sharedUiTypes,
   } = input;
   const visible = (element: Element): element is HTMLElement => {
     if (!(element instanceof HTMLElement) || element.hidden ||
@@ -1480,8 +1519,9 @@ async function readApplicationSnapshot(
     // textarea after a successful fill and blur. Treat the flag as stale only
     // when native validity passes and no owned, referenced, or unowned visible
     // validation message corroborates it.
-    let verified = !nativeInvalid && !referencedValidation &&
+    const validationClear = !nativeInvalid && !referencedValidation &&
       !ownedValidation && !unownedValidation;
+    let verified = true;
     let dateReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["dateReactHandlerLayers"];
     let checkboxReactHandlerLayers:
@@ -1497,6 +1537,51 @@ async function readApplicationSnapshot(
       [...selectionOwner.querySelectorAll<HTMLElement>(
         '[data-automation-id="selectedItem"]',
       )].filter((item) => visible(item) && text(item.textContent) !== "");
+    const controlledBackingCommitted = (leaf: HTMLElement, owner: HTMLElement | null): boolean => {
+      const stamped = leaf.closest<HTMLElement>(
+        `[${sharedUiStateRevisionAttribute}="shared-ui-state-v1"]` +
+          `[${sharedUiBackingAttribute}="committed"]`,
+      );
+      if (stamped !== null) return true;
+      if (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) {
+        if (text(leaf.value) !== "") return true;
+      }
+      if (leaf instanceof HTMLSelectElement && text(leaf.value) !== "") return true;
+      if (text(leaf.getAttribute("aria-valuetext")) !== "" ||
+          text(leaf.getAttribute("data-selected-label")) !== "") return true;
+      const inspected = new Set<unknown>();
+      const hasValue = (value: unknown, depth: number): boolean => {
+        if (value === null || value === undefined || depth > 2 || inspected.has(value)) return false;
+        if (typeof value === "string" || typeof value === "number") return text(String(value)) !== "";
+        if (typeof value !== "object") return false;
+        inspected.add(value);
+        if (Array.isArray(value)) return value.length > 0 && value.some((item) => hasValue(item, depth + 1));
+        const record = value as Record<string, unknown>;
+        return ["value", "selectedValue", "selectedOption", "selectedItem", "selectedItems"]
+          .some((key) => key in record && hasValue(record[key], depth + 1));
+      };
+      let candidate: Element | null = leaf;
+      for (let depth = 0; candidate !== null && depth < 8; depth += 1) {
+        const host = candidate as unknown as Record<string, unknown>;
+        if (Object.keys(candidate).filter((key) => key.startsWith("__reactProps$"))
+          .some((key) => hasValue(host[key], 0))) return true;
+        const fiberKey = Object.keys(candidate).find((key) =>
+          key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
+        );
+        let fiber = fiberKey === undefined ? undefined : host[fiberKey] as {
+          memoizedProps?: unknown;
+          memoizedState?: unknown;
+          return?: unknown;
+        } | undefined;
+        for (let fiberDepth = 0; fiber !== undefined && fiber !== null && fiberDepth < 16; fiberDepth += 1) {
+          if (hasValue(fiber.memoizedProps, 0) || hasValue(fiber.memoizedState, 0)) return true;
+          fiber = fiber.return as typeof fiber;
+        }
+        if (candidate === owner) break;
+        candidate = candidate.parentElement;
+      }
+      return false;
+    };
     const descendantRadios = [...control.querySelectorAll<HTMLElement>(
       'input[type="radio"], [role="radio"]',
     )];
@@ -1778,12 +1863,11 @@ async function readApplicationSnapshot(
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
-      );
+      ) && controlledBackingCommitted(semanticLeaf, selectionOwner);
     } else if (selectedItems.length === 1) {
-      // Workday's tokenized country-code input is a plain text input with an
-      // intentionally empty backing value. Its one visible nonempty token is the
-      // committed selection even when no combobox role is present.
-      verified = verified && true;
+      // A presentation token is not backing state. Require the owning control
+      // or its controlled component state to retain the selection.
+      verified = verified && controlledBackingCommitted(semanticLeaf, selectionOwner);
     } else if (
       control instanceof HTMLInputElement ||
       control instanceof HTMLTextAreaElement
@@ -1794,6 +1878,8 @@ async function readApplicationSnapshot(
     } else {
       verified = false;
     }
+    const semanticCommitted = verified;
+    verified = validationClear && semanticCommitted;
     const resumeOwnedFile = input?.type === "file" &&
       input.getAttribute("data-automation-id") === "file-upload-input-ref";
     const fieldPage: ApplicationHandlerPage | undefined = resumeOwnedFile
@@ -1803,6 +1889,43 @@ async function readApplicationSnapshot(
         : page === "resume" || page === "profile" || page === "questionnaire"
           ? page
           : undefined;
+    const stampedTypeOwner = semanticLeaf.closest<HTMLElement>(
+      `[${sharedUiStateRevisionAttribute}="shared-ui-state-v1"]` +
+        `[${sharedUiTypeAttribute}]`,
+    );
+    const stampedType = stampedTypeOwner?.getAttribute(sharedUiTypeAttribute);
+    const sharedType: SharedUiType = stampedType !== null && stampedType !== undefined &&
+        sharedUiTypes.includes(stampedType as SharedUiType)
+      ? stampedType as SharedUiType
+      : radioMembershipOwner !== undefined ||
+        descendantRadios.length > 0 ||
+        control.getAttribute(checkboxGroupAttribute) === "exclusive"
+      ? "radio_group"
+      : control.getAttribute(checkboxGroupAttribute) === "multiple"
+        ? "multi_select"
+      : selectedItems.length > 0 && supportedBehavior === "text"
+        ? "search_select"
+      : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "tel"
+        ? "phone"
+      : semanticLeaf instanceof HTMLInputElement && semanticLeaf.type === "number"
+        ? "number"
+      : supportedBehavior === "file_upload" ? "file_upload"
+      : supportedBehavior === "listbox" && (
+          semanticLeaf.getAttribute("aria-multiselectable") === "true" ||
+          semanticLeaf instanceof HTMLSelectElement && semanticLeaf.multiple
+        ) ? "multi_select"
+      : supportedBehavior === "listbox" ? "search_select"
+      : supportedBehavior === "radio" && semanticLeaf.getAttribute("role") === "radiogroup"
+        ? "radio_group"
+      : supportedBehavior as SharedUiType;
+    const sharedState: SharedUiStateInput = {
+      type: sharedType,
+      ownerState: "exact",
+      backingState: semanticCommitted ? "committed" : "empty",
+      stabilizationState: "stable",
+      readbackState: semanticCommitted ? "matches" : "empty",
+      validationState: validationClear ? "clear" : "invalid",
+    };
     requiredFields.push({
       fieldId: safeId,
       semanticKey: semanticHash([
@@ -1814,6 +1937,7 @@ async function readApplicationSnapshot(
       ].join("\u0000")),
       ...(fieldPage === undefined ? {} : { page: fieldPage }),
       verification: verified ? "verified" : "unverified",
+      uiState: sharedState,
       diagnostic: {
         tag: control.tagName.toLocaleLowerCase("en-US"),
         role,

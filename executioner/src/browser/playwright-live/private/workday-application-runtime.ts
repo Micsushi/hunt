@@ -32,6 +32,7 @@ import {
 } from "../../../ats/workday/application/resume/index.ts";
 import {
   WORKDAY_APPLICATION_PAGE_SELECTORS,
+  isApplicationFieldNavigationEligible,
   type ApplicationPageTruth,
   type ApplicationPageHandlerPort,
   type ApplicationPortFailure,
@@ -82,6 +83,12 @@ import {
 } from "../../../interaction/review/index.ts";
 import { createFieldVerifier, fieldIntentMatchesReadback } from
   "../../../interaction/verification/field-verifier.ts";
+import {
+  canonicalSharedUiTypes,
+  sharedUiBackingAttribute,
+  sharedUiStateRevisionAttribute,
+  sharedUiTypeAttribute,
+} from "../../../deterministic/ui-state-model.ts";
 import { createProfileFieldLearningCapture } from
   "../../../live/evidence/profile-field-learning.ts";
 import { createSafetyGuard } from "../../../safety/guards.ts";
@@ -262,7 +269,7 @@ async function profileMonitorTaxonomyFromSnapshot(
   return Object.freeze({
     fieldCount: controls.length,
     requiredFieldCount: controls.filter(({ required }) => required).length,
-    controlTypes: Object.freeze(unique(controls.map(({ uiBehavior }) => uiBehavior))),
+    controlTypes: canonicalSharedUiTypes(unique(controls.map(({ uiBehavior }) => uiBehavior))),
     questionTypes: Object.freeze(unique(controls.map(({ fieldId }) => monitorQuestionType(fieldId)))),
     answerTypes: Object.freeze(unique(controls.map(({ uiBehavior }) =>
       uiBehavior === "search_select" || uiBehavior === "radio_group" ? "option" :
@@ -442,8 +449,8 @@ export class OwnedWorkdayApplicationRuntime {
           !navigationSource.ok || navigationSource.value.page !== input.from ||
           navigationSource.value.pageId !== input.fromPageId ||
           navigationSource.value.submitActivated ||
-          navigationSource.value.requiredFields.some(({ verification }) =>
-            verification !== "verified"
+          navigationSource.value.requiredFields.some((field) =>
+            !isApplicationFieldNavigationEligible(field)
           )
         ) throw new TypeError("application navigation source denied");
         const advanced = await new PlaywrightWorkdayApplicationPage(page, {
@@ -1358,7 +1365,7 @@ export class OwnedWorkdayApplicationRuntime {
         nextOperationId: this.#nextOperationId,
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
-        previouslyVerified: ({ pageId, field, intent }) => {
+        previouslyVerified: async ({ pageId, field, intent }) => {
           const prior = this.#verifiedQuestionnaireIntents.get(
             questionnaireIntentKey(pageId, field.fieldId),
           );
@@ -1382,13 +1389,15 @@ export class OwnedWorkdayApplicationRuntime {
             remountGeneration: reconciliationGeneration,
             committedReadbackMatches: true,
           });
+          if (reusable) await stampSharedUiBacking(page, field, intent);
           return reusable;
         },
-        recordVerified: ({ pageId, field, intent }) => {
+        recordVerified: async ({ pageId, field, intent }) => {
           this.#verifiedQuestionnaireIntents.set(
             questionnaireIntentKey(pageId, field.fieldId),
             questionnaireIntentFingerprint(intent),
           );
+          await stampSharedUiBacking(page, field, intent);
         },
         recordAttempt: questionLearning === undefined ? undefined : (attempt) => {
           const readback = currentReadbacks.get(attempt.field.target) ??
@@ -1533,7 +1542,7 @@ export class OwnedWorkdayApplicationRuntime {
       }
       const requiredFields = completion.value.requiredFields.length;
       const verifiedFields = completion.value.requiredFields.filter(
-        ({ verification }) => verification === "verified",
+        isApplicationFieldNavigationEligible,
       ).length;
       const fixedPointSignature = questionnaireFixedPointSignature(
         completion.value,
@@ -1868,7 +1877,7 @@ function isExactVerifiedApplicationSource(
     observed.submitActivated || observed.c3OwnedDuplicateRows !== 0 ||
     JSON.stringify(observed.lanes ?? [observed.page]) !==
       JSON.stringify(source.lanes ?? [source.page]) ||
-    observed.requiredFields.some(({ verification }) => verification !== "verified")
+    observed.requiredFields.some((field) => !isApplicationFieldNavigationEligible(field))
   ) return false;
   const fieldKeys = (truth: ApplicationPageTruth) => truth.requiredFields
     .map(({ fieldId: id, page: lane }) => `${lane ?? ""}:${id}`)
@@ -1955,6 +1964,27 @@ export async function enrichQuestionnaireFields(
 
 function questionnaireIntentKey(pageId: BrowserPageId, questionFieldId: FieldId): string {
   return `${pageId}\0${questionFieldId}`;
+}
+
+async function stampSharedUiBacking(
+  page: Page,
+  field: FieldObservation,
+  intent: FieldIntent,
+): Promise<void> {
+  const target = page.locator(`[data-hunt-target-token="${field.target}"]`);
+  if (await target.count() !== 1) {
+    throw new TypeError("shared UI backing owner is not exact");
+  }
+  await target.evaluate((element, attributes) => {
+    element.setAttribute(attributes.revision, "shared-ui-state-v1");
+    element.setAttribute(attributes.type, attributes.uiType);
+    element.setAttribute(attributes.backing, "committed");
+  }, {
+    revision: sharedUiStateRevisionAttribute,
+    type: sharedUiTypeAttribute,
+    backing: sharedUiBackingAttribute,
+    uiType: intent.behavior,
+  });
 }
 
 function questionnaireFixedPointSignature(
@@ -2345,7 +2375,7 @@ async function monitorTaxonomy(
   return Object.freeze({
     fieldCount,
     requiredFieldCount,
-    controlTypes: Object.freeze(controlTypes.length === 0 ? ["text"] : controlTypes),
+    controlTypes: canonicalSharedUiTypes(controlTypes.length === 0 ? ["text"] : controlTypes),
     questionTypes,
     answerTypes: Object.freeze(answerTypes.size === 0 ? ["text"] : [...answerTypes]),
     validationState: "clear" as const,
@@ -2565,7 +2595,7 @@ async function monitorExperienceTaxonomy(page: Page): Promise<{
   return Object.freeze({
     fieldCount: result.fieldCount,
     requiredFieldCount: result.requiredFieldCount,
-    controlTypes: Object.freeze(result.controlTypes),
+    controlTypes: canonicalSharedUiTypes(result.controlTypes),
     questionTypes: Object.freeze(result.questionTypes),
     answerTypes: Object.freeze(result.answerTypes),
   });

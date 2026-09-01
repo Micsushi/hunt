@@ -13,6 +13,7 @@ import type {
   ProfilePageCompletionResult,
   ProfilePagePlan,
   ProfilePageSnapshot,
+  ProfileInteractionSnapshot,
   ProfileRepeatableSection,
   ProfileRowSnapshot,
   VerifiedProfileField,
@@ -28,6 +29,11 @@ import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
 import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
+import {
+  evaluateSharedUiState,
+  sharedUiTypeForBehavior,
+  sharedUiValueMatches,
+} from "../../../../deterministic/ui-state-model.ts";
 
 const reviewedVariants = new Set([
   "workday_text_v1",
@@ -1165,18 +1171,29 @@ async function reconcileField(
       );
       if (
         fresh.length !== 1 ||
-        !readbackMatches(effectiveField, fresh[0]!.readback, expected)
+        !readbackMatches(effectiveField, fresh[0]!.readback, expected) ||
+        !(page.interaction === undefined || profileInteractionEligible(
+          control,
+          page.interaction(control.controlId),
+          true,
+        ))
       ) return blocked("profile_commit_unverified", { fieldId: field.fieldId });
     } catch {
       try {
         const rebound = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
-        if (rebound.length === 1 && readbackMatches(effectiveField, rebound[0]!.readback, expected)) {
+        if (rebound.length === 1 && readbackMatches(effectiveField, rebound[0]!.readback, expected) &&
+            (page.interaction === undefined || profileInteractionEligible(
+              control, page.interaction(control.controlId), true,
+            ))) {
           return verifiedProfileField(effectiveField, rebound[0]!);
         }
         if (rebound.length === 1 && rebound[0]!.readback === null && syntheticFile === undefined) {
           await page.commit(request, signal);
           const retried = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
-          if (retried.length === 1 && readbackMatches(effectiveField, retried[0]!.readback, expected)) {
+          if (retried.length === 1 && readbackMatches(effectiveField, retried[0]!.readback, expected) &&
+              (page.interaction === undefined || profileInteractionEligible(
+                control, page.interaction(control.controlId), true,
+              ))) {
             return verifiedProfileField(effectiveField, retried[0]!);
           }
         }
@@ -1255,23 +1272,45 @@ function readbackMatches(
     return sourceOptionEquivalent(actual, expected);
   }
   if (field.answerType === "phone") {
-    return actual.replace(/\D/gu, "") === expected.replace(/\D/gu, "");
+    return sharedUiValueMatches("phone", expected, actual);
   }
   if (field.answerType === "boolean") {
     return normalize(actual) === (expected === "true" ? "true" : "false");
   }
   if (field.answerType === "month") {
-    return /^(?:0?[1-9]|1[0-2])$/u.test(actual) && Number(actual) === Number(expected);
+    return sharedUiValueMatches("month", expected, actual);
   }
   if (field.answerType === "multi_select") {
     const actualOptions = optionList(actual) ?? [actual];
     const expectedOptions = optionList(expected);
-    return expectedOptions !== undefined && sameNormalizedOptions(actualOptions, expectedOptions);
+    return expectedOptions !== undefined && sharedUiValueMatches(
+      "multi_select",
+      JSON.stringify(expectedOptions),
+      JSON.stringify(actualOptions),
+    );
   }
   if (field.answerType === "option" || field.answerType === "single_select") {
     return equivalentOption(actual, expected);
   }
   return normalize(actual) === normalize(expected);
+}
+
+function profileInteractionEligible(
+  control: ProfileControlSnapshot,
+  interaction: ProfileInteractionSnapshot | undefined,
+  remounted: boolean,
+): boolean {
+  if (interaction === undefined) return false;
+  const type = sharedUiTypeForBehavior(control.uiBehavior);
+  if (type === undefined) return false;
+  return evaluateSharedUiState({
+    type,
+    ownerState: "exact",
+    backingState: interaction.backingValueCommitted ? "committed" : "empty",
+    stabilizationState: remounted ? "remounted_stable" : "stable",
+    readbackState: interaction.backingValueCommitted ? "matches" : "empty",
+    validationState: interaction.validationCleared ? "clear" : "invalid",
+  }).navigationEligible;
 }
 
 function sourceOptionEquivalent(actual: string, expected: string): boolean {

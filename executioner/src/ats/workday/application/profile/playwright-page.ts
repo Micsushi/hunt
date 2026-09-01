@@ -28,6 +28,10 @@ import {
 } from "./inspection.ts";
 import { committedMultiSelectReadback } from "./multi-select-readback.ts";
 import type { ProfileInspectionFailure } from "./types.ts";
+import {
+  evaluateSharedUiState,
+  sharedUiTypeForBehavior,
+} from "../../../../deterministic/ui-state-model.ts";
 
 interface ResolvedControl {
   readonly locator: Locator;
@@ -591,6 +595,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
         throw new TypeError("Workday profile value did not commit");
       }
+    }
+    const sharedType = sharedUiTypeForBehavior(request.uiBehavior);
+    if (sharedType === undefined || !evaluateSharedUiState({
+      type: sharedType,
+      ownerState: "exact",
+      backingState: interaction.backingValueCommitted ? "committed" : "empty",
+      stabilizationState: "stable",
+      readbackState: interaction.backingValueCommitted ? "matches" : "empty",
+      validationState: interaction.validationCleared ? "clear" : "invalid",
+    }).navigationEligible) {
+      throw new TypeError("Workday profile shared UI state did not commit");
     }
     } catch (error) {
       if (

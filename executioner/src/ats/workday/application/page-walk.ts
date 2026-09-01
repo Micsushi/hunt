@@ -10,6 +10,7 @@ import {
   applicationUnknownLayers,
   checkpointForApplicationPage,
   isAllowedApplicationTransition,
+  isApplicationFieldNavigationEligible,
   isValidApplicationPageSequence,
   maximumApplicationPageVisits,
   type ApplicationClassifier,
@@ -288,8 +289,8 @@ export async function runApplicationPageWalk(
     );
   }
   const finalDuplicate = current.value.c3OwnedDuplicateRows > 0;
-  const finalIncomplete = current.value.requiredFields.some(
-    ({ verification }) => verification !== "verified",
+  const finalIncomplete = current.value.requiredFields.some((field) =>
+    !isApplicationFieldNavigationEligible(field)
   );
   if (finalDuplicate || finalIncomplete) {
     return failure(
@@ -553,7 +554,7 @@ function pageCheck(
     checkpoint,
     independentlyVerified: true,
     requiredFields: requiredFields.length,
-    verifiedFields: requiredFields.filter(({ verification }) => verification === "verified").length,
+    verifiedFields: requiredFields.filter(isApplicationFieldNavigationEligible).length,
     duplicateRows: page === "resume" && truth.page === "resume" &&
         truth.lanes?.includes("profile") === true
       ? 0

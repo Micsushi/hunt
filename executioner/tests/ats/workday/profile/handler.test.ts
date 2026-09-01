@@ -950,6 +950,27 @@ test("synthetic mode fills supported unknown profile controls without owner inpu
   assert.equal(port.commits[2]?.value, "true");
 });
 
+test("rejects fresh visible profile readback when controlled backing remains empty", async () => {
+  const port = new BackinglessMemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.family_name", "text")],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("identity.family_name", "identity", "text", "Lovelace")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_commit_unverified",
+    fieldId: "identity.family_name",
+  });
+  assert.equal(port.snapshot.controls[0]?.readback, "Lovelace");
+});
+
 test("a live profile transport traverses supported unknowns under the explicit fallback policy", async () => {
   const port = new MemoryProfilePage({
     pageType: "contact",
@@ -1895,5 +1916,20 @@ class MemoryProfilePage implements WorkdayProfilePagePort {
       ...this.snapshot,
       rows: this.snapshot.rows.filter((item) => item.rowId !== rowId),
     };
+  }
+}
+
+class BackinglessMemoryProfilePage extends MemoryProfilePage {
+  interaction() {
+    return {
+      popupBound: null,
+      optionFocused: null,
+      optionActivated: null,
+      popupClosed: null,
+      backingValueCommitted: false,
+      validationCleared: true,
+      visibleOptionCount: null,
+      selectedOptionOrdinal: null,
+    } as const;
   }
 }

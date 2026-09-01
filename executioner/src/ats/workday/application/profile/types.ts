@@ -3,6 +3,8 @@ import type {
   AnswerExecutionMode,
   AnswerProvenanceLane,
 } from "../../../../form/answers/application-types.ts";
+import type { SharedProfileUiType } from
+  "../../../../deterministic/ui-state-model.ts";
 
 export type ProfileFieldAnswerProvenance =
   | ProfileAnswerProvenance
@@ -47,21 +49,7 @@ export type ProfileCanonicalAnswerType =
   | "single_select"
   | "multi_select"
   | "file";
-export type ProfileUiBehavior =
-  | "checkbox"
-  | "file"
-  | "text"
-  | "textarea"
-  | "phone"
-  | "date"
-  | "month"
-  | "year"
-  | "number"
-  | "url"
-  | "select"
-  | "multi_select"
-  | "search_select"
-  | "radio_group";
+export type ProfileUiBehavior = SharedProfileUiType;
 
 export type ProfileFieldAnswer =
   | {

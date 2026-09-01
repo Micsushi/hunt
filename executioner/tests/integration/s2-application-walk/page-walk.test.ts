@@ -10,8 +10,37 @@ import type {
 import { runApplicationPageWalk } from "../../../src/ats/workday/application/page-walk.ts";
 import { dependenciesFor, truth } from "./fakes.ts";
 import { walkFixture } from "./fixtures.ts";
+import { evaluateSharedUiState } from
+  "../../../src/deterministic/ui-state-model.ts";
 
 const pageOrder = ["profile", "resume", "questionnaire"] as const;
+
+test("checkpoint and navigation reject a visible verified value whose backing state is empty", async () => {
+  const profile = truth("profile");
+  const blocked: ApplicationPageTruth = {
+    ...profile,
+    requiredFields: profile.requiredFields.map((field) => ({
+      ...field,
+      verification: "verified" as const,
+      uiState: evaluateSharedUiState({
+        type: "search_select",
+        ownerState: "exact",
+        backingState: "empty",
+        stabilizationState: "stable",
+        readbackState: "matches",
+        validationState: "clear",
+      }),
+    })),
+  };
+  const result = await runApplicationPageWalk(
+    dependenciesFor([profile, blocked], []),
+    { journeyId: walkFixture.journeyId },
+    new AbortController().signal,
+    { pageRetryLimit: 0 },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.error.failure.code, "page_incomplete");
+});
 
 test("walks the observed Workday My Information to Experience page order", async () => {
   const calls: string[] = [];

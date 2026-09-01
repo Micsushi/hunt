@@ -188,12 +188,12 @@ export interface QuestionnairePageHandlerDependencies {
     readonly pageId: BrowserPageId;
     readonly field: FieldObservation;
     readonly intent: FieldIntent;
-  }) => boolean;
+  }) => boolean | Promise<boolean>;
   readonly recordVerified?: (input: {
     readonly pageId: BrowserPageId;
     readonly field: FieldObservation;
     readonly intent: FieldIntent;
-  }) => void;
+  }) => void | Promise<void>;
   readonly recordAnswer?: (input: {
     readonly operationId: OperationId;
     readonly questionId: QuestionId;
@@ -419,7 +419,7 @@ export function createQuestionnairePageHandler(
           return blocked("narrative_ineligible", field.fieldId, category);
         }
 
-        if (dependencies.previouslyVerified?.({
+        if (await dependencies.previouslyVerified?.({
           pageId: request.pageId,
           field,
           intent: answer.value.intent,
@@ -540,7 +540,7 @@ export function createQuestionnairePageHandler(
           protectedCategory: category,
           generatedDefault,
         });
-        dependencies.recordVerified?.({
+        await dependencies.recordVerified?.({
           pageId: request.pageId,
           field,
           intent: answer.value.intent,
