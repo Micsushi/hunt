@@ -1057,6 +1057,43 @@ test("derived phone country code ignores a hidden stale upstream owner", async (
   });
 });
 
+test("derived backing failure emits only retained structural predicates", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-country">
+          <button id="country--country" aria-required="true">United States</button>
+        </div>
+        <div data-automation-id="formField-country-phone-code">
+          <span data-automation-id="selectedItem">United States (+1)</span>
+          <input id="phoneNumber--countryPhoneCode" role="combobox"
+            aria-required="true">
+        </div>
+      </main>
+    `);
+    const traces: { event: string; details?: object }[] = [];
+    const observed = await new PlaywrightWorkdayApplicationPage(page, {
+      trace: (event, details) => traces.push({ event, details }),
+    }).observe(signal());
+    assert.equal(observed.ok, true);
+    assert.deepEqual(traces.find(({ details }) =>
+      (details as { fieldId?: string } | undefined)?.fieldId ===
+        "phoneNumber--countryPhoneCode"
+    ), {
+      event: "application_required_field_diagnostic",
+      details: {
+        fieldId: "phoneNumber--countryPhoneCode",
+        uiBehavior: "search_select",
+        selectedItemCount: 1,
+        fieldOwnerSelectedItemCount: 1,
+        derivedBackingRuleMatched: true,
+        derivedVisibleUpstreamCount: 1,
+        derivedUpstreamBackingCommitted: false,
+      },
+    });
+  });
+});
+
 test("the physical My Information then My Experience lane sequence is valid", () => {
   assert.equal(isAllowedApplicationTransition("profile", "profile", ["profile"]), true);
   assert.equal(isValidApplicationPageSequence(["profile", "profile"]), true);

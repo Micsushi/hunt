@@ -404,7 +404,10 @@ export class OwnedWorkdayApplicationRuntime {
     }
     switch (operation.kind) {
       case "observe":
-        return new PlaywrightWorkdayApplicationPage(page, { timeoutMs: this.#timeoutMs }).observe(signal);
+        return new PlaywrightWorkdayApplicationPage(page, {
+          timeoutMs: this.#timeoutMs,
+          trace: this.#trace,
+        }).observe(signal);
       case "inspect_recovery": {
         const observed = await new PlaywrightWorkdayApplicationPage(
           page,

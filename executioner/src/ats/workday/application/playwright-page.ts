@@ -37,7 +37,8 @@ import {
 export interface PlaywrightWorkdayApplicationPageOptions { readonly timeoutMs?: number;
   readonly navigationSettleTimeoutMs?: number;
   readonly pageIds?: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
-  readonly prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>; }
+  readonly prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>;
+  readonly trace?: (event: string, details?: object) => void; }
 interface BrowserApplicationSnapshot {
   readonly page: ApplicationPage;
   readonly lanes: readonly ApplicationHandlerPage[];
@@ -67,6 +68,9 @@ interface BrowserApplicationSnapshot {
       readonly ownedValidation: boolean;
       readonly unownedValidation: boolean;
       readonly fieldOwnerInputNonEmptyCount: number;
+      readonly derivedBackingRuleMatched: boolean;
+      readonly derivedVisibleUpstreamCount: number;
+      readonly derivedUpstreamBackingCommitted: boolean;
       readonly dateReactHandlerLayers?: readonly {
         readonly hostTag: string;
         readonly domDepth: number;
@@ -129,18 +133,36 @@ export class PlaywrightWorkdayApplicationPage {
   readonly #navigationSettleTimeoutMs: number;
   readonly #pageIds: Partial<Record<ApplicationPage, ApplicationPageTruth["pageId"]>>;
   readonly #prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>;
+  readonly #trace?: (event: string, details?: object) => void;
   constructor(page: Page, options: PlaywrightWorkdayApplicationPageOptions = {}) {
     this.#page = page;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
     this.#navigationSettleTimeoutMs = options.navigationSettleTimeoutMs ?? this.#timeoutMs;
     this.#pageIds = options.pageIds ?? {};
     this.#prepareQuestionnaireSnapshot = options.prepareQuestionnaireSnapshot;
+    this.#trace = options.trace;
     if (!questionnaireOccurrences.has(page)) {
       questionnaireOccurrences.set(page, { epoch: 0, nextAction: 0 });
     }
   }
   async observe(signal: AbortSignal): Promise<ApplicationPortResult<ApplicationPageTruth>> {
     const snapshot = await this.#readSnapshot(signal);
+    if (snapshot.ok) {
+      for (const field of snapshot.value.requiredFields.filter(
+        ({ verification }) => verification === "unverified",
+      )) {
+        this.#trace?.("application_required_field_diagnostic", {
+          fieldId: field.fieldId,
+          uiBehavior: field.uiState.type,
+          selectedItemCount: field.diagnostic.nearestSelectedItemCount,
+          fieldOwnerSelectedItemCount: field.diagnostic.fieldOwnerSelectedItemCount,
+          derivedBackingRuleMatched: field.diagnostic.derivedBackingRuleMatched,
+          derivedVisibleUpstreamCount: field.diagnostic.derivedVisibleUpstreamCount,
+          derivedUpstreamBackingCommitted:
+            field.diagnostic.derivedUpstreamBackingCommitted,
+        });
+      }
+    }
     if (snapshot.ok && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
       try {
         process.stderr.write(`${JSON.stringify({
@@ -1533,6 +1555,9 @@ async function readApplicationSnapshot(
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["dateReactHandlerLayers"];
     let checkboxReactHandlerLayers:
       BrowserApplicationSnapshot["requiredFields"][number]["diagnostic"]["checkboxReactHandlerLayers"];
+    let derivedBackingRuleMatched = false;
+    let derivedVisibleUpstreamCount = 0;
+    let derivedUpstreamBackingCommitted = false;
     // Workday renders tokenized combobox selections beside the input inside the
     // nearest automation-owned ancestor. `closest()` on the control itself can
     // stop at the input, while the broader form-field owner can contain several
@@ -1871,21 +1896,25 @@ async function readApplicationSnapshot(
       const derivedRule = sharedUiDerivedBackingRules.find((rule) =>
         rule.type === "search_select" && rule.browserFieldId === safeId
       );
+      derivedBackingRuleMatched = derivedRule !== undefined;
       const upstreamMatches = derivedRule === undefined
         ? []
         : [...root.querySelectorAll<HTMLElement>("[id]")].filter(
           (candidate) => candidate.id === derivedRule.upstreamBrowserFieldId &&
             visible(candidate),
         );
+      derivedVisibleUpstreamCount = upstreamMatches.length;
       const upstream = upstreamMatches.length === 1 ? upstreamMatches[0] : undefined;
       const upstreamOwner = upstream?.parentElement?.closest<HTMLElement>(
         '[data-automation-id]',
       ) ?? upstream?.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       ) ?? null;
+      derivedUpstreamBackingCommitted = upstream != null && root.contains(upstream) &&
+        controlledBackingCommitted(upstream, upstreamOwner);
       const derivedBackingCommitted = derivedRule !== undefined && upstream != null &&
         root.contains(upstream) && fieldOwnerSelectedItems.length === 1 &&
-        controlledBackingCommitted(upstream, upstreamOwner);
+        derivedUpstreamBackingCommitted;
       verified = verified && (
         normalizedValue !== "" && !placeholder || selectedItems.length === 1
       ) && (controlledBackingCommitted(semanticLeaf, selectionOwner) ||
@@ -1988,6 +2017,9 @@ async function readApplicationSnapshot(
           [...fieldOwner.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
             "input, textarea",
           )].filter((candidate) => candidate.value.trim() !== "").length,
+        derivedBackingRuleMatched,
+        derivedVisibleUpstreamCount,
+        derivedUpstreamBackingCommitted,
         ...(dateReactHandlerLayers === undefined ? {} : { dateReactHandlerLayers }),
         ...(checkboxReactHandlerLayers === undefined ? {} : { checkboxReactHandlerLayers }),
       },
