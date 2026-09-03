@@ -3,6 +3,7 @@ import {
   MOCK_AUTH,
   MOCK_BREAKDOWN,
   MOCK_C1_QUEUE,
+  MOCK_C1_CONFIG,
   MOCK_C1_STATUS,
   MOCK_C2_STATUS,
   MOCK_DAILY,
@@ -29,6 +30,7 @@ const EXACT_GET_ROUTES: Record<string, unknown> = {
   '/api/linkedin/accounts': MOCK_LINKEDIN_ACCOUNTS,
   '/api/gateway/c1/status': MOCK_C1_STATUS,
   '/api/gateway/c1/queue': MOCK_C1_QUEUE,
+  '/api/gateway/c1/config': MOCK_C1_CONFIG,
   '/api/gateway/c2/status': MOCK_C2_STATUS,
 }
 
@@ -75,8 +77,17 @@ export async function mockPost<T>(path: string): Promise<T> {
   return {} as T
 }
 
-export async function mockPatch<T>(): Promise<T> {
+export async function mockPatch<T>(path: string, body: unknown): Promise<T> {
   await wait()
+  if (path === '/api/gateway/c1/config') {
+    const updates = body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+    return {
+      saved: true,
+      config_file: MOCK_C1_CONFIG.config_file,
+      updated_keys: Object.keys(updates),
+      config: { ...MOCK_C1_CONFIG, ...updates },
+    } as T
+  }
   return { status: 'ok' } as T
 }
 

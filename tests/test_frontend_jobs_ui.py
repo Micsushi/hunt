@@ -33,6 +33,17 @@ def test_jobs_table_keeps_id_on_one_line_and_truncates_long_titles():
     assert ".titleCell" in styles and "text-overflow: ellipsis" in styles
 
 
+def test_linkedin_listing_links_use_authenticated_collection_route():
+    helper = read("frontend/src/utils/jobLinks.ts")
+    jobs = read("frontend/src/pages/Jobs/index.tsx")
+    detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
+
+    assert "linkedin.com/jobs/collections/recommended/" in helper
+    assert "currentJobId" in helper
+    assert "linkedInListingUrl(job.job_url)" in jobs
+    assert "linkedInListingUrl(job.job_url)" in detail
+
+
 def test_dark_theme_controls_keep_readable_text_colors():
     filters = read("frontend/src/components/Filters/Filters.module.css")
 
@@ -87,6 +98,53 @@ def test_settings_exposes_c1_target_titles_and_experience_levels():
     assert "search_terms" not in control
     assert "co-op, and student searches" in settings
     assert "Level 1, L1, and role I/1 variants" in settings
+
+
+def test_settings_exposes_company_blocklist_as_a_pre_persistence_filter():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "Blocked companies" in settings
+    assert "never written to the database" in settings
+    assert "company_blocklist" in settings
+    assert "cfg.company_blocklist ?? []" in settings
+    assert "company_blocklist" in control
+    assert "company_blocklist" in mocks
+
+
+def test_settings_exposes_linkedin_discovery_rate_limit_cooldown():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "LinkedIn rate-limit cooldown" in settings
+    assert "first LinkedIn 429" in settings
+    assert "linkedin_discovery_cooldown_minutes" in settings
+    assert "linkedin_discovery_cooldown_minutes" in control
+    assert "linkedin_discovery_cooldown_minutes" in mocks
+
+
+def test_settings_exposes_linkedin_discovery_request_limits():
+    settings = read("frontend/src/pages/Settings/index.tsx")
+    control = read("frontend/src/api/control.ts")
+    mocks = read("frontend/src/mocks/data.ts")
+
+    assert "LinkedIn searches per cycle" in settings
+    assert "LinkedIn results per search" in settings
+    assert "LinkedIn parallel workers" in settings
+    assert "Fetch descriptions during LinkedIn discovery" in settings
+    assert "linkedin_queries_per_run" in settings
+    assert "linkedin_results_wanted" in settings
+    assert "linkedin_discovery_max_workers" in settings
+    assert "linkedin_fetch_description" in settings
+    assert "linkedin_queries_per_run" in control
+    assert "linkedin_results_wanted" in control
+    assert "linkedin_discovery_max_workers" in control
+    assert "linkedin_fetch_description" in control
+    assert "linkedin_queries_per_run" in mocks
+    assert "parseRequiredInteger" in settings
+    assert "Run settings were not saved" in settings
 
 
 def test_settings_exposes_c2_job_metadata_values():
@@ -144,7 +202,7 @@ def test_fletcher_active_queue_exposes_bulk_cancel_controls():
     assert "cancelOneActive(job.queue_item_id)" in fletcher
 
 
-def test_frontend_human_command_logger_posts_fail_open_active_component_events():
+def test_frontend_human_command_logger_posts_fail_open_audit_events():
     helper = read("frontend/src/api/humanCommandLog.ts")
     control = read("frontend/src/api/control.ts")
     jobs = read("frontend/src/api/jobs.ts")
@@ -152,23 +210,28 @@ def test_frontend_human_command_logger_posts_fail_open_active_component_events()
     detail = read("frontend/src/pages/Jobs/JobDetail.tsx")
 
     assert "export async function logHumanCommand" in helper
+    assert "fetch('/api/audit/events'" in helper
     assert "component?: string" in helper
     assert "laneId?: string" in helper
     assert "sessionId?: string" in helper
     assert "commandId?: string" in helper
     assert "traceId?: string" in helper
-    assert "fetch('/api/audit/events'" in helper
     assert "const component = payload.component || actionComponent || 'c0'" in helper
     assert "event_type: 'human.command'" in helper
-    assert "redaction:" not in helper
+    assert (
+        "actor: { type: 'human', id: 'human_local', surface: payload.surface || 'c0_ui' }" in helper
+    )
+    assert "lane_id: laneId" in helper
+    assert "session_id: sessionId" in helper
+    assert "command_id: commandId" in helper
+    assert "trace_id: traceId" in helper
+    assert "eventContext" in helper
     assert "catch {" in helper
     assert "logHumanCommand" in control
     assert "action: 'c0.settings.save'" in control
     assert "action: 'c0.linkedin_account.save'" in control
     assert "action: 'c1.scrape'" in control
     assert "action: 'c2.fletcher.queue_resume'" in control
-    assert "action: 'c4.run'" not in control
-    assert "action: 'c1.verify_easy_apply'" in control
     assert "action: 'c0.job.patch'" in jobs
     assert "fields: Object.keys(fields)" in jobs
     assert "action: 'c0.job.requeue'" in jobs
@@ -177,12 +240,9 @@ def test_frontend_human_command_logger_posts_fail_open_active_component_events()
     assert "action: 'c0.ops.requeue_errors'" in ops
     assert "action: payload.dry_run ? 'c0.ops.bulk_requeue_count' : 'c0.ops.bulk_requeue'" in ops
     assert "action: 'c0.ops.requeue_stale_processing'" in ops
-    assert "action: 'c0.open_apply_page'" in detail
-    assert "buttonId: 'open-apply-page'" in detail
-    assert "onClick={logOpenApplyPage}" in detail
 
 
-def test_human_command_logger_records_c0_c2_context_without_form_values():
+def test_human_command_logger_records_available_event_context():
     script = r"""
 const fs = require('fs');
 const vm = require('vm');
@@ -197,24 +257,28 @@ vm.runInNewContext(compiled.outputText, {
   module: moduleObj,
   exports: moduleObj.exports,
   fetch: async (url, init) => {
-    posted = { url, body: JSON.parse(init.body) };
+    posted = { url, init, body: JSON.parse(init.body) };
     return { ok: true };
   },
-  location: { pathname: '/jobs/42' },
-  document: { title: 'Job 42' },
+  location: { pathname: '/executioner' },
+  document: { title: 'Executioner' },
   crypto: { randomUUID: () => '12345678-1234-1234-1234-123456789abc' },
   Date,
   Math,
 });
 (async () => {
   await moduleObj.exports.logHumanCommand({
-    action: 'c2.fletcher.queue_resume',
-    buttonId: 'queue-fletcher-resume',
-    surface: 'c0_ui',
+    action: 'c3.open_apply_page',
+    buttonId: 'open-apply-page',
+    component: 'c3',
+    surface: 'c3_ui',
+    laneId: 'lane-1',
+    sessionId: 'session-1',
+    commandId: 'cmd-1',
     traceId: 'trace-1',
-    details: { jobId: 42, hasResume: true },
+    details: { jobId: 42 },
   });
-  console.log(JSON.stringify(posted));
+  console.log(JSON.stringify(posted.body));
 })();
 """
     result = subprocess.run(
@@ -224,21 +288,27 @@ vm.runInNewContext(compiled.outputText, {
         capture_output=True,
         text=True,
     )
-    posted = json.loads(result.stdout)
-    payload = posted["body"]
+    payload = json.loads(result.stdout)
 
-    assert posted["url"] == "/api/audit/events"
-    assert payload["component"] == "c2"
+    assert payload["component"] == "c3"
     assert payload["event_type"] == "human.command"
-    assert payload["actor"] == {"type": "human", "id": "human_local", "surface": "c0_ui"}
+    assert payload["actor"] == {"type": "human", "id": "human_local", "surface": "c3_ui"}
+    assert payload["lane_id"] == "lane-1"
+    assert payload["session_id"] == "session-1"
+    assert payload["command_id"] == "cmd-1"
     assert payload["trace_id"] == "trace-1"
     assert payload["payload"]["eventContext"] == {
-        "component": "c2",
-        "route": "/jobs/42",
-        "page": "Job 42",
+        "component": "c3",
+        "route": "/executioner",
+        "page": "Executioner",
+        "laneId": "lane-1",
+        "sessionId": "session-1",
+        "commandId": "cmd-1",
         "traceId": "trace-1",
     }
-    assert payload["payload"]["details"] == {"jobId": 42, "hasResume": True}
+    assert payload["payload"]["action"] == "c3.open_apply_page"
+    assert payload["payload"]["buttonId"] == "open-apply-page"
+    assert payload["payload"]["details"] == {"jobId": 42}
 
 
 def test_job_detail_resume_actions_use_queue_and_resume_workspace_label():

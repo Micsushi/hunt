@@ -1,9 +1,29 @@
 {
   "_comment": "Copy to hunt_user_config.json and edit. Omit any key to use the default from config.py.",
 
-  "watchlist": [],
+  "watchlist": [
+    "shopify",
+    "stripe",
+    "cloudflare",
+    "google",
+    "microsoft",
+    "amazon"
+  ],
 
-  "title_blacklist": [],
+  "company_blocklist": ["jobright.ai"],
+
+  "title_blacklist": [
+    "senior",
+    "sr.",
+    "lead",
+    "staff",
+    "principal",
+    "director",
+    "vp ",
+    "head of",
+    "phd",
+    "doctoral"
+  ],
 
   "target_job_titles": {
     "engineering": [],
@@ -12,18 +32,20 @@
 
   "experience_levels": [],
 
-  "locations": [
-    "Remote"
-  ],
+  "locations": ["Canada"],
 
   "sites": ["indeed", "linkedin"],
 
   "max_workers": 10,
   "results_wanted": 500,
+  "linkedin_discovery_max_workers": 1,
+  "linkedin_queries_per_run": 4,
+  "linkedin_results_wanted": 25,
   "hours_old": 24,
   "run_interval_seconds": 600,
   "enrich_after_scrape": true,
-  "linkedin_fetch_description": true,
+  "linkedin_fetch_description": false,
+  "linkedin_discovery_cooldown_minutes": 180,
   "enrichment_batch_limit": 25,
   "enrichment_timeout_ms": 45000,
   "enrichment_max_attempts": 4,

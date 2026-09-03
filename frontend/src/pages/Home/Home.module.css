@@ -41,6 +41,20 @@
     background var(--ease),
     border-color var(--ease);
 }
+
+.serviceState {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
+.service_ok .serviceState {
+  color: var(--good);
+}
+
+.service_error .serviceState {
+  color: var(--danger);
+}
 .servicePill:hover {
   background: var(--panel-hover);
   color: var(--ink);
@@ -233,6 +247,10 @@
   font-size: 0.875rem;
   color: var(--muted);
   padding: 8px 0;
+}
+
+.empty.emptyError {
+  color: var(--danger);
 }
 .loading,
 .error {

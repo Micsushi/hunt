@@ -16,5 +16,47 @@ Hunt uses a dark olive-green, data-dense control dashboard for the job pipeline.
 - Keep review and automation actions explicit about their target and status.
 - Update `DESIGN.md` when stable visual tokens change.
 
+## Standard Page Structure
+
+- Start with one `h1`, a concise operational description, and only the actions that apply to the whole page.
+- Group related controls under descriptive `h2`/`h3` headings. Avoid nested cards; use spacing and dividers inside one surface.
+- Put a control's label, hint, validation, and status together. Placeholder text is an example, not a label.
+- Keep primary actions at the end of their section. Name the result (`Save targeting`, `Refresh logs`) instead of using generic labels.
+
+## Interaction Contract
+
+- Every interactive element must work with the keyboard and show the shared accent focus ring.
+- Displayed LinkedIn listing links use the authenticated collections route derived from the stored job ID; direct employer apply URLs remain unchanged.
+- The Run settings panel exposes a LinkedIn discovery cooldown. JobSpy's first LinkedIn HTTP 429 stops queued LinkedIn searches and persists the pause across scheduler cycles; other job boards continue normally.
+- Selected toggles expose state with native inputs or `aria-pressed`; disclosures expose `aria-expanded`.
+- Interactive controls use a 40px default minimum height. Compact table controls may be smaller only when their label and focus target remain clear.
+- Disabled controls remain readable, use `not-allowed`, and must not be the only explanation for why an action is unavailable.
+- Respect `prefers-reduced-motion`: remove decorative transitions and animations without hiding state changes.
+
+## Feedback and States
+
+- Loading messages use `role="status"` when they replace page or section content.
+- Errors use `role="alert"`, name what failed, and state the recovery action. Do not show only `Failed to load`.
+- Empty states explain which filter or prerequisite produced the result and how to continue.
+- Save feedback is section-scoped: show saving, success, and failure next to the action that initiated it; do not imply unrelated settings were saved.
+- Preserve entered values after a failed save so the user can retry.
+
+## Responsive Behavior
+
+- Pages must not create document-level horizontal overflow at 390px. Data tables may scroll inside a labeled container.
+- Stack page headers and action groups on narrow screens; full-width primary actions are preferred when space is constrained.
+- Settings tabs remain keyboard-navigable and horizontally scrollable on small screens without truncating the active label.
+
+## Settings Information Architecture
+
+- `Targeting` owns C1 role titles, experience levels, company priority/block rules, title exclusions, locations, and job boards.
+- `Automation` owns C1 cadence, provider-specific request limits, enrichment, and advanced runtime controls. LinkedIn limits must be visually grouped and must not be conflated with the higher-throughput settings used by other sources.
+- `Resume` owns C2 tailoring and provider controls.
+- `System` owns persistence status, integrations, and maintenance links.
+- C1 targeting uses `target_job_titles` and `experience_levels`. The retired `search_terms` field must never appear in the UI or save payload.
+- Engineering and data are the fixed primary lanes; render any additional configured lanes after them and preserve those keys on save.
+- Blocked-company copy must state that exact normalized matches are rejected before database persistence. It must not imply that saving the list removes existing rows.
+- C1 file-backed scalar controls must state that saving and activation are separate: a scheduler restart is required before worker, interval, source, and request-limit changes take effect.
+
 OpenSpec change `design.md`, if introduced later, remains technical design and
 does not replace this UI contract.

@@ -94,9 +94,25 @@
 }
 
 .sortable {
-  cursor: pointer;
+  padding: 0 !important;
 }
-.sortable:hover {
+
+.sortButton {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  font: inherit;
+  letter-spacing: inherit;
+  min-height: 38px;
+  padding: 9px 12px;
+  text-transform: inherit;
+  width: 100%;
+}
+
+.sortable:hover,
+.sortButton:hover {
   color: var(--accent);
   background: var(--accent-soft);
 }

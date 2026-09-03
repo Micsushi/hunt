@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchC1Config,
@@ -32,6 +32,15 @@ function textToList(text: string): string[] {
     .filter(Boolean)
 }
 
+function parseRequiredInteger(raw: string, label: string, min = 1, max?: number): number {
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < min || (max !== undefined && value > max)) {
+    const range = max === undefined ? `${min} or greater` : `between ${min} and ${max}`
+    throw new Error(`${label} must be a whole number ${range}.`)
+  }
+  return value
+}
+
 function settingListValue(
   settings: ComponentSetting[] | undefined,
   key: string,
@@ -54,6 +63,78 @@ function settingListValue(
   )
 }
 
+type FeedbackTone = 'pending' | 'success' | 'error'
+
+interface SaveFeedback {
+  tone: FeedbackTone
+  message: string
+}
+
+function FormStatus({
+  pending,
+  error,
+  success,
+}: {
+  pending: boolean
+  error: unknown
+  success: string
+}) {
+  const feedback: SaveFeedback | null = pending
+    ? { tone: 'pending', message: 'Saving changes...' }
+    : error
+      ? {
+          tone: 'error',
+          message:
+            error instanceof Error ? `Save failed: ${error.message}` : 'Save failed. Try again.',
+        }
+      : success
+        ? { tone: 'success', message: success }
+        : null
+
+  if (!feedback) return null
+
+  return (
+    <span
+      className={`${styles.formStatus} ${styles[`formStatus${feedback.tone.charAt(0).toUpperCase()}${feedback.tone.slice(1)}`]}`}
+      role={feedback.tone === 'error' ? 'alert' : 'status'}
+      aria-live="polite"
+    >
+      {feedback.message}
+    </span>
+  )
+}
+
+function SettingsLoadingState({ label }: { label: string }) {
+  return (
+    <div className={styles.loadingState} role="status" aria-live="polite" aria-busy="true">
+      <span className={styles.loadingLine} />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+function SettingsErrorState({
+  title,
+  description,
+  onRetry,
+}: {
+  title: string
+  description: string
+  onRetry: () => void
+}) {
+  return (
+    <div className={styles.errorState} role="alert">
+      <div>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </div>
+      <button className={styles.btn} type="button" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  )
+}
+
 // ---- sub-panels ------------------------------------------------------------
 
 function DiscoveryFilters({
@@ -66,27 +147,44 @@ function DiscoveryFilters({
   saving: boolean
 }) {
   const [watchlist, setWatchlist] = useState(() => listToText(cfg.watchlist))
+  const [companyBlocklist, setCompanyBlocklist] = useState(() =>
+    listToText(cfg.company_blocklist ?? []),
+  )
   const [blacklist, setBlacklist] = useState(() => listToText(cfg.title_blacklist))
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Discovery filters</h2>
+        <h3 className={styles.panelTitle}>Discovery filters</h3>
+      </div>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Priority companies (one per line)
+          <span className={styles.fieldHint}>
+            Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={watchlist}
+            onChange={(e) => setWatchlist(e.target.value)}
+            rows={8}
+          />
+        </label>
+        <label className={styles.field}>
+          Blocked companies (one per line)
+          <span className={styles.fieldHint}>
+            Exact normalized matches are discarded after scraping and never written to the database.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={companyBlocklist}
+            onChange={(e) => setCompanyBlocklist(e.target.value)}
+            rows={8}
+          />
+        </label>
       </div>
       <label className={styles.field}>
-        Watchlist - priority companies (one per line)
-        <span className={styles.fieldHint}>
-          Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={watchlist}
-          onChange={(e) => setWatchlist(e.target.value)}
-          rows={10}
-        />
-      </label>
-      <label className={styles.field}>
-        Title blacklist - phrases to exclude (one per line)
+        Blocked title phrases (one per line)
         <span className={styles.fieldHint}>
           Jobs whose title contains any of these phrases are filtered out during scrape.
         </span>
@@ -104,6 +202,7 @@ function DiscoveryFilters({
           onClick={() =>
             onSave({
               watchlist: textToList(watchlist),
+              company_blocklist: textToList(companyBlocklist),
               title_blacklist: textToList(blacklist),
             })
           }
@@ -127,7 +226,7 @@ function SearchConfig({
   const laneNames = Array.from(
     new Set(['engineering', 'data', ...Object.keys(cfg.target_job_titles)]),
   )
-  const [targetTitles, setTargetTitles] = useState<Record<string, string>>(() =>
+  const [lanes, setLanes] = useState<Record<string, string>>(() =>
     Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])])),
   )
   const [experienceLevels, setExperienceLevels] = useState(() => new Set(cfg.experience_levels))
@@ -136,14 +235,14 @@ function SearchConfig({
   const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
 
   function updateLane(name: string, val: string) {
-    setTargetTitles((prev) => ({ ...prev, [name]: val }))
+    setLanes((prev) => ({ ...prev, [name]: val }))
   }
 
-  function setExperienceLevel(level: string, enabled: boolean) {
-    setExperienceLevels((current) => {
-      const next = new Set(current)
-      if (enabled) next.add(level)
-      else next.delete(level)
+  function toggleExperienceLevel(level: string) {
+    setExperienceLevels((previous) => {
+      const next = new Set(previous)
+      if (next.has(level)) next.delete(level)
+      else next.add(level)
       return next
     })
   }
@@ -151,44 +250,60 @@ function SearchConfig({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Search configuration</h2>
+        <div>
+          <h3 className={styles.panelTitle}>Search targeting</h3>
+          <p className={styles.panelDescription}>
+            Define the role titles and career levels Hunt should require when matching jobs.
+          </p>
+        </div>
       </div>
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} - Target job titles
+            {name.charAt(0).toUpperCase() + name.slice(1)} lane — Target job titles
+            <span className={styles.fieldHint}>One role title per line.</span>
             <textarea
               className={styles.textarea}
-              value={targetTitles[name] ?? ''}
+              value={lanes[name] ?? ''}
               onChange={(e) => updateLane(name, e.target.value)}
             />
           </label>
         ))}
       </div>
-      <div className={styles.field}>
-        Experience levels
-        {[
-          ['internship', 'Internship', 'Intern, internship, co-op, and student searches'],
-          [
-            'junior',
-            'Junior',
-            'Junior, entry level, associate, Level 1, L1, and role I/1 variants',
-          ],
-          ['new_grad', 'New grad', 'New grad, graduate, and entry-level searches'],
-        ].map(([value, label, hint]) => (
-          <label key={value} className={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={experienceLevels.has(value)}
-              onChange={(e) => setExperienceLevel(value, e.target.checked)}
-            />
-            <span>
-              {label}
-              <span className={styles.fieldHint}>{hint}</span>
-            </span>
-          </label>
-        ))}
-      </div>
+      <fieldset className={styles.experienceFieldset}>
+        <legend>Experience levels</legend>
+        <p className={styles.fieldHint}>
+          Hunt expands each selected level into the aliases shown below and deduplicates overlapping
+          queries.
+        </p>
+        <div className={styles.experienceGrid}>
+          {[
+            ['internship', 'Internship', 'Intern, internship, co-op, and student searches'],
+            [
+              'junior',
+              'Junior',
+              'Junior, entry level, associate, Level 1, L1, and role I/1 variants, including Level One',
+            ],
+            ['new_grad', 'New graduate', 'New grad, graduate, and entry level'],
+          ].map(([value, label, hint]) => (
+            <label key={value} className={styles.experienceChoice}>
+              <input
+                type="checkbox"
+                checked={experienceLevels.has(value)}
+                onChange={() => toggleExperienceLevel(value)}
+              />
+              <span>
+                <strong>{label}</strong>
+                <small>{hint}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <p className={styles.matchingNote}>
+        A result must match both a configured role title and a selected experience level. If either
+        list is empty, discovery will not return matches.
+      </p>
       <label className={styles.field}>
         Locations (one per line)
         <textarea
@@ -198,8 +313,8 @@ function SearchConfig({
           rows={4}
         />
       </label>
-      <div className={styles.field}>
-        Job boards
+      <fieldset className={styles.experienceFieldset}>
+        <legend>Job boards</legend>
         <label className={styles.checkLabel}>
           <input
             type="checkbox"
@@ -216,7 +331,7 @@ function SearchConfig({
           />
           Indeed
         </label>
-      </div>
+      </fieldset>
       <div className={styles.footer}>
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
@@ -227,15 +342,17 @@ function SearchConfig({
             if (indeedOn) sites.push('indeed')
             onSave({
               target_job_titles: Object.fromEntries(
-                Object.entries(targetTitles).map(([k, v]) => [k, textToList(v)]),
+                Object.entries(lanes).map(([k, v]) => [k, textToList(v)]),
               ),
-              experience_levels: Array.from(experienceLevels),
+              experience_levels: ['internship', 'junior', 'new_grad'].filter((level) =>
+                experienceLevels.has(level),
+              ),
               locations: textToList(locations),
               sites,
             })
           }}
         >
-          {saving ? 'Saving…' : 'Save search config'}
+          {saving ? 'Saving…' : 'Save targeting'}
         </button>
       </div>
     </div>
@@ -255,15 +372,78 @@ function RunSettings({
   const [resultsWanted, setResultsWanted] = useState(String(cfg.results_wanted))
   const [hoursOld, setHoursOld] = useState(String(cfg.hours_old))
   const [maxWorkers, setMaxWorkers] = useState(String(cfg.max_workers))
+  const [linkedinMaxWorkers, setLinkedinMaxWorkers] = useState(
+    String(cfg.linkedin_discovery_max_workers ?? 1),
+  )
+  const [linkedinQueriesPerRun, setLinkedinQueriesPerRun] = useState(
+    String(cfg.linkedin_queries_per_run ?? 4),
+  )
+  const [linkedinResultsWanted, setLinkedinResultsWanted] = useState(
+    String(cfg.linkedin_results_wanted ?? 25),
+  )
+  const [linkedinFetchDescription, setLinkedinFetchDescription] = useState(
+    cfg.linkedin_fetch_description ?? false,
+  )
+  const [linkedinCooldownMin, setLinkedinCooldownMin] = useState(
+    String(cfg.linkedin_discovery_cooldown_minutes),
+  )
   const [enrichAfterScrape, setEnrichAfterScrape] = useState(cfg.enrich_after_scrape)
   const [batchLimit, setBatchLimit] = useState(String(cfg.enrichment_batch_limit))
   const [timeoutMs, setTimeoutMs] = useState(String(cfg.enrichment_timeout_ms))
   const [maxAttempts, setMaxAttempts] = useState(String(cfg.enrichment_max_attempts))
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  function handleSave() {
+    try {
+      const updates: C1ConfigUpdates = {
+        run_interval_seconds: parseRequiredInteger(intervalSec, 'Run interval', 60),
+        results_wanted: parseRequiredInteger(resultsWanted, 'Indeed results per search'),
+        hours_old: parseRequiredInteger(hoursOld, 'Hours-old lookback'),
+        max_workers: parseRequiredInteger(maxWorkers, 'Non-LinkedIn parallel workers'),
+        linkedin_discovery_max_workers: parseRequiredInteger(
+          linkedinMaxWorkers,
+          'LinkedIn parallel workers',
+          1,
+          2,
+        ),
+        linkedin_queries_per_run: parseRequiredInteger(
+          linkedinQueriesPerRun,
+          'LinkedIn searches per cycle',
+          1,
+          20,
+        ),
+        linkedin_results_wanted: parseRequiredInteger(
+          linkedinResultsWanted,
+          'LinkedIn results per search',
+          1,
+          50,
+        ),
+        linkedin_fetch_description: linkedinFetchDescription,
+        linkedin_discovery_cooldown_minutes: parseRequiredInteger(
+          linkedinCooldownMin,
+          'LinkedIn rate-limit cooldown',
+        ),
+        enrich_after_scrape: enrichAfterScrape,
+        enrichment_batch_limit: parseRequiredInteger(batchLimit, 'Enrichment batch limit'),
+        enrichment_timeout_ms: parseRequiredInteger(timeoutMs, 'Enrichment timeout', 5000),
+        enrichment_max_attempts: parseRequiredInteger(maxAttempts, 'Max enrichment attempts'),
+      }
+      setValidationError(null)
+      onSave(updates)
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Enter valid run settings.')
+    }
+  }
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Run settings</h2>
+        <div>
+          <h3 className={styles.panelTitle}>Run settings</h3>
+          <p className={styles.panelDescription}>
+            Keep routine sources fast while tightly bounding LinkedIn discovery traffic.
+          </p>
+        </div>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -280,9 +460,9 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Results wanted per search
+          Indeed results per search
           <span className={styles.fieldHint}>
-            Max listings to fetch per search term (default 500).
+            Maximum listings to fetch from each non-LinkedIn search (default 500).
           </span>
           <input
             type="number"
@@ -306,8 +486,10 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Max parallel workers
-          <span className={styles.fieldHint}>Concurrent scrape/enrich workers (default 10).</span>
+          Non-LinkedIn parallel workers
+          <span className={styles.fieldHint}>
+            Concurrent workers for other sources (default 10).
+          </span>
           <input
             type="number"
             className={styles.input}
@@ -350,6 +532,84 @@ function RunSettings({
           />
         </label>
       </div>
+      <fieldset className={styles.experienceFieldset}>
+        <legend>LinkedIn discovery limits</legend>
+        <p className={styles.matchingNote}>
+          With the defaults, Hunt rotates through four LinkedIn searches per cycle, runs them one at
+          a time, caps each at 25 results, and leaves descriptions for the enrichment stage.
+        </p>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            LinkedIn searches per cycle
+            <span className={styles.fieldHint}>
+              Remaining targeting queries rotate into later cycles (default 4).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinQueriesPerRun}
+              onChange={(e) => setLinkedinQueriesPerRun(e.target.value)}
+              min={1}
+              max={20}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn results per search
+            <span className={styles.fieldHint}>
+              A lower cap reduces pagination and downstream requests (default 25).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinResultsWanted}
+              onChange={(e) => setLinkedinResultsWanted(e.target.value)}
+              min={1}
+              max={50}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn parallel workers
+            <span className={styles.fieldHint}>
+              Keep this at one to avoid concurrent request bursts (maximum 2).
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinMaxWorkers}
+              onChange={(e) => setLinkedinMaxWorkers(e.target.value)}
+              min={1}
+              max={2}
+            />
+          </label>
+          <label className={styles.field}>
+            LinkedIn rate-limit cooldown (minutes)
+            <span className={styles.fieldHint}>
+              After the first LinkedIn 429, stop queued searches and pause future cycles.
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={linkedinCooldownMin}
+              onChange={(e) => setLinkedinCooldownMin(e.target.value)}
+              min={1}
+            />
+          </label>
+        </div>
+        <label className={styles.checkLabel}>
+          <input
+            type="checkbox"
+            checked={linkedinFetchDescription}
+            onChange={(e) => setLinkedinFetchDescription(e.target.checked)}
+          />
+          <span>
+            Fetch descriptions during LinkedIn discovery
+            <span className={styles.fieldHint}>
+              Leave off. It adds one LinkedIn request per listing; enrichment can fetch details
+              later.
+            </span>
+          </span>
+        </label>
+      </fieldset>
       <label className={styles.checkLabel}>
         <input
           type="checkbox"
@@ -362,21 +622,15 @@ function RunSettings({
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
-          onClick={() =>
-            onSave({
-              run_interval_seconds: parseInt(intervalSec, 10),
-              results_wanted: parseInt(resultsWanted, 10),
-              hours_old: parseInt(hoursOld, 10),
-              max_workers: parseInt(maxWorkers, 10),
-              enrich_after_scrape: enrichAfterScrape,
-              enrichment_batch_limit: parseInt(batchLimit, 10),
-              enrichment_timeout_ms: parseInt(timeoutMs, 10),
-              enrichment_max_attempts: parseInt(maxAttempts, 10),
-            })
-          }
+          onClick={handleSave}
         >
           {saving ? 'Saving…' : 'Save run settings'}
         </button>
+        {validationError && (
+          <span className={`${styles.formStatus} ${styles.formStatusError}`} role="alert">
+            Run settings were not saved: {validationError}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -397,7 +651,7 @@ function AlertSettings({
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Alert thresholds</h2>
+        <h3 className={styles.panelTitle}>Alert thresholds</h3>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -462,7 +716,7 @@ function AppNotificationSettings() {
   const qc = useQueryClient()
   const supported = browserNotificationsSupported()
 
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -502,10 +756,21 @@ function AppNotificationSettings() {
     )
   }
 
+  if (isLoading) return <SettingsLoadingState label="Loading notification settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Notification settings are unavailable."
+        description="Check the C0 settings API, then try loading this preference again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>App notifications</h2>
+        <h3 className={styles.panelTitle}>App notifications</h3>
       </div>
       <label className={styles.checkLabel}>
         <input
@@ -521,6 +786,11 @@ function AppNotificationSettings() {
           ? `Browser permission: ${permission}. Notifications fire when this Hunt tab receives the completed generation response.`
           : 'This browser does not support desktop notifications.'}
       </p>
+      <FormStatus
+        pending={mutation.isPending}
+        error={mutation.error}
+        success={mutation.isSuccess ? 'Notification preference saved.' : ''}
+      />
     </div>
   )
 }
@@ -544,7 +814,7 @@ const C2_GEMINI_API_KEY = 'gemini_api_key'
 function C2ProviderRuntimeSettings() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2', 'runtime'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -636,10 +906,21 @@ function C2ProviderRuntimeSettings() {
     onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
   })
 
+  if (isLoading) return <SettingsLoadingState label="Loading provider and runtime settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Provider settings are unavailable."
+        description="Check the C0 settings API, then try loading Fletcher runtime values again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 provider and runtime</h2>
+        <h3 className={styles.panelTitle}>C2 provider and runtime</h3>
         <span className={styles.panelMeta}>Secrets are stored redacted</span>
       </div>
       <div className={styles.gridTwo}>
@@ -803,6 +1084,11 @@ function C2ProviderRuntimeSettings() {
         >
           {mutation.isPending ? 'Saving...' : 'Save provider settings'}
         </button>
+        <FormStatus
+          pending={mutation.isPending}
+          error={mutation.error}
+          success={mutation.isSuccess ? 'Provider and runtime settings saved.' : ''}
+        />
       </div>
     </div>
   )
@@ -945,7 +1231,7 @@ function JobMetadataSettings() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
 
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['component-settings', 'c2', 'job-metadata'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
@@ -1221,10 +1507,21 @@ function JobMetadataSettings() {
     onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
   })
 
+  if (isLoading) return <SettingsLoadingState label="Loading resume policy settings..." />
+  if (isError || !data) {
+    return (
+      <SettingsErrorState
+        title="Resume policy settings are unavailable."
+        description="Check the C0 settings API, then try loading Fletcher metadata values again."
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 job metadata</h2>
+        <h3 className={styles.panelTitle}>C2 job metadata</h3>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -1459,136 +1756,144 @@ function JobMetadataSettings() {
           />
         </label>
       </div>
-      <label className={styles.field}>
-        Target-lane policy
-        <span className={styles.fieldHint}>
-          Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={targetLanePolicy}
-          onChange={(e) => setTargetLanePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword keep policy
-        <textarea
-          className={styles.textarea}
-          value={keywordKeepPolicy}
-          onChange={(e) => setKeywordKeepPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword ignore policy
-        <textarea
-          className={styles.textarea}
-          value={keywordIgnorePolicy}
-          onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary keyword policy
-        <textarea
-          className={styles.textarea}
-          value={summaryKeywordPolicy}
-          onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Skill addition policy
-        <textarea
-          className={styles.textarea}
-          value={skillAdditionPolicy}
-          onChange={(e) => setSkillAdditionPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary good example
-        <textarea
-          className={styles.textarea}
-          value={summaryGoodExample}
-          onChange={(e) => setSummaryGoodExample(e.target.value)}
-          rows={3}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Summary banned phrases
-          <textarea
-            className={styles.textarea}
-            value={summaryBannedPhrases}
-            onChange={(e) => setSummaryBannedPhrases(e.target.value)}
-            rows={6}
-          />
-        </label>
-        <label className={styles.field}>
-          Blocked keywords
-          <textarea
-            className={styles.textarea}
-            value={blockedKeywords}
-            onChange={(e) => setBlockedKeywords(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
-      <label className={styles.field}>
-        Rewrite strategy
-        <span className={styles.fieldHint}>
-          Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={rewriteStrategy}
-          onChange={(e) => setRewriteStrategy(e.target.value)}
-          rows={8}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite keyword fit policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteKeywordFitPolicy}
-          onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite bullet policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteBulletPolicy}
-          onChange={(e) => setRewriteBulletPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Rewrite length policy
-          <span className={styles.fieldHint}>
-            Use {'{max_length_percent}'} where the configured percentage should appear.
-          </span>
-          <textarea
-            className={styles.textarea}
-            value={rewriteLengthPolicy}
-            onChange={(e) => setRewriteLengthPolicy(e.target.value)}
-            rows={4}
-          />
-        </label>
-        <label className={styles.field}>
-          Rewrite action keyword policy
-          <textarea
-            className={styles.textarea}
-            value={rewriteActionKeywordPolicy}
-            onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
+      <details className={styles.advancedSettings}>
+        <summary className={styles.advancedSummary}>
+          <span>Advanced prompt and rewrite policy</span>
+          <small>Long-form instructions used by Fletcher generation</small>
+        </summary>
+        <div className={styles.advancedBody}>
+          <label className={styles.field}>
+            Target-lane policy
+            <span className={styles.fieldHint}>
+              Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={targetLanePolicy}
+              onChange={(e) => setTargetLanePolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword keep policy
+            <textarea
+              className={styles.textarea}
+              value={keywordKeepPolicy}
+              onChange={(e) => setKeywordKeepPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword ignore policy
+            <textarea
+              className={styles.textarea}
+              value={keywordIgnorePolicy}
+              onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Summary keyword policy
+            <textarea
+              className={styles.textarea}
+              value={summaryKeywordPolicy}
+              onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Skill addition policy
+            <textarea
+              className={styles.textarea}
+              value={skillAdditionPolicy}
+              onChange={(e) => setSkillAdditionPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Summary good example
+            <textarea
+              className={styles.textarea}
+              value={summaryGoodExample}
+              onChange={(e) => setSummaryGoodExample(e.target.value)}
+              rows={3}
+            />
+          </label>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              Summary banned phrases
+              <textarea
+                className={styles.textarea}
+                value={summaryBannedPhrases}
+                onChange={(e) => setSummaryBannedPhrases(e.target.value)}
+                rows={6}
+              />
+            </label>
+            <label className={styles.field}>
+              Blocked keywords
+              <textarea
+                className={styles.textarea}
+                value={blockedKeywords}
+                onChange={(e) => setBlockedKeywords(e.target.value)}
+                rows={6}
+              />
+            </label>
+          </div>
+          <label className={styles.field}>
+            Rewrite strategy
+            <span className={styles.fieldHint}>
+              Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={rewriteStrategy}
+              onChange={(e) => setRewriteStrategy(e.target.value)}
+              rows={8}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite keyword fit policy
+            <textarea
+              className={styles.textarea}
+              value={rewriteKeywordFitPolicy}
+              onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
+              rows={7}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite bullet policy
+            <textarea
+              className={styles.textarea}
+              value={rewriteBulletPolicy}
+              onChange={(e) => setRewriteBulletPolicy(e.target.value)}
+              rows={7}
+            />
+          </label>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              Rewrite length policy
+              <span className={styles.fieldHint}>
+                Use {'{max_length_percent}'} where the configured percentage should appear.
+              </span>
+              <textarea
+                className={styles.textarea}
+                value={rewriteLengthPolicy}
+                onChange={(e) => setRewriteLengthPolicy(e.target.value)}
+                rows={4}
+              />
+            </label>
+            <label className={styles.field}>
+              Rewrite action keyword policy
+              <textarea
+                className={styles.textarea}
+                value={rewriteActionKeywordPolicy}
+                onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
+                rows={6}
+              />
+            </label>
+          </div>
+        </div>
+      </details>
       <div className={styles.footer}>
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
@@ -1597,6 +1902,11 @@ function JobMetadataSettings() {
         >
           {mutation.isPending ? 'Saving...' : 'Save metadata values'}
         </button>
+        <FormStatus
+          pending={mutation.isPending}
+          error={mutation.error}
+          success={mutation.isSuccess ? 'Resume metadata and policy settings saved.' : ''}
+        />
       </div>
     </div>
   )
@@ -1604,21 +1914,78 @@ function JobMetadataSettings() {
 
 // ---- main page -------------------------------------------------------------
 
-type SettingsTab = 'c1' | 'c2' | 'integrations'
+type SettingsTab = 'targeting' | 'automation' | 'resume' | 'system'
+type C1Section = 'filters' | 'search' | 'run' | 'alerts'
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
-  { id: 'c1', label: 'C1 discovery', description: 'Scrape, filters, enrich cadence' },
-  { id: 'c2', label: 'C2 Fletcher', description: 'Resume LLM, queue, prompt policy' },
-  { id: 'integrations', label: 'Integrations', description: 'Discord and shared services' },
+interface SettingsTabDefinition {
+  id: SettingsTab
+  label: string
+  owner: string
+  description: string
+  heading: string
+  summary: string
+  persistence: string
+}
+
+const SETTINGS_TABS: SettingsTabDefinition[] = [
+  {
+    id: 'targeting',
+    label: 'Targeting',
+    owner: 'C1',
+    description: 'Roles, companies, locations',
+    heading: 'Choose what Hunt looks for',
+    summary:
+      'Set search lanes, priority companies, exclusions, locations, and the job boards that feed discovery.',
+    persistence: 'C1 file-backed settings',
+  },
+  {
+    id: 'automation',
+    label: 'Automation',
+    owner: 'C1',
+    description: 'Cadence, limits, alerts',
+    heading: 'Control the discovery cycle',
+    summary:
+      'Tune scrape and enrichment cadence, worker limits, retry behavior, and operational alert thresholds.',
+    persistence: 'C1 file-backed settings',
+  },
+  {
+    id: 'resume',
+    label: 'Resume',
+    owner: 'C2',
+    description: 'Providers, quality, policy',
+    heading: 'Shape Fletcher output',
+    summary:
+      'Configure model access, runtime guardrails, resume metadata, selection limits, and generation policy.',
+    persistence: 'C2 database-backed settings',
+  },
+  {
+    id: 'system',
+    label: 'System',
+    owner: 'App',
+    description: 'Notifications, integrations',
+    heading: 'Connect operator feedback',
+    summary:
+      'Manage local completion notifications and verify shared services used for pipeline alerts.',
+    persistence: 'Browser and integration settings',
+  },
 ]
+
+const C1_SECTION_LABELS: Record<C1Section, string> = {
+  filters: 'Discovery filters',
+  search: 'Search configuration',
+  run: 'Run settings',
+  alerts: 'Alert thresholds',
+}
 
 export function SettingsPage() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const [activeTab, setActiveTab] = useState<SettingsTab>('c2')
-  const [savingSection, setSavingSection] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<SettingsTab>('targeting')
+  const [savingSection, setSavingSection] = useState<C1Section | null>(null)
+  const [c1Feedback, setC1Feedback] = useState<SaveFeedback | null>(null)
   const [testingDiscord, setTestingDiscord] = useState(false)
   const [discordResult, setDiscordResult] = useState<string | null>(null)
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   async function handleTestDiscord() {
     setTestingDiscord(true)
@@ -1640,6 +2007,7 @@ export function SettingsPage() {
     data: cfg,
     isLoading,
     error,
+    refetch,
   } = useQuery({
     queryKey: ['c1-config'],
     queryFn: fetchC1Config,
@@ -1647,112 +2015,230 @@ export function SettingsPage() {
   })
 
   const mutation = useMutation({
-    mutationFn: saveC1Config,
-    onSuccess: (res) => {
+    mutationFn: ({ updates }: { section: C1Section; updates: C1ConfigUpdates }) =>
+      saveC1Config(updates),
+    onMutate: ({ section }) => {
+      setSavingSection(section)
+      setC1Feedback({ tone: 'pending', message: `Saving ${C1_SECTION_LABELS[section]}...` })
+    },
+    onSuccess: (res, { section }) => {
       showToast(`Saved: ${res.updated_keys.join(', ')}`)
+      setC1Feedback({
+        tone: 'success',
+        message: `${C1_SECTION_LABELS[section]} saved. ${res.updated_keys.length} setting${res.updated_keys.length === 1 ? '' : 's'} updated.`,
+      })
       qc.invalidateQueries({ queryKey: ['c1-config'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
+    onError: (e, { section }) => {
+      const message = e instanceof Error ? e.message : 'Save failed'
+      setC1Feedback({
+        tone: 'error',
+        message: `${C1_SECTION_LABELS[section]} were not saved: ${message}. Try again.`,
+      })
+      showToast(message, 'error')
+    },
     onSettled: () => setSavingSection(null),
   })
 
-  function save(section: string, updates: C1ConfigUpdates) {
-    setSavingSection(section)
-    mutation.mutate(updates)
+  function save(section: C1Section, updates: C1ConfigUpdates) {
+    mutation.mutate({ section, updates })
   }
 
-  const c1Content = (() => {
+  function c1Content(tab: 'targeting' | 'automation') {
     if (isLoading) {
-      return (
-        <div className={styles.panel}>
-          <p className="muted">Loading config from C1...</p>
-        </div>
-      )
+      return <SettingsLoadingState label="Loading C1 configuration..." />
     }
     if (error || !cfg) {
       return (
-        <div className={styles.panel}>
-          <p className={styles.errorMsg}>Could not load C1 config. Is the C1 service running?</p>
-        </div>
+        <SettingsErrorState
+          title="C1 configuration is unavailable."
+          description="Check that the C1 service is running, then try loading these settings again."
+          onRetry={() => void refetch()}
+        />
       )
     }
     return (
       <>
-        <div className={styles.notice}>
-          Changes take effect on the next C1 scrape/enrich cycle. Restart C1 to apply scalar
-          settings immediately.
-          <br />
-          Config file: <span className={styles.configPath}>{cfg.config_file}</span>
-        </div>
-        <DiscoveryFilters
-          cfg={cfg}
-          saving={savingSection === 'filters'}
-          onSave={(u) => save('filters', u)}
-        />
-        <SearchConfig
-          cfg={cfg}
-          saving={savingSection === 'search'}
-          onSave={(u) => save('search', u)}
-        />
-        <RunSettings cfg={cfg} saving={savingSection === 'run'} onSave={(u) => save('run', u)} />
-        <AlertSettings
-          cfg={cfg}
-          saving={savingSection === 'alerts'}
-          onSave={(u) => save('alerts', u)}
-        />
+        <aside className={styles.notice}>
+          <div>
+            <strong>Activation</strong>
+            <p>
+              Changes are saved to C1's config file. Restart the C1 scheduler to activate worker,
+              interval, source, and request-limit changes; an active cycle keeps its current values.
+            </p>
+          </div>
+          <span className={styles.configPath}>{cfg.config_file}</span>
+        </aside>
+        {c1Feedback && (
+          <div
+            className={`${styles.saveBanner} ${styles[`saveBanner${c1Feedback.tone.charAt(0).toUpperCase()}${c1Feedback.tone.slice(1)}`]}`}
+            role={c1Feedback.tone === 'error' ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            {c1Feedback.message}
+          </div>
+        )}
+        {tab === 'targeting' ? (
+          <>
+            <SearchConfig
+              cfg={cfg}
+              saving={savingSection === 'search'}
+              onSave={(u) => save('search', u)}
+            />
+            <DiscoveryFilters
+              cfg={cfg}
+              saving={savingSection === 'filters'}
+              onSave={(u) => save('filters', u)}
+            />
+          </>
+        ) : (
+          <>
+            <RunSettings
+              cfg={cfg}
+              saving={savingSection === 'run'}
+              onSave={(u) => save('run', u)}
+            />
+            <AlertSettings
+              cfg={cfg}
+              saving={savingSection === 'alerts'}
+              onSave={(u) => save('alerts', u)}
+            />
+          </>
+        )}
       </>
     )
-  })()
+  }
+
+  function selectTab(nextTab: SettingsTab) {
+    setActiveTab(nextTab)
+    setC1Feedback(null)
+  }
+
+  function activateTab(index: number) {
+    const nextIndex = (index + SETTINGS_TABS.length) % SETTINGS_TABS.length
+    selectTab(SETTINGS_TABS[nextIndex].id)
+    tabRefs.current[nextIndex]?.focus()
+  }
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      activateTab(index + 1)
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      activateTab(index - 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      activateTab(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      activateTab(SETTINGS_TABS.length - 1)
+    }
+  }
+
+  const activeDefinition = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0]
 
   const integrationsContent = (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Integrations</h2>
+        <div>
+          <h3 className={styles.panelTitle}>Discord alerts</h3>
+          <p className={styles.panelDescription}>
+            Verify that C1 can reach the configured webhook before relying on pipeline alerts.
+          </p>
+        </div>
       </div>
-      <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-        Verify Discord webhook is configured and reachable. Sends a test message via C1.
-      </p>
-      <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
+      <button
+        className={styles.btn}
+        type="button"
+        disabled={testingDiscord}
+        onClick={handleTestDiscord}
+      >
         {testingDiscord ? 'Sending...' : 'Test Discord webhook'}
       </button>
-      {discordResult && <p style={{ marginTop: 8, fontSize: '0.88rem' }}>{discordResult}</p>}
+      {discordResult && (
+        <p
+          className={`${styles.formStatus} ${discordResult.startsWith('Failed') ? styles.formStatusError : styles.formStatusSuccess}`}
+          role={discordResult.startsWith('Failed') ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {discordResult}
+        </p>
+      )}
     </div>
   )
 
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
-        <h1 className={styles.heroTitle}>Settings</h1>
-        <p className={styles.heroMeta}>Component controls for Hunt runtime behavior.</p>
+        <div>
+          <h1 className={styles.heroTitle}>Settings</h1>
+          <p className={styles.heroMeta}>
+            Tune the pipeline by outcome. Every save is scoped to the section you are editing.
+          </p>
+        </div>
+        <div className={styles.heroSummary} aria-label="Settings overview">
+          <span>4 focused areas</span>
+          <span>Section-level saves</span>
+        </div>
       </section>
 
-      <div className={styles.tabBar} role="tablist" aria-label="Settings components">
-        {SETTINGS_TABS.map((tab) => (
+      <div className={styles.tabBar} role="tablist" aria-label="Settings areas">
+        {SETTINGS_TABS.map((tab, index) => (
           <button
             key={tab.id}
             type="button"
             role="tab"
+            id={`settings-tab-${tab.id}`}
+            aria-controls={`settings-panel-${tab.id}`}
             aria-selected={activeTab === tab.id}
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            ref={(node) => {
+              tabRefs.current[index] = node
+            }}
             className={`${styles.tabButton} ${activeTab === tab.id ? styles.tabButtonActive : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => selectTab(tab.id)}
+            onKeyDown={(event) => handleTabKeyDown(event, index)}
           >
-            <span>{tab.label}</span>
-            <small>{tab.description}</small>
+            <span className={styles.tabLabel}>
+              {tab.label}
+              <small>{tab.owner}</small>
+            </span>
+            <span className={styles.tabDescription}>{tab.description}</span>
           </button>
         ))}
       </div>
 
-      {activeTab === 'c1' && c1Content}
+      <section
+        className={styles.tabPanel}
+        role="tabpanel"
+        id={`settings-panel-${activeTab}`}
+        aria-labelledby={`settings-tab-${activeTab}`}
+        tabIndex={0}
+      >
+        <header className={styles.sectionHeader}>
+          <div>
+            <h2>{activeDefinition.heading}</h2>
+            <p>{activeDefinition.summary}</p>
+          </div>
+          <span className={styles.persistenceBadge}>{activeDefinition.persistence}</span>
+        </header>
 
-      {activeTab === 'c2' && (
-        <>
-          <C2ProviderRuntimeSettings />
-          <AppNotificationSettings />
-          <JobMetadataSettings />
-        </>
-      )}
-
-      {activeTab === 'integrations' && integrationsContent}
+        {activeTab === 'targeting' && c1Content('targeting')}
+        {activeTab === 'automation' && c1Content('automation')}
+        {activeTab === 'resume' && (
+          <>
+            <C2ProviderRuntimeSettings />
+            <JobMetadataSettings />
+          </>
+        )}
+        {activeTab === 'system' && (
+          <>
+            <AppNotificationSettings />
+            {integrationsContent}
+          </>
+        )}
+      </section>
     </div>
   )
 }

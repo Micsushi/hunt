@@ -62,6 +62,10 @@ spacing:
   md: "16px"
   lg: "24px"
   xl: "40px"
+interaction:
+  control-min-height: "40px"
+  focus-ring: "2px solid {colors.accent}, 3px offset"
+  motion: "140ms cubic-bezier(0.2, 0.8, 0.2, 1); near-zero duration when reduced motion is requested"
 components:
   button-primary:
     backgroundColor: "{colors.accent}"
@@ -129,3 +133,4 @@ components:
 
 ## Rule
 - Keep token front matter here. Put detailed rationale in `DESIGN-parts/`.
+- Apply the shared page, interaction, feedback, responsive, and Settings contracts in `ui-design.md`.
