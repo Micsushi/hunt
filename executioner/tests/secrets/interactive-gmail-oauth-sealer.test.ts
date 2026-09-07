@@ -616,54 +616,8 @@ test("trusted helper derives one deterministic opaque grant target", async () =>
   }
 });
 
-test("trusted helper derives one scope-bound lookup target from only the value-free recipient binding", async () => {
-  const source = await readFile(
-    "src/secrets/windows-dpapi/private/interactive-gmail-oauth-sealer.ts",
-    "utf8",
-  );
-  const csharp = /\$source = @'\r?\n([\s\S]*?)\r?\n'@/u.exec(source)?.[1] ?? "";
-  const root = await mkdtemp(join(tmpdir(), "hunt-gmail-grant-lookup-target-"));
-  try {
-    const sourcePath = join(root, "helper.cs");
-    const outputPath = join(root, "target.txt");
-    await writeFile(sourcePath, csharp);
-    const result = spawnSync(
-      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-Command",
-        "$refs='System.Security.dll','System.Web.dll','System.Web.Extensions.dll'; Add-Type -Path $env:HUNT_TEST_SOURCE -ReferencedAssemblies $refs; $flags=[Reflection.BindingFlags]'NonPublic,Static'; $target=[HuntInteractiveGmailOAuthSealer].GetMethod('LookupTarget',$flags); $valid=[HuntInteractiveGmailOAuthSealer].GetMethod('ValidRecipientBindingId',$flags); if($null -eq $target -or $null -eq $valid) { exit 53 }; if(-not $valid.Invoke($null,@('recipient_abcdefghijklmnop')) -or $valid.Invoke($null,@('recipient_short')) -or $valid.Invoke($null,@('recipient_abcdefghijklmnop.'))) { exit 54 }; $value=$target.Invoke($null,@($env:HUNT_TEST_CLIENT,'recipient_abcdefghijklmnop')); [IO.File]::WriteAllText($env:HUNT_TEST_OUTPUT,$value,[Text.Encoding]::ASCII); exit 0",
-      ],
-      {
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "ignore", "pipe"],
-        encoding: "utf8",
-        timeout: 15_000,
-        env: {
-          SystemRoot: "C:\\Windows",
-          WINDIR: "C:\\Windows",
-          HUNT_TEST_SOURCE: sourcePath,
-          HUNT_TEST_CLIENT: revokeRequest.clientId,
-          HUNT_TEST_OUTPUT: outputPath,
-        },
-      },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const target = await readFile(outputPath, "ascii");
-    const digest = createHash("sha256")
-      .update(
-        `hunt-c3-gmail-refresh-lookup-v1\0${revokeRequest.clientId}\0` +
-          `${revokeRequest.recipientBindingId}\0` +
-          "https://www.googleapis.com/auth/gmail.readonly",
-      )
-      .digest("hex");
-    assert.equal(target, `Hunt/C3/GmailRefreshLookup/v1/${digest}`);
-    assert.doesNotMatch(target, /recipient|person|example|@/u);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+// Pure lookup coverage lives in gmail-lookup-policy.test.ts. Do not load the
+// credential/network helper merely to exercise hashing and input validation.
 
 test("successful acquisition installs an exact lookup and lookup failure removes both durable entries", async () => {
   const source = await readFile(
