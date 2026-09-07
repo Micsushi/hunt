@@ -8,6 +8,7 @@ export function jobFlowFixture(job: BaselineJob): string {
   <h1>Synthetic ${job.company} fixture</h1><div id="surface"></div>
   <script>
     const order = ${JSON.stringify(order)};
+    const requiresVerification = ${JSON.stringify(job.permittedJourney.includes("verification_required"))};
     let state = JSON.parse(localStorage.getItem('fixture') || 'null') || { stage: 'posting', index: 0, values: {}, effects: 0 };
     const save = () => localStorage.setItem('fixture', JSON.stringify(state));
     const surface = document.getElementById('surface');
@@ -18,7 +19,7 @@ export function jobFlowFixture(job: BaselineJob): string {
       }
       if (state.stage === 'auth') {
         surface.innerHTML = '<label>Synthetic email<input id="email" type="email"></label><button id="signin">Mock sign in</button>';
-        document.getElementById('signin').onclick = () => { state.stage = 'verify'; save(); render(); }; return;
+        document.getElementById('signin').onclick = () => { state.stage = requiresVerification ? 'verify' : 'application'; save(); render(); }; return;
       }
       if (state.stage === 'verify') {
         surface.innerHTML = '<p>Mock mailbox verification only</p><button id="verify">Verify fixture identity</button>';

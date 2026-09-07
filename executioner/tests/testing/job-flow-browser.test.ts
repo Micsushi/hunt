@@ -13,8 +13,9 @@ const matrix = loadJobFlowMatrix(resolve("fixtures/job-flow-campaign/v1.json"), 
 const signal = () => new AbortController().signal;
 
 for (const job of matrix.baselineJobs) {
-  test(`${job.id}: real browser walks production navigation, checkpoints and Review with mocked sensitive handlers`, { timeout: 120_000 }, async () => {
+  test(`${job.id}: real browser walks production navigation, checkpoints and Review with mocked sensitive handlers`, { timeout: 120_000 }, async (t) => {
     const browser = await chromium.launch({ headless: true });
+    t.after(() => browser.close());
     const context = await browser.newContext({ serviceWorkers: "block" });
     const requests: string[] = [];
     const output = process.env.HUNT_JOB_FLOW_EVIDENCE_DIR;
@@ -36,7 +37,11 @@ for (const job of matrix.baselineJobs) {
       await page.getByRole("button", { name: "Apply to synthetic fixture" }).click();
       await page.getByLabel("Synthetic email").fill("campaign@example.invalid");
       await page.getByRole("button", { name: "Mock sign in" }).click();
-      await page.getByRole("button", { name: "Verify fixture identity" }).click();
+      if (job.permittedJourney.includes("verification_required")) {
+        await page.getByRole("button", { name: "Verify fixture identity" }).click();
+      } else {
+        assert.equal(await page.getByRole("button", { name: "Verify fixture identity" }).count(), 0);
+      }
       const input = { journeyId: journeyId("journey_campaign_fixture") };
       // A verified prefix survives a page/session loss, without repeating Next.
       if (job.id === matrix.baselineJobs[0]!.id) {
@@ -68,8 +73,7 @@ for (const job of matrix.baselineJobs) {
       if (evidenceRoot && !page.isClosed()) await page.screenshot({ path: join(evidenceRoot, "failure.png") }).catch(() => {});
       throw error;
     } finally {
-      try { if (evidenceRoot) await context.tracing.stop({ path: join(evidenceRoot, "trace.zip") }); }
-      finally { await browser.close(); }
+      if (evidenceRoot) await context.tracing.stop({ path: join(evidenceRoot, "trace.zip") });
     }
   });
 }
