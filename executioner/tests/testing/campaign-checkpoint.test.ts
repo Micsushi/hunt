@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acquireCampaignLock, baselineEvidencePresent, contentDigest, evidenceDigest, verifyCampaignCheckpoint } from "../../src/testing/campaign-checkpoint.ts";
+import { acquireCampaignLock, baselineEvidencePresent, contentDigest, evidenceDigest, verifyCampaignCheckpoint } from "../../scripts/campaign-checkpoint.ts";
 
 test("a zero-exit or skipped browser suite cannot pass without every evidence packet", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-campaign-evidence-"));

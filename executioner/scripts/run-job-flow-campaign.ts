@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, globSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadJobFlowMatrix, matrixTestFiles, renderJobFlowRules, verifyReadOnlyLiveJob } from "../src/testing/job-flow-campaign.ts";
-import { acquireCampaignLock, baselineEvidencePresent, contentDigest, evidenceDigest, verifyCampaignCheckpoint, type CampaignGate } from "../src/testing/campaign-checkpoint.ts";
+import { loadJobFlowMatrix, matrixTestFiles, renderJobFlowRules, verifyReadOnlyLiveJob } from "./job-flow-campaign.ts";
+import { acquireCampaignLock, baselineEvidencePresent, contentDigest, evidenceDigest, verifyCampaignCheckpoint, type CampaignGate } from "./campaign-checkpoint.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const matrix = loadJobFlowMatrix(join(root, "fixtures/job-flow-campaign/v1.json"), root);

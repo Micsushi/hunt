@@ -1,0 +1,2 @@
+# Generated rules have a canonical byte representation on every platform.
+docs/job-flow-rules.md text eol=lf

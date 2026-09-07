@@ -57,6 +57,20 @@ Artifacts are synthetic but may contain absolute local tool paths. Do not commit
 the runtime output. Keep only useful failed attempts and final acceptance
 evidence; review retention before long soak campaigns.
 
+Keep campaign tooling under `scripts/`, outside production component ownership
+and the shipped runtime. The architecture regression is part of the matrix.
+Use `npm test`, not a bare Node test invocation, for broader Windows acceptance
+tests: the local-quality port deliberately requires the Node installation's
+admitted `npm_execpath`.
+
+If a synthetic PowerShell probe returns `EPERM`, retain the spawn error rather
+than reporting only an empty stderr. Check local protection events. Defender
+1116/1117 can block the lookup-target probe in
+`tests/secrets/interactive-gmail-oauth-sealer.test.ts`. Do not retry around
+protection, disable it, add an exception or disguise the command. Record the
+required test as blocked and run independent tests separately; that is not a
+green full-suite result.
+
 ## Live coverage and interpretation
 
 `campaign:live` is an opt-in, separate read-only HTTP check of the official URLs

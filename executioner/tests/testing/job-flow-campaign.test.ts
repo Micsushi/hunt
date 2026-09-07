@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
-import { loadJobFlowMatrix, validateJobFlowMatrix, verifyReadOnlyLiveJob, matrixTestFiles } from "../../src/testing/job-flow-campaign.ts";
+import { loadJobFlowMatrix, validateJobFlowMatrix, verifyReadOnlyLiveJob, matrixTestFiles } from "../../scripts/job-flow-campaign.ts";
 
 const matrix = () => loadJobFlowMatrix(resolve("fixtures/job-flow-campaign/v1.json"), process.cwd());
 const job = () => matrix().baselineJobs[0]!;

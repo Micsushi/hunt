@@ -1,4 +1,4 @@
-import type { BaselineJob } from "../../src/testing/job-flow-campaign.ts";
+import type { BaselineJob } from "../../scripts/job-flow-campaign.ts";
 
 // Deliberately synthetic, production-shaped DOM. Never fetch or copy applicant data.
 export function jobFlowFixture(job: BaselineJob): string {

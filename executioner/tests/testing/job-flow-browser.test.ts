@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import test from "node:test";
 import { chromium, type Page } from "playwright";
-import { loadJobFlowMatrix } from "../../src/testing/job-flow-campaign.ts";
+import { loadJobFlowMatrix } from "../../scripts/job-flow-campaign.ts";
 import { PlaywrightWorkdayApplicationPage } from "../../src/ats/workday/application/playwright-page.ts";
 import { runApplicationPageWalk, type ApplicationPageHandlerPort, type ApplicationHandlerPage, type ApplicationWalkDependencies, type ApplicationWalkProgress } from "../../src/ats/workday/application/page-walk.ts";
 import { journeyId } from "../../src/contracts/index.ts";

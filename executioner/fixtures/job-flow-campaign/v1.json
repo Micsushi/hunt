@@ -161,7 +161,7 @@
       "expectedTerminal": "resume_or_typed_stop",
       "diagnostics": ["source_revision", "verified_prefix", "page_identity"],
       "workaround": "Resume only an exact source-bound verified prefix with intact evidence and exclusive ownership; reconcile browser truth before any new effect.",
-      "testFiles": ["tests/integration/s2-application-walk/page-walk.test.ts", "tests/connections/control/recovery.test.ts", "tests/testing/campaign-checkpoint.test.ts", "tests/testing/job-flow-browser.test.ts"]
+      "testFiles": ["tests/integration/s2-application-walk/page-walk.test.ts", "tests/connections/control/recovery.test.ts", "tests/testing/campaign-checkpoint.test.ts", "tests/testing/job-flow-browser.test.ts", "tests/architecture/dependency-rule.test.ts"]
     },
     {
       "id": "conditional-reveal-fixed-point",

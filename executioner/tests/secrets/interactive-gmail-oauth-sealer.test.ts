@@ -649,7 +649,7 @@ test("trusted helper derives one scope-bound lookup target from only the value-f
         },
       },
     );
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     const target = await readFile(outputPath, "ascii");
     const digest = createHash("sha256")
       .update(
