@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "matrixRevision": "job-flow-campaign-v1",
+  "repeatRuns": 3,
+  "liveValidation": {
+    "retryLimit": 1,
+    "timeoutMs": 15000,
+    "maxBytes": 2097152
+  },
+  "safety": {
+    "syntheticIdentityOnly": true,
+    "sensitiveStepsMocked": true,
+    "externalSubmissionAllowed": false
+  },
+  "requiredFailureClasses": [
+    "selector_drift",
+    "redirect",
+    "expired_job",
+    "auth_transition",
+    "email_transition",
+    "locale_state",
+    "popup",
+    "slow_loading",
+    "session_loss",
+    "error_recovery",
+    "evidence_capture",
+    "checkpoint_resume",
+    "conditional_reveal",
+    "controlled_rollback",
+    "duplicate_mirror",
+    "loop_stall"
+  ],
+  "rules": [
+    {
+      "id": "owned-structure-selector-drift",
+      "failureClass": "selector_drift",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["structural_owner", "control_type", "semantic_readback"],
+      "workaround": "Reclassify from the current owned structure; never fall back to generated IDs or stale selectors.",
+      "testFiles": ["tests/browser/live-adapter/workday-structural-catalog.test.ts"]
+    },
+    {
+      "id": "redirect-reclassification",
+      "failureClass": "redirect",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["source_host", "destination_host", "target_binding"],
+      "workaround": "Inspect the destination afresh and require exact host, tenant, posting, and page-state ownership.",
+      "testFiles": ["tests/ats/workday/live-entry/verification.test.ts", "tests/testing/job-flow-campaign.test.ts"]
+    },
+    {
+      "id": "expired-posting-safe-stop",
+      "failureClass": "expired_job",
+      "recoveryAction": "replace_job",
+      "retryLimit": 0,
+      "checkpoint": "discard",
+      "expectedTerminal": "posting_unavailable",
+      "diagnostics": ["availability_reason", "posting_identity", "submit_safety"],
+      "workaround": "Record the exact unavailable reason and replace the posting from the same company without blaming the fill path.",
+      "testFiles": ["tests/browser/live-adapter/workday-owned-target-probe.test.ts"]
+    },
+    {
+      "id": "auth-state-transition",
+      "failureClass": "auth_transition",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["account_state", "action_receipt", "monitor_ack"],
+      "workaround": "Choose the next action from independently observed account state and stop repeated create/sign-in cycles.",
+      "testFiles": ["tests/composition/s2-account-verified-runner.test.ts"]
+    },
+    {
+      "id": "bounded-email-transition",
+      "failureClass": "email_transition",
+      "recoveryAction": "retry_read",
+      "retryLimit": 2,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["mailbox_window", "candidate_count", "verification_state"],
+      "workaround": "Use fresh bounded queries and preserve recipient, sender, tenant, and run bindings; never extend the poll indefinitely.",
+      "testFiles": ["tests/composition/s2-account-verification-mailbox-polling.test.ts"]
+    },
+    {
+      "id": "locale-and-region-derivation",
+      "failureClass": "locale_state",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["canonical_field", "source_provenance", "backing_value"],
+      "workaround": "Derive locale-dependent values only from explicit facts and verify the committed canonical backing value.",
+      "testFiles": ["tests/composition/s2-application-owner-source.test.ts", "tests/ats/workday/profile/semantic-readback.test.ts"]
+    },
+    {
+      "id": "owned-popup-reconciliation",
+      "failureClass": "popup",
+      "recoveryAction": "inspect_popup",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["surface", "target_binding", "page_identity"],
+      "workaround": "Adopt only the sole popup with exact target ownership; foreign or duplicate popups fail closed.",
+      "testFiles": ["tests/journey/recovery/recovery.test.ts"]
+    },
+    {
+      "id": "bounded-loading-reconciliation",
+      "failureClass": "slow_loading",
+      "recoveryAction": "retry_read",
+      "retryLimit": 2,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["readiness_span", "loader_owner", "destination_identity"],
+      "workaround": "Wait only on an owned loader witness, then reobserve or perform one bounded reload without repeating the prior effect.",
+      "testFiles": ["tests/integration/s2-application-walk/playwright-page-navigation.test.ts"]
+    },
+    {
+      "id": "session-loss-recovery",
+      "failureClass": "session_loss",
+      "recoveryAction": "reattach",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["profile_marker", "target_binding", "process_ownership"],
+      "workaround": "Reattach only the exact marked profile and sole owned target; otherwise stop without adopting another browser.",
+      "testFiles": ["tests/browser/live-adapter/persistent-browser.test.ts"]
+    },
+    {
+      "id": "bounded-error-recovery",
+      "failureClass": "error_recovery",
+      "recoveryAction": "retry_read",
+      "retryLimit": 2,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["earliest_error", "effect_state", "retry_attempts"],
+      "workaround": "Retry only declared pre-effect failures within per-kind and total limits; uncertain effects stop for fresh observation.",
+      "testFiles": ["tests/control/orchestrator/recovery/retry.test.ts", "tests/journey/recovery/recovery.test.ts"]
+    },
+    {
+      "id": "privacy-safe-diagnostic-capture",
+      "failureClass": "evidence_capture",
+      "recoveryAction": "typed_stop",
+      "retryLimit": 0,
+      "checkpoint": "preserve",
+      "expectedTerminal": "typed_stop",
+      "diagnostics": ["screenshot_digest", "trace_digest", "process_audit"],
+      "workaround": "Seal value-free live evidence; use reserved .invalid identities for synthetic captures and pass the static privacy scan before publication.",
+      "testFiles": ["tests/live/evidence/value-free-run-trace.test.ts", "tests/live/evidence/page-local-inspection.test.ts", "tests/testing/job-flow-campaign.test.ts"]
+    },
+    {
+      "id": "resume-from-exact-checkpoint",
+      "failureClass": "checkpoint_resume",
+      "recoveryAction": "resume_checkpoint",
+      "retryLimit": 1,
+      "checkpoint": "advance_only",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["source_revision", "verified_prefix", "page_identity"],
+      "workaround": "Resume only an exact source-bound verified prefix with intact evidence and exclusive ownership; reconcile browser truth before any new effect.",
+      "testFiles": ["tests/integration/s2-application-walk/page-walk.test.ts", "tests/connections/control/recovery.test.ts", "tests/testing/campaign-checkpoint.test.ts", "tests/testing/job-flow-browser.test.ts"]
+    },
+    {
+      "id": "conditional-reveal-fixed-point",
+      "failureClass": "conditional_reveal",
+      "recoveryAction": "reobserve",
+      "retryLimit": 2,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["control_fingerprint", "required_count", "questionnaire_occurrence"],
+      "workaround": "Rescan until the owned required-control fingerprint reaches a bounded fixed point; same-count replacements still count as change.",
+      "testFiles": ["tests/integration/s2-application-walk/page-walk.test.ts"]
+    },
+    {
+      "id": "controlled-value-rollback",
+      "failureClass": "controlled_rollback",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["mutation_receipt", "backing_value", "delayed_readback"],
+      "workaround": "Require persistent backing state after remount or rollback; file selection also needs the owned upload-complete marker before navigation.",
+      "testFiles": ["tests/integration/s2-application-walk/playwright-page.test.ts", "tests/testing/job-flow-browser.test.ts"]
+    },
+    {
+      "id": "presentation-mirror-deduplication",
+      "failureClass": "duplicate_mirror",
+      "recoveryAction": "reobserve",
+      "retryLimit": 1,
+      "checkpoint": "preserve",
+      "expectedTerminal": "resume_or_typed_stop",
+      "diagnostics": ["structural_owner", "canonical_tokens", "mirror_count"],
+      "workaround": "Read one canonical value from each exact production owner and exclude decorative or repeated presentation mirrors.",
+      "testFiles": ["tests/ats/workday/profile/playwright-page.test.ts"]
+    },
+    {
+      "id": "state-loop-dead-end",
+      "failureClass": "loop_stall",
+      "recoveryAction": "typed_stop",
+      "retryLimit": 0,
+      "checkpoint": "preserve",
+      "expectedTerminal": "typed_stop",
+      "diagnostics": ["state_fingerprint", "attempt_count", "earliest_error"],
+      "workaround": "Stop repeated state/action fingerprints before another effect and retain the nearest verified checkpoint.",
+      "testFiles": ["tests/integration/s2-application-walk/page-walk.test.ts", "tests/browser/live-adapter/account-navigation.test.ts"]
+    }
+  ],
+  "baselineJobs": [
+    {
+      "id": "crown-workday-chef",
+      "company": "Crown Resorts",
+      "ats": "workday",
+      "stateCombination": "profile_first_au_region_checkpoint_resume",
+      "syntheticRegion": "NSW",
+      "officialUrl": "https://crownresorts.wd3.myworkdayjobs.com/en-US/crown_careers/job/Chef-De-Partie_R9011",
+      "allowedHosts": ["crownresorts.wd3.myworkdayjobs.com"],
+      "titleMarker": "Chef De Partie",
+      "permittedJourney": ["posting", "account_entry", "verification_required", "profile", "resume", "questionnaire", "review"],
+      "terminalState": "review",
+      "testFiles": ["tests/acceptance/s1/journey/composition.test.ts", "tests/testing/job-flow-browser.test.ts"]
+    },
+    {
+      "id": "galderma-workday-engineer",
+      "company": "Galderma",
+      "ats": "workday",
+      "stateCombination": "resume_first_es_region_conditional_questions",
+      "syntheticRegion": "CAT",
+      "officialUrl": "https://galderma.wd3.myworkdayjobs.com/en-US/External/job/Engineer--Injectable-Platform-PMS-T_JR019640-1",
+      "allowedHosts": ["galderma.wd3.myworkdayjobs.com"],
+      "titleMarker": "Engineer, Injectable Platform PMS",
+      "permittedJourney": ["posting", "account_entry", "resume", "profile", "questionnaire", "review"],
+      "terminalState": "review",
+      "testFiles": ["tests/testing/job-flow-browser.test.ts"]
+    },
+    {
+      "id": "integer-workday-account-manager",
+      "company": "Integer Holdings",
+      "ats": "workday",
+      "stateCombination": "profile_without_resume_conditional_questionnaire",
+      "syntheticRegion": "MI",
+      "officialUrl": "https://integer.wd1.myworkdayjobs.com/External/job/Remote---United-States/Senior-Account-Manager_R36007",
+      "allowedHosts": ["integer.wd1.myworkdayjobs.com"],
+      "titleMarker": "Senior Account Manager",
+      "permittedJourney": ["posting", "account_entry", "profile", "questionnaire", "review"],
+      "terminalState": "review",
+      "testFiles": ["tests/testing/job-flow-browser.test.ts", "tests/ats/workday/live-entry/classification.test.ts"]
+    }
+  ]
+}
