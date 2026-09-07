@@ -49,6 +49,31 @@ still runs. Production helper bytes and its integrity launcher are unchanged.
 
 ## Evidence and release action
 
+### Historical comparison
+
+The retained `c3-offline-gate-c3ae79cd` summary reports successful typecheck,
+full tests, corpus verification and build on clean revision
+`c3ae79cd752cc7b56775633aea1c62911532443e`. Its actual test log records 2,265
+passes, zero failures and zero skips, including the native scope-bound lookup
+test. The archived invocation used `npm test`, not a filtered test selection.
+It completed September 1, 2026 at approximately 06:24 UTC, or September 1 at
+00:24 MDT (UTC-06:00, the user's local timezone).
+
+The production helper at that passing revision and at `a8ba19cf` has the same
+Git blob: `5c55395e5623e1e9f019d301f26bac7068a6c860`. The first retained
+Defender detection occurred September 7 at 04:26:44.975 UTC, or September 6 at
+22:26:44.975 MDT. Identical source does not establish identical operating-system,
+signature or process context, and does not establish a false positive. Exact
+historical Defender signature/runtime equivalence has not been established.
+
+Earlier repair `a9a1854f` replaced an overlong inline production command with a
+short integrity-checked launcher. It preserves exact helper hashing, trusted
+source-path validation and private stdin framing. That repair is already in
+both revisions. Reverting it would remove existing safeguards without evidence
+that it resolves this detection. No production rollback or launcher alteration
+was made. Later focused/partitioned totals must not be substituted for a new
+full native gate.
+
 Investigation baseline: `1f2ee6f8`. Read-only host evidence showed seven matching
 `Trojan:Win32/Commando.A!ml` detections, threat ID `2147840094`. Recorded actions
 were successful; current threat fields were `IsActive=false` and
