@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from ..db import get_connection
 from .compiler import compile_tex
 from .models import ResumeDocument
 from .renderer import render_resume_tex
+from .review_io import atomic_json, publication_lock
 from .review_models import (
     ResumeReviewPackage,
     ResumeReviewVersionName,
@@ -48,7 +50,7 @@ def _read_index() -> dict[str, str]:
 
 
 def _write_index(index: dict[str, str]) -> None:
-    _index_path().write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_json(_index_path(), index)
 
 
 def _safe_attempt_dir(attempt_dir: str | Path) -> Path:
@@ -68,9 +70,10 @@ def _safe_review_id(review_id: str) -> str:
 def register_review(attempt_dir: str | Path, review_id: str | None = None) -> str:
     attempt = _safe_attempt_dir(attempt_dir)
     rid = _safe_review_id(review_id or build_review_id(attempt))
-    index = _read_index()
-    index[rid] = str(attempt)
-    _write_index(index)
+    with publication_lock(_runtime_root()):
+        index = _read_index()
+        index[rid] = str(attempt)
+        _write_index(index)
     return rid
 
 
@@ -87,19 +90,8 @@ def write_review_package(attempt_dir: str | Path, package: ResumeReviewPackage) 
     attempt.mkdir(parents=True, exist_ok=True)
     register_review(attempt, package.review_id)
     path = attempt / "review_package.json"
-    path.write_text(json.dumps(model_to_dict(package), indent=2), encoding="utf-8")
-    for name, version in package.versions.items():
-        vdir = attempt / "versions" / str(name.value if hasattr(name, "value") else name)
-        vdir.mkdir(parents=True, exist_ok=True)
-        (vdir / "original.json").write_text(
-            json.dumps(model_to_dict(version.original), indent=2), encoding="utf-8"
-        )
-        (vdir / "generated.json").write_text(
-            json.dumps(model_to_dict(version.generated), indent=2), encoding="utf-8"
-        )
-        (vdir / "current.json").write_text(
-            json.dumps(model_to_dict(version.current), indent=2), encoding="utf-8"
-        )
+    with publication_lock(attempt):
+        atomic_json(path, model_to_dict(package))
     return str(path)
 
 
@@ -124,22 +116,19 @@ def _version_dir(review_id: str, version: str | ResumeReviewVersionName) -> Path
 def save_current_document(
     review_id: str, version: str | ResumeReviewVersionName, doc: ResumeDocument
 ) -> ResumeReviewPackage:
-    package = load_review_package(review_id)
-    vname = _version_name(version)
-    vdir = _version_dir(review_id, vname)
-    vdir.mkdir(parents=True, exist_ok=True)
-    (vdir / "current.json").write_text(json.dumps(model_to_dict(doc), indent=2), encoding="utf-8")
-    package.versions[vname].current = doc
-    package.versions[vname].dirty = True
-    write_review_package(attempt_dir_for_review(review_id), package)
-    return package
+    attempt = attempt_dir_for_review(review_id)
+    with publication_lock(attempt):
+        package = load_review_package(review_id)
+        state = package.versions[_version_name(version)]
+        state.current = doc
+        state.dirty = True
+        state.edit_revision += 1
+        atomic_json(attempt / "review_package.json", model_to_dict(package))
+        return package
 
 
 def load_current_document(review_id: str, version: str | ResumeReviewVersionName) -> ResumeDocument:
-    path = _version_dir(review_id, version) / "current.json"
-    if not path.exists():
-        raise FileNotFoundError("Current resume document missing.")
-    return model_validate(ResumeDocument, json.loads(path.read_text(encoding="utf-8")))
+    return load_review_package(review_id).versions[_version_name(version)].current
 
 
 def compile_current_document(
@@ -147,24 +136,45 @@ def compile_current_document(
 ) -> ResumeReviewPackage:
     package = load_review_package(review_id)
     vname = _version_name(version)
-    doc = load_current_document(review_id, vname)
-    version_state = package.versions[vname]
-    next_revision = int(version_state.compiled_revision or 0) + 1
+    snapshot = model_to_dict(package.versions[vname])
+    doc = package.versions[vname].current
+    attempt = attempt_dir_for_review(review_id)
     vdir = _version_dir(review_id, vname)
-    rev_dir = vdir / "revisions" / f"{next_revision:04d}"
-    rev_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = rev_dir / "output.tex"
-    tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
-    result = compile_tex(tex_path)
-    version_state.compile_status = str(result.get("compile_status") or "")
-    if result.get("compile_status") == "ok":
-        version_state.compiled_revision = next_revision
-        version_state.dirty = False
-        version_state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
-        version_state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
-        _update_job_selected_resume(package, vname, tex_path.with_suffix(".pdf"), tex_path)
-    write_review_package(attempt_dir_for_review(review_id), package)
-    return package
+    vdir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=vdir, prefix=".compile-") as staging:
+        tex_path = Path(staging) / "output.tex"
+        tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
+        result = compile_tex(tex_path)
+        with publication_lock(attempt):
+            current = load_review_package(review_id)
+            state = current.versions[vname]
+            if model_to_dict(state) != snapshot:
+                raise ValueError(
+                    "Resume changed during compilation; compile the saved version again."
+                )
+            state.compile_status = str(result.get("compile_status") or "")
+            if state.compile_status == "ok":
+                pdf_path = tex_path.with_suffix(".pdf")
+                if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
+                    raise ValueError("Compiler did not produce a non-empty PDF.")
+                revisions = vdir / "revisions"
+                revisions.mkdir(exist_ok=True)
+                next_revision = state.compiled_revision + 1
+                # Never overwrite a revision left by an interrupted publication.
+                while (revisions / f"{next_revision:04d}").exists():
+                    next_revision += 1
+                published = revisions / f"{next_revision:04d}"
+                Path(staging).rename(published)
+                state.compiled_revision = next_revision
+                state.dirty = False
+                state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
+                state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
+            atomic_json(attempt / "review_package.json", model_to_dict(current))
+            if state.compile_status == "ok":
+                _update_job_selected_resume(
+                    current, vname, published / "output.pdf", published / "output.tex"
+                )
+            return current
 
 
 def _update_job_selected_resume(
