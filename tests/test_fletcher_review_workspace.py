@@ -326,6 +326,65 @@ def test_compile_failure_does_not_promote_missing_revision(tmp_path, monkeypatch
     assert artifact_path_for_review(review_id, "no_summary", "pdf") == attempt_dir / "output.pdf"
 
 
+def test_successful_recompile_selects_the_new_revision(tmp_path, monkeypatch):
+    import sqlite3
+
+    from fletcher.resume import review_store
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt = runtime / "synthetic-recompile"
+    previous = attempt / "versions" / "no_summary" / "revisions" / "0001"
+    previous.mkdir(parents=True)
+    for suffix in ("pdf", "tex"):
+        (previous / f"output.{suffix}").write_text("previous", encoding="utf-8")
+    doc = _doc()
+    doc.header.name = "Synthetic Candidate"
+    rid = build_review_id(attempt)
+    write_review_package(
+        attempt,
+        ResumeReviewPackage(
+            review_id=rid,
+            job=ResumeReviewJobInfo(job_id=7),
+            log_url="/synthetic-log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    compiled_revision=1,
+                    pdf_url="/synthetic.pdf",
+                    tex_url="/synthetic.tex",
+                )
+            },
+        ),
+    )
+    db = tmp_path / "selection.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE jobs (id INTEGER PRIMARY KEY, selected_resume_pdf_path TEXT, "
+            "selected_resume_tex_path TEXT, selected_resume_selected_at TEXT, "
+            "selected_resume_ready_for_c3 INTEGER)"
+        )
+        conn.execute("INSERT INTO jobs (id) VALUES (7)")
+    monkeypatch.setattr(review_store, "get_connection", lambda _: sqlite3.connect(db))
+
+    def compile_fixture(path):
+        path.with_suffix(".pdf").write_bytes(b"%PDF synthetic new revision")
+        return {"compile_status": "ok"}
+
+    monkeypatch.setattr(review_store, "compile_tex", compile_fixture)
+    result = compile_current_document(rid, "no_summary")
+    assert result.versions[ResumeReviewVersionName.NO_SUMMARY].compiled_revision == 2
+    with sqlite3.connect(db) as conn:
+        selected = conn.execute(
+            "SELECT selected_resume_pdf_path, selected_resume_tex_path, "
+            "selected_resume_ready_for_c3 FROM jobs WHERE id = 7"
+        ).fetchone()
+    expected = attempt / "versions" / "no_summary" / "revisions" / "0002"
+    assert selected == (str(expected / "output.pdf"), str(expected / "output.tex"), 1)
+
+
 def test_artifact_download_filename_uses_version_family_and_timestamp(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime"
     monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))

@@ -162,13 +162,16 @@ def compile_current_document(
         version_state.dirty = False
         version_state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
         version_state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
-        _update_job_selected_resume(package, review_id, vname)
+        _update_job_selected_resume(package, vname, tex_path.with_suffix(".pdf"), tex_path)
     write_review_package(attempt_dir_for_review(review_id), package)
     return package
 
 
 def _update_job_selected_resume(
-    package: ResumeReviewPackage, review_id: str, version: ResumeReviewVersionName
+    package: ResumeReviewPackage,
+    version: ResumeReviewVersionName,
+    pdf_path: Path,
+    tex_path: Path,
 ) -> None:
     if version == ResumeReviewVersionName.STARTING:
         return
@@ -176,8 +179,6 @@ def _update_job_selected_resume(
     if job_id is None:
         return
     try:
-        pdf_path = artifact_path_for_review(review_id, version, "pdf")
-        tex_path = artifact_path_for_review(review_id, version, "tex")
         conn = get_connection(None)
         try:
             conn.execute(
