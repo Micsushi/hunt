@@ -3863,6 +3863,22 @@ def api_fletcher_job_log(
     return PlainTextResponse("No queue log file is available yet.")
 
 
+def _require_fletcher_review_revision(payload: dict) -> int:
+    if not isinstance(payload, dict) or "expected_revision" not in payload:
+        raise HTTPException(status_code=428, detail="expected_revision is required")
+    expected_revision = payload["expected_revision"]
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="expected_revision must be a non-negative integer",
+        )
+    return expected_revision
+
+
 @app.get("/api/fletcher/reviews/{review_id}")
 def api_fletcher_review(review_id: str, _auth: str = Depends(require_auth)):
     from fletcher.resume.review_models import model_to_dict
@@ -3885,26 +3901,54 @@ def api_fletcher_review_save(
 ):
     from fletcher.resume.models import ResumeDocument
     from fletcher.resume.review_models import model_to_dict, model_validate
-    from fletcher.resume.review_store import save_current_document
+    from fletcher.resume.review_store import RevisionConflictError, save_current_document
 
     try:
+        expected_revision = _require_fletcher_review_revision(payload)
         doc = model_validate(ResumeDocument, payload.get("current") or payload)
-        return JSONResponse(model_to_dict(save_current_document(review_id, version, doc)))
+        return JSONResponse(
+            model_to_dict(
+                save_current_document(
+                    review_id,
+                    version,
+                    doc,
+                    expected_revision=expected_revision,
+                )
+            )
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Review not found")
+    except RevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/fletcher/reviews/{review_id}/versions/{version}/compile")
-def api_fletcher_review_compile(review_id: str, version: str, _auth: str = Depends(require_auth)):
+def api_fletcher_review_compile(
+    review_id: str,
+    version: str,
+    payload: dict = Body(...),
+    _auth: str = Depends(require_auth),
+):
     from fletcher.resume.review_models import model_to_dict
-    from fletcher.resume.review_store import compile_current_document
+    from fletcher.resume.review_store import RevisionConflictError, compile_current_document
 
     try:
-        return JSONResponse(model_to_dict(compile_current_document(review_id, version)))
+        expected_revision = _require_fletcher_review_revision(payload)
+        return JSONResponse(
+            model_to_dict(
+                compile_current_document(
+                    review_id,
+                    version,
+                    expected_revision=expected_revision,
+                )
+            )
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Review not found")
+    except RevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -3917,18 +3961,24 @@ def api_fletcher_review_revert(
     _auth: str = Depends(require_auth),
 ):
     from fletcher.resume.review_models import model_to_dict
-    from fletcher.resume.review_store import revert_current_document
+    from fletcher.resume.review_store import RevisionConflictError, revert_current_document
 
     try:
+        expected_revision = _require_fletcher_review_revision(payload)
         return JSONResponse(
             model_to_dict(
                 revert_current_document(
-                    review_id, version, str(payload.get("target") or "generated")
+                    review_id,
+                    version,
+                    str(payload.get("target") or "generated"),
+                    expected_revision=expected_revision,
                 )
             )
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Review not found")
+    except RevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

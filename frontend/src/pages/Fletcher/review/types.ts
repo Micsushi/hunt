@@ -56,7 +56,9 @@ export interface ResumeReviewVersion {
   pdf_url: string
   tex_url: string
   dirty: boolean
+  document_revision: number
   compiled_revision: number
+  compiled_document_revision: number
   compile_status?: string | null
 }
 
