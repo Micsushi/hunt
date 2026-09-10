@@ -231,3 +231,7 @@ The preferred modern entrypoints are **C1 (Hunter)** scoped:
 - `./hunter.sh` (POSIX)
 
 **Legacy aliases:** `hunt.ps1`, `hunt.cmd`, `./hunt.sh`, and `python scripts/huntctl.py` forward to the same CLI.
+## Contributor guidance
+
+See [AGENTS.md](AGENTS.md) for component boundaries, command entrypoints, and
+safe change guidance.
