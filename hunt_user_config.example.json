@@ -1,29 +1,11 @@
 {
   "_comment": "Copy to hunt_user_config.json and edit. Omit any key to use the default from config.py.",
 
-  "watchlist": [
-    "shopify",
-    "stripe",
-    "cloudflare",
-    "google",
-    "microsoft",
-    "amazon"
-  ],
+  "watchlist": [],
 
   "company_blocklist": ["jobright.ai"],
 
-  "title_blacklist": [
-    "senior",
-    "sr.",
-    "lead",
-    "staff",
-    "principal",
-    "director",
-    "vp ",
-    "head of",
-    "phd",
-    "doctoral"
-  ],
+  "title_blacklist": [],
 
   "target_job_titles": {
     "engineering": [],
@@ -32,7 +14,7 @@
 
   "experience_levels": [],
 
-  "locations": ["Canada"],
+  "locations": ["Remote"],
 
   "sites": ["indeed", "linkedin"],
 

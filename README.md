@@ -233,3 +233,17 @@ The preferred modern entrypoints are **C1 (Hunter)** scoped:
 - `./hunter.sh` (POSIX)
 
 **Legacy aliases:** `hunt.ps1`, `hunt.cmd`, `./hunt.sh`, and `python scripts/huntctl.py` forward to the same CLI.
+
+## Contributor checks
+
+See [AGENTS.md](AGENTS.md) for component boundaries and supported entrypoints.
+After installing the relevant Python test dependencies, run the shared contract
+suite with:
+
+```sh
+python test.py shared
+```
+
+This focused group uses repository fixtures and does not require private vault
+configuration or a live provider account. An unknown group fails instead of
+silently selecting another scope. See `test.py --help` for component groups.

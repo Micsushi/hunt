@@ -261,12 +261,82 @@ _DEV_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_DEV_ORIGINS,
-    allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "X-Hunt-Async",
+        "X-Request-ID",
+        "X-Review-Ops-Token",
+    ],
 )
 app.add_middleware(RequestIDMiddleware)
+
+
+_SAME_ORIGIN_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _request_origin_is_allowed(request: Request, origin: str) -> bool:
+    """Allow same-origin browser requests and explicitly configured CORS origins."""
+    if origin in _DEV_ORIGINS:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        target = urlsplit(str(request.url))
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        default_ports = {"http": 80, "https": 443}
+        # Proxy trust belongs to the ASGI server; never trust raw forwarded-host headers.
+        return (parsed.scheme, parsed.hostname, parsed.port or default_ports[parsed.scheme]) == (
+            target.scheme, target.hostname, target.port or default_ports.get(target.scheme)
+        )
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def security_headers_and_csrf(request: Request, call_next):
+    method = request.method.upper()
+    if method in _SAME_ORIGIN_METHODS and request.cookies.get(SESSION_COOKIE_NAME):
+        origin = request.headers.get("origin", "").strip()
+        referer = request.headers.get("referer", "").strip()
+        if origin and not _request_origin_is_allowed(request, origin):
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+        if not origin and referer:
+            try:
+                referer_origin = "{uri.scheme}://{uri.netloc}".format(uri=urlsplit(referer))
+            except ValueError:
+                return JSONResponse(status_code=403, content={"detail": "Invalid request referer."})
+            if not _request_origin_is_allowed(request, referer_origin):
+                return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    if request.url.scheme == "https" or forwarded_proto == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 def _mutation_component(path: str) -> str:
@@ -3124,6 +3194,18 @@ def require_session_or_service_token(request: Request) -> str:
     raise HTTPException(status_code=401, detail="Not authenticated.")
 
 
+def require_metrics_auth(request: Request) -> str:
+    """Protect queue metrics while still allowing an internal bearer token."""
+    username = _session_username(request)
+    if username:
+        return username
+    expected = (HUNT_SERVICE_TOKEN or "").strip()
+    auth = request.headers.get("authorization") or ""
+    if expected and auth.lower().startswith("bearer ") and auth[7:].strip() == expected:
+        return "service"
+    raise HTTPException(status_code=401, detail="Metrics authentication required.")
+
+
 def _bool_value(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -3238,18 +3320,41 @@ def _check_db() -> dict:
 
 async def _read_login_payload(request: Request) -> dict[str, str]:
     """Read login payload without requiring python-multipart in local dev venvs."""
+    max_bytes = 16 * 1024
+    content_length = request.headers.get("content-length", "")
+    if content_length.isdigit() and int(content_length) > max_bytes:
+        raise HTTPException(status_code=413, detail="Login request is too large.")
     content_type = (request.headers.get("content-type") or "").lower()
-    raw = await request.body()
+    stream = getattr(request, "stream", None)
+    if stream is None:
+        raw = await request.body()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail="Login request is too large.")
+    else:
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in stream():
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail="Login request is too large.")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Login payload must be UTF-8.")
     if content_type.startswith("application/json"):
         try:
-            parsed = json.loads(raw.decode("utf-8") or "{}")
+            parsed = json.loads(text or "{}")
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid login JSON.")
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="Login JSON must be an object.")
         return {
             "username": str(parsed.get("username") or ""),
             "password": str(parsed.get("password") or ""),
         }
-    parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    parsed = parse_qs(text, keep_blank_values=True)
     return {
         "username": parsed.get("username", [""])[0],
         "password": parsed.get("password", [""])[0],
@@ -3272,7 +3377,8 @@ async def auth_login(request: Request, response: Response):
         httponly=True,
         samesite="lax",
         max_age=60 * 60 * 24 * 7,
-        secure=False,  # set True behind HTTPS in production
+        secure=os.getenv("HUNT_COOKIE_SECURE", "1").strip().lower()
+        not in {"0", "false", "no", "off"},
     )
     return result
 
@@ -3284,7 +3390,13 @@ def auth_logout(request: Request, response: Response):
     if token:
         delete_session(token)
     result = JSONResponse({"status": "ok"})
-    result.delete_cookie(SESSION_COOKIE_NAME)
+    result.delete_cookie(
+        SESSION_COOKIE_NAME,
+        secure=os.getenv("HUNT_COOKIE_SECURE", "1").strip().lower()
+        not in {"0", "false", "no", "off"},
+        httponly=True,
+        samesite="lax",
+    )
     return result
 
 
@@ -4230,11 +4342,8 @@ def api_system_status(_auth: str = Depends(require_auth)):
 
 @app.get("/health")
 def health():
-    summary = get_review_queue_summary()
-    return {
-        "status": "ok",
-        "queue": summary,
-    }
+    # Keep the unauthenticated liveness probe free of queue counts and state.
+    return {"status": "ok"}
 
 
 @app.get("/api/summary")
@@ -4464,7 +4573,7 @@ def api_summary_queue_age(_auth: str = Depends(require_auth)):
 
 
 @app.get("/metrics")
-def metrics():
+def metrics(_auth: str = Depends(require_metrics_auth)):
     return PlainTextResponse(
         render_metrics(get_review_queue_summary()), media_type="text/plain; version=0.0.4"
     )
@@ -4566,7 +4675,7 @@ systemctl list-timers | grep -i hunt
 
 
 @app.get("/legacy/health-view", response_class=HTMLResponse)
-def health_view():
+def health_view(_auth: str = Depends(require_auth)):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
@@ -4591,13 +4700,16 @@ def health_view():
 
 
 @app.get("/legacy/summary")
-def summary_redirect():
+def summary_redirect(_auth: str = Depends(require_auth)):
     """Legacy path : merged into Queue & health."""
     return RedirectResponse(url="/legacy/health-view", status_code=307)
 
 
 @app.get("/legacy/ops", response_class=HTMLResponse)
-def ops_console(updated: int | None = Query(default=None, ge=0)):
+def ops_console(
+    updated: int | None = Query(default=None, ge=0),
+    _auth: str = Depends(require_auth),
+):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
@@ -5218,7 +5330,7 @@ def api_jobs_bulk_selection(payload: dict = Body(...)):
 
 
 @app.get("/legacy", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, _auth: str = Depends(require_auth)):
     summary = get_review_queue_summary()
     ready_rows = list_jobs_for_review(status="ready", limit=8)
     blocked_rows = list_jobs_for_review(status="blocked", limit=8)
@@ -5251,6 +5363,7 @@ def jobs_page(
     tag: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
+    _auth: str = Depends(require_auth),
 ):
     if source not in SOURCE_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
@@ -5298,7 +5411,12 @@ def jobs_page(
 
 
 @app.get("/legacy/jobs/{job_id}", response_class=HTMLResponse)
-def job_detail(request: Request, job_id: int, return_to: str = ""):
+def job_detail(
+    request: Request,
+    job_id: int,
+    return_to: str = "",
+    _auth: str = Depends(require_auth),
+):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -5412,6 +5530,7 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
 def jobs_compare(
     a: int | None = Query(None),
     b: int | None = Query(None),
+    _auth: str = Depends(require_auth),
 ):
     if a is None or b is None:
         a_val = "" if a is None else str(int(a))
