@@ -704,3 +704,7 @@ Its report status is `accepted_fixture`; `liveCorpusCertified` and
 application/recovery/Review adapter is implemented and locally verified, but
 no real Workday proof is claimed by this Stage 3 fixture acceptance.
 See `docs/corpus-release.md` and `docs/owner-test-backlog.md`.
+
+## Preserved stage requirements
+
+The requirement references for [controlled fixtures](docs/requirements/s1-controlled-workday-journey.md), [the live boundary](docs/requirements/s2-single-real-workday-journey.md), and [corpus closure](docs/requirements/s3-workday-corpus-closure.md) preserve earlier scope and acceptance clauses. They are traceability references; the current revision, dormant-scope rules and acceptance evidence above govern execution. They do not activate dormant work or authorize live access or release.
