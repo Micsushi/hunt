@@ -37,7 +37,7 @@ Its source, fixtures, tests, and supporting tools remain available on branch
 - Stage 1 uses controlled Workday fixtures only.
 - Every field mutation requires independent verification.
 - Final Submit is outside C3 v3 scope.
-- Unknown personal facts stop with `profile_answer_missing`.
+- Legacy owner-facts-only paths can return `profile_answer_missing`. Protected live proof runs use the explicit [application execution policy](src/contracts/application-execution-policy.ts): editable deterministic fallback remains tagged, never becomes an owner fact, and never permits Submit.
 
 Future C1 synchronization for maintenance, runtime-error, and removed-posting statuses is
 specified in [the C1/C3 job-status handoff](docs/c1-c3-job-status-handoff.md).

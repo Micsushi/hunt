@@ -53,15 +53,16 @@ your.” Keyword matches must resolve to one canonical question; overlapping
 groups remain `question_ambiguous`. `questionAnswerGuide` publishes each
 canonical question's accepted answer type, known choices, and default policy.
 Tenant-specific choices are still discovered from the visible control. Generated
-defaults and first-visible choices are admitted only in
-`synthetic_test_non_submittable` fixture runs. Live employer flows require
-`live_owner_fact` for every demographic, disability, veteran, consent, legal,
-employment, authorization, and other truth-dependent declaration; an exact
-privacy-decline choice remains editable guidance but is not a live fact until the
-owner selects it. Synthetic answers cannot persist as applicant facts, produce
-live page acceptance or Review expectation/completion, activate Submit, or cross
-the production application-source binding. Missing or mismatched live answers
-fail closed before mutation and are recorded as needing owner input.
+defaults and editable fallback follow the explicit application execution policy.
+The live protected-proof policy separates browser transport, answer provenance,
+submission permission, and proof eligibility. It permits deterministic site-valid
+editable fallback while keeping Submit forbidden. Such answers never become
+owner facts. Fixture transport remains ineligible for a live proof; fallback
+provenance alone does not make a live-browser protected proof ineligible.
+See `src/contracts/application-execution-policy.ts` from the Executioner root.
+Owner-facts-only callers and malformed or unsupported inputs can still fail
+closed with `profile_answer_missing`; this is not a universal live-proof rule.
+
 
 `stopAfter` supports each verified lane and `pre_review` without advancing
 beyond the requested browser truth. `createApplicationLaneAcceptanceCollector`
