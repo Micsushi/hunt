@@ -943,8 +943,9 @@ function plannedFields(
 }
 
 function applyRegisteredPlan(record: MutableRecord, plan: ProfileFieldPlan): void {
-  record.questionCategory = plan.questionType;
-  record.answerCategory = plan.answerType;
+  const guide = retainedProfileGuide.get(plan.fieldId);
+  record.questionCategory = guide?.normalizedQuestionType ?? plan.questionType;
+  record.answerCategory = guide?.answerType ?? plan.answerType;
   record.planBinding = planBindingFromPlan(plan);
   record.answerState = plan.answer.kind === "answered" ? "answered" : "unset";
   record.lane = plan.answer.kind === "answered" ? plan.answer.lane : null;

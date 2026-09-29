@@ -137,6 +137,32 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("generated phone plans preserve observed catalog metadata", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-phone-plan-learning-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({ pageType: "profile", rows: [], controls: [{
+      controlId: "phone-control", fieldId: "phone.number", required: true,
+      uiBehavior: "phone", uiVariant: "workday_phone_v2", readback: null,
+    }] }),
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+    root, sensitiveValues: [], observeControl: observer(),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.page.registerSyntheticField?.({
+      fieldId: "phone.number", questionType: "phone", answerType: "phone", allowedOptions: [],
+      answer: { kind: "answered", value: "2025550100", provenance: "generated_default", lane: "synthetic_test_default" },
+    });
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields[0].answerCategory, "text");
+    assert.equal(evidence.fields[0].metadataReconciliation, "matched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("retains a generated pending-owner answer for a supported unknown control", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-unknown-learning-"));
   const port = new FakeProfilePort(snapshot(null));
