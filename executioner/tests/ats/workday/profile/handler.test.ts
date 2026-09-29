@@ -1807,6 +1807,7 @@ test("fills recognized unplanned optional controls with explicit test fallbacks"
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [
+      { ...control("social.linkedin", "text", null, "workday_text_v2"), required: false },
       { ...control("social.facebook", "text", null, "workday_text_v2"), required: false },
       { ...control("social.twitter", "text", null, "workday_text_v2"), required: false },
     ],
@@ -1822,11 +1823,12 @@ test("fills recognized unplanned optional controls with explicit test fallbacks"
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
   assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/hunt-test-owner-review",
     "https://www.facebook.com/hunt.test.owner.review",
     "https://twitter.com/hunt_test_26",
   ]);
   if (result.kind !== "verified") return;
-  assert.equal(result.committedFields.length, 2);
+  assert.equal(result.committedFields.length, 3);
   assert.ok(result.committedFields.every(({ synthetic }) => synthetic));
   assert.ok(result.verifiedFields.every(({ provenance, lane }) =>
     provenance === "generated_default" && lane === "synthetic_test_default"

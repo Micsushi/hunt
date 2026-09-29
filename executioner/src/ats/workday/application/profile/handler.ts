@@ -719,6 +719,9 @@ function syntheticProfileValue(
     });
     return generated.kind === "generated" ? generated.value : undefined;
   }
+  if (control.fieldId === "social.linkedin") {
+    return "https://www.linkedin.com/in/hunt-test-owner-review";
+  }
   if (control.fieldId === "social.facebook") {
     return "https://www.facebook.com/hunt.test.owner.review";
   }

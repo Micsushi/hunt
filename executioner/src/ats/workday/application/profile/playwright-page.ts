@@ -102,6 +102,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   }
 
   async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
+    const started = performance.now();
     abort(signal);
     this.#inspectionFailure = undefined;
     this.#inspectionFacts = await this.#captureInspectionFacts();
@@ -172,6 +173,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       );
     }
     abort(signal);
+    this.#trace?.("profile_inspection_completed", {
+      durationMs: Math.round(performance.now() - started), fieldCount: controls.length,
+    });
     return { pageType: this.#pageType, controls, rows, repeatableSections };
   }
 
@@ -360,6 +364,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     signal: AbortSignal,
     inspectInteractiveOptions = true,
   ): Promise<ProfileControlObservation> {
+    const started = performance.now();
     abort(signal);
     const resolved = this.#controls.get(controlId);
     const bindingId = resolved?.fieldId ?? controlId;
@@ -397,6 +402,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const visibleOptionIds = Object.freeze(optionLabels.map(optionId));
       const selected = before === null ? null : optionId(before);
       abort(signal);
+      this.#trace?.("profile_control_observation_completed", {
+        fieldId: resolved.fieldId, durationMs: Math.round(performance.now() - started),
+      });
       return Object.freeze({
         controlId,
         binderStrategy: resolved.binderStrategy,
@@ -440,6 +448,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ));
     }
     if (!inspectInteractiveOptions) return [];
+    const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
     await control.focus({ timeout: this.#timeoutMs });
@@ -467,6 +476,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("profile option observation changed backing state");
       }
     }
+    this.#trace?.("profile_option_observation_completed", {
+      fieldId: resolved.fieldId, durationMs: Math.round(performance.now() - started),
+      observedOptionCount: labels.length,
+    });
     return labels;
   }
 
