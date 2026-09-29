@@ -456,7 +456,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     await this.#page.waitForTimeout(25);
     let labels: string[] = [];
     try {
-      const owner = await exactObservedOptionOwner(this.#page, control);
+      const owner = resolved.fieldId === "source.how_did_you_hear"
+        ? await exactPromptCatalogOwner(this.#page, control)
+        : await exactObservedOptionOwner(this.#page, control);
       if (owner !== undefined) {
         const options = await visibleLocators(owner.locator([
           '[role="option"]',
@@ -466,6 +468,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         labels = uniqueObservedOptions(await Promise.all(options.slice(0, 64).map((option) =>
           option.innerText()
         )));
+      }
+      if (labels.length === 0 && (resolved.uiBehavior === "search_select" ||
+          resolved.uiBehavior === "select" || resolved.uiBehavior === "multi_select")) {
+        await this.#captureSelectionDiagnostic("observation-empty", resolved.uiBehavior);
       }
     } finally {
       await this.#page.keyboard.press("Escape");

@@ -2364,6 +2364,30 @@ test("known choice snapshots supply observed options for protected fallback trav
   }
 });
 
+test("source option observation waits for its delayed owned catalog without selecting", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-controls="source-options" aria-required="true">
+      </div>
+      <div id="source-options" role="listbox" hidden><div role="option">Website</div></div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.querySelector('[role="listbox"]');
+      input.onclick = () => setTimeout(() => { popup.hidden = false; }, 150);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
 test("only zero-sized anonymous text companions of known choices are excluded", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
