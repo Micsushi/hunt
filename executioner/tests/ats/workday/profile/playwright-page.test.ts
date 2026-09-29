@@ -2294,6 +2294,47 @@ test("unknown required control identities survive DOM reordering without retaini
   }
 });
 
+test("known choice snapshots supply observed options for protected fallback traversal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <fieldset><legend>Have you worked here before? *</legend>
+        <label><input type="radio" name="candidateIsPreviousWorker" value="Yes" required>Yes</label>
+        <label><input type="radio" name="candidateIsPreviousWorker" value="No" required>No</label>
+      </fieldset>
+      <button id="phoneNumber--phoneType" aria-required="true" aria-haspopup="listbox" aria-controls="phone-types">Select One</button>
+      <div id="phone-types" role="listbox" hidden><div role="option">Mobile</div><div role="option">Home</div></div>
+    </main><script>
+      const button = document.querySelector('button');
+      const popup = document.querySelector('[role="listbox"]');
+      button.onclick = () => { popup.hidden = false; };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      popup.onclick = event => {
+        button.textContent = event.target.textContent;
+        button.setAttribute('aria-valuetext', event.target.textContent);
+        popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(initial.controls.find(({fieldId}) => fieldId === "phone.device_type")?.allowedOptions, ["Mobile", "Home"]);
+    assert.equal(await page.locator('button').innerText(), "Select One");
+    assert.equal(await page.locator('input:checked').count(), 0);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('input[value="No"]').isChecked(), true);
+    assert.equal(await page.locator('button').innerText(), "Mobile");
+    if (result.kind === "verified") {
+      assert.equal(result.verifiedFields.every(field => field.lane === "synthetic_test_default"), true);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("only zero-sized anonymous text companions of known choices are excluded", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

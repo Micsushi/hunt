@@ -649,6 +649,8 @@ export class OwnedWorkdayApplicationRuntime {
           pageType: request.ownerSources.profilePlan.pageType,
           timeoutMs: this.#timeoutMs,
           trace: this.#trace,
+          inspectMissingOptions: request.ownerSources.executionPolicy?.answerFallbackPolicy ===
+            "deterministic_site_valid_editable",
         });
         const profilePage: WorkdayProfilePagePort = {
           inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),

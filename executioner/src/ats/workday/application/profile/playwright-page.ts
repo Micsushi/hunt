@@ -56,6 +56,7 @@ export interface PlaywrightWorkdayProfilePageOptions {
   readonly pageType: ProfilePageType;
   readonly timeoutMs?: number;
   readonly trace?: (event: string, details?: object) => void;
+  readonly inspectMissingOptions?: boolean;
 }
 
 export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
@@ -63,6 +64,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #pageType: ProfilePageType;
   readonly #timeoutMs: number;
   readonly #trace: PlaywrightWorkdayProfilePageOptions["trace"];
+  readonly #inspectMissingOptions: boolean;
   readonly #controls = new Map<string, ResolvedControl>();
   readonly #interactions = new Map<string, MutableInteraction>();
   #selectionDiagnosticOrdinal = 0;
@@ -77,6 +79,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     this.#pageType = options.pageType;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
     this.#trace = options.trace;
+    this.#inspectMissingOptions = options.inspectMissingOptions ?? false;
   }
 
   #readback(
@@ -755,6 +758,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         readback: valid ? await radioReadback(matches) : null,
+        allowedOptions: uniqueObservedOptions(await Promise.all(matches.map(radioOptionLabel))),
       }];
     }
     if (matches.length > 1) {
@@ -772,6 +776,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       });
       const currentReadback = await this.#readback(match, entry.uiBehavior);
       const valid = await validationCleared(match);
+      const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
+        ? currentReadback === null
+          ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
+            entry.fieldId !== "phone.country_code" && entry.fieldId !== "skills.values")
+          : [currentReadback]
+        : [];
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
@@ -779,6 +789,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         readback: valid ? currentReadback : null,
+        ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
       });
     }
     return snapshots;
