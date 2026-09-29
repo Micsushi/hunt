@@ -195,9 +195,13 @@ export async function completeWorkdayProfilePage(
       normalize(current.readback) !== "" &&
       !readbackMatches(item, current.readback, visibleValue(item))
     ) continue;
+    let reconciledSnapshot = snapshot;
     const result = await reconcileField(
       item,
-      () => page.inspect(signal).then(({ controls }) => controls),
+      async () => {
+        reconciledSnapshot = await page.inspect(signal);
+        return reconciledSnapshot.controls;
+      },
       page,
       signal,
       effectivePlan.mode === "synthetic_test_non_submittable" &&
@@ -228,9 +232,12 @@ export async function completeWorkdayProfilePage(
       return result;
     }
     verified.push(result.field);
-    const refreshed = await inspectAndPreflight(effectivePlan, page, signal);
-    if (refreshed.kind === "blocked") return refreshed;
-    snapshot = refreshed.snapshot;
+    if (signal.aborted) return portFailure(signal);
+    // Reconcile just independently rescanned the full page for readback. Apply
+    // preflight to that same fresh snapshot instead of scanning it twice.
+    const preflight = preflightSnapshot(effectivePlan, reconciledSnapshot);
+    if (preflight !== undefined) return preflight;
+    snapshot = reconciledSnapshot;
   }
 
   if (effectivePlan.mode === "synthetic_test_non_submittable") {

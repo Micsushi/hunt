@@ -139,7 +139,8 @@ test("fills identity, address, phone, dates, and search-selects with independent
       lane: "live_owner_fact",
     },
   ]);
-  assert.ok(port.inspections >= port.commits.length + 1);
+  // Initial/final scans plus a fresh pre-effect and post-effect scan per field.
+  assert.equal(port.inspections, 2 + 2 * port.commits.length);
 });
 
 test("converts a typed metadata mismatch into non-submittable UI learning", async () => {

@@ -3452,6 +3452,23 @@ test("Review accepts transient Submit enabled drift when semantic invariants rem
         changes: [{ member: "finalSubmit.enabled", before: true, after: false }],
       },
     }]);
+    await page.locator("section").evaluate((element) => {
+      element.removeAttribute("data-hunt-review-field-id");
+      element.setAttribute("data-automation-id", "formField-");
+      element.textContent = "Unrelated private answer";
+    });
+    await assert.rejects(() => runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_review_benign_drift_0001"),
+      operationId: generatedOperationId("operation_review_missing_summary_01"),
+      sessionId: "live_session_review_benign_drift_0001" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, { kind: "capture_review" }, new AbortController().signal), /Review field mismatch/u);
+    assert.deepEqual(trace.filter(({ event }) => event === "review_summary_field_missing"), [{
+      event: "review_summary_field_missing", details: { fieldId: "s1-field-resume" },
+    }]);
+    assert.doesNotMatch(JSON.stringify(trace), /resume\.pdf|Unrelated private answer/u);
     assert.equal(await page.locator("html").getAttribute("data-hunt-submit-activated"), "false");
   } finally {
     runtime.dispose();

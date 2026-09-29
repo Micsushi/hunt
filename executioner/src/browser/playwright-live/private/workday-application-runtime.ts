@@ -969,7 +969,7 @@ export class OwnedWorkdayApplicationRuntime {
         ).observe(signal);
         if (!application.ok || application.value.page !== "pre_review" ||
             application.value.submitActivated) throw new TypeError("Review page is unavailable");
-        const beforeReview = await captureIndependentReviewFields(page, this.#reviewExpected);
+        const beforeReview = await captureIndependentReviewFields(page, this.#reviewExpected, this.#trace);
         const beforeStructure = await captureReviewStructure(page);
         assertAcceptedReviewStructure(beforeStructure);
         await this.#monitor(
@@ -987,7 +987,7 @@ export class OwnedWorkdayApplicationRuntime {
         ).observe(signal);
         if (!freshApplication.ok || freshApplication.value.page !== "pre_review" ||
             freshApplication.value.submitActivated) throw new TypeError("Review page drift denied");
-        const review = await captureIndependentReviewFields(page, this.#reviewExpected);
+        const review = await captureIndependentReviewFields(page, this.#reviewExpected, this.#trace);
         const structure = await captureReviewStructure(page);
         const structureChanges = reviewStructureChanges(beforeStructure, structure);
         if (structureChanges.length !== 0) {
@@ -2674,6 +2674,7 @@ async function monitorQuestionTypes(
 async function captureIndependentReviewFields(
   page: Page,
   expected: ReadonlyMap<string, ReviewExpectedField>,
+  trace?: (event: string, details?: object) => void,
 ): Promise<{
   readonly page: SemanticPageSnapshot;
   readonly verification: readonly { readonly kind: "verified"; readonly fieldId: FieldId }[];
@@ -2681,6 +2682,7 @@ async function captureIndependentReviewFields(
   if (expected.size === 0 || expected.size > 128) throw new TypeError("Review fields unavailable");
   const rows = page.locator('[data-automation-id="applyFlowReviewPage"] [data-hunt-review-field-id]');
   const count = await rows.count();
+  trace?.("review_field_capture_started", { fieldCount: expected.size, candidateCount: count });
   const seen = new Set<string>();
   if (count > 0) {
     const extraIds: string[] = [];
@@ -2718,6 +2720,9 @@ async function captureIndependentReviewFields(
       })}\n`);
     }
     const expectedIdentityCount = identities.filter((identity) => byIdentity.has(identity)).length;
+    trace?.("review_row_identity_observed", {
+      fieldCount: expected.size, candidateCount: realCount, successCount: expectedIdentityCount,
+    });
     if (expectedIdentityCount > 0) {
       const extraIds: string[] = [];
       for (let index = 0; index < realCount; index += 1) {
@@ -2741,12 +2746,15 @@ async function captureIndependentReviewFields(
         const matches = values.map(normalizeReviewValue).filter((value) =>
           value !== "" && createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256
         );
-        if (matches.length !== 1) throw new TypeError("Review field mismatch");
+        if (matches.length !== 1) {
+          trace?.("review_field_mismatch", { fieldId: fact.fieldId, candidateCount: matches.length });
+          throw new TypeError("Review field mismatch");
+        }
         verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
       }
       logReviewStructuralDrift(expected.size, realCount, extraIds);
     } else if (realCount === 1 && identities[0] === "formField-") {
-      await verifyWorkdayReviewSummary(page, expected);
+      await verifyWorkdayReviewSummary(page, expected, trace);
       expected.forEach((_fact, id) => seen.add(id));
     } else {
       throw new TypeError("Review rows incomplete or ambiguous");
@@ -2794,6 +2802,7 @@ function logReviewStructuralDrift(
 async function verifyWorkdayReviewSummary(
   page: Page,
   expected: ReadonlyMap<string, ReviewExpectedField>,
+  trace?: (event: string, details?: object) => void,
 ): Promise<void> {
   const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root) =>
     [...root.querySelectorAll<HTMLElement>("*")]
@@ -2818,6 +2827,11 @@ async function verifyWorkdayReviewSummary(
     required.set(valueSha256, (required.get(valueSha256) ?? 0) + 1)
   );
   const missing = [...required].filter(([digest, count]) => (observed.get(digest) ?? 0) < count);
+  for (const [fieldId, { valueSha256 }] of expected) {
+    if (missing.some(([digest]) => digest === valueSha256)) {
+      trace?.("review_summary_field_missing", { fieldId });
+    }
+  }
   if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
     const missingDigests = new Set(missing.map(([digest]) => digest));
     process.stderr.write(`${JSON.stringify({
