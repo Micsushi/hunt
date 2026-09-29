@@ -137,6 +137,38 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("tenant-required address fields retain observed requirements and reviewed employer wording", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-tenant-profile-learning-"));
+  const ids = ["address.line1", "address.city", "address.region", "address.postal_code", "employment.previously_worked_for_organization"];
+  const port = new FakeProfilePort({ pageType: "profile", rows: [], controls: ids.map((fieldId, index) => ({
+    controlId: `tenant-${index}`, fieldId, required: true, readback: null,
+    uiBehavior: fieldId === "address.region" ? "search_select" as const : fieldId.startsWith("employment.") ? "radio_group" as const : "text" as const,
+    uiVariant: fieldId === "address.region" ? "workday_search_select_v2" : fieldId.startsWith("employment.") ? "workday_previous_worker_radio_v1" : "workday_text_v2",
+  })) });
+  const baseObserver = observer();
+  const capture = createProfileFieldLearningCapture({
+    page: port, root, sensitiveValues: [],
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+    observeControl: async (control) => {
+      const value = await baseObserver(control);
+      return control.fieldId.startsWith("employment.") ? {
+        ...value, observation: { ...value.observation, sanitizedLabelSha256: retainedProfileTextSha256(
+          "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
+        ) },
+      } : value;
+    },
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.write();
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8")));
+    assert.equal(evidence.fields.length, 5);
+    assert.ok(evidence.fields.every((field) => field.required && field.metadataReconciliation === "matched" && field.terminalDisposition === "required_unset"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("generated derived phone code verifies matching backing without a redundant mutation", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-derived-phone-learning-"));
   const capture = createProfileFieldLearningCapture({

@@ -547,7 +547,7 @@ function metadataMismatchReasons(
     reasons.push("ui_behavior");
   }
   if (record.uiVariant !== guide.uiVariant) reasons.push("ui_variant");
-  if (record.required !== guide.required) reasons.push("required_state");
+  if (guide.required && !record.required) reasons.push("required_state");
   const expectedOptions = guide.allowedOptions.map((value) =>
     `option_sha256_${retainedProfileTextSha256(value)}`
   );
@@ -843,7 +843,7 @@ function guideMetadataMatches(
     field.answerCategory === guide.answerType &&
     guideBehaviorMatches(guide.behavior, field.uiType, field.uiVariant) &&
     field.uiVariant === guide.uiVariant &&
-    (guide.required === null || field.required === guide.required) && optionsMatch;
+    (!guide.required || field.required) && optionsMatch;
 }
 
 function guideBehaviorMatches(

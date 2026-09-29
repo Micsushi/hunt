@@ -67,6 +67,7 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
     "employment.previously_worked_for_organization": Object.freeze([
+      "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
       "Have you previously worked for our company (this does not apply to contingent/contract work)?",
       "Have you previously been employed with Intermountain Health, SelectHealth, Intermountain Nevada, Intermountain Ventures, Castell, Tellica Imaging, Saltzer Health, an Intermountain Health company, Classic Air, an Intermountain Health company, or SCL Health, an Intermountain Health company? If No, please continue to the next page. If Yes, please enter additional information related to your previous employment. Note: If you are a current employee, please apply via your internal career account.",
     ]),
