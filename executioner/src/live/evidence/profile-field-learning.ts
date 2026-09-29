@@ -48,6 +48,7 @@ import {
   sharedProfileUiTypes,
   sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBehavior,
+  sharedUiUsesDerivedBacking,
 } from "../../deterministic/ui-state-model.ts";
 
 const uiTypes = new Set<string>(sharedProfileUiTypes);
@@ -1070,6 +1071,11 @@ function learn(
     records.set(identity, record);
   }
   const expected = pending.get(identity);
+  const sharedType = sharedUiTypeForBehavior(control.uiBehavior);
+  if (record.driverAttempt === "none" && expected === undefined &&
+      sharedType !== undefined && sharedUiUsesDerivedBacking(sharedType, control.fieldId)) {
+    record.prefillDisposition = prefillDisposition(plan, control.readback);
+  }
   const advanced = advanceProfileFieldTerminalState({
     mutationExpected: expected !== undefined,
     readbackMatches: expected !== undefined && sameValue(

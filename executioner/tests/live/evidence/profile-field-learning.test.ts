@@ -137,6 +137,34 @@ test("retains value-free field learning through prefill, driver, and readback", 
   }
 });
 
+test("generated derived phone code verifies matching backing without a redundant mutation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-derived-phone-learning-"));
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort({ pageType: "profile", rows: [], controls: [{
+      controlId: "phone-code-control", fieldId: "phone.country_code", required: true,
+      uiBehavior: "search_select", uiVariant: "workday_search_select_v2", readback: "Canada (+1)",
+    }] }),
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+    root, sensitiveValues: [], observeControl: observer(),
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.page.registerSyntheticField?.({
+      fieldId: "phone.country_code", questionType: "phone", answerType: "option",
+      allowedOptions: ["Canada (+1)"],
+      answer: { kind: "answered", value: "Canada (+1)", provenance: "generated_default", lane: "synthetic_test_default" },
+    });
+    await capture.page.inspect(AbortSignal.any([]));
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(readFileSync(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields[0].terminalDisposition, "verified_without_mutation");
+    assert.equal(evidence.fields[0].driverAttempt, "none");
+    assert.equal(evidence.fields[0].backingState, "set");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("generated phone plans preserve observed catalog metadata", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-phone-plan-learning-"));
   const capture = createProfileFieldLearningCapture({

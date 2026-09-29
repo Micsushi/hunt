@@ -712,6 +712,13 @@ function syntheticProfileValue(
   }
   if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
   if (control.uiBehavior === "phone") return "5550100";
+  if (control.fieldId === "phone.extension") {
+    const generated = generateSyntheticTextValue({
+      min: null, max: null, maxLength: null, pattern: null,
+      ...control.constraints, inputType: "number",
+    });
+    return generated.kind === "generated" ? generated.value : undefined;
+  }
   if (control.fieldId === "social.facebook") {
     return "https://www.facebook.com/hunt.test.owner.review";
   }

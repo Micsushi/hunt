@@ -2233,6 +2233,52 @@ test("application taxonomy reports real numeric structure and rejects validation
   }
 });
 
+test("synthetic phone extension survives Profile reconciliation and Review expectation recording", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setContent(`<html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Phone Extension<input id="phoneNumber--extension"></label></main></body></html>`);
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: { ownerSources: {
+      executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
+      profilePlan: {
+        mode: "synthetic_test_non_submittable", pageType: "profile",
+        fields: [{ fieldId: "phone.extension", questionType: "phone", answerType: "text",
+          allowedOptions: [], answer: { kind: "profile_answer_missing" } }],
+        repeatables: [],
+      },
+      sensitiveValues: [],
+    } } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_extension_profile_01"),
+    timeoutMs: 1_000,
+    initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  const sessionId = "live_session_extension_profile_01" as LiveSessionId;
+  const journey = journeyId("journey_extension_profile_01");
+  runtime.bindSession({ schemaVersion: 1, journeyId: journey, sessionId,
+    profileLeaseId: "profile_lease_extension_01" as ProfileLeaseId,
+    target: {} as never, leaseExpiresAt: "2026-08-05T13:00:00.000Z" });
+  const request = { schemaVersion: 1 as const, journeyId: journey,
+    operationId: generatedOperationId("operation_extension_run_01"), sessionId,
+    target: {} as never, now: "2026-08-05T12:00:00.000Z" };
+  try {
+    const result = await runtime.run(page as never, request, {
+      kind: "reconcile_profile", input: { attempt: 1, pageId: "page-profile" } as never,
+    }, new AbortController().signal);
+    assert.equal((result as { ok: boolean }).ok, true);
+    assert.match(await page.locator('[id="phoneNumber--extension"]').inputValue(), /^\d+$/u);
+    const expected = await runtime.run(page as never, request,
+      { kind: "review_expectations" } as never, new AbortController().signal) as readonly { fieldId: string }[];
+    assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["phone.extension"]);
+  } finally {
+    runtime.dispose();
+    await browser.close();
+  }
+});
+
 test("profile cancellation before mutation remains operation_cancelled", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
