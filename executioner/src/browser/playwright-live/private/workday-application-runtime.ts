@@ -2057,6 +2057,9 @@ function normalizeReviewExpectedValue(field: string, value: string): string {
     return normalized.replace(/\D/gu, "");
   }
   if (field === "social.linkedin") return canonicalReviewUrl(normalized);
+  if (field === "identity.has_preferred_name" && (normalized === "true" || normalized === "false")) {
+    return normalized === "true" ? "Yes" : "No";
+  }
   const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(normalized);
   return isoDate === null ? normalized : `${isoDate[2]}/${isoDate[3]}/${isoDate[1]}`;
 }
@@ -2804,17 +2807,24 @@ async function verifyWorkdayReviewSummary(
   expected: ReadonlyMap<string, ReviewExpectedField>,
   trace?: (event: string, details?: object) => void,
 ): Promise<void> {
-  const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root) =>
-    [...root.querySelectorAll<HTMLElement>("*")]
-      .filter((element) => {
-        if (element.children.length !== 0 || element.getClientRects().length === 0 ||
-            element.closest('button, [role="button"]') !== null) return false;
-        const weight = getComputedStyle(element).fontWeight;
-        return weight === "normal" || Number.parseInt(weight, 10) < 600;
-      })
-      .map((element) => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
-      .filter(Boolean)
-  );
+  const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const answers: string[] = [];
+    while (walker.nextNode()) {
+      const element = walker.currentNode.parentElement;
+      if (element === null || element.getClientRects().length === 0 ||
+          element.closest('button, [role="button"]') !== null) continue;
+      const style = getComputedStyle(element);
+      if (style.visibility !== "visible" ||
+          !(style.fontWeight === "normal" || Number.parseInt(style.fontWeight, 10) < 600)) continue;
+      // Text nodes retain address lines beside BR/inline children without
+      // counting the same answer again through each ancestor container.
+      const answer = (walker.currentNode.textContent ?? "").normalize("NFC")
+        .replace(/\s+/gu, " ").trim();
+      if (answer !== "") answers.push(answer);
+    }
+    return answers;
+  });
   const observed = new Map<string, number>();
   for (const answer of answers) {
     for (const candidate of reviewAnswerCandidates(answer)) {

@@ -2237,6 +2237,9 @@ test("synthetic phone and extension survive regional length checks and Review ex
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.setContent(`<html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Phone Number<input required type="tel" pattern="[0-9]{10}" id="phoneNumber--phoneNumber"></label><label>Phone Extension<input id="phoneNumber--extension"></label></main></body></html>`);
+  await page.locator("main").evaluate((root) => {
+    root.insertAdjacentHTML("beforeend", '<label>I have a preferred name<input type="checkbox" id="name--preferredCheck"></label>');
+  });
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: { ownerSources: {
       executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
@@ -2273,8 +2276,11 @@ test("synthetic phone and extension survive regional length checks and Review ex
     assert.match(await page.locator('[id="phoneNumber--phoneNumber"]').inputValue(), /^\d{10}$/u);
     assert.match(await page.locator('[id="phoneNumber--extension"]').inputValue(), /^\d+$/u);
     const expected = await runtime.run(page as never, request,
-      { kind: "review_expectations" } as never, new AbortController().signal) as readonly { fieldId: string }[];
-    assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["phone.number", "phone.extension"]);
+      { kind: "review_expectations" } as never, new AbortController().signal) as readonly { fieldId: string; valueSha256: string }[];
+    assert.deepEqual(expected.map(({ fieldId }) => fieldId).sort(),
+      ["identity.has_preferred_name", "phone.extension", "phone.number"]);
+    assert.equal(expected.find(({ fieldId }) => fieldId === "identity.has_preferred_name")?.valueSha256,
+      createHash("sha256").update("No").digest("hex"));
   } finally {
     runtime.dispose();
     await browser.close();
@@ -3917,6 +3923,15 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     });
     const workdaySummaryShape = await runtime.review.capture(new AbortController().signal);
     assert.equal(workdaySummaryShape.request.verification.length, 2);
+    await row.locator("span").nth(1).evaluate((node) => {
+      node.innerHTML = "Exact configured interest statement.<br>Another summary line";
+    });
+    const multilineSummary = await runtime.review.capture(new AbortController().signal);
+    assert.equal(multilineSummary.request.verification.length, 2);
+    await row.locator("span").nth(1).evaluate((node) => {
+      node.innerHTML = '<span hidden>Exact configured interest statement.</span>Wrong visible answer';
+    });
+    await assert.rejects(() => runtime.review.capture(new AbortController().signal));
     await row.locator("span").nth(1).evaluate((node) => { node.textContent = "summary mismatch"; });
     await assert.rejects(() => runtime.review.capture(new AbortController().signal));
     await row.locator("span").nth(1).evaluate((node) => {
