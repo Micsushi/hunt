@@ -711,7 +711,7 @@ function syntheticProfileValue(
     return choice;
   }
   if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
-  if (control.uiBehavior === "phone") return "5550100";
+  if (control.uiBehavior === "phone") return "4035550100";
   if (control.fieldId === "phone.extension") {
     const generated = generateSyntheticTextValue({
       min: null, max: null, maxLength: null, pattern: null,

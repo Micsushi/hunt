@@ -2233,17 +2233,18 @@ test("application taxonomy reports real numeric structure and rejects validation
   }
 });
 
-test("synthetic phone extension survives Profile reconciliation and Review expectation recording", async () => {
+test("synthetic phone and extension survive regional length checks and Review expectation recording", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  await page.setContent(`<html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Phone Extension<input id="phoneNumber--extension"></label></main></body></html>`);
+  await page.setContent(`<html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Phone Number<input required type="tel" pattern="[0-9]{10}" id="phoneNumber--phoneNumber"></label><label>Phone Extension<input id="phoneNumber--extension"></label></main></body></html>`);
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: { ownerSources: {
       executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
       profilePlan: {
         mode: "synthetic_test_non_submittable", pageType: "profile",
-        fields: [{ fieldId: "phone.extension", questionType: "phone", answerType: "text",
-          allowedOptions: [], answer: { kind: "profile_answer_missing" } }],
+        fields: ["phone.number", "phone.extension"].map((fieldId) => ({ fieldId,
+          questionType: "phone", answerType: "text",
+          allowedOptions: [], answer: { kind: "profile_answer_missing" } })),
         repeatables: [],
       },
       sensitiveValues: [],
@@ -2269,10 +2270,11 @@ test("synthetic phone extension survives Profile reconciliation and Review expec
       kind: "reconcile_profile", input: { attempt: 1, pageId: "page-profile" } as never,
     }, new AbortController().signal);
     assert.equal((result as { ok: boolean }).ok, true);
+    assert.match(await page.locator('[id="phoneNumber--phoneNumber"]').inputValue(), /^\d{10}$/u);
     assert.match(await page.locator('[id="phoneNumber--extension"]').inputValue(), /^\d+$/u);
     const expected = await runtime.run(page as never, request,
       { kind: "review_expectations" } as never, new AbortController().signal) as readonly { fieldId: string }[];
-    assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["phone.extension"]);
+    assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["phone.number", "phone.extension"]);
   } finally {
     runtime.dispose();
     await browser.close();
