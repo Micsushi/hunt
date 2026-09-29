@@ -26,6 +26,9 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
         </fieldset>
       </div>
       <div id="disability-help" role="note">Self-identification help</div>
+      <section data-automation-id="applyFlowReviewPage">
+        <p style="font-weight:400">Private address line<br>Private city</p>
+      </section>
       <script>
         const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
         Object.defineProperty(group, '__reactProps$retainedOwner', {
@@ -55,6 +58,7 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       "utf8",
     )) as {
       readonly evidenceRevision: string;
+      readonly reviewTextNodes: readonly { summaryTextSha256: string; tag: string; childTags: string[] }[];
       readonly ariaSnapshotSha256: readonly string[];
       readonly checkboxGroups: readonly {
         readonly ownerAutomationId: string | null;
@@ -91,6 +95,12 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
       readonly mutations: readonly { readonly attribute?: string | null }[];
     };
     assert.equal(evidence.evidenceRevision, "s2-page-local-inspection-v3");
+    assert.deepEqual(evidence.reviewTextNodes.map(({ summaryTextSha256, tag, childTags }) => ({
+      summaryTextSha256, tag, childTags,
+    })), [
+      { summaryTextSha256: hash("Private address line"), tag: "p", childTags: ["br"] },
+      { summaryTextSha256: hash("Private city"), tag: "p", childTags: ["br"] },
+    ]);
     assert.equal(evidence.ariaSnapshotSha256.length, 1);
     assert.equal(evidence.checkboxGroups.length, 1);
     const group = evidence.checkboxGroups[0]!;
@@ -138,7 +148,7 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
     ));
     assert.ok(evidence.mutations.some(({ attribute }) => attribute === "aria-invalid"));
     const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
-    assert.doesNotMatch(serialized, /Please check|I do not want|Self-identification help/u);
+    assert.doesNotMatch(serialized, /Please check|I do not want|Self-identification help|Private address|Private city/u);
     assert.deepEqual(
       readFileSync(join(evidenceRoot, "monitor-visible.png")).subarray(0, 8),
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

@@ -11,7 +11,7 @@ import {
 import { MONITOR_SCREENSHOT_FILE } from "./operator-monitor-ack.ts";
 const evidenceRevision = "s2-page-local-inspection-v3";
 const recordLimit = 128;
-const sensitiveTextKeys = new Set(["label", "optionLabel", "placeholder"]);
+const sensitiveTextKeys = new Set(["label", "optionLabel", "placeholder", "summaryText"]);
 
 interface EventRecord {
   readonly consoleTypes: string[];
@@ -389,6 +389,30 @@ function readPageLocalSnapshot(checkboxGroupAttribute: string): object {
       }),
     };
   });
+  const reviewTextNodes: object[] = [];
+  const reviewRoot = document.querySelector('[data-automation-id="applyFlowReviewPage"]');
+  if (reviewRoot !== null) {
+    const walker = document.createTreeWalker(reviewRoot, NodeFilter.SHOW_TEXT);
+    while (reviewTextNodes.length < 128 && walker.nextNode()) {
+      const element = walker.currentNode.parentElement;
+      const text = walker.currentNode.textContent ?? "";
+      if (element === null || text.trim() === "") continue;
+      const style = getComputedStyle(element);
+      reviewTextNodes.push({
+        summaryText: text,
+        characterCount: text.length,
+        lineCount: text.split(/\r?\n/u).length,
+        tag: element.tagName.toLowerCase(),
+        parentTag: element.parentElement?.tagName.toLowerCase() ?? null,
+        fontWeight: style.fontWeight,
+        display: style.display,
+        visibility: style.visibility,
+        visible: visible(element),
+        bounds: bounds(element),
+        childTags: [...element.children].map((child) => child.tagName.toLowerCase()).slice(0, 32),
+      });
+    }
+  }
   const active = document.activeElement;
   const root = document.documentElement as unknown as Record<string, unknown>;
   const mutationProbe = root.__huntPageLocalMutationProbe as
@@ -396,6 +420,7 @@ function readPageLocalSnapshot(checkboxGroupAttribute: string): object {
   return {
     dateControls: wrappers,
     checkboxGroups,
+    reviewTextNodes,
     activeElement: active instanceof Element ? {
       tag: active.tagName.toLowerCase(),
       type: active instanceof HTMLInputElement ? active.type : null,
