@@ -3929,6 +3929,12 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     const multilineSummary = await runtime.review.capture(new AbortController().signal);
     assert.equal(multilineSummary.request.verification.length, 2);
     await row.locator("span").nth(1).evaluate((node) => {
+      node.textContent = "Exact configured interest statement.\nA second address line with several extra words\nCanada";
+      node.style.whiteSpace = "pre-line";
+    });
+    const newlineSummary = await runtime.review.capture(new AbortController().signal);
+    assert.equal(newlineSummary.request.verification.length, 2);
+    await row.locator("span").nth(1).evaluate((node) => {
       node.innerHTML = '<span hidden>Exact configured interest statement.</span>Wrong visible answer';
     });
     await assert.rejects(() => runtime.review.capture(new AbortController().signal));

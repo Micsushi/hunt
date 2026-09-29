@@ -2819,9 +2819,11 @@ async function verifyWorkdayReviewSummary(
           !(style.fontWeight === "normal" || Number.parseInt(style.fontWeight, 10) < 600)) continue;
       // Text nodes retain address lines beside BR/inline children without
       // counting the same answer again through each ancestor container.
-      const answer = (walker.currentNode.textContent ?? "").normalize("NFC")
-        .replace(/\s+/gu, " ").trim();
-      if (answer !== "") answers.push(answer);
+      // Workday also renders a complete address in one pre-line text node.
+      for (const line of (walker.currentNode.textContent ?? "").split(/\r?\n/u)) {
+        const answer = line.normalize("NFC").replace(/\s+/gu, " ").trim();
+        if (answer !== "") answers.push(answer);
+      }
     }
     return answers;
   });
