@@ -2294,6 +2294,26 @@ test("unknown required control identities survive DOM reordering without retaini
   }
 });
 
+test("only zero-sized anonymous text companions of known choices are excluded", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-country">
+        <button id="country--country" aria-haspopup="listbox">Canada</button>
+        <input type="text" style="width:0;height:0;padding:0;border:1px solid">
+      </div>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    assert.equal(await page.locator('input').isVisible(), true);
+    assert.deepEqual((await adapter.inspect(AbortSignal.any([]))).controls.map(({fieldId}) => fieldId), ["address.country"]);
+    await page.locator('input').evaluate(element => element.style.width = "100px");
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /unknown required control identity denied/u);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("unknown required controls without a unique machine identity fail before mutation", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

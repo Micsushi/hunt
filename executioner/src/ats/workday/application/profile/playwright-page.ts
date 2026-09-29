@@ -856,6 +856,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     );
     const catalog = {
       scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector),
+      choiceSelectors: profileScalarControlCatalog
+        .filter(({ uiBehavior }) => uiBehavior === "search_select")
+        .map(({ selector }) => selector),
       radioGroupSelectors: profileScalarControlCatalog
         .filter(({ uiBehavior }) => uiBehavior === "radio_group")
         .map(({ selector }) => selector),
@@ -890,6 +893,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             '[data-automation-id="formField"], [data-automation-id^="formField-"]',
           );
           if (owner !== null && reviewed.scalarSelectors.some((selector) =>
+            owner.querySelector(selector) !== null
+          )) return true;
+        }
+        if (element instanceof HTMLInputElement && element.matches(
+          'input[type="text"]:not([id]):not([name]):not([data-automation-id]):not([role]):not([placeholder]):not([aria-label]):not([required]):not([aria-required="true"])',
+        ) && element.clientWidth === 0 && element.clientHeight === 0 &&
+            element.labels?.length === 0) {
+          const owner = element.closest('[data-automation-id^="formField-"]');
+          if (owner !== null && reviewed.choiceSelectors.some((selector) =>
             owner.querySelector(selector) !== null
           )) return true;
         }
