@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -63,3 +64,42 @@ def test_ready_resume_query_executes_against_real_postgres(monkeypatch):
 
     assert isinstance(rows, list)
     assert len(rows) <= 1
+
+
+@pytest.mark.skipif(
+    not os.getenv("HUNT_TEST_POSTGRES_URL"),
+    reason="set HUNT_TEST_POSTGRES_URL to run the real PostgreSQL regression",
+)
+def test_discovery_priority_upgrade_and_c3_query_on_real_postgres(monkeypatch):
+    from hunter.db import add_job, get_job_by_id, list_c3_ready_jobs
+    from hunter.db_compat import get_connection
+
+    monkeypatch.setenv("HUNT_DB_URL", os.environ["HUNT_TEST_POSTGRES_URL"])
+    job = {
+        "title": "Software Engineer",
+        "company": "Isolated Test Company",
+        "location": "Calgary",
+        "source": "linkedin",
+        "priority": False,
+        "is_remote": True,
+        "job_url": f"https://example.invalid/job/{uuid.uuid4()}",
+    }
+    try:
+        inserted = add_job(job)
+        assert inserted[0] == "inserted"
+        updated = add_job({**job, "priority": True})
+        assert updated[0] == "updated"
+        assert get_job_by_id(inserted[1])["priority"] is True
+        assert isinstance(list_c3_ready_jobs(limit=1), list)
+    finally:
+        conn = get_connection()
+        try:
+            conn.execute(
+                "DELETE FROM job_source_observations WHERE job_id IN "
+                "(SELECT id FROM jobs WHERE job_url = ?)",
+                (job["job_url"],),
+            )
+            conn.execute("DELETE FROM jobs WHERE job_url = ?", (job["job_url"],))
+            conn.commit()
+        finally:
+            conn.close()

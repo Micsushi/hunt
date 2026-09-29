@@ -2201,7 +2201,7 @@ def add_job(job_data):
             updates["level"] = job_data.get("level")
 
         if int(existing.get("priority") or 0) == 0 and int(job_data.get("priority") or 0) == 1:
-            updates["priority"] = 1
+            updates["priority"] = True
 
         if _should_upgrade_text(existing.get("apply_url"), job_data.get("apply_url")):
             updates["apply_url"] = normalize_apply_url(job_data.get("apply_url"))
@@ -2323,7 +2323,7 @@ def list_c3_ready_jobs(*, limit=50):
             WHERE apply_type = 'external_apply'
               AND lower(trim(coalesce(status, ''))) NOT IN ('applied', 'canceled', 'cancelled')
               AND enrichment_status IN ('done', 'done_verified')
-              AND coalesce(priority, 0) = 0
+              AND coalesce(priority, FALSE) = FALSE
               AND ats_type = 'workday'
               AND auto_apply_eligible IS TRUE
               AND selected_resume_ready_for_c3 IS TRUE
