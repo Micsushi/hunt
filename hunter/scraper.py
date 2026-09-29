@@ -16,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from hunter.c1_logging import C1Logger
 from hunter.config import (
+    BACKFILL_HOURS_OLD,
+    COMPANY_CAREER_SITES,
     ENRICH_AFTER_SCRAPE,
     ENRICHMENT_BATCH_LIMIT,
     ENRICHMENT_HEADFUL,
@@ -33,7 +35,20 @@ from hunter.config import (
     TITLE_BLACKLIST,
     WATCHLIST,
 )
-from hunter.db import add_job, count_ready_jobs_for_enrichment, init_db
+from hunter.db import (
+    add_job,
+    count_ready_jobs_for_enrichment,
+    init_db,
+    record_company_fetch_result,
+    record_discovery_source_health,
+    upsert_company_fetch_queue,
+)
+from hunter.discovery_policy import annotate_job
+from hunter.discovery_sources import (
+    career_fetch_plan,
+    discover_company_career_site,
+    discover_public_feeds,
+)
 from hunter.notifications import send_discord_webhook_message
 from hunter.search_lanes import title_matches_search_lane
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
@@ -159,7 +174,7 @@ def _notify_priority_jobs(priority_jobs):
     return result
 
 
-def scrape_single(site, term, location, category):
+def scrape_single(site, term, location, category, *, hours_old=None, raise_errors=False):
     print(f"  [{site}] [{category}] Searching: '{term}' in '{location}'...")
     try:
         # Import here so unit tests and non-discovery workflows don't require jobspy.
@@ -170,7 +185,7 @@ def scrape_single(site, term, location, category):
             "search_term": term,
             "location": location,
             "results_wanted": RESULTS_WANTED,
-            "hours_old": HOURS_OLD,
+            "hours_old": HOURS_OLD if hours_old is None else hours_old,
             "country_indeed": "Canada",
         }
         if site == "linkedin":
@@ -179,6 +194,8 @@ def scrape_single(site, term, location, category):
         jobs_df = scrape_jobs(**scrape_kwargs)
     except Exception as e:
         print(f"  [{site}] [{category}] Error for '{term}' in '{location}': {e}")
+        if raise_errors:
+            raise
         return []
 
     print(f"  [{site}] [{category}] Found {len(jobs_df)} jobs for '{term}' in '{location}'")
@@ -224,7 +241,40 @@ def scrape_single(site, term, location, category):
             "ats_type": detect_ats_type(apply_url),
         }
         if job_data["job_url"]:
-            jobs.append(job_data)
+            jobs.append(annotate_job(job_data))
+    return jobs
+
+
+def _scrape_jobspy_task(site, term, location, category, hours_old):
+    source = f"jobspy_{site}"
+    try:
+        jobs = scrape_single(site, term, location, category, hours_old=hours_old, raise_errors=True)
+        record_discovery_source_health(source, status="ok", lead_count=len(jobs))
+        return jobs
+    except Exception as exc:
+        record_discovery_source_health(source, status="failed", error=str(exc)[:500])
+        return []
+
+
+def _discover_company_queue():
+    jobs = []
+    for company, career_site in COMPANY_CAREER_SITES.items():
+        plan = career_fetch_plan(career_site)
+        upsert_company_fetch_queue(company, career_site, plan["method"])
+        found, health = discover_company_career_site(company, career_site)
+        jobs.extend(found)
+        record_company_fetch_result(
+            company,
+            state=health["status"],
+            lead_count=health.get("lead_count", 0),
+            error=health.get("error"),
+        )
+        record_discovery_source_health(
+            f"company:{company}",
+            status=health["status"],
+            lead_count=health.get("lead_count", 0),
+            error=health.get("error"),
+        )
     return jobs
 
 
@@ -305,6 +355,9 @@ def scrape(
     enrichment_timeout_ms=None,
     enrichment_browser_channel=None,
     ui_verify_blocked=None,
+    hours_old=None,
+    include_public_sources=False,
+    include_company_queue=False,
 ):
     init_db()
     logger = C1Logger(discord=False)
@@ -323,6 +376,7 @@ def scrape(
         ui_verify_blocked = ENRICHMENT_UI_VERIFY_BLOCKED
 
     all_jobs = []
+    effective_hours_old = HOURS_OLD if hours_old is None else hours_old
     tasks = [
         (site, term, location, category)
         for category, terms in SEARCH_TERMS.items()
@@ -349,7 +403,9 @@ def scrape(
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
-                executor.submit(scrape_single, site, term, location, category): (
+                executor.submit(
+                    _scrape_jobspy_task, site, term, location, category, effective_hours_old
+                ): (
                     site,
                     term,
                     location,
@@ -361,6 +417,19 @@ def scrape(
             for future in as_completed(futures):
                 jobs = future.result()
                 all_jobs.extend(jobs)
+
+        if include_public_sources:
+            public_jobs, health = discover_public_feeds(hours_old=effective_hours_old)
+            all_jobs.extend(public_jobs)
+            for item in health:
+                record_discovery_source_health(
+                    item["source"],
+                    status=item["status"],
+                    lead_count=item["lead_count"],
+                    error=item["error"],
+                )
+        if include_company_queue:
+            all_jobs.extend(_discover_company_queue())
 
         inserted = 0
         refreshed = 0
@@ -478,6 +547,11 @@ if __name__ == "__main__":
         action="store_true",
         help="After the normal post-scrape pass, rerun blocked rows in a visible browser.",
     )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help=f"Use the {BACKFILL_HOURS_OLD}-hour window and include public feeds/company queues.",
+    )
     args = parser.parse_args()
 
     enrich_pending = ENRICH_AFTER_SCRAPE
@@ -496,6 +570,9 @@ if __name__ == "__main__":
         enrichment_timeout_ms=args.timeout_ms,
         enrichment_browser_channel=args.channel,
         ui_verify_blocked=args.ui_verify_blocked if args.ui_verify_blocked else None,
+        hours_old=BACKFILL_HOURS_OLD if args.backfill else None,
+        include_public_sources=args.backfill,
+        include_company_queue=args.backfill,
     )
     elapsed = time.time() - start
     minutes, seconds = divmod(int(elapsed), 60)

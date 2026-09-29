@@ -68,6 +68,10 @@ class ConfigPatchRequest(BaseModel):
     results_wanted: int | None = None
     hours_old: int | None = None
     run_interval_seconds: int | None = None
+    backfill_interval_seconds: int | None = None
+    backfill_hours_old: int | None = None
+    public_feed_discovery: bool | None = None
+    company_career_sites: dict[str, str] | None = None
     enrich_after_scrape: bool | None = None
     enrichment_batch_limit: int | None = None
     linkedin_fetch_description: bool | None = None
@@ -75,6 +79,11 @@ class ConfigPatchRequest(BaseModel):
     enrichment_max_attempts: int | None = None
     enrichment_alert_failure_rate_percent: int | None = None
     enrichment_alert_cooldown_minutes: int | None = None
+
+
+class C3OutcomeRequest(BaseModel):
+    outcome: str
+    reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +178,9 @@ def post_enrich(req: EnrichRequest, background_tasks: BackgroundTasks):
 def get_config():
     from hunter import user_config as _uc
     from hunter.config import (
+        BACKFILL_HOURS_OLD,
+        BACKFILL_INTERVAL_SECONDS,
+        COMPANY_CAREER_SITES,
         ENRICH_AFTER_SCRAPE,
         ENRICHMENT_ALERT_COOLDOWN_MINUTES,
         ENRICHMENT_ALERT_FAILURE_RATE_PERCENT,
@@ -179,6 +191,7 @@ def get_config():
         LINKEDIN_FETCH_DESCRIPTION,
         LOCATIONS,
         MAX_WORKERS,
+        PUBLIC_FEED_DISCOVERY,
         RESULTS_WANTED,
         RUN_INTERVAL_SECONDS,
         SEARCH_TERMS,
@@ -200,6 +213,10 @@ def get_config():
         "results_wanted": RESULTS_WANTED,
         "hours_old": HOURS_OLD,
         "run_interval_seconds": RUN_INTERVAL_SECONDS,
+        "backfill_interval_seconds": BACKFILL_INTERVAL_SECONDS,
+        "backfill_hours_old": BACKFILL_HOURS_OLD,
+        "public_feed_discovery": PUBLIC_FEED_DISCOVERY,
+        "company_career_sites": COMPANY_CAREER_SITES,
         "enrich_after_scrape": ENRICH_AFTER_SCRAPE,
         "linkedin_fetch_description": LINKEDIN_FETCH_DESCRIPTION,
         "enrichment_batch_limit": ENRICHMENT_BATCH_LIMIT,
@@ -225,6 +242,38 @@ def patch_config(req: ConfigPatchRequest):
         "updated_keys": list(updates.keys()),
         "config": merged,
     }
+
+
+@app.get("/discovery/health", dependencies=[Depends(require_service_token)])
+def get_discovery_health():
+    from hunter.db import list_company_fetch_queue, list_discovery_source_health
+
+    return {
+        "sources": list_discovery_source_health(),
+        "company_fetch_queue": list_company_fetch_queue(),
+    }
+
+
+@app.get("/c3/ready", dependencies=[Depends(require_service_token)])
+def get_c3_ready(limit: int = 50):
+    from hunter.db import get_apply_context_for_job, list_c3_ready_jobs
+
+    return {
+        "jobs": [get_apply_context_for_job(row["id"]) for row in list_c3_ready_jobs(limit=limit)]
+    }
+
+
+@app.post("/jobs/{job_id}/c3-outcome", dependencies=[Depends(require_service_token)])
+def post_c3_outcome(job_id: int, req: C3OutcomeRequest):
+    from hunter.db import record_c3_outcome
+
+    try:
+        updated = record_c3_outcome(job_id, outcome=req.outcome, reason=req.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, "outcome": req.outcome, "reason": req.reason}
 
 
 @app.post("/test-discord", dependencies=[Depends(require_service_token)])

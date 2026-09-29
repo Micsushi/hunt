@@ -1,9 +1,9 @@
 """
 Search lane classification for discovery (all job boards).
 
-Discovery runs queries from ``SEARCH_TERMS`` in ``hunter.config``, grouped into lanes:
-``engineering``, ``product``, ``data``. Boards often return noisy rows, so after fetch we
-require the **job title** to still match the **lane** of the query that produced the row.
+Discovery runs queries from ``SEARCH_TERMS`` in ``hunter.config``, grouped into role
+lanes. Boards often return noisy rows, so after fetch we require the **job title** to
+still match the **lane** of the query that produced the row.
 
 This module is board-agnostic: the same check applies to LinkedIn, Indeed, and any future
 ``source`` stored on ``jobs`` with a ``category`` lane id.
@@ -16,6 +16,9 @@ import unicodedata
 LANE_ENGINEERING = "engineering"
 LANE_PRODUCT = "product"
 LANE_DATA = "data"
+LANE_IT_SUPPORT = "it_support"
+LANE_QUALITY_SECURITY = "quality_security"
+LANE_HARDWARE = "hardware"
 
 # Substrings on accent-folded, lowercased titles. Extend when SEARCH_TERMS changes.
 LANE_TITLE_KEYWORDS = {
@@ -40,6 +43,10 @@ LANE_TITLE_KEYWORDS = {
         "logiciel",
     ),
     LANE_PRODUCT: (
+        "project coordinator",
+        "implementation specialist",
+        "solutions engineer",
+        "technical customer success",
         "product manager",
         "project manager",
         "program manager",
@@ -54,6 +61,8 @@ LANE_TITLE_KEYWORDS = {
         "analyste daffaires",
     ),
     LANE_DATA: (
+        "business analyst",
+        "operations analyst",
         "data analyst",
         "data scientist",
         "data engineer",
@@ -67,6 +76,41 @@ LANE_TITLE_KEYWORDS = {
         "analyste de donnees",
         "scientifique des donnees",
         "donnees",
+    ),
+    LANE_IT_SUPPORT: (
+        "it support",
+        "technical support",
+        "help desk",
+        "service desk",
+        "desktop support",
+        "application support",
+        "systems administrator",
+        "system administrator",
+        "network administrator",
+        "network support",
+        "noc",
+        "data centre",
+        "data center",
+        "computer technician",
+        "field service",
+    ),
+    LANE_QUALITY_SECURITY: (
+        "qa",
+        "quality assurance",
+        "test engineer",
+        "automation engineer",
+        "sdet",
+        "security",
+        "cyber",
+    ),
+    LANE_HARDWARE: (
+        "embedded",
+        "firmware",
+        "robotics",
+        "hardware",
+        "electronics",
+        "deployment technician",
+        "repair technician",
     ),
 }
 
@@ -83,7 +127,7 @@ def canonicalize_title_text(value):
 
 def title_matches_search_lane(title, lane):
     """
-    Return True if ``title`` fits the discovery lane ``lane`` (engineering | product | data).
+    Return True if ``title`` fits the configured discovery ``lane``.
 
     Empty or unknown ``lane``: True (no second-pass filter; caller should still set category from query).
     """

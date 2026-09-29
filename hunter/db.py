@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -8,6 +9,8 @@ from hunter.config import (
     ENRICHMENT_STALE_PROCESSING_MINUTES,
     TITLE_BLACKLIST,
 )
+from hunter.discovery_policy import annotate_job, normalize_company
+from hunter.discovery_sources import DEFAULT_PUBLIC_FEEDS
 from hunter.enrichment_policy import (
     compute_retry_after,
     format_sqlite_timestamp,
@@ -98,6 +101,43 @@ CREATE TABLE IF NOT EXISTS linkedin_accounts (
 )
 """
 
+JOB_SOURCE_OBSERVATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS job_source_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(job_id, source, source_url),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+)
+"""
+
+DISCOVERY_SOURCE_HEALTH_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS discovery_source_health (
+    source TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    lead_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+COMPANY_FETCH_QUEUE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS company_fetch_queue (
+    normalized_company TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    career_site TEXT NOT NULL,
+    fetch_method TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    lead_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    last_checked_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 MIGRATION_COLUMNS = {
     "operator_notes": "TEXT",
     "operator_tag": "TEXT",
@@ -124,6 +164,18 @@ MIGRATION_COLUMNS = {
     "selected_resume_ready_for_c3": "BOOLEAN",
     "latest_resume_jd_usable": "INTEGER",
     "latest_resume_jd_usable_reason": "TEXT",
+    "canonical_job_key": "TEXT",
+    "normalized_company": "TEXT",
+    "career_stage": "TEXT",
+    "priority_tier": "TEXT",
+    "fit_score": "INTEGER",
+    "viability_score": "INTEGER",
+    "discovery_suppressed_reason": "TEXT",
+    "source_count": "INTEGER DEFAULT 1",
+    "c3_outcome": "TEXT",
+    "c3_outcome_reason": "TEXT",
+    "c3_observed_at": "TEXT",
+    "discovery_policy_version": "INTEGER",
 }
 
 INSERT_COLUMNS = (
@@ -145,6 +197,14 @@ INSERT_COLUMNS = (
     "enrichment_attempts",
     "apply_host",
     "ats_type",
+    "canonical_job_key",
+    "normalized_company",
+    "career_stage",
+    "priority_tier",
+    "fit_score",
+    "viability_score",
+    "discovery_suppressed_reason",
+    "last_enrichment_error",
 )
 
 _UNSET = object()
@@ -275,6 +335,56 @@ def _migrate_jobs_table(cursor):
     for column_name, column_def in MIGRATION_COLUMNS.items():
         if column_name not in existing_columns:
             cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
+
+
+def _refresh_discovery_metadata(cursor, current):
+    annotated = annotate_job(current)
+    fields = (
+        "canonical_job_key",
+        "normalized_company",
+        "career_stage",
+        "priority_tier",
+        "fit_score",
+        "viability_score",
+        "discovery_suppressed_reason",
+        "priority",
+    )
+    cursor.execute(
+        "UPDATE jobs SET "
+        + ", ".join(f"{key} = ?" for key in fields)
+        + ", discovery_policy_version = 1 WHERE id = ?",
+        tuple(annotated.get(key) for key in fields) + (current["id"],),
+    )
+    return annotated
+
+
+def _backfill_discovery_metadata(cursor):
+    rows = cursor.execute(
+        """
+        SELECT * FROM jobs WHERE discovery_policy_version IS NULL
+        """
+    ).fetchall()
+    employers = set()
+    for row in rows:
+        current = dict(row)
+        if (
+            current.get("source") in DEFAULT_PUBLIC_FEEDS
+            or str(current.get("source") or "").startswith("employer_")
+        ) and not current.get("enriched_at"):
+            cursor.execute(
+                """UPDATE jobs SET enrichment_status = 'blocked', apply_type = 'unknown',
+                   auto_apply_eligible = FALSE, last_enrichment_error = 'public_apply_flow_unverified'
+                   WHERE id = ?""",
+                (current["id"],),
+            )
+            current.update(
+                enrichment_status="blocked", apply_type="unknown", auto_apply_eligible=False
+            )
+        annotated = _refresh_discovery_metadata(cursor, current)
+        _record_source_observation(cursor, current["id"], current)
+        employers.add(annotated.get("normalized_company"))
+    for company in employers:
+        _enforce_employer_month_cap(cursor, company)
 
 
 POSTGRES_CASCADE_FK_MIGRATIONS = (
@@ -624,7 +734,18 @@ def init_db(*, maintenance=True):
         cursor.execute(RUNTIME_STATE_TABLE_SQL)
         cursor.execute(COMPONENT_SETTINGS_TABLE_SQL)
         cursor.execute(LINKEDIN_ACCOUNTS_TABLE_SQL)
+        cursor.execute(JOB_SOURCE_OBSERVATIONS_TABLE_SQL)
+        cursor.execute(DISCOVERY_SOURCE_HEALTH_TABLE_SQL)
+        cursor.execute(COMPANY_FETCH_QUEUE_TABLE_SQL)
         _migrate_jobs_table(cursor)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_canonical ON jobs(canonical_job_key)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_employer_month ON jobs(normalized_company, date_posted)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_discovery_version ON jobs(discovery_policy_version)"
+        )
+        _backfill_discovery_metadata(cursor)
         _ensure_postgres_delete_cascade_constraints(cursor)
         if maintenance:
             _backfill_enrichment_metadata(cursor)
@@ -1141,8 +1262,13 @@ def mark_job_enrichment_succeeded(
             """,
             tuple(params),
         )
+        updated = cursor.rowcount
+        if updated:
+            current = dict(cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            annotated = _refresh_discovery_metadata(cursor, current)
+            _enforce_employer_month_cap(cursor, annotated.get("normalized_company"))
         conn.commit()
-        return cursor.rowcount
+        return updated
     finally:
         conn.close()
 
@@ -1804,11 +1930,227 @@ def append_review_audit_entry(action, detail=None, *, max_entries=100):
     )
 
 
+def _record_source_observation(cursor, job_id, job_data):
+    source = str(job_data.get("source") or "unknown")
+    source_url = str(job_data.get("job_url") or job_data.get("apply_url") or "")
+    if not source_url:
+        return
+    cursor.execute(
+        """
+        INSERT INTO job_source_observations (job_id, source, source_url)
+        VALUES (?, ?, ?)
+        ON CONFLICT(job_id, source, source_url) DO UPDATE SET
+            last_seen_at = CURRENT_TIMESTAMP
+        """,
+        (job_id, source, source_url),
+    )
+    cursor.execute(
+        """
+        UPDATE jobs
+        SET source_count = (
+            SELECT COUNT(*) FROM job_source_observations WHERE job_id = ?
+        )
+        WHERE id = ?
+        """,
+        (job_id, job_id),
+    )
+
+
+def _enforce_employer_month_cap(cursor, normalized_company):
+    if not normalized_company:
+        return
+    rows = cursor.execute(
+        """
+        SELECT id, status, priority_tier, fit_score, viability_score, date_posted,
+               discovery_suppressed_reason, canonical_job_key, enrichment_status,
+               auto_apply_eligible
+        FROM jobs
+        WHERE normalized_company = ?
+        """,
+        (normalized_company,),
+    ).fetchall()
+    history_statuses = {"applied", "canceled", "cancelled"}
+    managed_reasons = (None, "", "employer_month_cap", "duplicate_canonical_job")
+    identities = {}
+    for row in rows:
+        key = row["canonical_job_key"] or f"row:{row['id']}"
+        identities.setdefault(key, []).append(dict(row))
+    representatives = []
+    for copies in identities.values():
+        # Retain every row and its observations. Only one active representative
+        # may consume a slot; history outranks a newly rediscovered copy.
+        representative = max(
+            copies,
+            key=lambda row: (
+                str(row["status"] or "").strip().lower() in history_statuses,
+                row["discovery_suppressed_reason"] in managed_reasons,
+                row["enrichment_status"] in {"done", "done_verified"}
+                and bool(row["auto_apply_eligible"]),
+                row["enrichment_status"] in {"done", "done_verified"},
+                -int(row["id"]),
+            ),
+        )
+        representatives.append(representative)
+        for row in copies:
+            if row["id"] == representative["id"]:
+                if row["discovery_suppressed_reason"] == "duplicate_canonical_job":
+                    row["discovery_suppressed_reason"] = None
+                    cursor.execute(
+                        "UPDATE jobs SET discovery_suppressed_reason = NULL WHERE id = ?",
+                        (row["id"],),
+                    )
+            elif (
+                str(row["status"] or "").strip().lower() not in history_statuses
+                and row["discovery_suppressed_reason"] in managed_reasons
+            ):
+                cursor.execute(
+                    "UPDATE jobs SET discovery_suppressed_reason = 'duplicate_canonical_job' WHERE id = ?",
+                    (row["id"],),
+                )
+
+    months = {}
+    for row in representatives:
+        month = str(row["date_posted"] or "")[:7]
+        if re.fullmatch(r"\d{4}-\d{2}", month):
+            months.setdefault(month, []).append(row)
+    tier_score = {"P1": 3, "P2": 2, "P3": 1}
+    for monthly_rows in months.values():
+        history = [
+            row
+            for row in monthly_rows
+            if str(row["status"] or "").strip().lower() in history_statuses
+        ]
+        history_ids = {row["id"] for row in history}
+        candidates = [
+            row
+            for row in monthly_rows
+            if row["id"] not in history_ids
+            and row["discovery_suppressed_reason"] in managed_reasons
+        ]
+        slots = max(0, 2 - len(history))
+        candidates.sort(
+            key=lambda row: (
+                tier_score.get(row["priority_tier"], 0),
+                int(row["fit_score"] or 0) + int(row["viability_score"] or 0),
+                str(row["date_posted"] or ""),
+                int(row["id"]),
+            ),
+            reverse=True,
+        )
+        for index, row in enumerate(candidates):
+            cursor.execute(
+                "UPDATE jobs SET discovery_suppressed_reason = ? WHERE id = ?",
+                (None if index < slots else "employer_month_cap", row["id"]),
+            )
+
+
+def record_discovery_source_health(source, *, status, lead_count=0, error=None):
+    conn = get_connection()
+    try:
+        conn.execute(DISCOVERY_SOURCE_HEALTH_TABLE_SQL)
+        conn.execute(
+            """
+            INSERT INTO discovery_source_health (source, status, lead_count, last_error, checked_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source) DO UPDATE SET
+                status = excluded.status,
+                lead_count = excluded.lead_count,
+                last_error = excluded.last_error,
+                checked_at = CURRENT_TIMESTAMP
+            """,
+            (source, status, int(lead_count or 0), error),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_discovery_source_health():
+    conn = get_connection()
+    try:
+        conn.execute(DISCOVERY_SOURCE_HEALTH_TABLE_SQL)
+        rows = conn.execute("SELECT * FROM discovery_source_health ORDER BY source").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def upsert_company_fetch_queue(company, career_site, fetch_method):
+    normalized = normalize_company(company)
+    if not normalized or not career_site:
+        return
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO company_fetch_queue (
+                normalized_company, company, career_site, fetch_method, state
+            ) VALUES (?, ?, ?, ?, 'pending')
+            ON CONFLICT(normalized_company) DO UPDATE SET
+                company = excluded.company,
+                career_site = excluded.career_site,
+                fetch_method = excluded.fetch_method,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (normalized, company, career_site, fetch_method),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_company_fetch_result(company, *, state, lead_count=0, error=None):
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE company_fetch_queue
+            SET state = ?, lead_count = ?, last_error = ?,
+                last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE normalized_company = ?
+            """,
+            (state, int(lead_count or 0), error, normalize_company(company)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_company_fetch_queue():
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM company_fetch_queue
+            ORDER BY CASE state WHEN 'pending' THEN 0 WHEN 'failed' THEN 1 ELSE 2 END,
+                     coalesce(last_checked_at, ''), normalized_company
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def add_job(job_data):
+    job_data = annotate_job(job_data)
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM jobs WHERE job_url = ?", (job_data.get("job_url"),))
+        cursor.execute(
+            """
+            SELECT * FROM jobs
+            WHERE job_url = ?
+               OR (? != '' AND canonical_job_key = ?)
+            ORDER BY CASE WHEN job_url = ? THEN 0 ELSE 1 END, id
+            LIMIT 1
+            """,
+            (
+                job_data.get("job_url"),
+                job_data.get("canonical_job_key") or "",
+                job_data.get("canonical_job_key") or "",
+                job_data.get("job_url"),
+            ),
+        )
         existing_row = cursor.fetchone()
 
         if not existing_row:
@@ -1822,11 +2164,31 @@ def add_job(job_data):
                 """,
                 values,
             )
+            job_id = cursor.lastrowid
+            cursor.execute("UPDATE jobs SET discovery_policy_version = 1 WHERE id = ?", (job_id,))
+            _record_source_observation(cursor, job_id, job_data)
+            _enforce_employer_month_cap(cursor, job_data.get("normalized_company"))
             conn.commit()
-            return "inserted", cursor.lastrowid
+            return "inserted", job_id
 
         existing = dict(existing_row)
         updates = {}
+
+        # A later board observation gives a blocked public lead a supported worker.
+        if (
+            existing.get("source") not in {"linkedin", "indeed"}
+            and job_data.get("source") in {"linkedin", "indeed"}
+            and existing.get("enrichment_status") not in {"done", "done_verified"}
+        ):
+            updates.update(
+                source=job_data["source"],
+                job_url=job_data["job_url"],
+                apply_type="unknown",
+                auto_apply_eligible=None,
+                enrichment_status="pending",
+                enrichment_attempts=0,
+                last_enrichment_error=None,
+            )
 
         for field_name in ("company", "location", "description", "date_posted", "category"):
             if _should_upgrade_text(existing.get(field_name), job_data.get(field_name)):
@@ -1871,7 +2233,26 @@ def add_job(job_data):
         ):
             updates["enrichment_attempts"] = job_data.get("enrichment_attempts")
 
+        merged = annotate_job({**existing, **updates})
+        for field_name in (
+            "canonical_job_key",
+            "normalized_company",
+            "career_stage",
+            "priority_tier",
+            "fit_score",
+            "viability_score",
+            "discovery_suppressed_reason",
+        ):
+            if existing.get(field_name) != merged.get(field_name):
+                updates[field_name] = merged.get(field_name)
+
+        _record_source_observation(cursor, existing["id"], job_data)
+
         if not updates:
+            _enforce_employer_month_cap(
+                cursor,
+                job_data.get("normalized_company") or existing.get("normalized_company"),
+            )
             conn.commit()
             return "skipped", existing["id"]
 
@@ -1884,6 +2265,10 @@ def add_job(job_data):
             WHERE id = ?
             """,
             tuple(params),
+        )
+        _enforce_employer_month_cap(
+            cursor,
+            job_data.get("normalized_company") or existing.get("normalized_company"),
         )
         conn.commit()
         return "updated", existing["id"], "priority" in updates
@@ -1912,6 +2297,75 @@ def get_job_by_id(job_id):
         conn.close()
 
 
+def _job_is_c3_ready(job):
+    return bool(
+        job
+        and str(job.get("status") or "").strip().lower() not in {"applied", "canceled", "cancelled"}
+        and job.get("apply_type") == "external_apply"
+        and job.get("enrichment_status") in {"done", "done_verified"}
+        and int(job.get("priority") or 0) == 0
+        and bool(job.get("auto_apply_eligible"))
+        and job.get("apply_url")
+        and not looks_like_linkedin_url(job.get("apply_url"))
+        and job.get("ats_type") == "workday"
+        and bool(job.get("selected_resume_ready_for_c3"))
+        and job.get("selected_resume_pdf_path")
+        and not job.get("discovery_suppressed_reason")
+    )
+
+
+def list_c3_ready_jobs(*, limit=50):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE apply_type = 'external_apply'
+              AND lower(trim(coalesce(status, ''))) NOT IN ('applied', 'canceled', 'cancelled')
+              AND enrichment_status IN ('done', 'done_verified')
+              AND coalesce(priority, 0) = 0
+              AND ats_type = 'workday'
+              AND auto_apply_eligible IS TRUE
+              AND selected_resume_ready_for_c3 IS TRUE
+              AND selected_resume_pdf_path IS NOT NULL
+              AND trim(selected_resume_pdf_path) != ''
+              AND apply_url IS NOT NULL
+              AND trim(apply_url) != ''
+              AND coalesce(discovery_suppressed_reason, '') = ''
+            ORDER BY priority DESC, fit_score DESC, viability_score DESC,
+                     date_posted DESC, id DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+        return [dict(row) for row in rows if not looks_like_linkedin_url(row["apply_url"])]
+    finally:
+        conn.close()
+
+
+def record_c3_outcome(job_id, *, outcome, reason=None):
+    allowed = {"ready_for_review", "blocked", "failed", "cancelled"}
+    if outcome not in allowed:
+        raise ValueError("unsupported C3 outcome")
+    if reason is not None and (len(reason) > 120 or not re.fullmatch(r"[a-z0-9_.:-]+", reason)):
+        raise ValueError("reason must be a short factual code")
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET c3_outcome = ?, c3_outcome_reason = ?, c3_observed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outcome, reason, job_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def get_apply_context_for_job(job_id):
     job = get_job_by_id(job_id)
     if not job:
@@ -1936,6 +2390,10 @@ def get_apply_context_for_job(job_id):
         "selected_resume_tex_path": job.get("selected_resume_tex_path") or "",
         "selected_resume_selected_at": job.get("selected_resume_selected_at") or "",
         "selected_resume_ready_for_c3": bool(job.get("selected_resume_ready_for_c3")),
+        "c3_ready": _job_is_c3_ready(job),
+        "c3_outcome": job.get("c3_outcome") or "",
+        "c3_outcome_reason": job.get("c3_outcome_reason") or "",
+        "c3_observed_at": job.get("c3_observed_at") or "",
         "last_enrichment_error": job.get("last_enrichment_error") or "",
         "enrichment_status": job.get("enrichment_status") or "",
     }
@@ -1970,8 +2428,9 @@ def update_selected_resume_for_job(
                 job_id,
             ),
         )
+        updated = cursor.rowcount
         conn.commit()
-        return cursor.rowcount
+        return updated
     finally:
         conn.close()
 
@@ -2024,8 +2483,14 @@ def update_job_status(job_id, status):
     try:
         cursor = conn.cursor()
         cursor.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+        updated = cursor.rowcount
+        if updated:
+            row = cursor.execute(
+                "SELECT normalized_company FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            _enforce_employer_month_cap(cursor, row["normalized_company"])
         conn.commit()
-        return cursor.rowcount
+        return updated
     finally:
         conn.close()
 

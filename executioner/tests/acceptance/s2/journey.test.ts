@@ -27,6 +27,7 @@ import {
 } from "../../../src/acceptance/s2-journey.ts";
 import { writeStage2TerminalArtifact } from "../../../src/acceptance/s2-terminal-artifact.ts";
 import { reviewPageFixture } from "../../interaction/review/fixtures.ts";
+import { createC1TerminalPublisher } from "../../../src/observability/c1-outcomes.ts";
 
 const sourceRevision = "0123456789abcdef0123456789abcdef01234567";
 const config = Object.freeze({
@@ -36,6 +37,33 @@ const config = Object.freeze({
   approvalId: "approval_0123456789abcdef",
   journeyId: "journey_0123456789abcdef",
   targetHandleId: "target_ref_0123456789abcdef",
+});
+
+test("real journey terminal reaches the configured C1 job and reporting failure preserves it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-c1-outcome-"));
+  const evidenceRoot = resolve(root, "evidence");
+  mkdirSync(evidenceRoot);
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const publish = createC1TerminalPublisher(config.targetHandleId, {
+    HUNT_C1_OUTCOME_BASE_URL: "http://127.0.0.1:8001",
+    HUNT_C1_OUTCOME_JOB_ID: "42",
+    HUNT_C1_OUTCOME_TARGET_HANDLE_ID: config.targetHandleId,
+    HUNT_C1_OUTCOME_TOKEN: "service-token",
+  }, (async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return new Response(null, { status: 503 });
+  }) as typeof fetch)!;
+  try {
+    const result = await runStage2RealJourney(invocation(evidenceRoot), undefined,
+      { ...ports(), publishC1Terminal: publish }, new AbortController().signal);
+    assertFailureCode(result, "runtime_binding_failed");
+    assert.deepEqual(calls, [{ url: "http://127.0.0.1:8001/jobs/42/c3-outcome",
+      body: { outcome: "failed", reason: "owner_config_invalid" } }]);
+    assert.deepEqual(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).terminal,
+      result.terminal);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the unavailable opaque runtime binding fails before any journey effect", async () => {
@@ -110,6 +138,7 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
   mkdirSync(evidenceRoot);
   const calls: string[] = [];
   const timingEvents: string[] = [];
+  const outcomes: unknown[] = [];
   let accepted: unknown;
   try {
     const result = await runStage2RealJourney(
@@ -120,6 +149,16 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
       }),
       {
         now: () => "2026-08-05T12:00:00.000Z",
+        publishC1Terminal: createC1TerminalPublisher(config.targetHandleId, {
+          HUNT_C1_OUTCOME_BASE_URL: "http://127.0.0.1:8001",
+          HUNT_C1_OUTCOME_JOB_ID: "42",
+          HUNT_C1_OUTCOME_TARGET_HANDLE_ID: config.targetHandleId,
+          HUNT_C1_OUTCOME_TOKEN: "service-token",
+        }, (async (_url, init) => {
+          assert.equal(existsSync(join(evidenceRoot, "terminal-artifact.json")), true);
+          outcomes.push(JSON.parse(String(init?.body)));
+          return new Response(null, { status: 200 });
+        }) as typeof fetch),
         writeAcceptance: async (_root, value) => {
           calls.push("acceptance.write");
           accepted = value;
@@ -133,6 +172,7 @@ test("one bound runtime recovers, proves pre-Review and Review, seals evidence, 
     );
 
     assert.equal(result.ok, true);
+    assert.deepEqual(outcomes, [{ outcome: "ready_for_review", reason: "review_reached" }]);
     assert.deepEqual(timingEvents, [
       "runtime_review_verification_completed",
       "runtime_review_acceptance_sealing_completed",

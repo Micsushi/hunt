@@ -41,7 +41,53 @@ Its source, fixtures, tests, and supporting tools remain available on branch
 
 Future C1 synchronization for maintenance, runtime-error, and removed-posting statuses is
 specified in [the C1/C3 job-status handoff](docs/c1-c3-job-status-handoff.md).
-C3 currently emits the typed factual outcome only; it does not mutate C1.
+C3 can opt in to publishing compact factual terminal outcomes through C1's authenticated
+`POST /jobs/{job_id}/c3-outcome` endpoint. Raw page text and applicant data are
+never included in that status message.
+
+For a prepared C1-linked run, set all four environment variables:
+`HUNT_C1_OUTCOME_BASE_URL` (the Hunter service URL), `HUNT_C1_OUTCOME_JOB_ID`
+(the numeric C1 database job ID), `HUNT_C1_OUTCOME_TARGET_HANDLE_ID` (the exact
+prepared run's target handle), and `HUNT_C1_OUTCOME_TOKEN` (the Hunter service
+bearer token). The shared Review journey runner used by the CLI and MCP checks
+the binding before starting and publishes once after terminal persistence has
+completed (including a factual persistence-failure result). Partial or mismatched
+bindings are rejected. Without these variables,
+publishing is disabled. A reporting failure emits the value-free
+`c1_outcome_publish_failed` warning on stderr and leaves the browser outcome and
+terminal evidence unchanged; it does not claim C1 accepted the update. Earlier
+account/application checkpoint slices do not publish a final journey outcome.
+
+## Importing Job Fill data
+
+Export a version 2 backup from Job Fill, then import it into an external,
+private C3 input directory:
+
+```text
+npm run import:job-fill -- --input C:\absolute\job_fill_backup.json --output C:\absolute\private-c3-input
+```
+
+The importer maps recognized records into the existing strict application
+profile with owner provenance, extracts resume/cover-letter files, retains
+matching rules in the unresolved-review report, and writes a replacement
+ledger. Conflicting values never overwrite one another.
+Records with a nonempty section or country scope remain in the review report
+instead of becoming global applicant facts. Job Fill's synthesized
+screening defaults remain pending until each fact ID is explicitly confirmed
+with `--confirm-defaults fact_id,fact_id`. The output must be a new directory
+under an existing parent, physically outside every Git checkout. Existing
+destinations are never overwritten. The current-user/SYSTEM ACL boundary is
+established before writing applicant data.
+
+Existing native text and date values are preserved only after browser validity,
+length, and site invalid-state checks pass. Unverified values use the ordinary
+answer-resolution path. Choice
+controls still use the existing verified interaction path because they may
+reveal conditional questions. Empty or invalid fields may be filled, every
+mutation is verified, and final Submit remains forbidden. The retained live
+application runtime is still Workday-specific;
+Greenhouse and Lever currently participate in C1 discovery/deduplication but
+are not claimed as C3 live-proof support.
 
 ## Future Chrome extension delivery
 

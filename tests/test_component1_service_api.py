@@ -81,7 +81,7 @@ class HunterServiceApiTests(unittest.TestCase):
     ):
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO jobs (
                     title, company, location, job_url, apply_url, description,
@@ -113,6 +113,7 @@ class HunterServiceApiTests(unittest.TestCase):
                 ),
             )
             conn.commit()
+            return cursor.lastrowid
         finally:
             conn.close()
 
@@ -183,6 +184,36 @@ class HunterServiceApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"pending": 1, "ready": 2})
+
+    def test_discovery_health_and_c3_handoff_endpoints(self):
+        job_id = self._insert_job(enrichment_status="done", suffix="c3")
+        db.update_selected_resume_for_job(
+            job_id,
+            version_id="resume-v1",
+            pdf_path="C:/private/resume.pdf",
+        )
+        db.record_discovery_source_health("feed", status="ok", lead_count=3)
+        client = self._make_client()
+
+        health = client.get("/discovery/health", headers=_auth())
+        ready = client.get("/c3/ready", headers=_auth())
+        outcome = client.post(
+            f"/jobs/{job_id}/c3-outcome",
+            headers=_auth(),
+            json={"outcome": "ready_for_review", "reason": "review_page_reached"},
+        )
+        rejected = client.post(
+            f"/jobs/{job_id}/c3-outcome",
+            headers=_auth(),
+            json={"outcome": "blocked", "reason": "contains personal prose"},
+        )
+
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["sources"][0]["lead_count"], 3)
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json()["jobs"][0]["job_id"], str(job_id))
+        self.assertEqual(outcome.status_code, 200)
+        self.assertEqual(rejected.status_code, 400)
 
     def test_scrape_starts_background_task_with_request_values(self):
         client = self._make_client()

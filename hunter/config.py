@@ -65,6 +65,17 @@ def _get_config_dict(name: str, default: dict[str, list[str]]) -> dict[str, list
     return clean or default
 
 
+def _get_config_string_dict(name: str, default: dict[str, str]) -> dict[str, str]:
+    value = _config_value(name, default)
+    if not isinstance(value, dict):
+        return default
+    return {
+        str(key).strip(): str(item).strip()
+        for key, item in value.items()
+        if str(key).strip() and str(item).strip()
+    }
+
+
 def get_db_path():
     return _os.path.abspath(
         _os.path.expanduser(_get_str_env("HUNT_DB_PATH", _os.path.join(_ROOT, "hunt.db")))
@@ -108,6 +119,10 @@ HOURS_OLD = _get_config_int(
     "HOURS_OLD", 24
 )  # 24h lookback: job_url uniqueness handles dedup across runs
 RUN_INTERVAL_SECONDS = _get_config_int("RUN_INTERVAL_SECONDS", 600)  # 10 minutes between runs
+BACKFILL_INTERVAL_SECONDS = _get_config_int("BACKFILL_INTERVAL_SECONDS", 86400)
+BACKFILL_HOURS_OLD = _get_config_int("BACKFILL_HOURS_OLD", 336)
+PUBLIC_FEED_DISCOVERY = _get_config_bool("PUBLIC_FEED_DISCOVERY", True)
+COMPANY_CAREER_SITES = _get_config_string_dict("COMPANY_CAREER_SITES", {})
 ENRICH_AFTER_SCRAPE = _get_config_bool("ENRICH_AFTER_SCRAPE", True)
 LINKEDIN_FETCH_DESCRIPTION = _get_config_bool("LINKEDIN_FETCH_DESCRIPTION", True)
 ENRICHMENT_BATCH_LIMIT = _get_config_int("ENRICHMENT_BATCH_LIMIT", 25)

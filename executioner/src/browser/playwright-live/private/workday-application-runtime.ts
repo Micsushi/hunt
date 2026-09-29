@@ -1933,6 +1933,12 @@ export async function enrichQuestionnaireFields(
         : "single" as const;
       return {
         target: element.getAttribute("data-hunt-target-token") ?? "",
+        populatedValueValid: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
+          leaf.value.trim() !== "" && leaf.validity.valid &&
+          (leaf.minLength < 0 || leaf.value.length >= leaf.minLength) &&
+          (leaf.maxLength < 0 || leaf.value.length <= leaf.maxLength) &&
+          leaf.closest('[aria-invalid="true"]') === null &&
+          element.querySelector('[aria-invalid="true"]') === null,
         constraints: {
           inputType,
           min: numeric(leaf.getAttribute("min")),
@@ -1962,6 +1968,7 @@ export async function enrichQuestionnaireFields(
       field.behavior === "select" || field.behavior === "listbox";
     return Object.freeze({
       ...field,
+      populatedValueValid: metadata.populatedValueValid,
       ...(text ? {
         constraints: Object.freeze({ ...metadata.constraints }),
         readOnly: metadata.constraints.readOnly,

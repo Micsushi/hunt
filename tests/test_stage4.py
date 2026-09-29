@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 import os
@@ -656,11 +657,18 @@ class Stage4Tests(unittest.TestCase):
                 initial_state="welcome",
             )
 
-            with patch.dict(
-                os.environ,
-                {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
-                clear=False,
+            frozen_time = datetime.datetime.now(datetime.UTC)
+            with (
+                patch.dict(
+                    os.environ,
+                    {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
+                    clear=False,
+                ),
+                patch.object(
+                    linkedin_session.datetime, "datetime", wraps=datetime.datetime
+                ) as clock,
             ):
+                clock.now.return_value = frozen_time
                 linkedin_session._start_auth_trace_run("auto_relogin", headless=False)
                 linkedin_session._trace_auth_screen(page, action="first_snapshot", force=True)
                 linkedin_session._finish_auth_trace_run("failure", message="first run failed")

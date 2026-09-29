@@ -6,6 +6,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from hunter.browser_runtime import (
     BrowserRuntimeError,
@@ -317,7 +318,7 @@ def _append_auth_trace_record(record):
 def _start_auth_trace_run(flow, **metadata):
     global _AUTH_TRACE_RUN_ID, _AUTH_TRACE_FLOW, _AUTH_TRACE_SEQUENCE, _AUTH_TRACE_LAST_SNAPSHOT_KEY
     now_utc = datetime.datetime.now(datetime.UTC)
-    _AUTH_TRACE_RUN_ID = now_utc.strftime("%Y%m%dT%H%M%S.%fZ") + f"-pid{os.getpid()}"
+    _AUTH_TRACE_RUN_ID = now_utc.strftime("%Y%m%dT%H%M%S.%fZ") + f"-{uuid4().hex}"
     _AUTH_TRACE_FLOW = flow
     _AUTH_TRACE_SEQUENCE = 0
     _AUTH_TRACE_LAST_SNAPSHOT_KEY = None

@@ -8,6 +8,7 @@ import {
   type AnswerResolutionResult,
   type AnswerResolver,
   type AnswerProvenance,
+  type BrowserReadback,
   type FieldIntent,
   type ProfileQuery,
   type ProfileQueryRequest,
@@ -58,6 +59,15 @@ function failure(
 
 function unsupported(field: ApplicationFieldObservation) {
   return success({ kind: "unsupported", fieldId: field.fieldId });
+}
+
+function hasSafeCommittedValue(
+  field: ApplicationFieldObservation,
+  value: BrowserReadback | undefined,
+): boolean {
+  return field.populatedValueValid === true &&
+    (field.behavior === "text" || field.behavior === "textarea" || field.behavior === "date") &&
+    value?.kind === "text" && value.value.trim() !== "";
 }
 
 function resolved(intent: FieldIntent, lane: AnswerProvenanceLane) {
@@ -423,6 +433,10 @@ export function createApplicationAnswerResolver(
         field.state === "ambiguous"
       ) {
         return unsupported(field);
+      }
+      if (!syntheticMode && field.state === "populated" &&
+          hasSafeCommittedValue(field, request.committedReadback)) {
+        return success({ kind: "readback_only", fieldId: field.fieldId });
       }
 
       const questionResolution = resolveQuestion(field.label);

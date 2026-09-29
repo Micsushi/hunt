@@ -138,7 +138,11 @@ export function parseWorkdayFeed(value: unknown): WorkdayFeedPosting[] {
   if (!isRecord(value) || !Number.isSafeInteger(value.total) || (value.total as number) < 0 || !Array.isArray(value.jobPostings)) {
     throw new TypeError("Workday feed response is invalid");
   }
-  return value.jobPostings.map((posting, index) => {
+  return value.jobPostings.flatMap((posting, index) => {
+    // Some official feeds include requisition-only placeholders, not public jobs.
+    if (isRecord(posting) && Object.keys(posting).length === 1 &&
+        Array.isArray(posting.bulletFields) &&
+        posting.bulletFields.every((field) => typeof field === "string")) return [];
     if (
       !isRecord(posting)
       || typeof posting.title !== "string"
@@ -152,12 +156,12 @@ export function parseWorkdayFeed(value: unknown): WorkdayFeedPosting[] {
     ) {
       throw new TypeError(`Workday feed posting ${index} is invalid`);
     }
-    return {
+    return [{
       title: posting.title.trim(),
       externalPath: posting.externalPath,
       locationsText: posting.locationsText?.trim() || "Not recorded",
       postedOn: posting.postedOn?.trim() || "Not recorded",
-    };
+    }];
   });
 }
 

@@ -9,7 +9,7 @@ Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Execution
 | **C0** | **Frontend** | Operator dashboard and control plane - SPA UI plus FastAPI backend. Backend is the API gateway: all component API calls route through it. | **`frontend/`** + **`backend/`** | `hunt-frontend` (nginx + SPA) + `hunt-backend` (FastAPI) |
 | **C1** | **Hunter** | Job discovery and multi-source enrichment. Exposes service API for backend to trigger scrapes and enrichment from the UI. | Python package **`hunter/`** (see below) | `hunt-hunter` |
 | **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts). Exposes service API for one-off generation triggered from the UI file drop. | **`fletcher/`** | `hunt-fletcher` |
-| **C3** | **Executioner** | Planned v3 browser application journey. v2 was removed from `main`; v3 is not implemented. | **`executioner/`** | none |
+| **C3** | **Executioner** | Retained v3 Workday application journey. Prepares and verifies fields through Review; final Submit is forbidden. | **`executioner/`** | none |
 | **C4** | **Coordinator** | Paused orchestration experiment retained for reference. | **`coordinator/`** | none |
 
 **C1 (Hunter)**: formerly “the scraper”. `scraper/` directory gone - code in `hunter` package.

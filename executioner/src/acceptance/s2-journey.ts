@@ -11,6 +11,7 @@ import {
   type TerminalResultV4,
 } from "../contracts/index.ts";
 import { stage2CausalCode } from "../contracts/s2-causal-error.ts";
+import { createC1TerminalPublisher, type C1TerminalPublisher } from "../observability/c1-outcomes.ts";
 import type { ReviewStopRequest, ReviewReadOnlyPage } from "../interaction/review/index.ts";
 import { inspectWorkdayReview, stopAtVerifiedReview } from "../interaction/review/index.ts";
 import {
@@ -89,6 +90,7 @@ export interface Stage2RealJourneyRuntimeBinding {
 }
 
 export interface Stage2RealJourneyPorts {
+  readonly publishC1Terminal?: C1TerminalPublisher;
   now(): string;
   writeAcceptance(
     evidenceRoot: string,
@@ -130,6 +132,25 @@ export type Stage2RealJourneyResult =
 type PendingJourneyResult = Stage2RealJourneyResult;
 
 export async function runStage2RealJourney(
+  invocation: Stage2RealJourneyInvocation,
+  binding: Stage2RealJourneyRuntimeBinding | undefined,
+  ports: Stage2RealJourneyPorts,
+  signal: AbortSignal,
+): Promise<Stage2RealJourneyResult> {
+  const publish = ports.publishC1Terminal ?? createC1TerminalPublisher(invocation.config.targetHandleId);
+  const result = await executeStage2RealJourney(invocation, binding, ports, signal);
+  if (publish !== undefined) {
+    try {
+      await publish(result.terminal);
+    } catch {
+      // Reporting cannot rewrite independently observed browser/evidence outcomes.
+      process.stderr.write('{"status":"warning","code":"c1_outcome_publish_failed"}\n');
+    }
+  }
+  return result;
+}
+
+async function executeStage2RealJourney(
   invocation: Stage2RealJourneyInvocation,
   binding: Stage2RealJourneyRuntimeBinding | undefined,
   ports: Stage2RealJourneyPorts,

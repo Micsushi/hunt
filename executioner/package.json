@@ -43,6 +43,7 @@
     "readiness:s2": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/run-s2-readiness.ts",
     "readiness:s2:verify": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/verify-s2-readiness.ts",
     "storage:s2": "node scripts/manage-s2-storage.ts",
+    "import:job-fill": "node scripts/import-job-fill-backup.ts",
     "corpus:manifest:freeze": "node scripts/freeze-corpus-manifest.ts",
     "corpus:validate": "node scripts/validate-corpus-manifest.ts",
     "corpus:fixtures:freeze": "node scripts/freeze-corpus-fixtures.ts",

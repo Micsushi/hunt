@@ -19,6 +19,7 @@ import type {
 import { createApplicationAnswerResolver as createAnswerResolver } from
   "../../../src/form/answers/resolver.ts";
 import { mapVisibleOption } from "../../../src/form/options/mapper.ts";
+import type { ApplicationFieldObservation } from "../../../src/form/answers/application-types.ts";
 import {
   createProfileQueryFake,
   createResumeArtifactFixture,
@@ -41,7 +42,7 @@ function field(
   });
 }
 
-function request(observed: FieldObservation) {
+function request(observed: ApplicationFieldObservation) {
   const resume = Object.freeze({
     resumeId: upstreamResumeId("resume-1"),
     sha256: "6a5c5b7838b3f7a7bf24b7e9ca49141f10ee68b2e14c9ee43eba3fdecf7173cc",
@@ -112,6 +113,40 @@ test("profile answers produce exact immutable intents with provenance", async ()
     assert.equal(Object.isFrozen(result), true);
     assert.equal(Object.isFrozen(result.value), true);
     assert.equal(Object.isFrozen(result.value.intent), true);
+  }
+});
+
+test("valid committed values are preserved instead of overwritten", async () => {
+  const { resolver, profile } = resolverWith({
+    kind: "answered",
+    value: "Replacement",
+    provenance: "owner_provided",
+    lane: "live_owner_fact",
+  });
+  const result = await resolver.resolve(Object.freeze({
+    ...request({ ...field("Given name", "text", [], "populated"), populatedValueValid: true }),
+    committedReadback: { kind: "text" as const, value: boundedText("Manual value") },
+  }), new AbortController().signal);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: { kind: "readback_only", fieldId: fieldId("s1-field-given-name") },
+  });
+  assert.equal(profile.calls.length, 0);
+});
+
+test("invalid or unverified committed values still resolve the owner answer", async () => {
+  for (const populatedValueValid of [false, undefined]) {
+    const { resolver, profile } = resolverWith({
+      kind: "answered", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact",
+    });
+    const result = await resolver.resolve({
+      ...request(field("Given name", "text", [], "populated")),
+      field: { ...field("Given name", "text", [], "populated"), populatedValueValid },
+      committedReadback: { kind: "text", value: boundedText("Invalid draft") },
+    }, new AbortController().signal);
+    assert.equal(result.ok && result.value.kind, "resolved");
+    assert.equal(profile.calls.length, 1);
   }
 });
 

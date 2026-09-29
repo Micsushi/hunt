@@ -3290,6 +3290,36 @@ test("semantic adapter covers ARIA controls, contenteditable, multiselect, and r
   }
 });
 
+test("populated scalar preservation requires current browser validity", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main>
+      <input aria-label="Valid name" value="Ada">
+      <input aria-label="Bad email" type="email" value="not-an-email">
+      <input aria-label="Bad pattern" pattern="[0-9]{3}" value="abc">
+      <input aria-label="Bad number" type="number" min="1" max="5" value="9">
+      <input aria-label="Bad step" type="number" min="0" step="2" value="3">
+      <input aria-label="Bad date" type="date" min="2026-01-01" value="2025-01-01">
+      <input aria-label="Too short" minlength="5" value="Ada">
+      <input aria-label="Too long" maxlength="2" value="Ada">
+      <div aria-invalid="true"><input aria-label="Site invalid" value="Ada"></div>
+    </main>`);
+    await page.locator("input").evaluateAll((inputs) => inputs.forEach((input, index) => {
+      input.setAttribute("data-hunt-target-token", `target-workday-11111111-${index + 1}`);
+    }));
+    const observed = await inspectPage(page, "validity-session" as never,
+      "validity-page" as never, new Map());
+    const fields = await enrichQuestionnaireFields(page, discoverFields(observed.observation.targets));
+    assert.equal(fields.length, 9);
+    for (const field of fields) {
+      assert.equal(field.populatedValueValid, field.label === "Valid name", String(field.label));
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("production questionnaire coverage uses the shared supported-control registry", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

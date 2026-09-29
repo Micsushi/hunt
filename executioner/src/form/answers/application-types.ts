@@ -165,6 +165,8 @@ export interface ApplicationTextConstraints {
 }
 
 export type ApplicationFieldObservation = FieldObservation & {
+  /** Native validity and visible invalid-state checks passed for this observation. */
+  readonly populatedValueValid?: boolean;
   readonly constraints?: ApplicationTextConstraints;
   readonly readOnly?: boolean;
   readonly selectionMode?: "single" | "multiple";

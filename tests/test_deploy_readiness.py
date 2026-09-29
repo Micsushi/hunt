@@ -1131,6 +1131,8 @@ def test_component_test_runner_target_mapping(monkeypatch):
                 "tests/test_stage32.py",
                 "tests/test_stage4.py",
                 "tests/test_search_lanes.py",
+                "tests/test_c1_discovery_policy.py",
+                "tests/test_component1_service_api.py",
                 "hunter/tests",
             ],
             run_component_tests.ROOT,
@@ -1157,6 +1159,8 @@ def test_component_test_runner_alias_mapping(monkeypatch):
         "tests/test_stage32.py",
         "tests/test_stage4.py",
         "tests/test_search_lanes.py",
+        "tests/test_c1_discovery_policy.py",
+        "tests/test_component1_service_api.py",
         "hunter/tests",
     ]
 

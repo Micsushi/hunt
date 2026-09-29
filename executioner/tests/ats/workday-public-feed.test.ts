@@ -27,6 +27,16 @@ test("Workday source URLs deterministically identify the public jobs feed", () =
   );
 });
 
+test("requisition-only placeholders do not invalidate real public feed jobs", () => {
+  const jobs = parseWorkdayFeed({ total: 2, jobPostings: [
+    { bulletFields: ["R74006"] },
+    { title: "Software Engineer", externalPath: "/job/Canada/Software-Engineer_R1" },
+  ] });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0]?.title, "Software Engineer");
+  assert.throws(() => parseWorkdayFeed({ total: 1, jobPostings: [{ title: "Missing URL" }] }));
+});
+
 test("feed requests retry transient Workday failures with the exact public payload", async () => {
   const source = parseWorkdaySource("https://acme.wd5.myworkdayjobs.com/Careers/job/US/Old_R1");
   const requests: Array<Readonly<{ url: string; body: string }>> = [];

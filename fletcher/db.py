@@ -747,6 +747,8 @@ def _job_is_ready_for_c3(job: dict) -> bool:
     auto_apply_eligible = int(job.get("auto_apply_eligible") or 0)
     return (
         enrichment_status in {"done", "done_verified"}
+        and str(job.get("status") or "").strip().lower() not in {"applied", "canceled", "cancelled"}
+        and not job.get("discovery_suppressed_reason")
         and apply_type == "external_apply"
         and auto_apply_eligible == 1
         and priority == 0
@@ -1276,8 +1278,16 @@ def list_jobs_ready_for_resume(
             if not rows:
                 break
             for row in rows:
-                scanned += 1
                 r = dict(row)
+                if r.get("discovery_suppressed_reason") or str(
+                    r.get("status") or ""
+                ).strip().lower() in {
+                    "applied",
+                    "canceled",
+                    "cancelled",
+                }:
+                    continue
+                scanned += 1
                 if should_skip_resume_regeneration(
                     conn, job_id=int(r["id"]), description=r.get("description")
                 ):

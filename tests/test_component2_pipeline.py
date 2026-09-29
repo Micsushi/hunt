@@ -3,10 +3,12 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
 from fletcher.db import (
+    _job_is_ready_for_c3,
     get_apply_context,
     init_resume_db,
     job_description_fingerprint,
@@ -557,10 +559,67 @@ class Component2PipelineTests(unittest.TestCase):
         rows2 = list_jobs_ready_for_resume(db_path=self.db_path, limit=10, only_missing=False)
         self.assertEqual([r["id"] for r in rows2], [1])
 
+    def test_automatic_generation_and_selection_respect_discovery_and_history(self):
+        init_resume_db(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("ALTER TABLE jobs ADD COLUMN discovery_suppressed_reason TEXT")
+        for status, reason in (
+            ("applied", None),
+            ("cancelled", None),
+            ("canceled", None),
+            ("new", "duplicate_canonical_job"),
+            ("new", "employer_month_cap"),
+        ):
+            with self.subTest(status=status, reason=reason):
+                with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute(
+                        "UPDATE jobs SET status = ?, discovery_suppressed_reason = ?",
+                        (status, reason),
+                    )
+                self.assertEqual(list_jobs_ready_for_resume(db_path=self.db_path), [])
+                self.assertFalse(
+                    _job_is_ready_for_c3(
+                        {
+                            "status": status,
+                            "discovery_suppressed_reason": reason,
+                            "enrichment_status": "done",
+                            "apply_type": "external_apply",
+                            "auto_apply_eligible": 1,
+                            "priority": 0,
+                            "apply_url": "https://example.com/job/1",
+                        }
+                    )
+                )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE jobs SET status = 'new', discovery_suppressed_reason = NULL")
+        self.assertEqual(
+            [row["id"] for row in list_jobs_ready_for_resume(db_path=self.db_path)], [1]
+        )
+
     def test_record_resume_attempt_uses_postgres_safe_job_id_filters(self):
         source = (REPO_ROOT / "fletcher" / "db.py").read_text(encoding="utf-8")
 
         self.assertNotIn("WHERE job_id IS ?", source)
         self.assertIn(
             'job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"', source
+        )
+
+    def test_retained_exclusions_do_not_starve_older_ready_jobs(self):
+        init_resume_db(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("ALTER TABLE jobs ADD COLUMN discovery_suppressed_reason TEXT")
+            conn.executemany(
+                "INSERT INTO jobs (title, job_url, enrichment_status, status, discovery_suppressed_reason) "
+                "VALUES ('Excluded role', ?, 'done', ?, ?)",
+                [
+                    (
+                        f"https://example.com/excluded/{index}",
+                        "applied" if index % 2 else "new",
+                        None if index % 2 else "employer_month_cap",
+                    )
+                    for index in range(5001)
+                ],
+            )
+        self.assertEqual(
+            [row["id"] for row in list_jobs_ready_for_resume(db_path=self.db_path, limit=1)], [1]
         )
