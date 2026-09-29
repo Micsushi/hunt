@@ -78,9 +78,9 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     tex_path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    is_latest_generated BOOLEAN DEFAULT 0,
-    is_latest_useful BOOLEAN DEFAULT 0,
-    is_selected_for_c3 BOOLEAN DEFAULT 0
+    is_latest_generated BOOLEAN DEFAULT FALSE,
+    is_latest_useful BOOLEAN DEFAULT FALSE,
+    is_selected_for_c3 BOOLEAN DEFAULT FALSE
 )
 """
 
