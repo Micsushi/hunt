@@ -46,6 +46,35 @@ const field = (
       }),
 });
 
+test("required-field reads preserve disabled, read-only and marker semantics", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const [attributes, marker, expected] of [
+      ["required", "", true],
+      ['aria-required="true"', "", true],
+      ['aria-label="First Name Required"', "", true],
+      ['aria-label="First Name Not Required"', "", false],
+      ["required disabled", "*", false],
+      ['required aria-disabled="true"', "*", false],
+      ["required readonly", "*", false],
+      ["", "*", true],
+      ["", '<abbr title="Required"></abbr>', true],
+    ] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-name"><label>First Name${marker}
+          <input id="name--legalName--firstName" ${attributes}>
+        </label></div></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      const snapshot = await adapter.inspect(new AbortController().signal);
+      assert.equal(snapshot.controls.find(({ fieldId }) =>
+        fieldId === "identity.given_name")?.required, expected, `${attributes} ${marker}`);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Playwright adapter owns repeatables on the My Experience root", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

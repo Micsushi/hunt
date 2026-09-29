@@ -2703,25 +2703,20 @@ async function required(
   locator: Locator,
   compositeRole?: "radiogroup",
 ): Promise<boolean> {
-  if (
-    await locator.isDisabled() ||
-    await locator.getAttribute("aria-disabled") === "true" ||
-    await locator.evaluate((element) =>
+  if (await locator.isDisabled()) return false;
+  return locator.evaluate((element, role) => {
+    if (element.getAttribute("aria-disabled") === "true" ||
       (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
       element.readOnly
-    )
-  ) return false;
-  const ariaLabel = (await locator.getAttribute("aria-label"))?.trim() ?? "";
-  const accessibleRequired = /(?:^|\s)Required$/u.test(ariaLabel) &&
-    !/(?:^|\s)Not Required$/u.test(ariaLabel);
-  const compositeRequired = compositeRole === undefined
-    ? false
-    : await locator.evaluate(
-      (element, role) =>
-        element.closest(`[role="${role}"]`)?.getAttribute("aria-required") === "true",
-      compositeRole,
-    );
-  const fieldMarkerRequired = await locator.evaluate((element) => {
+    ) return false;
+    const ariaLabel = element.getAttribute("aria-label")?.trim() ?? "";
+    const accessibleRequired = /(?:^|\s)Required$/u.test(ariaLabel) &&
+      !/(?:^|\s)Not Required$/u.test(ariaLabel);
+    const compositeRequired = role !== undefined &&
+      element.closest(`[role="${role}"]`)?.getAttribute("aria-required") === "true";
+    if (element.hasAttribute("required") ||
+        element.getAttribute("aria-required") === "true" ||
+        accessibleRequired || compositeRequired) return true;
     const field = element.closest(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
@@ -2732,10 +2727,7 @@ async function required(
     return [...field.querySelectorAll("legend, label")].some((candidate) =>
       /\*\s*$/u.test(candidate.textContent ?? "")
     );
-  });
-  return await locator.getAttribute("required") !== null ||
-    await locator.getAttribute("aria-required") === "true" ||
-    accessibleRequired || compositeRequired || fieldMarkerRequired;
+  }, compositeRole);
 }
 
 async function validationCleared(locator: Locator): Promise<boolean> {
