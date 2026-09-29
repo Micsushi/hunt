@@ -58,6 +58,16 @@ test("application-ready monitoring accepts the Workday Next footer and reports d
       submitPresent: false,
       submitActivated: false,
     });
+    await page.evaluate(() => {
+      document.body.style.minHeight = "3000px";
+      window.scrollTo(0, 1500);
+    });
+    assert.ok(await page.evaluate(() => window.scrollY) > 0);
+    await applicationReadyMonitorPage(page as never).screenshot({ type: "png" });
+    assert.equal(await page.evaluate(() => window.scrollY), 0);
+    assert.equal(await page.locator("h2").evaluate((heading) =>
+      heading.getBoundingClientRect().top >= 0 &&
+      heading.getBoundingClientRect().bottom <= window.innerHeight), true);
   } finally {
     await page.close();
     await browser.close();

@@ -26,14 +26,18 @@ export function valueFreeExternalMonitorPage(
 ): ExternalMonitorPage {
   const owned = page as unknown as Page;
   return Object.freeze({
-    screenshot: (options?: { readonly type?: "png"; readonly fullPage?: boolean }) =>
-      owned.screenshot({
+    screenshot: async (options?: { readonly type?: "png"; readonly fullPage?: boolean }) => {
+      // Native accessibility observes the viewport. Restore the stage heading
+      // before capture; the independent observer still establishes page identity.
+      await owned.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
+      return owned.screenshot({
         ...options,
         animations: "disabled",
         caret: "hide",
         mask: valueBearingSelectors.map((selector) => owned.locator(selector)),
         maskColor: "#6B7280",
-      }),
+      });
+    },
     title: title ?? (() => owned.title()),
     url: () => owned.url(),
   });
