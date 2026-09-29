@@ -45,7 +45,7 @@ const identities = [
   "employment.previously_worked_for_organization",
 ] as const;
 
-test("exact Integer Profile fixture observes required live-owner-unset controls without interaction", async () => {
+test("exact Integer Profile fixture records uncommitted defaults without interacting past a missing derived control", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const evidenceRoot = mkdtempSync(join(tmpdir(), "integer-profile-learning-"));
@@ -216,9 +216,27 @@ test("exact Integer Profile fixture observes required live-owner-unset controls 
       assert.equal(field.validationState, "clear");
       assert.equal(field.observationBinding?.stateObservedAck, true);
     }
-    assert.equal(learning.fields.find(({ fieldIdentity }) =>
+    const previousWorker = learning.fields.find(({ fieldIdentity }) =>
       fieldIdentity === "profile.employment.previously_worked_for_organization"
-    )?.terminalDisposition, "required_unset");
+    );
+    assert.ok(previousWorker !== undefined);
+    // Deterministic fallback prepared an answer, but the missing country-code
+    // dependency blocked all mutation. Never call that planned default verified.
+    assert.deepEqual({
+      answerState: previousWorker.answerState,
+      lane: previousWorker.lane,
+      backingState: previousWorker.backingState,
+      driverAttempt: previousWorker.driverAttempt,
+      monitorBinding: previousWorker.monitorBinding,
+      terminalDisposition: previousWorker.terminalDisposition,
+    }, {
+      answerState: "answered",
+      lane: "synthetic_test_default",
+      backingState: "unset",
+      driverAttempt: "none",
+      monitorBinding: null,
+      terminalDisposition: "pending",
+    });
     const countryCode = learning.fields.find(({ fieldIdentity }) =>
       fieldIdentity === "profile.phone.country_code"
     );
