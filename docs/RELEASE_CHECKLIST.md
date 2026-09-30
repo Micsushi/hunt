@@ -54,17 +54,23 @@ Verify in the live dashboard:
 
 ## 5. Update docs
 
-- `docs/roadmap.md`: mark newly completed items
+- Record verified task progress and release evidence in the selected task tracker
 - `docs/LOCAL_POSTGRES_SMOKES.md`: update if smoke procedure changed
 
-## 6. Record durable context in the repo
+## 6. Record operator guidance and task progress separately
 
 When release work changes durable operator context, update the smallest relevant
 repo-local document:
 
-- `docs/roadmap.md` for newly discovered or completed work
-- `AGENTS.md` for architecture or command guidance needed by future agents
-- the relevant component document for behavior, workflow, config, or blockers
+- `docs/ARCHITECTURE.md` for component responsibilities and interactions
+- `AGENTS.md` for contributor commands and safe-change guidance
+- the relevant component document for human behavior, workflow or configuration guidance
+
+Keep newly discovered work, blockers, task status and release evidence in the
+selected task tracker, not a second editable roadmap. In this setup that tracker
+is Project Records; reading these operator instructions does not require access
+to it. This checklist does not lift C4's pause, authorize submission or establish
+acceptance of a separate C3 candidate.
 
 ---
 

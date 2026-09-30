@@ -6,7 +6,7 @@ Automated Hunt runtime. The active runtime scope is **C0 (Frontend)**,
 **C1 (Hunter)** discovery/enrichment, and **C2 (Fletcher)** resume generation.
 **C3 v3 is planned but not implemented. C4 is on hold.**
 
-Current operator confidence snapshot (as of 2026-07-30):
+Historical operator confidence snapshot (2026-07-30; not current acceptance):
 
 - **C0**: mostly done
 - **C1 / Hunter**: about 95% done
@@ -26,7 +26,7 @@ will not depend on C4.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
-Current focus:
+Historical priorities retained for context, not a current execution queue:
 
 - keep C0 stable and documented accurately
 - finish C1's last live proof: verify Easy Apply filtering on a real matching row
@@ -41,7 +41,10 @@ Current focus:
 - **Service API** : **`hunter/service.py`** exposes status, queue, scrape, enrich, and account reauth endpoints for C0.
 - **Control plane** : **`backend/app.py`** serves the C0 dashboard plus filter, sort, search jobs, errors, artifacts, and gateway routes over the same DB.
 
-**Component versions and future milestones:** **`docs/roadmap.md`**.
+**Component responsibilities and interactions:** [Architecture](docs/ARCHITECTURE.md).
+Current task progress and future milestones belong in the project's selected
+task tracker; the former roadmap is retained in Project Records as historical
+planning, not a release grant.
 
 ## Setup (Ubuntu)
 
@@ -131,7 +134,7 @@ numeric guardrail keys.
 - C2 settings and provider/runtime controls: `docs/C2_SETTINGS.md`
 - C3 v3 public status: `executioner/README.md`
 - Paused C4 worker references: `docs/C4_AGENT_WORKERS.md`, `docs/C4_OPENCLAW_RUNBOOK.md`, `docs/C4_HERMES_RUNBOOK.md`
-- System roadmap: `docs/roadmap.md`
+- System architecture: [Architecture](docs/ARCHITECTURE.md)
 - Shared glossary: `docs/GLOSSARY.md`
 - Repo-native deploy command: `python deploy.py all`
 - Server-shaped deploy command: `python deploy.py all --mode server --env-file .env.server2`
