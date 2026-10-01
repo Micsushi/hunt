@@ -1811,7 +1811,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (radios.length > 1) {
       throw new TypeError("Workday prompt catalog radio is ambiguous");
     }
-    const activation = radios[0] ?? option;
+    const leaves = await visibleLocators(option.locator('[data-automation-id="promptLeafNode"]'));
+    if (leaves.length > 1) {
+      throw new TypeError("Workday prompt catalog leaf is ambiguous");
+    }
+    const activation = radios[0] ?? leaves[0] ?? option;
     try {
       await activation.click({
         timeout: behavior === "multi_select"
@@ -1843,6 +1847,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     );
     interaction.validationCleared = await validationCleared(control);
     if (!interaction.backingValueCommitted || !interaction.validationCleared) {
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        process.stderr.write(`${JSON.stringify({
+          profilePromptUncommittedVisibleOptions: (await options.allInnerTexts()).slice(0, 64).map(normalize),
+        })}\n`);
+      }
       throw new TypeError("Workday prompt catalog value did not commit");
     }
     return true;

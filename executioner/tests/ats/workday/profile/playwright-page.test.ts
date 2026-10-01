@@ -2399,12 +2399,12 @@ test("source selection binds its newly opened portal without selecting an unrela
       </div></main>
       <div role="listbox" data-automation-id="activeListContainer"><div role="option">Website</div></div>
       <div id="source-options" role="listbox" data-automation-id="activeListContainer" hidden>
-        <div role="option"><span data-automation-id="promptOption">Website</span></div>
+        <div role="option" data-automation-id="menuItem" style="width:500px"><div data-automation-id="promptLeafNode" style="width:100px"><span data-automation-id="promptOption">Website</span></div></div>
       </div><script>
         const input = document.querySelector('input');
         const popup = document.querySelector('#source-options');
         input.onclick = () => { popup.hidden = false; };
-        popup.onclick = () => {
+        popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
           document.querySelector('#selected-source').innerHTML = '<div data-automation-id="selectedItem">Website</div>';
           input.value = ''; popup.hidden = true;
         };
