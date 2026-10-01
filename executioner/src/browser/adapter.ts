@@ -334,12 +334,30 @@ async function applyMutationUnchecked(
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
   const locatorCount = await locator.count();
+  if (mutation.kind === "set_text" && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    process.stderr.write(`${JSON.stringify({ textMutationDiagnostic: {
+      count: locatorCount, controls: await locator.evaluateAll(elements => elements.map(element => ({
+        tag: element.tagName, type: element.getAttribute("type"), inputMode: element.getAttribute("inputmode"),
+        automationId: element.getAttribute("data-automation-id"), patternPresent: element.hasAttribute("pattern"),
+        min: element.getAttribute("min"), max: element.getAttribute("max"), maxLength: element.getAttribute("maxlength"),
+      }))),
+    } })}\n`);
+  }
   if (locatorCount !== 1 && !mayRebindExclusiveChoice) return "invalid";
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
     for (let index = 0; index < locatorCount; index += 1) {
       const member = locator.nth(index);
-      await member.fill(mutation.text, { timeout: timeoutMs });
+      try { await member.fill(mutation.text, { timeout: timeoutMs }); }
+      catch (error) {
+        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+          process.stderr.write(`${JSON.stringify({ textMutationDiagnostic: {
+            errorName: error instanceof Error ? error.name : "unknown",
+            numericInputRejected: error instanceof Error && /number input|input of type number/iu.test(error.message),
+          } })}\n`);
+        }
+        throw error;
+      }
       await member.blur({ timeout: timeoutMs });
     }
     return "applied";
