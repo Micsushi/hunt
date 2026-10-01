@@ -2388,6 +2388,36 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
+test("source selection binds its newly opened portal without selecting an unrelated option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true"><div id="selected-source"></div>
+      </div></main>
+      <div role="listbox" data-automation-id="activeListContainer"><div role="option">Website</div></div>
+      <div id="source-options" role="listbox" data-automation-id="activeListContainer" hidden>
+        <div role="option"><span data-automation-id="promptOption">Website</span></div>
+      </div><script>
+        const input = document.querySelector('input');
+        const popup = document.querySelector('#source-options');
+        input.onclick = () => { popup.hidden = false; };
+        popup.onclick = () => {
+          document.querySelector('#selected-source').innerHTML = '<div data-automation-id="selectedItem">Website</div>';
+          input.value = ''; popup.hidden = true;
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Website" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Website");
+    assert.equal(await page.locator('[role="listbox"]').first().isVisible(), true);
+  } finally { await browser.close(); }
+});
+
 test("source observation binds only its newly visible unfocused portal catalog", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

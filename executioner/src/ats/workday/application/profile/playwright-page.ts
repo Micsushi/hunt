@@ -1123,6 +1123,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "select" | "multi_select",
   ): Promise<void> {
+    const priorCatalogs = await control.getAttribute("id") === "source--source"
+      ? await Promise.all((await visibleLocators(this.#page.locator(
+        '[data-automation-id="activeListContainer"][role="listbox"]',
+      ))).map(catalog => catalog.elementHandle()))
+      : undefined;
+    try {
+      await this.#selectSearchOptionWithOwner(control, value, interaction, behavior, priorCatalogs);
+    } finally {
+      await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
+    }
+  }
+
+  async #selectSearchOptionWithOwner(
+    control: Locator,
+    value: string,
+    interaction: MutableInteraction,
+    behavior: "search_select" | "select" | "multi_select",
+    priorCatalogs: readonly (ElementHandle | null)[] | undefined,
+  ): Promise<void> {
     await control.click({ timeout: this.#timeoutMs });
     await this.#captureSelectionDiagnostic("clicked", behavior);
     const editable = await control.evaluate((element) =>
@@ -1192,7 +1211,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       if (
         editable && (behavior === "multi_select" || behavior === "search_select") &&
-        await this.#selectPromptCatalogOption(control, value, interaction, behavior)
+        await this.#selectPromptCatalogOption(control, value, interaction, behavior, priorCatalogs)
       ) return;
       if (behavior === "select") {
         const scope = await field.count() === 1 ? field : this.#page.locator("body");
@@ -1282,7 +1301,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#page.waitForTimeout(500);
             await this.#captureSelectionDiagnostic("prompt-typed", behavior);
           }
-          if (await this.#selectPromptCatalogOption(control, value, interaction, behavior)) return;
+          if (await this.#selectPromptCatalogOption(control, value, interaction, behavior, priorCatalogs)) return;
           const promptOptions = await visibleLocators(this.#page.locator([
             '[role="option"]',
             '[data-automation-id="promptOption"]',
@@ -1622,8 +1641,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     value: string,
     interaction: MutableInteraction,
     behavior: "search_select" | "multi_select",
+    priorCatalogs?: readonly (ElementHandle | null)[],
   ): Promise<boolean> {
-    const owner = await exactPromptCatalogOwner(this.#page, control);
+    const owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
     if (owner === undefined) return false;
     let options = owner.locator([
       '[role="option"]:visible',
@@ -1675,7 +1695,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (category !== undefined) {
         await category.click({ timeout: this.#timeoutMs });
         await this.#page.waitForTimeout(100);
-        const nestedOwner = await exactPromptCatalogOwner(this.#page, control) ??
+        const nestedOwner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs) ??
           (await owner.isVisible() ? owner : undefined);
         if (nestedOwner === undefined) {
           throw new TypeError("Workday source prompt category lost its owner");
