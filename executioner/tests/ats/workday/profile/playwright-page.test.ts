@@ -2446,6 +2446,34 @@ test("committed dynamic choice observation does not reopen its catalog", async (
   } finally { await browser.close(); }
 });
 
+test("a matching saved source proves controlled backing without clicking its covered input", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source" style="position:relative"><label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true" style="width:300px;height:30px">
+        <div data-automation-id="selectedItem" style="position:absolute;inset:0;background:white">Example Careers</div>
+      </div></main><script>
+        const input = document.querySelector('input');
+        input.__reactFiber$test = { memoizedProps: { selectedValues: [{id:'site',text:'Example Careers'}] }, return: {memoizedProps: null} };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(({fieldId}) => fieldId === "source.how_did_you_hear")!;
+    await adapter.commit({ controlId: source.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(source.controlId)?.backingValueCommitted, true);
+    assert.equal(adapter.interaction(source.controlId)?.optionActivated, false);
+    for (const selectedValues of [[], [{id:'',text:'Example Careers'}], [{id:'site',text:'Other'}],
+      [{id:'one',text:'Example Careers'}, {id:'two',text:'Example Careers'}]]) {
+      await page.locator('input').evaluate((element, selectedValues) => {
+        (element as unknown as Record<string, unknown>).__reactFiber$test = {memoizedProps: {selectedValues}};
+      }, selectedValues);
+      await assert.rejects(adapter.commit({ controlId: source.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([])));
+      assert.equal(adapter.interaction(source.controlId)?.backingValueCommitted, false);
+    }
+  } finally { await browser.close(); }
+});
+
 test("source discovery exposes the career-site leaf rather than its category", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

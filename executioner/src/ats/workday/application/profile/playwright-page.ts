@@ -662,7 +662,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday multi-select value did not commit");
       }
     } else if (request.uiBehavior === "search_select" || request.uiBehavior === "select") {
-      if (
+      if (resolved.fieldId === "source.how_did_you_hear" &&
+          await committedPromptPrefill(resolved.locator, request.value)) {
+        interaction.backingValueCommitted = true;
+        interaction.validationCleared = await validationCleared(resolved.locator);
+        if (!interaction.validationCleared) throw new TypeError("Workday saved source validation is invalid");
+      } else if (
         request.uiBehavior === "select" &&
         await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)
       ) {
@@ -2991,6 +2996,33 @@ async function preferredPromptOption(
     throw new TypeError("Workday prompt catalog option is ambiguous");
   }
   return preferred[0]!.option;
+}
+
+async function committedPromptPrefill(control: Locator, expected: string): Promise<boolean> {
+  return control.evaluate((element, value) => {
+    const normalize = (text: string) => text.replace(/\s+/gu, " ").trim();
+    const owner = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
+    const tokens = [...owner?.querySelectorAll('[data-automation-id="selectedItem"]') ?? []]
+      .filter(token => token.getClientRects().length > 0 && getComputedStyle(token).visibility !== "hidden");
+    if (tokens.length !== 1 || normalize(tokens[0]!.textContent ?? "") !== normalize(value)) return false;
+    const node = element as unknown as Record<string, unknown>;
+    const fiberKey = Object.keys(node).find(key => key.startsWith("__reactFiber$"));
+    let fiber = fiberKey === undefined ? undefined : node[fiberKey] as Record<string, unknown> | undefined;
+    let found = false;
+    for (let depth = 0; fiber != null && depth < 16; depth += 1) {
+      const props = fiber.memoizedProps as Record<string, unknown> | undefined;
+      if (props != null && Array.isArray(props.selectedValues)) {
+        const selected = props.selectedValues;
+        if (selected.length !== 1 || typeof selected[0] !== "object" || selected[0] === null) return false;
+        const item = selected[0] as Record<string, unknown>;
+        if (typeof item.id !== "string" || item.id.trim() === "" ||
+            typeof item.text !== "string" || normalize(item.text) !== normalize(value)) return false;
+        found = true;
+      }
+      fiber = fiber.return as Record<string, unknown> | undefined;
+    }
+    return found;
+  }, expected);
 }
 
 function sourcePromptCategory(value: string): string | undefined {
