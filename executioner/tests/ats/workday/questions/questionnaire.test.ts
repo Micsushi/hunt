@@ -118,6 +118,7 @@ function dependencies(options: {
   readonly verifier?: FieldVerifier;
   readonly observation?: SanitizedStructuralObservationV1;
   readonly narrative?: ConfiguredNarrativeProvider;
+  readonly fieldPresent?: QuestionnairePageHandlerDependencies["fieldPresent"];
   readonly previouslyVerified?: QuestionnairePageHandlerDependencies["previouslyVerified"];
   readonly recordVerified?: QuestionnairePageHandlerDependencies["recordVerified"];
   readonly recordAttempt?: QuestionnairePageHandlerDependencies["recordAttempt"];
@@ -191,6 +192,7 @@ function dependencies(options: {
       observationFor(_fieldId, layer: ClassificationLayer) {
         return options.observation?.layer === layer ? options.observation : undefined;
       },
+      fieldPresent: options.fieldPresent,
       previouslyVerified: options.previouslyVerified,
       recordVerified: options.recordVerified,
       recordAttempt: options.recordAttempt,
@@ -245,6 +247,49 @@ test("required narrative and fixed choices resolve canonically and independently
     },
   });
   assert.deepEqual(calls, { resolved: 0, driven: 3, verified: 3 });
+});
+
+test("removed conditional questions are not driven or included in review answers", async () => {
+  const { handler, calls } = dependencies({
+    fieldPresent: async (field) => field.fieldId !== authorizationField.fieldId,
+  });
+  const result = await handler.complete(
+    request([authorizationField, countryField]), new AbortController().signal,
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && result.value.kind === "verified");
+  assert.deepEqual(result.value.answers.map(({ fieldId }) => fieldId), [countryField.fieldId]);
+  assert.equal(calls.driven, 1);
+  assert.equal(calls.verified, 1);
+});
+
+test("an answer removed by a later choice is excluded from review expectations", async () => {
+  let removed = false;
+  const { handler, calls } = dependencies({
+    fieldPresent: async (field) => !(removed && field.fieldId === authorizationField.fieldId),
+    recordVerified: async ({ field }) => {
+      if (field.fieldId === countryField.fieldId) removed = true;
+    },
+  });
+  const result = await handler.complete(
+    request([authorizationField, countryField]), new AbortController().signal,
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && result.value.kind === "verified");
+  assert.deepEqual(result.value.answers.map(({ fieldId }) => fieldId), [countryField.fieldId]);
+  assert.equal(calls.driven, 2);
+  assert.equal(calls.verified, 2);
+});
+
+test("ambiguous field presence fails closed", async () => {
+  const { handler, calls } = dependencies({
+    fieldPresent: async () => { throw new TypeError("ambiguous questionnaire target"); },
+  });
+  await assert.rejects(
+    handler.complete(request([countryField]), new AbortController().signal),
+    /ambiguous questionnaire target/,
+  );
+  assert.equal(calls.driven, 0);
 });
 
 test("an uncertain text effect continues only after independent committed readback", async () => {

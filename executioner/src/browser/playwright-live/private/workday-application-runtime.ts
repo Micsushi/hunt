@@ -1376,6 +1376,14 @@ export class OwnedWorkdayApplicationRuntime {
         nextOperationId: this.#nextOperationId,
         allocateCandidateId: () => `unknown_candidate_${randomBytes(12).toString("hex")}` as never,
         observationFor: (fieldId, layer) => facts.get(`${fieldId}:${layer}`),
+        fieldPresent: async (field, currentSignal) => {
+          this.#assertAuthorized(currentSignal);
+          await bindQuestionnaireTargets(page, input.pageId);
+          const target = page.locator(`[data-hunt-target-token="${field.target}"]`);
+          const count = await target.count();
+          if (count > 1) throw new TypeError("ambiguous questionnaire target");
+          return count === 1 && await target.isVisible();
+        },
         previouslyVerified: async ({ pageId, field, intent }) => {
           const prior = this.#verifiedQuestionnaireIntents.get(
             questionnaireIntentKey(pageId, field.fieldId),

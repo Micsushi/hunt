@@ -1509,6 +1509,7 @@ test("questionnaire batches external proof once while every field keeps independ
   await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
     <div data-automation-id="formField-authorization"><label>Are you legally authorized to work in this country? <span aria-hidden="true">*</span></label><button id="mcvf1" type="button" aria-label="Select One Required" aria-haspopup="listbox">Yes</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
     <div data-automation-id="formField-sponsorship"><label>Will you now or in the future require sponsorship? <span aria-hidden="true">*</span></label><button id="mcvf2" type="button" aria-label="Select One Required" aria-haspopup="listbox">No</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
+    <label id="conditional-removed">Country<input required aria-label="Country"></label>
     <label>Brief interest statement<textarea id="mcvf3" required aria-label="Brief interest statement"></textarea></label>
     <div data-automation-id="formField-source"><label>How Did You Hear About Us? <span aria-hidden="true">*</span></label><button id="mcvf4" type="button" aria-label="Select One Required" aria-haspopup="listbox">Select One</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">LinkedIn</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Indeed</div></div></div></div>
     <div id="conditional-age" data-automation-id="formField-age" hidden><label>Are you at least 18 years of age? <span aria-hidden="true">*</span></label><button id="mcvf5" type="button" aria-label="Select One Required" aria-haspopup="listbox">Select One</button><div class="options" hidden><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">Yes</div></div><div data-automation-id="promptOption"><div data-automation-id="promptLeafNode">No</div></div></div></div>
@@ -1533,7 +1534,10 @@ test("questionnaire batches external proof once while every field keeps independ
         owner.textContent = option.textContent.trim();
         owner.dataset.committed = 'true';
         field.querySelector('.options').hidden = true;
-        if (owner.id === 'mcvf2') document.querySelector('#conditional-age').hidden = false;
+        if (owner.id === 'mcvf2') {
+          document.querySelector('#conditional-age').hidden = false;
+          document.querySelector('#conditional-removed')?.remove();
+        }
       });
       document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
@@ -1572,6 +1576,7 @@ test("questionnaire batches external proof once while every field keeps independ
               sponsorship_required: { value: false, provenance: "owner_provided" },
               age_requirement_met: { value: true, provenance: "owner_provided" },
               application_source: { value: "LinkedIn", provenance: "owner_provided" },
+              country: { value: "Canada", provenance: "owner_provided" },
               configured_narrative: {
                 value: "Exact configured interest statement.",
                 provenance: "configured_template",
@@ -1642,7 +1647,9 @@ test("questionnaire batches external proof once while every field keeps independ
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
         } else if (taxonomy.fieldCount === 5 && taxonomy.questionTypes.includes("authorization")) {
-          assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
+          assert.deepEqual(taxonomy.questionTypes, await page.locator('#conditional-removed').count() === 1
+            ? ["authorization", "contact", "narrative", "unknown"]
+            : ["authorization", "narrative", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 5);
         } else if (taxonomy.fieldCount === 4 && taxonomy.requiredFieldCount === 0) {
           assert.deepEqual(taxonomy.questionTypes, ["demographic"]);
@@ -1700,6 +1707,7 @@ test("questionnaire batches external proof once while every field keeps independ
       JSON.stringify(result),
     );
     assert.equal(finalQuestionnaireRemounted, true);
+    assert.equal(await page.locator('#conditional-removed').count(), 0);
     assert.equal(await page.locator("textarea").inputValue(), "Exact configured interest statement.");
     assert.equal(await page.locator('button[data-committed="true"]').count(), 4);
     assert.deepEqual(

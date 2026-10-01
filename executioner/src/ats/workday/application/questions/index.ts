@@ -184,6 +184,7 @@ export interface QuestionnairePageHandlerDependencies {
     fieldId: FieldId,
     layer: ClassificationLayer,
   ): SanitizedStructuralObservationV1 | undefined;
+  readonly fieldPresent?: (field: FieldObservation, signal: AbortSignal) => Promise<boolean>;
   readonly previouslyVerified?: (input: {
     readonly pageId: BrowserPageId;
     readonly field: FieldObservation;
@@ -269,6 +270,7 @@ export function createQuestionnairePageHandler(
       const mode = request.mode;
       for (const field of request.page.fields) {
         if (field.state === "hidden") continue;
+        if (await dependencies.fieldPresent?.(field, signal) === false) continue;
         const question = resolveQuestion(field.label);
         const category = protectedQuestionCategory(
           field.label,
@@ -559,11 +561,18 @@ export function createQuestionnairePageHandler(
           }));
         }
       }
+      const retainedAnswers: VerifiedQuestionnaireAnswer[] = [];
+      for (const answer of answers) {
+        const field = request.page.fields.find(({ fieldId }) => fieldId === answer.fieldId)!;
+        if (await dependencies.fieldPresent?.(field, signal) !== false) {
+          retainedAnswers.push(answer);
+        }
+      }
       return {
         ok: true,
         value: Object.freeze({
           kind: "verified",
-          answers: Object.freeze(answers),
+          answers: Object.freeze(retainedAnswers),
           protectedPlaceholderCount: 0,
         }),
       };
