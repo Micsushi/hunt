@@ -3573,7 +3573,10 @@ export async function hydrateQuestionnairePopupOptions(
   if (await reboundOpenTarget.count() !== 1 || !await reboundOpenTarget.isVisible()) {
     throw new TypeError("questionnaire popup target unavailable after open");
   }
-  const popupOwnerBound = await reboundOpenTarget.evaluate((control, declaredToken) => {
+  let popupOwnerBound = false;
+  const ownerDeadline = Date.now() + Math.min(timeoutMs, 5_000);
+  do {
+    popupOwnerBound = await reboundOpenTarget.evaluate((control, declaredToken) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -3617,7 +3620,9 @@ export async function hydrateQuestionnairePopupOptions(
     if (owners.length !== 1) return false;
     owners[0]!.setAttribute("data-hunt-popup-hydration-owner", declaredToken);
     return true;
-  }, targetToken);
+    }, targetToken);
+    if (!popupOwnerBound && Date.now() < ownerDeadline) await page.waitForTimeout(50);
+  } while (!popupOwnerBound && Date.now() < ownerDeadline);
   if (!popupOwnerBound) throw new TypeError("questionnaire popup owner unavailable");
   const options = page.locator(
     `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
@@ -3651,6 +3656,16 @@ export async function hydrateQuestionnairePopupOptions(
     ).locator('[data-automation-id="promptIcon"]:visible');
     if (await promptIcon.count() > 1) throw new TypeError("questionnaire popup toggle ambiguous");
     await (await promptIcon.count() === 1 ? promptIcon : reboundToggle).click({ timeout: timeoutMs });
+    await bindQuestionnaireTargets(page, pageId);
+  }
+  if (await ownedHydrationPopupOpen(page, targetToken)) {
+    const heading = reboundOpenTarget.locator(
+      'xpath=ancestor::*[starts-with(@data-automation-id,"applyFlow")][1]',
+    ).locator('h1:visible, h2:visible, [role="heading"]:visible');
+    if (await heading.count() === 1 && await heading.evaluate(element =>
+      element.closest('a, button, label, [role="button"]') === null &&
+      element.querySelector('a, button, input, select, textarea, [role="button"]') === null
+    )) await heading.click({ timeout: timeoutMs });
     await bindQuestionnaireTargets(page, pageId);
   }
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 5_000))) {

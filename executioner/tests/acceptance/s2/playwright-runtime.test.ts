@@ -2432,11 +2432,12 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
-for (const closeMode of ["blur", "icon"]) test(`Workday roleless prompt inputs hydrate and commit with ${closeMode} close`, async () => {
+for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prompt inputs hydrate and commit with ${closeMode} close`, async () => {
   const browser = await chromium.launch({headless:true});
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <h2>Application questions</h2>
       <div data-automation-id="formField-pronouns"><label for="pronouns">Pronouns</label>
         <div data-automation-id="multiSelectContainer"><div data-automation-id="multiselectInputContainer"><input id="pronouns"><span data-automation-id="promptIcon">Toggle</span></div></div>
       </div></main><script>
@@ -2452,11 +2453,12 @@ for (const closeMode of ["blur", "icon"]) test(`Workday roleless prompt inputs h
             const option=event.target.closest('[role="option"]'); if(!option)return;
             const token=document.createElement('span'); token.setAttribute('data-automation-id','selectedItem'); token.textContent=option.textContent;
             input.parentElement.append(token); popup.remove();
-          }; document.body.append(popup);
+          }; setTimeout(()=>document.body.append(popup),'${closeMode}'==='outside'?100:0);
         };
         const close=()=>{document.querySelector('[role="listbox"]')?.remove();input.removeAttribute('aria-label');input.removeAttribute('data-automation-id');};
         input.onblur=()=>{if('${closeMode}'==='blur')close();};
-        document.querySelector('[data-automation-id="promptIcon"]').onclick=close;
+        document.querySelector('[data-automation-id="promptIcon"]').onclick=()=>{if('${closeMode}'==='icon')close();};
+        document.querySelector('h2').onclick=close;
       </script>`);
     const pageId="questionnaire-roleless-prompt" as never;
     await bindQuestionnaireTargets(page,pageId);
