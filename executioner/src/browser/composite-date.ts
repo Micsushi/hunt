@@ -217,6 +217,18 @@ async function chooseCalendarDate(
       .replace(/\s+/gu, " ").trim()) ? [index] : [],
   ), labels);
   dateDiagnostic("calendar_dates", { exactMatches: matches.length, visibleSurfaces: await surfaces.count() });
+  if (matches.length === 0 && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    dateDiagnostic("calendar_structure", { surfaces: await surfaces.evaluateAll(elements => elements.flatMap(element => {
+      const label = element.getAttribute("aria-label") ?? "";
+      if (!/\b(?:next|previous|january|february|march|april|may|june|july|august|september|october|november|december)\b|\d{4}/iu.test(label)) return [];
+      const ancestors = []; let parent = element.parentElement;
+      for (let depth = 0; parent !== null && depth < 5; depth += 1, parent = parent.parentElement) {
+        ancestors.push({tag: parent.tagName, role: parent.getAttribute("role"), automationId: parent.getAttribute("data-automation-id")});
+      }
+      return [{tag: element.tagName, role: element.getAttribute("role"), automationId: element.getAttribute("data-automation-id"),
+        labelShape: label.replace(/\d/gu, "#").replace(/january|february|march|april|may|june|july|august|september|october|november|december/giu, "MONTH").replace(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/giu, "WEEKDAY").slice(0, 100), ancestors}];
+    }).slice(0, 48)) });
+  }
   if (matches.length === 1) {
     await surfaces.nth(matches[0]!).click({ timeout: timeoutMs });
     return true;
