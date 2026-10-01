@@ -374,29 +374,22 @@ export function createApplicationAnswerResolver(
     if (existing !== undefined) {
       const rebound = options.findIndex(({ label }) => normalizeCatalogText(label) === existing);
       if (rebound >= 0) return rebound;
-      const committed = request.committedReadback?.kind === "selected"
-        ? request.committedReadback.option
-        : null;
-      const adopted = committed === null || committed === undefined
-        ? -1
-        : options.findIndex(({ label }) =>
-          normalizeCatalogText(label) === normalizeCatalogText(committed)
-        );
-      if (adopted >= 0) {
-        remember(normalizeCatalogText(options[adopted]!.label));
-        syntheticReplacementReasons.set(fieldKey, "committed_value_adopted");
-        return adopted;
-      }
-      const selected = selectRandomIndex(length);
-      if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
-        remember(normalizeCatalogText(options[selected]!.label));
-        syntheticReplacementReasons.set(fieldKey, "cached_option_unavailable");
-      }
-      return selected;
+    }
+    const committed = request.committedReadback?.kind === "selected"
+      ? request.committedReadback.option
+      : null;
+    const adopted = committed === null || committed === undefined
+      ? -1
+      : options.findIndex(({ label }) => normalizeCatalogText(label) === normalizeCatalogText(committed));
+    if (adopted >= 0) {
+      remember(normalizeCatalogText(options[adopted]!.label));
+      if (existing !== undefined) syntheticReplacementReasons.set(fieldKey, "committed_value_adopted");
+      return adopted;
     }
     const selected = selectRandomIndex(length);
     if (Number.isSafeInteger(selected) && selected >= 0 && selected < length) {
       remember(normalizeCatalogText(options[selected]!.label));
+      if (existing !== undefined) syntheticReplacementReasons.set(fieldKey, "cached_option_unavailable");
     }
     return selected;
   };

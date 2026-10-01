@@ -864,6 +864,26 @@ test("same field slot rejects a cached choice from a different option class", as
   assert.deepEqual(picks, []);
 });
 
+test("a fresh synthetic choice adopts a current site-valid selection before random fallback", async () => {
+  const profile = createProfileQueryFake({ query: { ok: true, value: { kind: "profile_answer_missing" } } });
+  let selections = 0;
+  const resolver = createAnswerResolver(profile.port, "Test response", "2026-08-20", () => { selections += 1; return 0; });
+  const observed = field("Unreviewed choice", "listbox", [
+    { id: optionId("saved-alpha"), label: boundedText("Alpha") },
+    { id: optionId("saved-beta"), label: boundedText("Beta") },
+  ]);
+  const adopted = await resolver.resolve({
+    ...syntheticRequest(observed),
+    committedReadback: { kind: "selected", option: boundedText("Beta") },
+  }, new AbortController().signal);
+  assert.ok(adopted.ok && adopted.value.kind === "resolved" && adopted.value.intent.kind === "choice");
+  assert.equal(adopted.value.intent.expectedOption, "Beta");
+  const repeated = await resolver.resolve(syntheticRequest(observed), new AbortController().signal);
+  assert.ok(repeated.ok && repeated.value.kind === "resolved" && repeated.value.intent.kind === "choice");
+  assert.equal(repeated.value.intent.expectedOption, "Beta");
+  assert.equal(selections, 0);
+});
+
 test("same-field option disappearance adopts a current committed site-valid selection", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
