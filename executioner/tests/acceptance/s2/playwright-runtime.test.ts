@@ -1478,9 +1478,9 @@ fields: [
       readonly fieldId: string;
     }[];
     assert.deepEqual(expectations.map(({ fieldId }) => fieldId), [
+      "source.how_did_you_hear",
       "identity.given_name",
       "identity.family_name",
-      "source.how_did_you_hear",
     ]);
   } finally {
     runtime.dispose();
@@ -2422,6 +2422,42 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
     await context.close();
     await browser.close();
   }
+});
+
+test("Workday roleless prompt inputs hydrate and commit through the existing choice adapter", async () => {
+  const browser = await chromium.launch({headless:true});
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-pronouns"><label for="pronouns">Pronouns</label>
+        <div data-automation-id="multiSelectContainer"><div data-automation-id="multiselectInputContainer"><input id="pronouns"></div></div>
+      </div></main><script>
+        const input=document.querySelector('#pronouns');
+        input.onclick=()=>{
+          const popup=document.createElement('div'); popup.setAttribute('role','listbox');
+          popup.innerHTML='<div role="option">Prefer not to say</div><div role="option">They/them</div>';
+          popup.onclick=event=>{
+            const option=event.target.closest('[role="option"]'); if(!option)return;
+            const token=document.createElement('span'); token.setAttribute('data-automation-id','selectedItem'); token.textContent=option.textContent;
+            input.parentElement.append(token); popup.remove();
+          }; document.body.append(popup);
+        };
+        document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('[role="listbox"]')?.remove();});
+      </script>`);
+    const pageId="questionnaire-roleless-prompt" as never;
+    await bindQuestionnaireTargets(page,pageId);
+    const targets=await questionnairePopupHydrationTargets(page);
+    assert.equal(targets.length,1);
+    await hydrateQuestionnairePopupOptions(page,pageId,targets[0]!,3000);
+    const token=await page.locator('#pronouns').getAttribute('data-hunt-target-token');
+    const inspected=await inspectPage(page,"session-roleless-prompt" as never,pageId,new Map());
+    const target=inspected.targets.get(token!)?.[0];
+    assert.equal(target?.control.kind,"select");
+    assert.ok(target);
+    assert.equal(await applyMutation(page,target,{kind:"select",target:target.token,option:"Prefer not to say" as never},undefined,3000),"applied");
+    const after=await inspectPage(page,"session-roleless-prompt" as never,pageId,new Map());
+    assert.deepEqual(after.targets.get(token!)?.[0]?.readback,{kind:"selected",option:"Prefer not to say"});
+  } finally { await browser.close(); }
 });
 
 test("optional ARIA comboboxes hydrate only their exact owner and preserve selection", async () => {

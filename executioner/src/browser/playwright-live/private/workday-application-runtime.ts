@@ -3226,7 +3226,8 @@ export async function bindQuestionnaireTargets(
         : leaf instanceof HTMLInputElement && leaf.type === "file" ? "file_upload"
         : leaf instanceof HTMLSelectElement ? "select"
         : control.getAttribute("aria-haspopup") === "listbox" ||
-            leaf.getAttribute("role") === "combobox" || leaf.getAttribute("role") === "listbox"
+            leaf.getAttribute("role") === "combobox" || leaf.getAttribute("role") === "listbox" ||
+            leaf instanceof HTMLInputElement && leaf.closest('[data-automation-id="multiSelectContainer"]') !== null
           ? "listbox"
           : control instanceof HTMLFieldSetElement || leaf.getAttribute("role") === "radiogroup" ||
               control.getAttribute("data-hunt-checkbox-selection-mode") === "exclusive"
@@ -3359,7 +3360,8 @@ export async function questionnairePopupHydrationTargets(
       .filter(visible);
     if (roots.length !== 1) return [];
     return [...roots[0]!.querySelectorAll<HTMLElement>(
-      '[data-hunt-target-token]:is(button[aria-haspopup="listbox"], [role="combobox"])',
+      '[data-hunt-target-token]:is(button[aria-haspopup="listbox"], [role="combobox"]), ' +
+        '[data-automation-id="multiSelectContainer"] input[data-hunt-target-token]',
     )].filter((control) => {
       if (!visible(control) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true" ||

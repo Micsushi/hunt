@@ -2386,7 +2386,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         interaction = multiple ? "multi-checkbox-group" : "exclusive-checkbox-group";
       } else if (
         element.getAttribute("role") === "combobox" ||
-        element.getAttribute("aria-haspopup") === "listbox"
+        element.getAttribute("aria-haspopup") === "listbox" ||
+        element instanceof HTMLInputElement && element.closest('[data-automation-id="multiSelectContainer"]') !== null
       ) {
         const multiple = isMultiSelect(element);
         const popupOwnerId = ownedListboxId(element);

@@ -315,6 +315,21 @@ test("Workday composite date verifies yyyy mm dd backing without accepting incom
   } finally { await browser.close(); }
 });
 
+test("preserves an exact committed composite date without refilling segments", async () => {
+  const browser = await chromium.launch({headless: true});
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div id="date"><input data-automation-id="dateSectionMonth-input" value="10"><input data-automation-id="dateSectionDay-input" value="01"><input data-automation-id="dateSectionYear-input" value="2026"></div>`);
+    const owner = page.locator('#date');
+    await owner.evaluate(element => {
+      Object.defineProperty(element, '__reactProps$date', {enumerable: true, value: {value: {yyyy:2026,mm:10,dd:1}, onDatePicked(){}}});
+      element.addEventListener('input', () => element.setAttribute('data-refilled', 'true'));
+    });
+    assert.equal(await applyCompositeDateMutation(page, owner, "2026-10-01", 500), true);
+    assert.equal(await owner.getAttribute('data-refilled'), null);
+  } finally { await browser.close(); }
+});
+
 test("Workday calendar navigates bounded months and verifies the exact day", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

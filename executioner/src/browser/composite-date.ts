@@ -110,6 +110,9 @@ export async function applyCompositeDateMutation(
   ));
   dateDiagnostic("segments", { editable });
   if (editable.some((value) => !value)) return false;
+  const existing = await Promise.all(locators.map(part => part.inputValue()));
+  const existingIso = `${existing[2]?.trim()}-${existing[0]?.trim().padStart(2, "0")}-${existing[1]?.trim().padStart(2, "0")}`;
+  if (existingIso === isoDate && await compositeDateBackingCommitted(owner, isoDate)) return true;
   const visible = await Promise.all(locators.map((part) => part.isVisible()));
   dateDiagnostic("visibility", { visible });
   // Some Workday tenants keep zero-sized segments behind a visible date picker.
