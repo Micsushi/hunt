@@ -2432,13 +2432,13 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
-test("hierarchical Workday prompts expose and commit leaves, never country categories", async () => {
+for (const searchMode of ["keyup", "enter"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     const fixture = `<main data-automation-id="applyFlowApplicationQuestionsPage"><h2>Questions</h2>
       <div data-automation-id="formField-status"><label for="status">Citizenship status</label>
-      <div data-automation-id="multiSelectContainer"><input id="status"></div></div></main><script>{
+      <div data-automation-id="multiSelectContainer"><input id="status" data-automation-id="searchBox"></div></div></main><script>{
       const input=document.querySelector('#status');
       let popup;
       const branch=name=>'<div role="option"><div data-automation-id="promptLeafNode">'+name+'<svg role="presentation"></svg></div></div>';
@@ -2461,7 +2461,7 @@ test("hierarchical Workday prompts expose and commit leaves, never country categ
         document.body.append(popup);
       };
       input.onclick=open;
-      input.onkeyup=()=>{if(popup?.isConnected)popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
+      input.onkeyup=event=>{if(popup?.isConnected && ('${searchMode}'==='keyup' || event.key==='Enter'))popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
       document.onkeydown=event=>{if(event.key==='Escape'){popup?.remove();input.value='';}};
       }</script>`;
     const pageId = "questionnaire-hierarchical-prompt" as never;
