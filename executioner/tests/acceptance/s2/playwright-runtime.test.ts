@@ -2432,6 +2432,61 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
+test("hierarchical Workday prompts expose and commit leaves, never country categories", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const fixture = `<main data-automation-id="applyFlowApplicationQuestionsPage"><h2>Questions</h2>
+      <div data-automation-id="formField-status"><label for="status">Citizenship status</label>
+      <div data-automation-id="multiSelectContainer"><input id="status"></div></div></main><script>{
+      const input=document.querySelector('#status');
+      let popup;
+      const branch=name=>'<div role="option"><div data-automation-id="promptLeafNode">'+name+'<svg role="presentation"></svg></div></div>';
+      const open=()=>{
+        if(popup?.isConnected)return;
+        popup=document.createElement('div');popup.setAttribute('role','listbox');
+        popup.innerHTML=branch('Afghanistan')+branch('Åland Islands');
+        popup.onmousedown=event=>event.preventDefault();
+        popup.onclick=event=>{
+          const option=event.target.closest('[role="option"]');if(!option)return;
+          if(option.querySelector('svg')){
+            popup.innerHTML=option.textContent==='Canada'
+              ? '<div role="option"><div data-automation-id="promptLeafNode">Citizen</div></div><div role="option"><div data-automation-id="promptLeafNode">Permanent resident</div></div>'
+              : '<div>No Items.</div>';
+            input.value='';return;
+          }
+          const selected=document.createElement('span');selected.dataset.automationId='selectedItem';
+          selected.textContent=option.textContent;input.parentElement.append(selected);popup.remove();
+        };
+        document.body.append(popup);
+      };
+      input.onclick=open;
+      input.oninput=()=>{if(popup?.isConnected)popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
+      document.onkeydown=event=>{if(event.key==='Escape'){popup?.remove();input.value='';}};
+      }</script>`;
+    const pageId = "questionnaire-hierarchical-prompt" as never;
+    await page.setContent(fixture);
+    await bindQuestionnaireTargets(page, pageId);
+    let token = (await questionnairePopupHydrationTargets(page))[0]!;
+    await assert.rejects(hydrateQuestionnairePopupOptions(page, pageId, token, 1500), /category context unavailable/);
+    await page.setContent(fixture);
+    await bindQuestionnaireTargets(page, pageId);
+    token = (await questionnairePopupHydrationTargets(page))[0]!;
+    await hydrateQuestionnairePopupOptions(page, pageId, token, 1500, "Canada");
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    token = (await page.locator('#status').getAttribute('data-hunt-target-token'))!;
+    const inspected = await inspectPage(page, "session-hierarchical-prompt" as never, pageId, new Map());
+    const target = inspected.targets.get(token)?.[0];
+    assert.ok(target?.control.kind === "select");
+    assert.deepEqual(target.control.options, ["Citizen", "Permanent resident"]);
+    assert.equal(await applyMutation(page, target, {
+      kind: "select", target: target.token, option: "Permanent resident" as never,
+    }, undefined, 1500), "applied");
+    const after = await inspectPage(page, "session-hierarchical-prompt" as never, pageId, new Map());
+    assert.deepEqual(after.targets.get(token)?.[0]?.readback, { kind: "selected", option: "Permanent resident" });
+  } finally { await browser.close(); }
+});
+
 for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prompt inputs hydrate and commit with ${closeMode} close`, async () => {
   const browser = await chromium.launch({headless:true});
   const page = await browser.newPage();

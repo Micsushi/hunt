@@ -40,6 +40,7 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
+import { expandWorkdayPromptCategory } from "../../adapter.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
@@ -433,6 +434,7 @@ export class OwnedWorkdayApplicationRuntime {
             input.fromPageId,
             this.#timeoutMs,
             () => this.#assertAuthorized(innerSignal),
+            this.#questionnaireCountry(),
           );
         };
         const attempt = this.#nextNavigationMonitorAttempt(input.from);
@@ -1087,6 +1089,14 @@ export class OwnedWorkdayApplicationRuntime {
     return observed.value.page;
   }
 
+  #questionnaireCountry(): string | undefined {
+    const country = this.#request?.ownerSources?.profilePlan?.fields?.find(
+      ({ fieldId }) => fieldId === "address.country",
+    );
+    return country?.answer.kind === "answered"
+      ? country.optionMapping?.visibleOption ?? country.answer.value : undefined;
+  }
+
   #assertAuthorized(signal: AbortSignal): void {
     const now = this.#now();
     if (signal.aborted || !/^\d{4}-\d{2}-\d{2}T/u.test(now) ||
@@ -1168,7 +1178,7 @@ export class OwnedWorkdayApplicationRuntime {
       const activeBatch = sharedBatch;
       await prepareQuestionnaireTargets(
         page, input.pageId, this.#timeoutMs,
-        () => this.#assertAuthorized(signal), this.#trace,
+        () => this.#assertAuthorized(signal), this.#trace, this.#questionnaireCountry(),
       );
       const activeSemanticSessionId =
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
@@ -1187,7 +1197,7 @@ export class OwnedWorkdayApplicationRuntime {
         createVerifier: createFieldVerifier,
         prepare: (innerSignal) => prepareQuestionnaireTargets(
           page, input.pageId, this.#timeoutMs,
-          () => this.#assertAuthorized(innerSignal), this.#trace,
+          () => this.#assertAuthorized(innerSignal), this.#trace, this.#questionnaireCountry(),
         ),
         driverRebindFailed: (driveRequest, underlyingError) => {
           this.#trace?.("questionnaire_field_rebind_failed", {
@@ -3390,6 +3400,7 @@ async function prepareQuestionnaireTargets(
   timeoutMs: number,
   assertAuthorized: () => void,
   trace?: (event: string, details?: object) => void,
+  preferredCategory?: string,
 ): Promise<void> {
   await bindQuestionnaireTargets(page, pageId);
   await seedRenderedQuestionnairePopupOptions(page);
@@ -3400,7 +3411,7 @@ async function prepareQuestionnaireTargets(
     if (targetToken === undefined) break;
     assertAuthorized();
     const startedAt = performance.now();
-    await hydrateQuestionnairePopupOptions(page, pageId, targetToken, timeoutMs);
+    await hydrateQuestionnairePopupOptions(page, pageId, targetToken, timeoutMs, preferredCategory);
     trace?.("questionnaire_popup_hydration_completed", {
       targetToken,
       durationMs: monotonicDuration(startedAt),
@@ -3421,6 +3432,7 @@ async function prepareNavigationQuestionnaireSnapshot(
   pageId: BrowserPageId,
   timeoutMs: number,
   assertAuthorized: () => void,
+  preferredCategory?: string,
 ): Promise<void> {
   const questionnaireRootCount = await page.evaluate(({ selectors }) => {
     const visible = (element: Element): boolean => {
@@ -3439,7 +3451,7 @@ async function prepareNavigationQuestionnaireSnapshot(
   }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
   if (questionnaireRootCount === 0) return;
   assertAuthorized();
-  await prepareQuestionnaireTargets(page, pageId, timeoutMs, assertAuthorized);
+  await prepareQuestionnaireTargets(page, pageId, timeoutMs, assertAuthorized, undefined, preferredCategory);
 }
 
 async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> {
@@ -3510,6 +3522,7 @@ export async function hydrateQuestionnairePopupOptions(
   pageId: BrowserPageId,
   targetToken: string,
   timeoutMs: number,
+  preferredCategory?: string,
 ): Promise<void> {
   const tracePrompt = async (stage: string) => {
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
@@ -3632,9 +3645,20 @@ export async function hydrateQuestionnairePopupOptions(
       '[data-automation-id="promptLeafNode"]:visible',
   );
   await options.first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
-  const labels = [...new Set((await options.allInnerTexts())
+  let labels = [...new Set((await options.allInnerTexts())
     .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
     .filter(Boolean))];
+  const hasCategories = await options.locator('svg[role="presentation"]').count() > 0;
+  if (hasCategories) {
+    if (preferredCategory === undefined) throw new TypeError("questionnaire popup category context unavailable");
+    const leaves = await expandWorkdayPromptCategory(
+      page, reboundOpenTarget,
+      page.locator(`[data-hunt-popup-hydration-owner="${targetToken}"]`),
+      preferredCategory, timeoutMs,
+    );
+    if (leaves === undefined) throw new TypeError("questionnaire popup category has no selectable answers");
+    labels = [...leaves];
+  }
   await page.keyboard.press("Escape");
   await bindQuestionnaireTargets(page, pageId);
   if (await ownedHydrationPopupOpen(page, targetToken)) {
@@ -3690,6 +3714,9 @@ export async function hydrateQuestionnairePopupOptions(
   await rebound.evaluate((element, observed) => {
     element.setAttribute("data-hunt-popup-options", JSON.stringify(observed));
   }, labels);
+  if (hasCategories) await rebound.evaluate((element, category) => {
+    element.setAttribute("data-hunt-popup-category", category!);
+  }, preferredCategory);
   await page.locator(`[data-hunt-popup-hydration-preexisting="${targetToken}"]`)
     .evaluateAll((elements) => elements.forEach((element) =>
       element.removeAttribute("data-hunt-popup-hydration-preexisting")

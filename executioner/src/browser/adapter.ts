@@ -1761,6 +1761,7 @@ async function applyMutationUnchecked(
       return "applied";
     }
     if (target.interaction === "field-popup") {
+      const category = await locator.getAttribute("data-hunt-popup-category");
       await locator.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
       await page.waitForTimeout(50);
       const hitOwned = await locator.evaluate((element) => {
@@ -1775,6 +1776,18 @@ async function applyMutationUnchecked(
       if (!hitOwned) return "invalid";
       await markPreexistingFieldPopupOwners(page, target);
       await locator.click({ timeout: timeoutMs });
+      if (category !== null) {
+        const deadline = Date.now() + Math.min(timeoutMs, 5_000);
+        let bound = await bindOpenedFieldPopupOwner(page, target);
+        while (!bound && Date.now() < deadline) {
+          await page.waitForTimeout(50);
+          bound = await bindOpenedFieldPopupOwner(page, target);
+        }
+        if (!bound) return "invalid";
+        const leaves = await expandWorkdayPromptCategory(page, locator,
+          page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`), category, timeoutMs);
+        if (!leaves?.includes(mutation.option)) return "invalid";
+      }
       const exact = await waitForExactFieldPopupOption(
         page,
         target,
@@ -2572,6 +2585,35 @@ async function waitForOwnedPopup(
     return undefined;
   }
   return await popup.count() === 1 ? popup : undefined;
+}
+
+export async function expandWorkdayPromptCategory(
+  page: Page,
+  control: Locator,
+  owner: Locator,
+  category: string,
+  timeoutMs: number,
+): Promise<readonly string[] | undefined> {
+  if (category.trim() === "" || category.length > 512 || await owner.count() !== 1 ||
+      !await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) return undefined;
+  await control.fill(category, { timeout: timeoutMs });
+  const branch = await waitForExactOwnedOption(page, owner, category, timeoutMs);
+  if (branch.count !== 1 || branch.locator === undefined ||
+      await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
+  await branch.locator.click({ timeout: timeoutMs });
+  const deadline = Date.now() + Math.min(timeoutMs, 5_000);
+  do {
+    const leaves = await owner.locator('[data-automation-id="promptLeafNode"], [role="option"]')
+      .evaluateAll(elements => [...new Set(elements.filter(element =>
+        element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        getComputedStyle(element).visibility !== "hidden" &&
+        element.querySelector('svg[role="presentation"]') === null
+      ).map(element => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
+        .filter(Boolean))]);
+    if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+    if (Date.now() < deadline) await page.waitForTimeout(50);
+  } while (Date.now() < deadline);
+  return undefined;
 }
 
 async function exactOwnedOption(
