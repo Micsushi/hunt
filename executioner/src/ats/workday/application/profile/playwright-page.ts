@@ -1659,6 +1659,23 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       process.stderr.write(`${JSON.stringify({
         profilePromptTypeaheadVisibleOptions: initialLabels.slice(0, 64),
       })}\n`);
+      if (await control.getAttribute("id") === "source--source") {
+        process.stderr.write(`${JSON.stringify({
+          profileSourceOptionStructure: await options.evaluateAll(elements => elements.slice(0, 32).map(element => ({
+            tag: element.tagName,
+            role: element.getAttribute("role"),
+            automationId: element.getAttribute("data-automation-id"),
+            expanded: element.getAttribute("aria-expanded"),
+            hasPopup: element.getAttribute("aria-haspopup"),
+            descendants: [...element.querySelectorAll('[data-automation-id], [role], input')].slice(0, 16).map(child => ({
+              tag: child.tagName,
+              role: child.getAttribute("role"),
+              automationId: child.getAttribute("data-automation-id"),
+              type: child.getAttribute("type"),
+            })),
+          }))),
+        })}\n`);
+      }
     }
     const initialExact: { readonly option: Locator; readonly rank: number }[] = [];
     for (const [index, option] of initial.entries()) {
