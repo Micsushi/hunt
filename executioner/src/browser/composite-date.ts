@@ -16,7 +16,7 @@ export async function compositeDateBackingCommitted(
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(isoDate)) return false;
   const deadline = Date.now() + timeoutMs;
   do {
-    const status = await owner.evaluate((element, expectedIso): BackingStatus => {
+    const observation = await owner.evaluate((element, expectedIso) => {
       const acceptedString = (value: string): boolean => {
         const normalized = value.replace(
           /[\s\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu,
@@ -80,12 +80,17 @@ export async function compositeDateBackingCommitted(
       const controlled = records.filter((record) =>
         Object.hasOwn(record, "value") && typeof record.onDatePicked === "function"
       );
-      if (controlled.length === 0) return "uncontrolled";
-      return controlled.some((record) => acceptedValue(record.value))
-        ? "committed"
-        : "uncommitted";
-    }, isoDate).catch((): BackingStatus => "uncommitted");
-    if (status === "uncontrolled" || status === "committed") return true;
+      const status: BackingStatus = controlled.length === 0 ? "uncontrolled"
+        : controlled.some((record) => acceptedValue(record.value)) ? "committed" : "uncommitted";
+      return { status, values: controlled.map(record => {
+        const value = record.value;
+        return { type: typeof value, isNull: value === null, isDate: value instanceof Date,
+          stringShape: typeof value === "string" ? value.replace(/[0-9]/gu, "#").replace(/[a-z]/giu, "x").slice(0, 40) : undefined,
+          keys: typeof value === "object" && value !== null ? Object.keys(value).slice(0, 16) : [] };
+      }) };
+    }, isoDate).catch((error) => ({ status: "uncommitted" as const, values: [], errorName: error instanceof Error ? error.name : "unknown" }));
+    if (observation.status === "uncontrolled" || observation.status === "committed") return true;
+    if (Date.now() >= deadline) dateDiagnostic("backing_uncommitted", observation);
     if (Date.now() < deadline) await owner.page().waitForTimeout(50);
   } while (Date.now() < deadline);
   return false;
