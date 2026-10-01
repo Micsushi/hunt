@@ -952,6 +952,39 @@ test("required Workday radio groups and tokenized comboboxes verify their commit
   });
 });
 
+test("tokenized source requires an exact nonempty controlled selectedValues entry", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source"><div data-automation-id="multiSelectContainer">
+        <span data-automation-id="selectedItem">Example Careers</span>
+        <input id="source--source" aria-required="true">
+      </div></div></main>`);
+    for (const [props, expected] of [
+      [{ selectedValues: [{ id: "source-1", text: "Example Careers" }] }, "verified"],
+      [{ selectedValues: [] }, "unverified"],
+      [{ selectedValues: [{ id: "", text: "Example Careers" }] }, "unverified"],
+      [{ selectedValues: [{ id: "source-1", text: "Another Site" }] }, "unverified"],
+      [{ values: [{ id: "source-1", text: "Example Careers" }] }, "unverified"],
+      [{ selectedValues: [{ id: "source-1", text: "Example Careers" }, { id: "source-2", text: "Another Site" }] }, "unverified"],
+    ] as const) {
+      await page.locator('input').evaluate((element, value) => {
+        (element as unknown as Record<string, unknown>).__reactProps$fixture = value;
+      }, props);
+      const observed = await application(page).observe(signal());
+      assert.equal(observed.ok && observed.value.requiredFields[0]?.verification, expected);
+    }
+    await page.locator('input').evaluate(element => {
+      (element as unknown as Record<string, unknown>).__reactProps$fixture = {
+        selectedValues: [{ id: "source-1", text: "Example Careers" }],
+      };
+      const token = element.parentElement!.querySelector('[data-automation-id="selectedItem"]')!;
+      element.parentElement!.parentElement!.append(token);
+    });
+    const unrelated = await application(page).observe(signal());
+    assert.equal(unrelated.ok && unrelated.value.requiredFields[0]?.verification, "unverified");
+  });
+});
+
 test("a token presentation mirror cannot verify an empty controlled backing value", async () => {
   await withPage(async (page) => {
     await page.setContent(`

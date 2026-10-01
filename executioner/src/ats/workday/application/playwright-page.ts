@@ -1606,6 +1606,18 @@ async function readApplicationSnapshot(
         inspected.add(value);
         if (Array.isArray(value)) return value.length > 0 && value.some((item) => hasValue(item, depth + 1));
         const record = value as Record<string, unknown>;
+        // Workday's tokenized source widget stores selectedValues as ID/text
+        // records, not scalar values. Match its controlled selection to the
+        // exact owning token; a display token or available option alone fails.
+        if (Array.isArray(record.selectedValues) && record.selectedValues.length === 1 && owner !== null) {
+          const selected = record.selectedValues[0] as Record<string, unknown> | null;
+          const tokens = [...owner.querySelectorAll<HTMLElement>('[data-automation-id="selectedItem"]')]
+            .filter(item => visible(item) && text(item.textContent) !== "");
+          if (selected !== null && typeof selected === "object" &&
+              typeof selected.id === "string" && text(selected.id) !== "" &&
+              typeof selected.text === "string" && text(selected.text) !== "" &&
+              tokens.length === 1 && text(tokens[0]!.textContent) === text(selected.text)) return true;
+        }
         return ["value", "selectedValue", "selectedOption", "selectedItem", "selectedItems"]
           .some((key) => key in record && hasValue(record[key], depth + 1));
       };
