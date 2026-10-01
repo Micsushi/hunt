@@ -2442,15 +2442,18 @@ test("Workday roleless prompt inputs hydrate and commit through the existing cho
       </div></main><script>
         const input=document.querySelector('#pronouns');
         input.onclick=()=>{
+          input.setAttribute('aria-label','Search');
+          if(document.querySelector('[role="listbox"]'))return;
           const popup=document.createElement('div'); popup.setAttribute('role','listbox');
           popup.innerHTML='<div role="option">Prefer not to say</div><div role="option">They/them</div>';
+          popup.onmousedown=event=>event.preventDefault();
           popup.onclick=event=>{
             const option=event.target.closest('[role="option"]'); if(!option)return;
             const token=document.createElement('span'); token.setAttribute('data-automation-id','selectedItem'); token.textContent=option.textContent;
             input.parentElement.append(token); popup.remove();
           }; document.body.append(popup);
         };
-        document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('[role="listbox"]')?.remove();});
+        input.onblur=()=>{document.querySelector('[role="listbox"]')?.remove();input.removeAttribute('aria-label');};
       </script>`);
     const pageId="questionnaire-roleless-prompt" as never;
     await bindQuestionnaireTargets(page,pageId);

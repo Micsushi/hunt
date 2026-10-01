@@ -3163,7 +3163,9 @@ export async function bindQuestionnaireTargets(
         ? normalize(control.labels?.[0]?.textContent) || normalize(field?.textContent)
         : isConditionalApplicationDate
         ? normalize(field?.querySelector("label, legend")?.textContent)
-        : control.getAttribute("aria-haspopup") === "listbox"
+        : control.getAttribute("aria-haspopup") === "listbox" ||
+            control instanceof HTMLInputElement &&
+            control.closest('[data-automation-id="multiSelectContainer"]') !== null
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : "";
       if (label === "") label = normalize(control.getAttribute("aria-label"));
@@ -3604,6 +3606,14 @@ export async function hydrateQuestionnairePopupOptions(
     .filter(Boolean))];
   await page.keyboard.press("Escape");
   await bindQuestionnaireTargets(page, pageId);
+  if (await ownedHydrationPopupOpen(page, targetToken)) {
+    const rebound = page.locator(`[data-hunt-target-token="${targetToken}"]`);
+    if (await rebound.count() !== 1 || !await rebound.isVisible()) {
+      throw new TypeError("questionnaire popup target unavailable during close");
+    }
+    await rebound.blur({ timeout: timeoutMs });
+    await bindQuestionnaireTargets(page, pageId);
+  }
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 500))) {
     const reboundToggle = page.locator(`[data-hunt-target-token="${targetToken}"]`);
     if (await reboundToggle.count() !== 1 || !await reboundToggle.isVisible()) {
