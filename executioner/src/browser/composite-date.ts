@@ -157,6 +157,9 @@ async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boo
   if (preferred.length === 1) {
     const target = candidates.nth(preferred[0]!.index);
     try {
+      await target.evaluate(element => element.scrollIntoView({
+        block: "center", inline: "nearest", behavior: "instant",
+      }));
       await target.click({ timeout: timeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";

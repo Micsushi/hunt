@@ -211,13 +211,16 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
-for (const {hiddenSegments, nestedIcon} of [
-  {hiddenSegments: false, nestedIcon: false}, {hiddenSegments: true, nestedIcon: false},
-  {hiddenSegments: true, nestedIcon: true},
+for (const {hiddenSegments, nestedIcon, stickyFooter} of [
+  {hiddenSegments: false, nestedIcon: false, stickyFooter: false},
+  {hiddenSegments: true, nestedIcon: false, stickyFooter: false},
+  {hiddenSegments: true, nestedIcon: true, stickyFooter: false},
+  {hiddenSegments: true, nestedIcon: true, stickyFooter: true},
 ]) {
-test(`commits a controlled Workday composite date through its owned calendar (hidden segments: ${hiddenSegments}, nested icon: ${nestedIcon})`, async () => {
+test(`commits a controlled Workday composite date through its owned calendar (hidden segments: ${hiddenSegments}, nested icon: ${nestedIcon}, sticky footer: ${stickyFooter})`, async () => {
   const fixture = await loopbackPage(`
     ${hiddenSegments ? '<style>[data-automation-id="dateInputWrapper"] { min-height: 30px; } input { position: absolute; width: 0; height: 0; padding: 0; border: 0; }</style>' : ''}
+    ${stickyFooter ? '<style>body { padding-top: 620px; padding-bottom: 400px; } #footer { position:fixed; bottom:0; left:0; right:0; height:160px; background:white; z-index:10; }</style><div id="footer" data-automation-id="pageFooter"></div>' : ''}
     <div data-automation-id="formField-dateSignedOn">
       <label>Date</label>
       <div aria-label="Date" data-automation-id="dateInputWrapper"
