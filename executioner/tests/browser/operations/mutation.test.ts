@@ -13,7 +13,7 @@ import {
   upstreamResumeId,
 } from "../../../src/contracts/index.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
-import { applyCompositeDateMutation } from "../../../src/browser/composite-date.ts";
+import { applyCompositeDateMutation, compositeDateBackingCommitted } from "../../../src/browser/composite-date.ts";
 import {
   applyMutation,
   inspectPage,
@@ -291,6 +291,29 @@ test(`commits a controlled Workday composite date through its owned calendar (hi
   }
 });
 }
+
+test("Workday composite date verifies yyyy mm dd backing without accepting incomplete or wrong dates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="date"></div>');
+    const owner = page.locator('#date');
+    for (const [value, expected] of [
+      [{yyyy: 2026, mm: 10, dd: 1}, true],
+      [{yyyy: "2026", mm: "10", dd: "01"}, true],
+      [{yyyy: 2026, mm: 9, dd: 1}, false],
+      [{yyyy: 2026, mm: 10}, false],
+      [{yyyy: 2026, mm: null, dd: 1}, false],
+    ] as const) {
+      await owner.evaluate((element, value) => {
+        Object.defineProperty(element, '__reactProps$date', {
+          configurable: true, enumerable: true, value: {value, onDatePicked() {}},
+        });
+      }, value);
+      assert.equal(await compositeDateBackingCommitted(owner, "2026-10-01", 0), expected);
+    }
+  } finally { await browser.close(); }
+});
 
 test("Workday calendar navigates bounded months and verifies the exact day", async () => {
   const browser = await chromium.launch({ headless: true });

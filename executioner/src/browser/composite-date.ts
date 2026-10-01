@@ -38,9 +38,9 @@ export async function compositeDateBackingCommitted(
         for (const key of ["value", "displayValue", "formattedValue", "dateValue"] as const) {
           if (typeof record[key] === "string" && acceptedString(record[key])) return true;
         }
-        const year = Number(record.year);
-        const month = Number(record.month);
-        const day = Number(record.day);
+        const year = Number(record.year ?? record.yyyy);
+        const month = Number(record.month ?? record.mm);
+        const day = Number(record.day ?? record.dd);
         return Number.isSafeInteger(year) && Number.isSafeInteger(month) &&
           Number.isSafeInteger(day) &&
           `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${
