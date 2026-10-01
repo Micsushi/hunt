@@ -338,6 +338,16 @@ async function applyMutationUnchecked(
     process.stderr.write(`${JSON.stringify({ textMutationDiagnostic: {
       count: locatorCount, controls: await locator.evaluateAll(elements => elements.map(element => ({
         tag: element.tagName, type: element.getAttribute("type"), inputMode: element.getAttribute("inputmode"),
+        role: element.getAttribute("role"), hasPopup: element.getAttribute("aria-haspopup"),
+        ancestors: (() => {
+          const result = []; let parent = element.parentElement;
+          for (let depth = 0; parent !== null && depth < 6; depth += 1, parent = parent.parentElement) {
+            result.push({tag: parent.tagName, role: parent.getAttribute("role"), automationId: parent.getAttribute("data-automation-id"),
+              hasPopup: parent.getAttribute("aria-haspopup"), controls: parent.getAttribute("aria-controls") !== null,
+              inputCount: parent.querySelectorAll("input").length, buttonCount: parent.querySelectorAll('button, [role="button"]').length});
+          }
+          return result;
+        })(),
         automationId: element.getAttribute("data-automation-id"), patternPresent: element.hasAttribute("pattern"),
         min: element.getAttribute("min"), max: element.getAttribute("max"), maxLength: element.getAttribute("maxlength"),
       }))),
