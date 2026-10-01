@@ -67,6 +67,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   readonly #inspectMissingOptions: boolean;
   readonly #controls = new Map<string, ResolvedControl>();
   readonly #interactions = new Map<string, MutableInteraction>();
+  readonly #observedSourceCategories = new Map<string, string>();
   #selectionDiagnosticOrdinal = 0;
   readonly #unknownControlOrdinals = new Map<string, number>();
   readonly #ownedIndexedRows = new Set<string>();
@@ -518,6 +519,27 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         }
       }
       if (owner !== undefined) {
+        if (resolved.fieldId === "source.how_did_you_hear") {
+          this.#observedSourceCategories.clear();
+          const category = await preferredPromptOption(
+            await visibleLocators(owner.locator('[role="option"]')),
+            new Set(["career websites"]),
+          );
+          if (category !== undefined && await category.locator(
+            '[data-automation-id="promptLeafNode"] svg[role="presentation"]',
+          ).count() === 1) {
+            await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
+            await this.#page.waitForTimeout(100);
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+            if (owner === undefined) throw new TypeError("Workday source category options are unavailable");
+            const leaves = await visibleLocators(owner.locator('[role="option"]'));
+            const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())));
+            if (leafLabels.some(label => normalize(label) === "career websites")) {
+              throw new TypeError("Workday source category did not expand");
+            }
+            for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), "Career Websites");
+          }
+        }
         const options = await visibleLocators(owner.locator([
           '[role="option"]',
           '[data-automation-id="promptOption"]:not([role="option"] *)',
@@ -1706,11 +1728,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         options,
       );
     }
-    const sourceCategory = sourcePromptCategory(value);
+    const sourceCategory = (await control.getAttribute("id") === "source--source"
+      ? this.#observedSourceCategories.get(normalize(value)) : undefined) ?? sourcePromptCategory(value);
     if (behavior === "search_select" && sourceCategory !== undefined) {
       const category = await preferredPromptOption(initial, new Set([normalize(sourceCategory)]));
       if (category !== undefined) {
-        await category.click({ timeout: this.#timeoutMs });
+        await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
         await this.#page.waitForTimeout(100);
         const nestedOwner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs) ??
           (await owner.isVisible() ? owner : undefined);
@@ -1805,17 +1828,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.visibleOptionCount = visibleOptionCount;
     interaction.selectedOptionOrdinal = selectedOptionOrdinal;
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
-    const radios = await visibleLocators(option.locator(
-      'input[type="radio"], [role="radio"]',
-    ));
-    if (radios.length > 1) {
-      throw new TypeError("Workday prompt catalog radio is ambiguous");
-    }
-    const leaves = await visibleLocators(option.locator('[data-automation-id="promptLeafNode"]'));
-    if (leaves.length > 1) {
-      throw new TypeError("Workday prompt catalog leaf is ambiguous");
-    }
-    const activation = radios[0] ?? leaves[0] ?? option;
+    const activation = await promptOptionActivation(option);
     try {
       await activation.click({
         timeout: behavior === "multi_select"
@@ -2926,6 +2939,15 @@ async function exactPromptCatalogOwner(
     if (Date.now() < deadline) await page.waitForTimeout(50);
   } while (Date.now() < deadline);
   return undefined;
+}
+
+async function promptOptionActivation(option: Locator): Promise<Locator> {
+  const radios = await visibleLocators(option.locator('input[type="radio"], [role="radio"]'));
+  const leaves = await visibleLocators(option.locator('[data-automation-id="promptLeafNode"]'));
+  if (radios.length > 1 || leaves.length > 1) {
+    throw new TypeError("Workday prompt catalog activation is ambiguous");
+  }
+  return radios[0] ?? leaves[0] ?? option;
 }
 
 async function preferredPromptOption(

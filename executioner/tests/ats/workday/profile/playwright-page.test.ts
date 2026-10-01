@@ -2418,6 +2418,42 @@ test("source selection binds its newly opened portal without selecting an unrela
   } finally { await browser.close(); }
 });
 
+test("source discovery exposes the career-site leaf rather than its category", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source"><label for="source--source">How Did You Hear About Us?</label>
+      <input id="source--source" aria-required="true"><div id="selected"></div></div></main>
+      <div id="popup" role="listbox" data-automation-id="activeListContainer" hidden></div>
+      <script>
+        const input = document.querySelector('input'); const popup = document.querySelector('#popup');
+        input.onclick = () => {
+          popup.hidden = false;
+          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode">Career Websites<svg role="presentation"></svg></div></div>';
+          popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+            popup.innerHTML = '';
+            setTimeout(() => {
+              popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Example Careers</span></div></div>';
+              popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+                document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">Example Careers</div>';
+                input.value = ''; popup.hidden = true;
+              };
+            }, 200);
+          };
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, ["Example Careers"]);
+    assert.equal(await page.locator('#selected').innerText(), "");
+    assert.equal(await page.locator('#popup').isVisible(), false);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Example Careers");
+  } finally { await browser.close(); }
+});
+
 test("source observation binds only its newly visible unfocused portal catalog", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
