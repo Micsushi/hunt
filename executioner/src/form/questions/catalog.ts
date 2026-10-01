@@ -322,7 +322,7 @@ const generatedLearningDefaults = Object.freeze({
   "s1-question-family-name": "Candidate",
   "s1-question-phone-number": "403-555-0100",
   "s1-question-country": "Canada",
-  "workday-question-desired-salary": 0,
+  "workday-question-desired-salary": 1,
 } as const satisfies Partial<Record<CanonicalQuestionId, string | number | boolean>>);
 
 export function generatedLearningDefaultFor(
