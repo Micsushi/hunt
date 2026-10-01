@@ -500,8 +500,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ).locator('[data-automation-id="promptSearchButton"]'));
         if (buttons.length > 1) throw new TypeError("Workday prompt search owner is ambiguous");
         if (buttons.length === 1) {
-          await this.#openPromptSearch(buttons[0]!, control);
+          await buttons[0]!.click({ timeout: this.#timeoutMs });
           owner = await exactPromptCatalogOwner(this.#page, control);
+          if (owner === undefined) {
+            await this.#openPromptSearch(buttons[0]!, control);
+            owner = await exactPromptCatalogOwner(this.#page, control);
+          }
         }
       }
       if (owner !== undefined) {

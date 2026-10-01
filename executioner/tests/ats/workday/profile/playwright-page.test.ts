@@ -2388,7 +2388,8 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
-test("source option observation opens its roleless prompt without committing an answer", async () => {
+for (const opener of ["native", "component"] as const) {
+test(`source option observation opens its roleless ${opener} prompt without committing an answer`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2401,10 +2402,11 @@ test("source option observation opens its roleless prompt without committing an 
       <div role="listbox" tabindex="-1" hidden><div role="option">Website</div></div>
     </main><script>
       const popup = document.querySelector('[role="listbox"]');
-      document.querySelector('span').__reactFiber$retained = {
-        memoizedProps: { onSelectInputClick: () => setTimeout(() => {
-          popup.hidden = false; popup.focus();
-        }, 150) }, return: null
+      const open = () => setTimeout(() => { popup.hidden = false; popup.focus(); }, 150);
+      const button = document.querySelector('span');
+      button.onclick = ${opener === "native"} ? open : () => {};
+      button.__reactFiber$retained = {
+        memoizedProps: { onSelectInputClick: ${opener === "component"} ? open : () => {} }, return: null
       };
       document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
     </script>`);
@@ -2415,6 +2417,7 @@ test("source option observation opens its roleless prompt without committing an 
     assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
   } finally { await browser.close(); }
 });
+}
 
 test("only zero-sized anonymous text companions of known choices are excluded", async () => {
   const browser = await chromium.launch({ headless: true });
