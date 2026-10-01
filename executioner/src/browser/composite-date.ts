@@ -155,7 +155,29 @@ async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boo
   const buttons = matches.filter(({ actionable }) => actionable);
   const preferred = buttons.length > 0 ? buttons : matches;
   if (preferred.length === 1) {
-    await candidates.nth(preferred[0]!.index).click({ timeout: timeoutMs });
+    const target = candidates.nth(preferred[0]!.index);
+    try {
+      await target.click({ timeout: timeoutMs });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      dateDiagnostic("calendar_click_failed", {
+        intercepted: message.includes("intercepts pointer events"),
+        notVisible: message.includes("not visible"), notStable: message.includes("not stable"),
+        detached: message.includes("not attached") || message.includes("detached"),
+        outsideViewport: message.includes("outside of the viewport"),
+        target: await target.evaluate(element => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return { tag: element.tagName, role: element.getAttribute("role"),
+            automationId: element.getAttribute("data-automation-id"),
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+            viewportHeight: innerHeight, scrollY,
+            hitTag: hit?.tagName, hitAutomationId: hit?.getAttribute("data-automation-id"),
+            hitWithinTarget: hit !== null && element.contains(hit) };
+        }).catch(() => null),
+      });
+      throw error;
+    }
     return true;
   }
   if (buttons.length > 1) return false;
