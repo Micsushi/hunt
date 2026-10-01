@@ -2461,7 +2461,7 @@ test("hierarchical Workday prompts expose and commit leaves, never country categ
         document.body.append(popup);
       };
       input.onclick=open;
-      input.oninput=()=>{if(popup?.isConnected)popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
+      input.onkeyup=()=>{if(popup?.isConnected)popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
       document.onkeydown=event=>{if(event.key==='Escape'){popup?.remove();input.value='';}};
       }</script>`;
     const pageId = "questionnaire-hierarchical-prompt" as never;

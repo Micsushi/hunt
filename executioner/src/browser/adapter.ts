@@ -2596,8 +2596,9 @@ export async function expandWorkdayPromptCategory(
 ): Promise<readonly string[] | undefined> {
   if (category.trim() === "" || category.length > 512 || await owner.count() !== 1 ||
       !await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) return undefined;
-  await control.fill(category, { timeout: timeoutMs });
-  const branch = await waitForExactOwnedOption(page, owner, category, timeoutMs);
+  await control.fill("", { timeout: timeoutMs });
+  await control.pressSequentially(category, { delay: 10, timeout: timeoutMs });
+  const branch = await waitForExactOwnedOption(page, owner, category, Math.min(timeoutMs, 5_000));
   if (branch.count !== 1 || branch.locator === undefined ||
       await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
   await branch.locator.click({ timeout: timeoutMs });

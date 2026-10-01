@@ -413,6 +413,8 @@ export class PlaywrightWorkdayApplicationPage {
           "questionnaire popup target unavailable during close",
           "questionnaire popup target unavailable after close",
           "questionnaire popup hydration limit exceeded",
+          "questionnaire popup category context unavailable",
+          "questionnaire popup category has no selectable answers",
         ].includes(error.message) ? error.message : "unclassified",
       });
       return failure(
