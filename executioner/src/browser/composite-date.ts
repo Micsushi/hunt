@@ -205,10 +205,16 @@ async function chooseCalendarDate(
     new Intl.DateTimeFormat("en-US", {
       year: "numeric", month: "long", day: "numeric",
     }).format(date),
+    new Intl.DateTimeFormat("en-GB", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    }).format(date).replaceAll(",", ""),
     `${isoDate.slice(5, 7)}/${isoDate.slice(8, 10)}/${isoDate.slice(0, 4)}`,
     `${Number(isoDate.slice(5, 7))}/${Number(isoDate.slice(8, 10))}/${isoDate.slice(0, 4)}`,
   ];
-  const surfaces = page.locator(
+  const picker = page.locator('[data-automation-id="datePicker"][role="application"]:visible');
+  const pickerCount = await picker.count();
+  if (pickerCount > 1 || pickerCount === 1 && !await navigateCalendarMonth(picker, date, timeoutMs)) return false;
+  const surfaces = (pickerCount === 1 ? picker : page).locator(
     'button[aria-label]:visible, [role="button"][aria-label]:visible, ' +
       '[role="gridcell"][aria-label]:visible',
   );
@@ -245,6 +251,35 @@ async function chooseCalendarDate(
   if (await day.count() !== 1) return false;
   await day.click({ timeout: timeoutMs });
   return true;
+}
+
+async function navigateCalendarMonth(picker: Locator, date: Date, timeoutMs: number): Promise<boolean> {
+  const header = picker.locator('[data-automation-id="monthPickerHeader"]');
+  if (await header.count() !== 1) return false;
+  const months = Array.from({ length: 12 }, (_, month) =>
+    new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(2000, month, 1))
+  );
+  const target = date.getFullYear() * 12 + date.getMonth();
+  for (let step = 0; step <= 24; step += 1) {
+    const label = (await header.innerText()).replace(/\s+/gu, " ").trim();
+    const match = /^(\w+) (\d{4})$/u.exec(label);
+    const month = match === null ? -1 : months.indexOf(match[1]!);
+    if (match === null || month < 0) return false;
+    const current = Number(match[2]) * 12 + month;
+    if (current === target) return true;
+    if (step === 24 || Math.abs(target - current) > 24 - step) return false;
+    const delta = target > current ? 1 : -1;
+    const next = current + delta;
+    const button = header.getByRole("button", { name: delta > 0 ? "Next month" : "Previous month", exact: true });
+    if (await button.count() !== 1 || !await button.isEnabled()) return false;
+    await button.click({ timeout: timeoutMs });
+    const expected = `${months[next % 12]} ${Math.floor(next / 12)}`;
+    try {
+      await header.filter({ hasText: new RegExp(`^\\s*${expected}\\s*$`, "u") })
+        .waitFor({ state: "visible", timeout: Math.min(timeoutMs, 1500) });
+    } catch { return false; }
+  }
+  return false;
 }
 
 function dateDiagnostic(stage: string, details: object = {}): void {

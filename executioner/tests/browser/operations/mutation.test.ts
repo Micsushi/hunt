@@ -13,6 +13,7 @@ import {
   upstreamResumeId,
 } from "../../../src/contracts/index.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
+import { applyCompositeDateMutation } from "../../../src/browser/composite-date.ts";
 import {
   applyMutation,
   inspectPage,
@@ -290,6 +291,60 @@ test(`commits a controlled Workday composite date through its owned calendar (hi
   }
 });
 }
+
+test("Workday calendar navigates bounded months and verifies the exact day", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const {date, stuck, expected} of [
+      {date: "2026-10-01", stuck: false, expected: true},
+      {date: "2025-12-01", stuck: false, expected: true},
+      {date: "2026-10-01", stuck: true, expected: false},
+      {date: "2029-01-01", stuck: false, expected: false},
+    ]) {
+      await page.setContent(`<div data-automation-id="formField-date">
+        <div data-automation-id="dateInputWrapper">
+          <input data-automation-id="dateSectionMonth-input"><input data-automation-id="dateSectionDay-input"><input data-automation-id="dateSectionYear-input">
+          <button aria-label="Open date picker">Calendar</button>
+        </div></div>
+        <div role="application" data-automation-id="datePicker" hidden>
+          <div data-automation-id="monthPickerHeader"><button aria-label="Previous month"></button><span></span><button aria-label="Next month"></button></div>
+          <button data-automation-id="datePickerDay"></button>
+        </div><script>(() => {
+          const owner = document.querySelector('[data-automation-id="dateInputWrapper"]');
+          const picker = document.querySelector('[data-automation-id="datePicker"]');
+          const state = {value:null, onDatePicked(){}};
+          owner.__reactProps$test = state;
+          let month = new Date(2026,0,1); globalThis.monthClicks = 0;
+          function render(){
+            picker.querySelector('span').textContent = month.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+            picker.querySelector('[data-automation-id="datePickerDay"]').setAttribute('aria-label', month.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).replaceAll(',',''));
+          }
+          render();
+          document.querySelector('[aria-label="Open date picker"]').onclick = () => { picker.hidden = false; };
+          for(const [name,delta] of [['Next month',1],['Previous month',-1]]) {
+            picker.querySelector('[aria-label="'+name+'"]').onclick = () => {
+              globalThis.monthClicks++; if(${stuck}) return;
+              setTimeout(() => { month.setMonth(month.getMonth()+delta); render(); }, 25);
+            };
+          }
+          picker.querySelector('[data-automation-id="datePickerDay"]').onclick = () => {
+            state.value = {year:month.getFullYear(),month:month.getMonth()+1,day:1};
+            owner.querySelector('[data-automation-id="dateSectionMonth-input"]').value = String(month.getMonth()+1);
+            owner.querySelector('[data-automation-id="dateSectionDay-input"]').value = '1';
+            owner.querySelector('[data-automation-id="dateSectionYear-input"]').value = String(month.getFullYear());
+            picker.hidden = true;
+          };
+        })();</script>`);
+      assert.equal(await applyCompositeDateMutation(page, page.locator('[data-automation-id="dateInputWrapper"]'), date, 1000), expected, date);
+      const clicks = await page.evaluate(() => (globalThis as typeof globalThis & {monthClicks:number}).monthClicks);
+      assert.equal(clicks, date === "2029-01-01" ? 0 : stuck || date === "2025-12-01" ? 1 : 9);
+    }
+    await page.locator('[data-automation-id="datePicker"]').evaluate(element => element.after(element.cloneNode(true)));
+    assert.equal(await applyCompositeDateMutation(page, page.locator('[data-automation-id="dateInputWrapper"]'), "2026-10-01", 1000), false);
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & {monthClicks:number}).monthClicks), 0);
+  } finally { await browser.close(); }
+});
 
 test("does not accept composite date segments whose controlled backing stays empty", async () => {
   const fixture = await loopbackPage(`
