@@ -82,15 +82,9 @@ export async function compositeDateBackingCommitted(
       );
       const status: BackingStatus = controlled.length === 0 ? "uncontrolled"
         : controlled.some((record) => acceptedValue(record.value)) ? "committed" : "uncommitted";
-      return { status, values: controlled.map(record => {
-        const value = record.value;
-        return { type: typeof value, isNull: value === null, isDate: value instanceof Date,
-          stringShape: typeof value === "string" ? value.replace(/[0-9]/gu, "#").replace(/[a-z]/giu, "x").slice(0, 40) : undefined,
-          keys: typeof value === "object" && value !== null ? Object.keys(value).slice(0, 16) : [] };
-      }) };
-    }, isoDate).catch((error) => ({ status: "uncommitted" as const, values: [], errorName: error instanceof Error ? error.name : "unknown" }));
-    if (observation.status === "uncontrolled" || observation.status === "committed") return true;
-    dateDiagnostic("backing_uncommitted", observation);
+      return status;
+    }, isoDate).catch(() => "uncommitted" as const);
+    if (observation === "uncontrolled" || observation === "committed") return true;
     if (Date.now() < deadline) await owner.page().waitForTimeout(50);
   } while (Date.now() < deadline);
   return false;
@@ -108,13 +102,11 @@ export async function applyCompositeDateMutation(
   const editable = await Promise.all(locators.map(async (part) =>
     await part.count() === 1 && await part.isEditable()
   ));
-  dateDiagnostic("segments", { editable });
   if (editable.some((value) => !value)) return false;
   const existing = await Promise.all(locators.map(part => part.inputValue()));
   const existingIso = `${existing[2]?.trim()}-${existing[0]?.trim().padStart(2, "0")}-${existing[1]?.trim().padStart(2, "0")}`;
   if (existingIso === isoDate && await compositeDateBackingCommitted(owner, isoDate)) return true;
   const visible = await Promise.all(locators.map((part) => part.isVisible()));
-  dateDiagnostic("visibility", { visible });
   // Some Workday tenants keep zero-sized segments behind a visible date picker.
   // Use that owned UI instead of trying to fill hidden inputs.
   if (visible.every(Boolean)) {
@@ -124,18 +116,14 @@ export async function applyCompositeDateMutation(
         await part.fill(values[index]!, { timeout: timeoutMs });
       }
       await locators[2]!.blur({ timeout: timeoutMs });
-    } catch (error) {
-      dateDiagnostic("segment_fill_failed", { errorName: error instanceof Error ? error.name : "unknown" });
+    } catch {
       return false;
     }
     if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   }
-  if (!await openOwnedCalendar(owner, timeoutMs)) { dateDiagnostic("calendar_unavailable"); return false; }
-  dateDiagnostic("calendar_opened");
-  if (!await chooseCalendarDate(page, isoDate, timeoutMs)) { dateDiagnostic("date_unavailable"); return false; }
-  const committed = await compositeDateBackingCommitted(owner, isoDate);
-  dateDiagnostic("calendar_readback", { committed });
-  return committed;
+  if (!await openOwnedCalendar(owner, timeoutMs)) return false;
+  if (!await chooseCalendarDate(page, isoDate, timeoutMs)) return false;
+  return await compositeDateBackingCommitted(owner, isoDate);
 }
 
 async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boolean> {
@@ -155,45 +143,18 @@ async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boo
     return /(?:calendar|date[\s_-]*(?:picker|button|icon))/iu.test(evidence)
       ? [{ index, actionable: element.matches('button, [role="button"]') }] : [];
   }));
-  dateDiagnostic("calendar_controls", { candidateCount: matches.length, structures: await candidates.evaluateAll(elements => elements.slice(0, 24).map(element => ({
-    tag: element.tagName, role: element.getAttribute("role"), automationId: element.getAttribute("data-automation-id"),
-    calendarLabel: /calendar|date.*picker/iu.test(element.getAttribute("aria-label") ?? ""),
-    width: Math.round(element.getBoundingClientRect().width), height: Math.round(element.getBoundingClientRect().height),
-  }))) });
   const buttons = matches.filter(({ actionable }) => actionable);
   const preferred = buttons.length > 0 ? buttons : matches;
   if (preferred.length === 1) {
     const target = candidates.nth(preferred[0]!.index);
-    try {
-      await target.evaluate(element => element.scrollIntoView({
-        block: "center", inline: "nearest", behavior: "instant",
-      }));
-      await target.click({ timeout: timeoutMs });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      dateDiagnostic("calendar_click_failed", {
-        intercepted: message.includes("intercepts pointer events"),
-        notVisible: message.includes("not visible"), notStable: message.includes("not stable"),
-        detached: message.includes("not attached") || message.includes("detached"),
-        outsideViewport: message.includes("outside of the viewport"),
-        target: await target.evaluate(element => {
-          const rect = element.getBoundingClientRect();
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-          return { tag: element.tagName, role: element.getAttribute("role"),
-            automationId: element.getAttribute("data-automation-id"),
-            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-            viewportHeight: innerHeight, scrollY,
-            hitTag: hit?.tagName, hitAutomationId: hit?.getAttribute("data-automation-id"),
-            hitWithinTarget: hit !== null && element.contains(hit) };
-        }).catch(() => null),
-      });
-      throw error;
-    }
+    await target.evaluate(element => element.scrollIntoView({
+      block: "center", inline: "nearest", behavior: "instant",
+    }));
+    await target.click({ timeout: timeoutMs });
     return true;
   }
   if (buttons.length > 1) return false;
   const icons = field.locator("svg:visible");
-  dateDiagnostic("calendar_icons", { count: await icons.count() });
   if (await icons.count() !== 1) return false;
   await icons.click({ timeout: timeoutMs });
   return true;
@@ -230,19 +191,6 @@ async function chooseCalendarDate(
     (element, index) => admitted.includes((element.getAttribute("aria-label") ?? "")
       .replace(/\s+/gu, " ").trim().replace(/^(?:(?:Selected|Today)\s+)+/u, "")) ? [index] : [],
   ), labels);
-  dateDiagnostic("calendar_dates", { exactMatches: matches.length, visibleSurfaces: await surfaces.count() });
-  if (matches.length === 0 && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-    dateDiagnostic("calendar_structure", { surfaces: await surfaces.evaluateAll(elements => elements.flatMap(element => {
-      const label = element.getAttribute("aria-label") ?? "";
-      if (!/\b(?:next|previous|january|february|march|april|may|june|july|august|september|october|november|december)\b|\d{4}/iu.test(label)) return [];
-      const ancestors = []; let parent = element.parentElement;
-      for (let depth = 0; parent !== null && depth < 5; depth += 1, parent = parent.parentElement) {
-        ancestors.push({tag: parent.tagName, role: parent.getAttribute("role"), automationId: parent.getAttribute("data-automation-id")});
-      }
-      return [{tag: element.tagName, role: element.getAttribute("role"), automationId: element.getAttribute("data-automation-id"),
-        labelShape: label.replace(/\d/gu, "#").replace(/january|february|march|april|may|june|july|august|september|october|november|december/giu, "MONTH").replace(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/giu, "WEEKDAY").slice(0, 100), ancestors}];
-    }).slice(0, 48)) });
-  }
   if (matches.length === 1) {
     await surfaces.nth(matches[0]!).click({ timeout: timeoutMs });
     return true;
@@ -288,10 +236,4 @@ async function navigateCalendarMonth(picker: Locator, date: Date, timeoutMs: num
     } catch { return false; }
   }
   return false;
-}
-
-function dateDiagnostic(stage: string, details: object = {}): void {
-  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-    process.stderr.write(`${JSON.stringify({ compositeDateDiagnostic: { stage, ...details } })}\n`);
-  }
 }

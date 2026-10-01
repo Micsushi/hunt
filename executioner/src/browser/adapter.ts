@@ -334,40 +334,12 @@ async function applyMutationUnchecked(
   const mayRebindExclusiveChoice = mutation.kind === "select" &&
     target.interaction === "exclusive-checkbox-group";
   const locatorCount = await locator.count();
-  if (mutation.kind === "set_text" && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-    process.stderr.write(`${JSON.stringify({ textMutationDiagnostic: {
-      count: locatorCount, controls: await locator.evaluateAll(elements => elements.map(element => ({
-        tag: element.tagName, type: element.getAttribute("type"), inputMode: element.getAttribute("inputmode"),
-        role: element.getAttribute("role"), hasPopup: element.getAttribute("aria-haspopup"),
-        ancestors: (() => {
-          const result = []; let parent = element.parentElement;
-          for (let depth = 0; parent !== null && depth < 6; depth += 1, parent = parent.parentElement) {
-            result.push({tag: parent.tagName, role: parent.getAttribute("role"), automationId: parent.getAttribute("data-automation-id"),
-              hasPopup: parent.getAttribute("aria-haspopup"), controls: parent.getAttribute("aria-controls") !== null,
-              inputCount: parent.querySelectorAll("input").length, buttonCount: parent.querySelectorAll('button, [role="button"]').length});
-          }
-          return result;
-        })(),
-        automationId: element.getAttribute("data-automation-id"), patternPresent: element.hasAttribute("pattern"),
-        min: element.getAttribute("min"), max: element.getAttribute("max"), maxLength: element.getAttribute("maxlength"),
-      }))),
-    } })}\n`);
-  }
   if (locatorCount !== 1 && !mayRebindExclusiveChoice) return "invalid";
   if (mutation.kind === "set_text") {
     if (target.control.kind !== "text") return "invalid";
     for (let index = 0; index < locatorCount; index += 1) {
       const member = locator.nth(index);
-      try { await member.fill(mutation.text, { timeout: timeoutMs }); }
-      catch (error) {
-        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
-          process.stderr.write(`${JSON.stringify({ textMutationDiagnostic: {
-            errorName: error instanceof Error ? error.name : "unknown",
-            numericInputRejected: error instanceof Error && /number input|input of type number/iu.test(error.message),
-          } })}\n`);
-        }
-        throw error;
-      }
+      await member.fill(mutation.text, { timeout: timeoutMs });
       await member.blur({ timeout: timeoutMs });
     }
     return "applied";
@@ -2058,9 +2030,11 @@ async function settleExactFieldPopupCommit(
   if (!await rebindExactFieldPopupTarget(page, target)) return false;
   const control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   if (await control.count() !== 1) return false;
+  const searchPrompt = await control.evaluate(element => element instanceof HTMLInputElement &&
+    element.closest('[data-automation-id="multiSelectContainer"]') !== null);
   await control.blur({ timeout: timeoutMs }).catch(() => undefined);
-  if (await control.evaluate(element => element instanceof HTMLInputElement &&
-      element.closest('[data-automation-id="multiSelectContainer"]') !== null)) {
+  if (searchPrompt) {
+    if (!await rebindExactFieldPopupTarget(page, target)) return false;
     const popup = page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`);
     if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) {
       await control.press("Escape", { timeout: timeoutMs });
