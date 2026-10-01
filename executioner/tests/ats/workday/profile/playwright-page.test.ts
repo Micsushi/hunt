@@ -2418,6 +2418,34 @@ test("source selection binds its newly opened portal without selecting an unrela
   } finally { await browser.close(); }
 });
 
+test("committed dynamic choice observation does not reopen its catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-countryRegion">
+        <button id="address--countryRegion" aria-haspopup="listbox" aria-controls="regions">Alberta</button>
+        <div id="regions" role="listbox" hidden><div role="option">Alberta</div><div role="option">Ontario</div></div>
+      </div></main><script>
+        globalThis.opens = 0;
+        document.querySelector('button').onclick = () => { globalThis.opens++; document.querySelector('#regions').hidden = false; };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelector('#regions').hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls[0]!;
+    const observed = await adapter.observeControl(control.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(observed.validationState, "clear");
+    assert.equal(observed.optionCatalogState, "unknown");
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & { opens: number }).opens), 0);
+    await page.locator('button').evaluate(element => { element.textContent = 'Select One'; });
+    const empty = await adapter.observeControl(control.controlId, AbortSignal.any([]));
+    assert.equal(empty.backingState, "unset");
+    assert.equal(empty.visibleOptionIds.length, 2);
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & { opens: number }).opens), 1);
+  } finally { await browser.close(); }
+});
+
 test("source discovery exposes the career-site leaf rather than its category", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

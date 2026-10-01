@@ -6,6 +6,7 @@ import {
   profileRequiredControlSelector,
   profileRepeatableCatalog,
   profileScalarControlCatalog,
+  retainedProfileControlGuide,
   type ProfileControlCatalogEntry,
   type ProfileRepeatableCatalogEntry,
 } from "./catalog.ts";
@@ -390,10 +391,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           // An empty Workday skills prompt has no stable option catalog until
           // the applicant enters a query. Opening it is not read-only.
           resolved.fieldId !== "skills.values" &&
-          // A selected Intermountain source is rendered over its search input.
-          // Its retained guide has no fixed catalog, so the committed readback
-          // is sufficient and reopening the covered input is not read-only.
-          (resolved.fieldId !== "source.how_did_you_hear" || before === null),
+          // Dynamic choices have no fixed catalog to reconcile after selection.
+          // Re-read backing and validation without reopening a committed popup.
+          (before === null || !retainedProfileControlGuide.some(guide =>
+            guide.identity === resolved.fieldId && guide.behavior === "search_select" &&
+            guide.allowedOptions.length === 0)),
       );
       const after = await this.#resolvedReadback(resolved);
       const validationAfter = (await Promise.all(controls.map(validationCleared))).every(Boolean);
