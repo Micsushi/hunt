@@ -3159,13 +3159,13 @@ export async function bindQuestionnaireTargets(
         selectors.primaryQuestionnaire,
         selectors.applicationQuestions,
       ].join(", "));
+      const isPromptInput = control instanceof HTMLInputElement &&
+        control.closest('[data-automation-id="multiSelectContainer"]') !== null;
       let label = control instanceof HTMLInputElement && control.type === "checkbox"
         ? normalize(control.labels?.[0]?.textContent) || normalize(field?.textContent)
         : isConditionalApplicationDate
         ? normalize(field?.querySelector("label, legend")?.textContent)
-        : control.getAttribute("aria-haspopup") === "listbox" ||
-            control instanceof HTMLInputElement &&
-            control.closest('[data-automation-id="multiSelectContainer"]') !== null
+        : control.getAttribute("aria-haspopup") === "listbox" || isPromptInput
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : "";
       if (label === "") label = normalize(control.getAttribute("aria-label"));
@@ -3299,7 +3299,8 @@ export async function bindQuestionnaireTargets(
         constraints,
         optionLabels.join("\u001e"),
         control.tagName,
-        control.getAttribute("data-automation-id") ?? "",
+        isPromptInput && control.getAttribute("data-automation-id") === "searchBox"
+          ? "" : control.getAttribute("data-automation-id") ?? "",
         fieldIdentity,
         semanticAncestorContext,
         ...(isConditionalApplicationDate
@@ -3645,7 +3646,11 @@ export async function hydrateQuestionnairePopupOptions(
     if (await reboundToggle.count() !== 1 || !await reboundToggle.isVisible()) {
       throw new TypeError("questionnaire popup target unavailable during close");
     }
-    await reboundToggle.click({ timeout: timeoutMs });
+    const promptIcon = reboundToggle.locator(
+      'xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]',
+    ).locator('[data-automation-id="promptIcon"]:visible');
+    if (await promptIcon.count() > 1) throw new TypeError("questionnaire popup toggle ambiguous");
+    await (await promptIcon.count() === 1 ? promptIcon : reboundToggle).click({ timeout: timeoutMs });
     await bindQuestionnaireTargets(page, pageId);
   }
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 5_000))) {
