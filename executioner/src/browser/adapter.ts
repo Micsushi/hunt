@@ -1785,7 +1785,8 @@ async function applyMutationUnchecked(
         }
         if (!bound) return "invalid";
         const leaves = await expandWorkdayPromptCategory(page, locator,
-          page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`), category, timeoutMs);
+          page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`), category, timeoutMs,
+          () => bindOpenedFieldPopupOwner(page, target));
         if (!leaves?.includes(mutation.option)) return "invalid";
       }
       const exact = await waitForExactFieldPopupOption(
@@ -2593,29 +2594,44 @@ export async function expandWorkdayPromptCategory(
   owner: Locator,
   category: string,
   timeoutMs: number,
+  rebindOwner?: () => Promise<boolean>,
 ): Promise<readonly string[] | undefined> {
   if (category.trim() === "" || category.length > 512 || await owner.count() !== 1 ||
       !await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) return undefined;
   await control.fill("", { timeout: timeoutMs });
   await control.pressSequentially(category, { delay: 10, timeout: timeoutMs });
-  let branch = await waitForExactOwnedOption(page, owner, category, Math.min(timeoutMs, 1_000));
-  if (branch.count === 0 && await control.getAttribute("data-automation-id") === "searchBox" &&
-      await owner.isVisible() && await page.getByRole("button", { name: /^submit$/iu }).count() === 0) {
-    await control.press("Enter", { timeout: timeoutMs });
-    branch = await waitForExactOwnedOption(page, owner, category, Math.min(timeoutMs, 5_000));
-  }
-  if (branch.count !== 1 || branch.locator === undefined ||
-      await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
-  await branch.locator.click({ timeout: timeoutMs });
-  const deadline = Date.now() + Math.min(timeoutMs, 5_000);
-  do {
-    const leaves = await owner.locator('[data-automation-id="promptLeafNode"], [role="option"]')
+  const readLeaves = async () => {
+    if (rebindOwner !== undefined && !await rebindOwner()) return [];
+    if (await owner.count() !== 1) return [];
+    return owner.locator('[data-automation-id="promptLeafNode"], [role="option"]')
       .evaluateAll(elements => [...new Set(elements.filter(element =>
         element instanceof HTMLElement && element.getClientRects().length > 0 &&
         getComputedStyle(element).visibility !== "hidden" &&
         element.querySelector('svg[role="presentation"]') === null
       ).map(element => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
         .filter(Boolean))]);
+  };
+  let leaves = await readLeaves();
+  if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+  let branch = await waitForExactOwnedOption(page, owner, category, Math.min(timeoutMs, 1_000));
+  if (branch.count === 0 && await control.getAttribute("data-automation-id") === "searchBox" &&
+      await owner.isVisible() && await page.getByRole("button", { name: /^submit$/iu }).count() === 0) {
+    await control.press("Enter", { timeout: timeoutMs });
+    const searchDeadline = Date.now() + Math.min(timeoutMs, 5_000);
+    do {
+      leaves = await readLeaves();
+      if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+      branch = await owner.count() === 1 ? await exactOwnedOption(owner, category) : { count: 0 };
+      if (branch.count > 0) break;
+      await page.waitForTimeout(50);
+    } while (Date.now() < searchDeadline);
+  }
+  if (branch.count !== 1 || branch.locator === undefined ||
+      await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
+  await branch.locator.click({ timeout: timeoutMs });
+  const deadline = Date.now() + Math.min(timeoutMs, 5_000);
+  do {
+    const leaves = await readLeaves();
     if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
     if (Date.now() < deadline) await page.waitForTimeout(50);
   } while (Date.now() < deadline);

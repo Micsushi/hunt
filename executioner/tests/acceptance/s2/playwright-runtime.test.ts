@@ -2432,7 +2432,7 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
-for (const searchMode of ["keyup", "enter"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
+for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2461,7 +2461,14 @@ for (const searchMode of ["keyup", "enter"]) test(`hierarchical Workday prompts 
         document.body.append(popup);
       };
       input.onclick=open;
-      input.onkeyup=event=>{if(popup?.isConnected && ('${searchMode}'==='keyup' || event.key==='Enter'))popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');};
+      input.onkeyup=event=>{if(popup?.isConnected && ('${searchMode}'==='keyup' || event.key==='Enter')){
+        if('${searchMode}'==='direct'){
+          const replacement=popup.cloneNode(false); replacement.onclick=popup.onclick; replacement.onmousedown=popup.onmousedown;
+          popup.replaceWith(replacement); popup=replacement;
+          popup.removeAttribute('data-hunt-popup-hydration-owner');popup.removeAttribute('data-hunt-field-popup-owner');
+          popup.innerHTML='<div role="option"><div data-automation-id="promptLeafNode">Citizen</div></div><div role="option"><div data-automation-id="promptLeafNode">Permanent resident</div></div>';
+        }else popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');
+      }};
       document.onkeydown=event=>{if(event.key==='Escape'){popup?.remove();input.value='';}};
       }</script>`;
     const pageId = "questionnaire-hierarchical-prompt" as never;

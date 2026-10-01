@@ -3586,10 +3586,7 @@ export async function hydrateQuestionnairePopupOptions(
   if (await reboundOpenTarget.count() !== 1 || !await reboundOpenTarget.isVisible()) {
     throw new TypeError("questionnaire popup target unavailable after open");
   }
-  let popupOwnerBound = false;
-  const ownerDeadline = Date.now() + Math.min(timeoutMs, 5_000);
-  do {
-    popupOwnerBound = await reboundOpenTarget.evaluate((control, declaredToken) => {
+  const bindPopupOwner = async () => reboundOpenTarget.evaluate((control, declaredToken) => {
     const visible = (element: Element): element is HTMLElement => {
       if (!(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
@@ -3634,6 +3631,10 @@ export async function hydrateQuestionnairePopupOptions(
     owners[0]!.setAttribute("data-hunt-popup-hydration-owner", declaredToken);
     return true;
     }, targetToken);
+  let popupOwnerBound = false;
+  const ownerDeadline = Date.now() + Math.min(timeoutMs, 5_000);
+  do {
+    popupOwnerBound = await bindPopupOwner();
     if (!popupOwnerBound && Date.now() < ownerDeadline) await page.waitForTimeout(50);
   } while (!popupOwnerBound && Date.now() < ownerDeadline);
   if (!popupOwnerBound) throw new TypeError("questionnaire popup owner unavailable");
@@ -3654,7 +3655,7 @@ export async function hydrateQuestionnairePopupOptions(
     const leaves = await expandWorkdayPromptCategory(
       page, reboundOpenTarget,
       page.locator(`[data-hunt-popup-hydration-owner="${targetToken}"]`),
-      preferredCategory, timeoutMs,
+      preferredCategory, timeoutMs, bindPopupOwner,
     );
     if (leaves === undefined) throw new TypeError("questionnaire popup category has no selectable answers");
     labels = [...leaves];
