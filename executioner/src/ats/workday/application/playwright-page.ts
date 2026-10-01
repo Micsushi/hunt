@@ -401,7 +401,20 @@ export class PlaywrightWorkdayApplicationPage {
         return failure("browser_target_ambiguous", "page_type");
       }
       return { ok: true, value: snapshot };
-    } catch {
+    } catch (error) {
+      navigationDiagnostic("snapshot_failed", {
+        errorName: error instanceof Error ? error.name : "unknown",
+        questionnairePopupFailure: error instanceof Error && [
+          "questionnaire popup owner unavailable",
+          "questionnaire popup remained open after exact-owner close",
+          "questionnaire popup options denied",
+          "questionnaire popup hydration changed selection",
+          "questionnaire popup target unavailable after open",
+          "questionnaire popup target unavailable during close",
+          "questionnaire popup target unavailable after close",
+          "questionnaire popup hydration limit exceeded",
+        ].includes(error.message) ? error.message : "unclassified",
+      });
       return failure(
         signal.aborted ? "operation_cancelled" : "browser_target_stale",
         "ui_behavior",
