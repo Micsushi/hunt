@@ -3510,6 +3510,29 @@ export async function hydrateQuestionnairePopupOptions(
   targetToken: string,
   timeoutMs: number,
 ): Promise<void> {
+  const tracePrompt = async (stage: string) => {
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE !== "1") return;
+    const controls = await page.locator('[data-automation-id="multiSelectContainer"] input').evaluateAll(inputs => {
+      const hash = (value: string | null) => {
+        let result = 2166136261;
+        for (const char of value ?? "") result = Math.imul(result ^ char.charCodeAt(0), 16777619);
+        return (result >>> 0).toString(16);
+      };
+      return inputs.map(element => {
+        const input = element as HTMLInputElement;
+        const field = input.closest('[data-automation-id^="formField-"]');
+        return { token: input.getAttribute('data-hunt-target-token'), automationId: input.getAttribute('data-automation-id'),
+          field: field?.getAttribute('data-automation-id'), role: input.getAttribute('role'), type: input.type,
+          readOnly: input.readOnly, disabled: input.disabled, active: document.activeElement === input,
+          visible: input.getClientRects().length > 0 && getComputedStyle(input).visibility !== 'hidden',
+          ariaLabelHash: hash(input.getAttribute('aria-label')), placeholderHash: hash(input.getAttribute('placeholder')),
+          labelHash: hash(field?.querySelector('label, legend')?.textContent ?? null),
+          optionsHash: hash(input.getAttribute('data-hunt-popup-options')),
+          ancestors: [input.parentElement, input.parentElement?.parentElement].map(node => ({tag:node?.tagName, automationId:node?.getAttribute('data-automation-id')})) };
+      });
+    });
+    process.stderr.write(`${JSON.stringify({ questionnairePromptStructure: stage, targetToken, controls })}\n`);
+  };
   if (!/^target-[a-z0-9-]{1,120}$/u.test(targetToken)) {
     throw new TypeError("questionnaire popup target denied");
   }
@@ -3541,8 +3564,10 @@ export async function hydrateQuestionnairePopupOptions(
         owner.setAttribute("data-hunt-popup-hydration-preexisting", declaredToken)
       );
   }, targetToken);
+  await tracePrompt("before_open");
   await target.click({ timeout: timeoutMs });
   await bindQuestionnaireTargets(page, pageId);
+  await tracePrompt("after_open");
   const reboundOpenTarget = page.locator(`[data-hunt-target-token="${targetToken}"]`);
   if (await reboundOpenTarget.count() !== 1 || !await reboundOpenTarget.isVisible()) {
     throw new TypeError("questionnaire popup target unavailable after open");
@@ -3613,6 +3638,7 @@ export async function hydrateQuestionnairePopupOptions(
     }
     await rebound.blur({ timeout: timeoutMs });
     await bindQuestionnaireTargets(page, pageId);
+    await tracePrompt("after_blur");
   }
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 500))) {
     const reboundToggle = page.locator(`[data-hunt-target-token="${targetToken}"]`);
