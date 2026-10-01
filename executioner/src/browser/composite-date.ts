@@ -144,17 +144,21 @@ async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boo
       ...[...element.querySelectorAll("[data-automation-id]")]
         .map((child) => child.getAttribute("data-automation-id") ?? ""),
     ].join(" ");
-    return /(?:calendar|date[\s_-]*(?:picker|button|icon))/iu.test(evidence) ? [index] : [];
+    return /(?:calendar|date[\s_-]*(?:picker|button|icon))/iu.test(evidence)
+      ? [{ index, actionable: element.matches('button, [role="button"]') }] : [];
   }));
   dateDiagnostic("calendar_controls", { candidateCount: matches.length, structures: await candidates.evaluateAll(elements => elements.slice(0, 24).map(element => ({
     tag: element.tagName, role: element.getAttribute("role"), automationId: element.getAttribute("data-automation-id"),
     calendarLabel: /calendar|date.*picker/iu.test(element.getAttribute("aria-label") ?? ""),
     width: Math.round(element.getBoundingClientRect().width), height: Math.round(element.getBoundingClientRect().height),
   }))) });
-  if (matches.length === 1) {
-    await candidates.nth(matches[0]!).click({ timeout: timeoutMs });
+  const buttons = matches.filter(({ actionable }) => actionable);
+  const preferred = buttons.length > 0 ? buttons : matches;
+  if (preferred.length === 1) {
+    await candidates.nth(preferred[0]!.index).click({ timeout: timeoutMs });
     return true;
   }
+  if (buttons.length > 1) return false;
   const icons = field.locator("svg:visible");
   dateDiagnostic("calendar_icons", { count: await icons.count() });
   if (await icons.count() !== 1) return false;

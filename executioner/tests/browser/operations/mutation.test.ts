@@ -211,8 +211,11 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
-for (const hiddenSegments of [false, true]) {
-test(`commits a controlled Workday composite date through its owned calendar (hidden segments: ${hiddenSegments})`, async () => {
+for (const {hiddenSegments, nestedIcon} of [
+  {hiddenSegments: false, nestedIcon: false}, {hiddenSegments: true, nestedIcon: false},
+  {hiddenSegments: true, nestedIcon: true},
+]) {
+test(`commits a controlled Workday composite date through its owned calendar (hidden segments: ${hiddenSegments}, nested icon: ${nestedIcon})`, async () => {
   const fixture = await loopbackPage(`
     ${hiddenSegments ? '<style>[data-automation-id="dateInputWrapper"] { min-height: 30px; } input { position: absolute; width: 0; height: 0; padding: 0; border: 0; }</style>' : ''}
     <div data-automation-id="formField-dateSignedOn">
@@ -222,8 +225,9 @@ test(`commits a controlled Workday composite date through its owned calendar (hi
         <input data-automation-id="dateSectionMonth-input">
         <input data-automation-id="dateSectionDay-input">
         <input data-automation-id="dateSectionYear-input">
+        ${nestedIcon ? '<div role="button" data-automation-id="dateIcon" aria-label="Open date picker" style="width:24px;height:24px;overflow:hidden"><svg style="pointer-events:none;width:300px;height:150px"></svg></div>' : ''}
       </div>
-      <button type="button" aria-label="Open date picker"><svg></svg></button>
+      ${nestedIcon ? '' : '<button type="button" aria-label="Open date picker"><svg></svg></button>'}
       <div role="dialog" hidden>
         <button type="button" aria-label="Monday, August 31, 2026">31</button>
       </div>
