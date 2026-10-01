@@ -103,8 +103,10 @@ export async function applyCompositeDateMutation(
   const editable = await Promise.all(locators.map(async (part) =>
     await part.count() === 1 && await part.isEditable()
   ));
+  dateDiagnostic("segments", { editable });
   if (editable.some((value) => !value)) return false;
   const visible = await Promise.all(locators.map((part) => part.isVisible()));
+  dateDiagnostic("visibility", { visible });
   // Some Workday tenants keep zero-sized segments behind a visible date picker.
   // Use that owned UI instead of trying to fill hidden inputs.
   if (visible.every(Boolean)) {
@@ -114,14 +116,18 @@ export async function applyCompositeDateMutation(
         await part.fill(values[index]!, { timeout: timeoutMs });
       }
       await locators[2]!.blur({ timeout: timeoutMs });
-    } catch {
+    } catch (error) {
+      dateDiagnostic("segment_fill_failed", { errorName: error instanceof Error ? error.name : "unknown" });
       return false;
     }
     if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   }
-  if (!await openOwnedCalendar(owner, timeoutMs)) return false;
-  if (!await chooseCalendarDate(page, isoDate, timeoutMs)) return false;
-  return await compositeDateBackingCommitted(owner, isoDate);
+  if (!await openOwnedCalendar(owner, timeoutMs)) { dateDiagnostic("calendar_unavailable"); return false; }
+  dateDiagnostic("calendar_opened");
+  if (!await chooseCalendarDate(page, isoDate, timeoutMs)) { dateDiagnostic("date_unavailable"); return false; }
+  const committed = await compositeDateBackingCommitted(owner, isoDate);
+  dateDiagnostic("calendar_readback", { committed });
+  return committed;
 }
 
 async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boolean> {
@@ -140,11 +146,17 @@ async function openOwnedCalendar(owner: Locator, timeoutMs: number): Promise<boo
     ].join(" ");
     return /(?:calendar|date[\s_-]*(?:picker|button|icon))/iu.test(evidence) ? [index] : [];
   }));
+  dateDiagnostic("calendar_controls", { candidateCount: matches.length, structures: await candidates.evaluateAll(elements => elements.slice(0, 24).map(element => ({
+    tag: element.tagName, role: element.getAttribute("role"), automationId: element.getAttribute("data-automation-id"),
+    calendarLabel: /calendar|date.*picker/iu.test(element.getAttribute("aria-label") ?? ""),
+    width: Math.round(element.getBoundingClientRect().width), height: Math.round(element.getBoundingClientRect().height),
+  }))) });
   if (matches.length === 1) {
     await candidates.nth(matches[0]!).click({ timeout: timeoutMs });
     return true;
   }
   const icons = field.locator("svg:visible");
+  dateDiagnostic("calendar_icons", { count: await icons.count() });
   if (await icons.count() !== 1) return false;
   await icons.click({ timeout: timeoutMs });
   return true;
@@ -175,6 +187,7 @@ async function chooseCalendarDate(
     (element, index) => admitted.includes((element.getAttribute("aria-label") ?? "")
       .replace(/\s+/gu, " ").trim()) ? [index] : [],
   ), labels);
+  dateDiagnostic("calendar_dates", { exactMatches: matches.length, visibleSurfaces: await surfaces.count() });
   if (matches.length === 1) {
     await surfaces.nth(matches[0]!).click({ timeout: timeoutMs });
     return true;
@@ -191,4 +204,10 @@ async function chooseCalendarDate(
   if (await day.count() !== 1) return false;
   await day.click({ timeout: timeoutMs });
   return true;
+}
+
+function dateDiagnostic(stage: string, details: object = {}): void {
+  if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+    process.stderr.write(`${JSON.stringify({ compositeDateDiagnostic: { stage, ...details } })}\n`);
+  }
 }
