@@ -429,6 +429,41 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
   }
 
+  async #openPromptSearch(activator: Locator, control: Locator): Promise<void> {
+    const sourcePrompt = await control.getAttribute("id") === "source--source";
+    const componentOwnerActivated = await activator.evaluate((element, source) => {
+      if (!(element instanceof HTMLElement)) {
+        throw new TypeError("Workday prompt search owner is unavailable");
+      }
+      const record = element as unknown as Record<string, unknown>;
+      const fiberKey = Object.keys(element).find((name) =>
+        name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$")
+      );
+      let fiber = fiberKey === undefined ? undefined : record[fiberKey] as {
+        readonly memoizedProps?: unknown;
+        readonly pendingProps?: unknown;
+        readonly return?: unknown;
+      } | undefined;
+      const handlers = new Set<() => unknown>();
+      for (let depth = 0; fiber !== undefined && fiber !== null && depth < 32; depth += 1) {
+        const props = fiber.memoizedProps ?? fiber.pendingProps;
+        if (typeof props === "object" && props !== null) {
+          const handler = source
+            ? (props as { readonly onSelectInputClick?: unknown }).onSelectInputClick
+            : (props as { readonly onPromptIconClick?: unknown }).onPromptIconClick;
+          if (typeof handler === "function") handlers.add(handler as () => unknown);
+        }
+        fiber = fiber.return as typeof fiber;
+      }
+      if (handlers.size > 1) throw new TypeError("Workday prompt component owner is ambiguous");
+      const handler = [...handlers][0];
+      if (handler === undefined) return false;
+      handler();
+      return true;
+    }, sourcePrompt);
+    if (!componentOwnerActivated) await activator.click({ timeout: this.#timeoutMs });
+  }
+
   async #observeOptionLabels(
     resolved: ResolvedControl,
     controls: readonly Locator[],
@@ -456,9 +491,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     await this.#page.waitForTimeout(25);
     let labels: string[] = [];
     try {
-      const owner = resolved.fieldId === "source.how_did_you_hear"
+      let owner = resolved.fieldId === "source.how_did_you_hear"
         ? await exactPromptCatalogOwner(this.#page, control)
         : await exactObservedOptionOwner(this.#page, control);
+      if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
+        const buttons = await visibleLocators(control.locator(
+          'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
+        ).locator('[data-automation-id="promptSearchButton"]'));
+        if (buttons.length > 1) throw new TypeError("Workday prompt search owner is ambiguous");
+        if (buttons.length === 1) {
+          await this.#openPromptSearch(buttons[0]!, control);
+          owner = await exactPromptCatalogOwner(this.#page, control);
+        }
+      }
       if (owner !== undefined) {
         const options = await visibleLocators(owner.locator([
           '[role="option"]',
@@ -1180,42 +1225,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const activator = searchButtons[0] ?? promptWrappers[0];
         if (activator !== undefined) {
           if (await activator.getAttribute("data-automation-id") === "promptSearchButton") {
-            const sourcePrompt = await control.getAttribute("id") === "source--source";
-            const componentOwnerActivated = await activator.evaluate((element, source) => {
-              if (!(element instanceof HTMLElement)) {
-                throw new TypeError("Workday prompt search owner is unavailable");
-              }
-              const record = element as unknown as Record<string, unknown>;
-              const fiberKey = Object.keys(element).find((name) =>
-                name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$")
-              );
-              let fiber = fiberKey === undefined ? undefined : record[fiberKey] as {
-                readonly memoizedProps?: unknown;
-                readonly pendingProps?: unknown;
-                readonly return?: unknown;
-              } | undefined;
-              const handlers = new Set<() => unknown>();
-              for (let depth = 0; fiber !== undefined && fiber !== null && depth < 32; depth += 1) {
-                const props = fiber.memoizedProps ?? fiber.pendingProps;
-                if (typeof props === "object" && props !== null) {
-                  const handler = source
-                    ? (props as { readonly onSelectInputClick?: unknown }).onSelectInputClick
-                    : (props as { readonly onPromptIconClick?: unknown }).onPromptIconClick;
-                  if (typeof handler === "function") handlers.add(handler as () => unknown);
-                }
-                fiber = fiber.return as typeof fiber;
-              }
-              if (handlers.size > 1) {
-                throw new TypeError("Workday prompt component owner is ambiguous");
-              }
-              const handler = [...handlers][0];
-              if (handler === undefined) return false;
-              handler();
-              return true;
-            }, sourcePrompt);
-            if (!componentOwnerActivated) {
-              await activator.click({ timeout: this.#timeoutMs });
-            }
+            await this.#openPromptSearch(activator, control);
           } else {
             const glyphs = await visibleLocators(activator.locator("svg"));
             if (glyphs.length > 1) {

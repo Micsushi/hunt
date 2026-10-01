@@ -2388,6 +2388,34 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
+test("source option observation opens its roleless prompt without committing an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" data-automation-id="searchBox" aria-required="true">
+        <span data-automation-id="promptSearchButton">Open</span>
+      </div>
+      <div role="listbox" tabindex="-1" hidden><div role="option">Website</div></div>
+    </main><script>
+      const popup = document.querySelector('[role="listbox"]');
+      document.querySelector('span').__reactFiber$retained = {
+        memoizedProps: { onSelectInputClick: () => setTimeout(() => {
+          popup.hidden = false; popup.focus();
+        }, 150) }, return: null
+      };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
 test("only zero-sized anonymous text companions of known choices are excluded", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
