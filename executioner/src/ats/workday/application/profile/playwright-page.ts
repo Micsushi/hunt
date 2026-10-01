@@ -503,6 +503,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           await buttons[0]!.click({ timeout: this.#timeoutMs });
           owner = await exactPromptCatalogOwner(this.#page, control);
           if (owner === undefined) {
+            await this.#captureSelectionDiagnostic("native-source-observation-empty", "search_select");
             await this.#openPromptSearch(buttons[0]!, control);
             owner = await exactPromptCatalogOwner(this.#page, control);
           }
