@@ -2388,7 +2388,7 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
-for (const opener of ["native", "component"] as const) {
+for (const opener of ["native", "component", "icon-component"] as const) {
 test(`source option observation opens its roleless ${opener} prompt without committing an answer`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -2406,7 +2406,10 @@ test(`source option observation opens its roleless ${opener} prompt without comm
       const button = document.querySelector('span');
       button.onclick = ${opener === "native"} ? open : () => {};
       button.__reactFiber$retained = {
-        memoizedProps: { onSelectInputClick: ${opener === "component"} ? open : () => {} }, return: null
+        memoizedProps: {
+          onSelectInputClick: ${opener === "component"} ? open : () => {},
+          ...(${opener === "icon-component"} ? { onPromptIconClick: open } : {})
+        }, return: null
       };
       document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
     </script>`);

@@ -429,9 +429,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
   }
 
-  async #openPromptSearch(activator: Locator, control: Locator): Promise<void> {
+  async #openPromptSearch(activator: Locator, control: Locator, inspectCatalog = false): Promise<void> {
     const sourcePrompt = await control.getAttribute("id") === "source--source";
-    const componentOwnerActivated = await activator.evaluate((element, source) => {
+    const componentOwnerActivated = await activator.evaluate((element, { source, inspectCatalog }) => {
       if (!(element instanceof HTMLElement)) {
         throw new TypeError("Workday prompt search owner is unavailable");
       }
@@ -448,9 +448,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       for (let depth = 0; fiber !== undefined && fiber !== null && depth < 32; depth += 1) {
         const props = fiber.memoizedProps ?? fiber.pendingProps;
         if (typeof props === "object" && props !== null) {
+          const inputHandler = (props as { readonly onSelectInputClick?: unknown }).onSelectInputClick;
+          const iconHandler = (props as { readonly onPromptIconClick?: unknown }).onPromptIconClick;
           const handler = source
-            ? (props as { readonly onSelectInputClick?: unknown }).onSelectInputClick
-            : (props as { readonly onPromptIconClick?: unknown }).onPromptIconClick;
+            ? inspectCatalog ? iconHandler ?? inputHandler : inputHandler
+            : iconHandler;
           if (typeof handler === "function") handlers.add(handler as () => unknown);
         }
         fiber = fiber.return as typeof fiber;
@@ -460,7 +462,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (handler === undefined) return false;
       handler();
       return true;
-    }, sourcePrompt);
+    }, { source: sourcePrompt, inspectCatalog });
     if (!componentOwnerActivated) await activator.click({ timeout: this.#timeoutMs });
   }
 
@@ -504,7 +506,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           owner = await exactPromptCatalogOwner(this.#page, control);
           if (owner === undefined) {
             await this.#captureSelectionDiagnostic("native-source-observation-empty", "search_select");
-            await this.#openPromptSearch(buttons[0]!, control);
+            await this.#openPromptSearch(buttons[0]!, control, true);
             owner = await exactPromptCatalogOwner(this.#page, control);
           }
         }
