@@ -183,9 +183,9 @@ export async function completeWorkdayProfilePage(
   // optional widget can then fail closed without preventing the required
   // repeatable rows from being learned and verified first.
   // Settle expensive choice catalogs before text commits trigger independent
-  // page rescans. Country stays ahead of its dependent region. Live owner-only
-  // plans keep their original order.
-  const earlyChoices = ["address.country", "address.region", "source.how_did_you_hear"];
+  // page rescans. Source is independent of address; Country stays ahead of its
+  // dependent region. Live owner-only plans keep their original order.
+  const earlyChoices = ["source.how_did_you_hear", "address.country", "address.region"];
   const fields = effectivePlan.mode === "synthetic_test_non_submittable"
     ? [...effectivePlan.fields].sort((left, right) => {
         const rank = (item: ProfileFieldPlan) => {

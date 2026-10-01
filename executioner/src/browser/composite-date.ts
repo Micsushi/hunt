@@ -100,20 +100,25 @@ export async function applyCompositeDateMutation(
   const locators = parts.map(([legacyId, currentId]) => owner.locator(
     `[data-automation-id="${legacyId}"], [data-automation-id="${currentId}"]`,
   ));
-  const ready = await Promise.all(locators.map(async (part) =>
-    await part.count() === 1 && await part.isVisible() && await part.isEditable()
+  const editable = await Promise.all(locators.map(async (part) =>
+    await part.count() === 1 && await part.isEditable()
   ));
-  if (ready.some((value) => !value)) return false;
-  const values = [isoDate.slice(5, 7), isoDate.slice(8, 10), isoDate.slice(0, 4)];
-  try {
-    for (const [index, part] of locators.entries()) {
-      await part.fill(values[index]!, { timeout: timeoutMs });
+  if (editable.some((value) => !value)) return false;
+  const visible = await Promise.all(locators.map((part) => part.isVisible()));
+  // Some Workday tenants keep zero-sized segments behind a visible date picker.
+  // Use that owned UI instead of trying to fill hidden inputs.
+  if (visible.every(Boolean)) {
+    const values = [isoDate.slice(5, 7), isoDate.slice(8, 10), isoDate.slice(0, 4)];
+    try {
+      for (const [index, part] of locators.entries()) {
+        await part.fill(values[index]!, { timeout: timeoutMs });
+      }
+      await locators[2]!.blur({ timeout: timeoutMs });
+    } catch {
+      return false;
     }
-    await locators[2]!.blur({ timeout: timeoutMs });
-  } catch {
-    return false;
+    if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   }
-  if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   if (!await openOwnedCalendar(owner, timeoutMs)) return false;
   if (!await chooseCalendarDate(page, isoDate, timeoutMs)) return false;
   return await compositeDateBackingCommitted(owner, isoDate);

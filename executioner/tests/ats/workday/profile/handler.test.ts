@@ -81,7 +81,7 @@ test("synthetic Profile settles country-dependent and source choices before text
   ] });
   assert.equal((await completeWorkdayProfilePage(plan, port, AbortSignal.any([]))).kind, "verified");
   assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
-    "control-address.country", "control-address.region", "control-source.how_did_you_hear", "control-identity.given_name",
+    "control-source.how_did_you_hear", "control-address.country", "control-address.region", "control-identity.given_name",
   ]);
 });
 

@@ -211,8 +211,10 @@ test("applies admitted desired-state mutations and independently reads them back
   }
 });
 
-test("commits a controlled Workday composite date through its owned calendar", async () => {
+for (const hiddenSegments of [false, true]) {
+test(`commits a controlled Workday composite date through its owned calendar (hidden segments: ${hiddenSegments})`, async () => {
   const fixture = await loopbackPage(`
+    ${hiddenSegments ? '<style>[data-automation-id="dateInputWrapper"] { min-height: 30px; } input { position: absolute; width: 0; height: 0; padding: 0; border: 0; }</style>' : ''}
     <div data-automation-id="formField-dateSignedOn">
       <label>Date</label>
       <div aria-label="Date" data-automation-id="dateInputWrapper"
@@ -280,6 +282,7 @@ test("commits a controlled Workday composite date through its owned calendar", a
     await fixture.close();
   }
 });
+}
 
 test("does not accept composite date segments whose controlled backing stays empty", async () => {
   const fixture = await loopbackPage(`
