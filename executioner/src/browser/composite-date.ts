@@ -90,7 +90,7 @@ export async function compositeDateBackingCommitted(
       }) };
     }, isoDate).catch((error) => ({ status: "uncommitted" as const, values: [], errorName: error instanceof Error ? error.name : "unknown" }));
     if (observation.status === "uncontrolled" || observation.status === "committed") return true;
-    if (Date.now() >= deadline) dateDiagnostic("backing_uncommitted", observation);
+    dateDiagnostic("backing_uncommitted", observation);
     if (Date.now() < deadline) await owner.page().waitForTimeout(50);
   } while (Date.now() < deadline);
   return false;
