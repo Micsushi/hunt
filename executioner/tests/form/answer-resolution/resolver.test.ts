@@ -79,6 +79,19 @@ function resolverWith(answer: ApplicationProfileAnswerResult) {
   };
 }
 
+test("salary test fallback is numeric without replacing owner salary or authorizing a live fallback", async () => {
+  const missing = resolverWith({kind: "profile_answer_missing"}).resolver;
+  const observed = field("What are your salary expectations for this position? Please answer as an annual/yearly amount (e.g. 25000)*");
+  const signal = new AbortController().signal;
+  const generated = await missing.resolve(syntheticRequest(observed), signal);
+  assert.equal(generated.ok && generated.value.kind === "resolved" && generated.value.intent.kind === "text" && generated.value.intent.value, "0");
+  const live = await missing.resolve(request(observed), signal);
+  assert.equal(live.ok && live.value.kind, "profile_answer_missing");
+  const owner = resolverWith({kind: "answered", value: "85000", provenance: "owner_provided", lane: "live_owner_fact"}).resolver;
+  const preserved = await owner.resolve(syntheticRequest(observed), signal);
+  assert.equal(preserved.ok && preserved.value.kind === "resolved" && preserved.value.intent.kind === "text" && preserved.value.intent.value, "85000");
+});
+
 test("profile answers produce exact immutable intents with provenance", async () => {
   const cases = [
     ["Given name", "text", "Ada", "text", { value: "Ada" }],
