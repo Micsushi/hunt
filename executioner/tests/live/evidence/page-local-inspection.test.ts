@@ -160,6 +160,39 @@ test("page-local inspection retains Workday checkbox ownership and React evidenc
   }
 });
 
+test("failed request diagnostics distinguish origins without retaining private URLs", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "workday-network-inspection-"));
+  try {
+    await page.route("https://application.example/", route => route.fulfill({
+      contentType: "text/html", body: "<html><body>Application</body></html>",
+    }));
+    await page.goto("https://application.example/");
+    const inspection = createPageLocalInspection(evidenceRoot);
+    await inspection.prepare(page);
+    await page.route("**/private-person?token=private-token", route => route.abort("namenotresolved"));
+    await page.evaluate(async () => {
+      for (const origin of [location.origin, "https://telemetry.example"]) {
+        await fetch(`${origin}/private-person?token=private-token`).catch(() => undefined);
+      }
+    });
+    await inspection.capture(page);
+    const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
+    const evidence = JSON.parse(serialized);
+    assert.deepEqual(evidence.requestFailures, [
+      { resourceType: "fetch", failureClass: "dns", sameOrigin: true,
+        originSha256: hash("https://application.example") },
+      { resourceType: "fetch", failureClass: "dns", sameOrigin: false,
+        originSha256: hash("https://telemetry.example") },
+    ]);
+    assert.doesNotMatch(serialized, /private-person|private-token|application\.example|telemetry\.example/u);
+  } finally {
+    await browser.close();
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
 function hash(value: string): string {
   return createHash("sha256").update(
     value.normalize("NFC").replace(/\s+/gu, " ").trim(),

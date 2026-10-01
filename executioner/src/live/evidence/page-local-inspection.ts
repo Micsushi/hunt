@@ -16,7 +16,12 @@ const sensitiveTextKeys = new Set(["label", "optionLabel", "placeholder", "summa
 interface EventRecord {
   readonly consoleTypes: string[];
   readonly pageErrorNames: string[];
-  readonly requestFailures: { readonly resourceType: string; readonly failureClass: string }[];
+  readonly requestFailures: {
+    readonly resourceType: string;
+    readonly failureClass: string;
+    readonly sameOrigin: boolean;
+    readonly originSha256: string;
+  }[];
 }
 
 export function createPageLocalInspection(evidenceRoot: string): {
@@ -47,6 +52,8 @@ export function createPageLocalInspection(evidenceRoot: string): {
       {
         resourceType: request.resourceType().replace(/[^a-z_-]/giu, "_").slice(0, 32),
         failureClass: requestFailureClass(request.failure()?.errorText),
+        sameOrigin: new URL(request.url()).origin === new URL(page.url()).origin,
+        originSha256: diagnosticTextHash(new URL(request.url()).origin),
       },
     ));
     await page.addInitScript(installMutationProbe);
