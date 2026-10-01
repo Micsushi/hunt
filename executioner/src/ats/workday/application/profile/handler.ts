@@ -444,12 +444,16 @@ function withSupportedSyntheticUnknowns(
   fallbacks: Map<string, ProfileFieldPlan>,
 ): ProfilePagePlan {
   const controls = new Map(snapshot.controls.map((control) => [control.fieldId, control]));
+  const countryField = plan.fields.find(({ fieldId }) => fieldId === "address.country");
+  const country = countryField?.answer.kind === "answered"
+    ? countryField.optionMapping?.visibleOption ?? countryField.answer.value
+    : controls.get("address.country")?.readback ?? undefined;
   const prepared = plan.fields.map((field): ProfileFieldPlan => {
     if (field.answer.kind !== "profile_answer_missing") return field;
     const control = controls.get(field.fieldId);
     return control === undefined
       ? field
-      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field) ?? field;
+      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field, country) ?? field;
   });
   const planned = new Set(prepared.map(({ fieldId }) => fieldId));
   const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
@@ -469,6 +473,7 @@ function withSupportedSyntheticUnknowns(
       fallbacks,
       `scalar\u0000${control.fieldId}`,
       template,
+      country,
     );
     return field === undefined ? [] : [field];
   });
@@ -484,6 +489,7 @@ function syntheticProfileField(
   fallbacks: Map<string, ProfileFieldPlan> = new Map(),
   slot = control.fieldId,
   template?: ProfileFieldPlan,
+  country?: string,
 ): ProfileFieldPlan | undefined {
   const unknownRequired = control.required && control.fieldId.startsWith("unknown.required.");
   if (!unknownRequired && (template === undefined ||
@@ -503,7 +509,7 @@ function syntheticProfileField(
     );
   const choice = committed ?? syntheticProfileOption(control.fieldId, options);
   const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
-  const answer = syntheticProfileValue(control, choice, answerType);
+  const answer = syntheticProfileValue(control, choice, answerType, country);
   if (answer === undefined || answerType === undefined) return undefined;
   const field = Object.freeze({
     fieldId: control.fieldId,
@@ -714,6 +720,7 @@ function syntheticProfileValue(
   control: ProfileControlSnapshot,
   choice: string | undefined,
   answerType = syntheticProfileAnswerType(control.uiBehavior),
+  country?: string,
 ): string | undefined {
   if (control.uiBehavior === "checkbox") {
     return control.fieldId === "identity.has_preferred_name" ? "false" : "true";
@@ -731,6 +738,14 @@ function syntheticProfileValue(
     return choice;
   }
   if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
+  if (control.fieldId === "address.postal_code" && /^(canada|ca)$/iu.test(country?.trim() ?? "")) {
+    const generated = generateSyntheticTextValue({
+      inputType: "text", min: null, max: null, maxLength: null,
+      ...control.constraints,
+      pattern: control.constraints?.pattern ?? "[ABCEGHJ-NPRSTVXY][0-9][ABCEGHJ-NPRSTVWXYZ] [0-9][ABCEGHJ-NPRSTVWXYZ][0-9]",
+    });
+    return generated.kind === "generated" ? generated.value : undefined;
+  }
   if (control.uiBehavior === "phone") return "4035550100";
   if (control.fieldId === "phone.extension") {
     const generated = generateSyntheticTextValue({

@@ -1824,6 +1824,28 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
   ]);
 });
 
+test("synthetic postal fallback uses the planned or observed Canadian country without replacing owner facts", async () => {
+  for (const source of ["planned", "observed", "owner"] as const) {
+    const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+      { ...control("address.country", "search_select", source === "planned" ? "United States" : "Canada"),
+        allowedOptions: ["Canada", "United States"] },
+      control("address.postal_code", "text"),
+    ] });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+      fields: [
+        ...(source === "planned" ? [field("address.country", "address", "option", "CA", "owner_provided", "Canada")] : []),
+        ...(source === "owner" ? [field("address.postal_code", "address", "text", "T2P 1J9")] : []),
+      ],
+    }, port, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const postal = port.commits.find(({ controlId }) => controlId === "control-address.postal_code");
+    assert.match(postal?.value ?? "", /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTVWXYZ] \d[ABCEGHJ-NPRSTVWXYZ]\d$/u);
+    if (source === "owner") assert.equal(postal?.value, "T2P 1J9");
+    else if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) => fieldId === "address.postal_code")?.lane, "synthetic_test_default");
+  }
+});
+
 test("fills recognized unplanned optional controls with explicit test fallbacks", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
