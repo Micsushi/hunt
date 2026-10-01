@@ -2436,11 +2436,11 @@ for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prom
   const browser = await chromium.launch({headless:true});
   const page = await browser.newPage();
   try {
-    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
-      <h2>Application questions</h2>
+    await page.setContent(`<div data-automation-id="applyFlowPage"><h3>Application questions</h3>
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-pronouns"><label for="pronouns">Pronouns</label>
         <div data-automation-id="multiSelectContainer"><div data-automation-id="multiselectInputContainer"><input id="pronouns"><span data-automation-id="promptIcon">Toggle</span></div></div>
-      </div></main><script>
+      </div></main></div><script>
         const input=document.querySelector('#pronouns');
         input.onclick=()=>{
           input.setAttribute('aria-label','Search');
@@ -2458,7 +2458,7 @@ for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prom
         const close=()=>{document.querySelector('[role="listbox"]')?.remove();input.removeAttribute('aria-label');input.removeAttribute('data-automation-id');};
         input.onblur=()=>{if('${closeMode}'==='blur')close();};
         document.querySelector('[data-automation-id="promptIcon"]').onclick=()=>{if('${closeMode}'==='icon')close();};
-        document.querySelector('h2').onclick=close;
+        document.querySelector('h3').onclick=close;
       </script>`);
     const pageId="questionnaire-roleless-prompt" as never;
     await bindQuestionnaireTargets(page,pageId);

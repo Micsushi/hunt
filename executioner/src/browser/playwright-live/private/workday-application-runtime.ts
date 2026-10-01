@@ -3659,13 +3659,18 @@ export async function hydrateQuestionnairePopupOptions(
     await bindQuestionnaireTargets(page, pageId);
   }
   if (await ownedHydrationPopupOpen(page, targetToken)) {
-    const heading = reboundOpenTarget.locator(
-      'xpath=ancestor::*[starts-with(@data-automation-id,"applyFlow")][1]',
-    ).locator('h1:visible, h2:visible, [role="heading"]:visible');
-    if (await heading.count() === 1 && await heading.evaluate(element =>
-      element.closest('a, button, label, [role="button"]') === null &&
-      element.querySelector('a, button, input, select, textarea, [role="button"]') === null
-    )) await heading.click({ timeout: timeoutMs });
+    const headings = reboundOpenTarget.locator(
+      'xpath=ancestor::*[starts-with(@data-automation-id,"applyFlow")][last()]',
+    ).locator('h1:visible, h2:visible, h3:visible, h4:visible, [role="heading"]:visible');
+    const safeHeadings = await headings.evaluateAll(elements => elements.flatMap((element, index) =>
+      element.closest('a, button, label, [role="button"], [role="link"], [role="listbox"], [data-hunt-popup-hydration-owner]') === null &&
+      element.querySelector('a, button, input, select, textarea, [role="button"], [role="link"]') === null
+        ? [index] : []
+    ));
+    if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") process.stderr.write(`${JSON.stringify({
+      questionnairePopupCloseHeadings: { total: await headings.count(), safe: safeHeadings.length },
+    })}\n`);
+    if (safeHeadings[0] !== undefined) await headings.nth(safeHeadings[0]).click({ timeout: timeoutMs });
     await bindQuestionnaireTargets(page, pageId);
   }
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 5_000))) {
