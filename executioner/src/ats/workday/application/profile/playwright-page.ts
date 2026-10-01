@@ -1848,6 +1848,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.validationCleared = await validationCleared(control);
     if (!interaction.backingValueCommitted || !interaction.validationCleared) {
       if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        await this.#captureSelectionDiagnostic("prompt-uncommitted", behavior);
         process.stderr.write(`${JSON.stringify({
           profilePromptUncommittedVisibleOptions: (await options.allInnerTexts()).slice(0, 64).map(normalize),
         })}\n`);
