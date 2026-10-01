@@ -772,6 +772,25 @@ test("visible optional churn is not accepted as semantic transition evidence", a
   });
 });
 
+test("choice catalog churn does not end a still-pending navigation before Review arrives", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+        <label>Choice <select required data-hunt-field-id="choice"><option selected>Alpha</option></select></label>
+        <button id="next">Save and Continue</button>
+      </main><script>
+        document.querySelector('#next').onclick=()=>{
+          document.querySelector('select').add(new Option('Beta','beta'));
+          setTimeout(()=>document.body.innerHTML='<main data-automation-id="applyFlowReviewPage"><button>Submit</button></main>',3500);
+        };
+      </script>`);
+    const adapter = application(page, 5000);
+    const result = await adapter.next(await questionnaireRequest(adapter, ['questionnaire', 'pre_review']), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+    assert.equal((await adapter.observe(signal())).ok, true);
+  });
+});
+
 test("accessible Required markers and unknown required controls fail closed", async () => {
   await withPage(async (page) => {
     const adapter = application(page);

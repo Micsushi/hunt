@@ -465,6 +465,10 @@ export class PlaywrightWorkdayApplicationPage {
         );
         if (
           after.ok && (after.value.signature !== before.signature || currentActionWitness) &&
+          (after.value.page !== before.page || after.value.rootSelector !== before.rootSelector ||
+            after.value.transitionKey !== before.transitionKey || currentActionWitness ||
+            after.value.requiredFields.length > before.requiredFields.length ||
+            hasValidationDowngrade(before, after.value)) &&
           (hasIndependentDestinationEvidence(before, after.value) ||
             (before.page === "questionnaire" && after.value.page === "questionnaire" &&
               currentActionWitness) ||
