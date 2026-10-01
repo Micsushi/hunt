@@ -520,8 +520,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (owner !== undefined) {
         const options = await visibleLocators(owner.locator([
           '[role="option"]',
-          '[data-automation-id="promptOption"]',
-          '[data-automation-id="promptLeafNode"]',
+          '[data-automation-id="promptOption"]:not([role="option"] *)',
+          '[data-automation-id="promptLeafNode"]:not([role="option"] *)',
         ].join(", ")));
         labels = uniqueObservedOptions(await Promise.all(options.slice(0, 64).map((option) =>
           option.innerText()

@@ -2404,7 +2404,7 @@ test("source observation binds only its newly visible unfocused portal catalog",
       const popup = document.querySelector('#source-options');
       document.querySelector('input').onclick = () => {
         popup.hidden = false; popup.innerHTML = '';
-        setTimeout(() => { popup.innerHTML = '<div role="option">Website</div>'; }, 150);
+        setTimeout(() => { popup.innerHTML = '<div role="option"><div data-automation-id="promptOption">Website</div></div>'; }, 150);
       };
       document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
     </script>`);
@@ -2422,6 +2422,15 @@ test("source observation binds only its newly visible unfocused portal catalog",
     });
     await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
     assert.equal(await page.locator('input').inputValue(), "");
+    await page.locator('#duplicate-source-options').evaluate(element => element.remove());
+    await page.locator('input').evaluate(element => {
+      element.onclick = () => {
+        const popup = document.querySelector<HTMLElement>('#source-options')!;
+        popup.innerHTML = '<div role="option">Website</div><div role="option">Website</div>';
+        popup.hidden = false;
+      };
+    });
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
   } finally { await browser.close(); }
 });
 
