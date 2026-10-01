@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 
 import {
   profileInteractiveControlSelector,
@@ -488,13 +488,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
-    await control.focus({ timeout: this.#timeoutMs });
-    await control.click({ timeout: this.#timeoutMs });
-    await this.#page.waitForTimeout(25);
+    const priorCatalogs = resolved.fieldId === "source.how_did_you_hear"
+      ? await Promise.all((await visibleLocators(this.#page.locator(
+        '[data-automation-id="activeListContainer"][role="listbox"]',
+      ))).map(locator => locator.elementHandle()))
+      : undefined;
     let labels: string[] = [];
     try {
+      await control.focus({ timeout: this.#timeoutMs });
+      await control.click({ timeout: this.#timeoutMs });
+      await this.#page.waitForTimeout(25);
       let owner = resolved.fieldId === "source.how_did_you_hear"
-        ? await exactPromptCatalogOwner(this.#page, control)
+        ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
       if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
         await this.#captureSelectionDiagnostic("input-source-observation-empty", "search_select");
@@ -504,11 +509,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if (buttons.length > 1) throw new TypeError("Workday prompt search owner is ambiguous");
         if (buttons.length === 1) {
           await buttons[0]!.click({ timeout: this.#timeoutMs });
-          owner = await exactPromptCatalogOwner(this.#page, control);
+          owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
           if (owner === undefined) {
             await this.#captureSelectionDiagnostic("native-source-observation-empty", "search_select");
             await this.#openPromptSearch(buttons[0]!, control, true);
-            owner = await exactPromptCatalogOwner(this.#page, control);
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
           }
         }
       }
@@ -527,6 +532,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await this.#captureSelectionDiagnostic("observation-empty", resolved.uiBehavior);
       }
     } finally {
+      await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
       await this.#page.keyboard.press("Escape");
       await control.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
@@ -2830,6 +2836,7 @@ async function exactObservedOptionOwner(
 async function exactPromptCatalogOwner(
   page: Page,
   control: Locator,
+  priorCatalogs?: readonly (ElementHandle | null)[],
 ): Promise<Locator | undefined> {
   const source = await control.getAttribute("id") === "source--source";
   const deadline = Date.now() + (source ? 1_500 : 0);
@@ -2847,6 +2854,12 @@ async function exactPromptCatalogOwner(
       ));
       const sourceOwners: Locator[] = [];
       for (const candidate of candidates) {
+        if (priorCatalogs !== undefined) {
+          if (!await candidate.evaluate((element, prior) => prior.includes(element), [...priorCatalogs])) {
+            sourceOwners.push(candidate);
+          }
+          continue;
+        }
         const labels = new Set((await candidate.locator([
           '[role="option"]',
           '[data-automation-id="promptOption"]',
@@ -2859,7 +2872,9 @@ async function exactPromptCatalogOwner(
       if (sourceOwners.length > 1) {
         throw new TypeError("Workday source prompt owner is ambiguous");
       }
-      if (sourceOwners.length === 1) return sourceOwners[0];
+      if (sourceOwners.length === 1 && (await visibleLocators(sourceOwners[0]!.locator(
+        '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]',
+      ))).length > 0) return sourceOwners[0];
     }
     if (Date.now() < deadline) await page.waitForTimeout(50);
   } while (Date.now() < deadline);

@@ -2388,6 +2388,43 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
+test("source observation binds only its newly visible unfocused portal catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true">
+      </div>
+    </main>
+    <div data-automation-id="activeListContainer" role="listbox"><div role="option">Canada (+1)</div></div>
+    <div id="source-options" data-automation-id="activeListContainer" role="listbox" style="min-height:20px" hidden><div role="option">Website</div></div>
+    <script>
+      const popup = document.querySelector('#source-options');
+      document.querySelector('input').onclick = () => {
+        popup.hidden = false; popup.innerHTML = '';
+        setTimeout(() => { popup.innerHTML = '<div role="option">Website</div>'; }, 150);
+      };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('#source-options').isVisible(), false);
+    assert.equal(await page.locator('[role="listbox"]').first().isVisible(), true);
+    await page.locator('#source-options').evaluate(element => {
+      const duplicate = element.cloneNode(true) as HTMLElement;
+      duplicate.id = "duplicate-source-options";
+      element.after(duplicate);
+      document.querySelector('input')!.addEventListener('click', () => { duplicate.hidden = false; });
+    });
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
 for (const opener of ["native", "component", "icon-component"] as const) {
 test(`source option observation opens its roleless ${opener} prompt without committing an answer`, async () => {
   const browser = await chromium.launch({ headless: true });
