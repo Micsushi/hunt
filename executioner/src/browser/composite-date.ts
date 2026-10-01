@@ -220,7 +220,7 @@ async function chooseCalendarDate(
   );
   const matches = await surfaces.evaluateAll((elements, admitted) => elements.flatMap(
     (element, index) => admitted.includes((element.getAttribute("aria-label") ?? "")
-      .replace(/\s+/gu, " ").trim()) ? [index] : [],
+      .replace(/\s+/gu, " ").trim().replace(/^(?:(?:Selected|Today)\s+)+/u, "")) ? [index] : [],
   ), labels);
   dateDiagnostic("calendar_dates", { exactMatches: matches.length, visibleSurfaces: await surfaces.count() });
   if (matches.length === 0 && process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {

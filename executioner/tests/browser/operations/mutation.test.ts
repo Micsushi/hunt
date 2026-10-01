@@ -296,10 +296,11 @@ test("Workday calendar navigates bounded months and verifies the exact day", asy
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    for (const {date, stuck, expected} of [
-      {date: "2026-10-01", stuck: false, expected: true},
+    for (const {date, stuck, expected, prefix = ""} of [
+      {date: "2026-10-01", stuck: false, expected: true, prefix: "Selected Today "},
       {date: "2025-12-01", stuck: false, expected: true},
       {date: "2026-10-01", stuck: true, expected: false},
+      {date: "2026-10-01", stuck: false, expected: false, prefix: "Unavailable "},
       {date: "2029-01-01", stuck: false, expected: false},
     ]) {
       await page.setContent(`<div data-automation-id="formField-date">
@@ -318,7 +319,7 @@ test("Workday calendar navigates bounded months and verifies the exact day", asy
           let month = new Date(2026,0,1); globalThis.monthClicks = 0;
           function render(){
             picker.querySelector('span').textContent = month.toLocaleDateString('en-US',{month:'long',year:'numeric'});
-            picker.querySelector('[data-automation-id="datePickerDay"]').setAttribute('aria-label', month.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).replaceAll(',',''));
+            picker.querySelector('[data-automation-id="datePickerDay"]').setAttribute('aria-label', '${prefix}' + month.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).replaceAll(',',''));
           }
           render();
           document.querySelector('[aria-label="Open date picker"]').onclick = () => { picker.hidden = false; };
