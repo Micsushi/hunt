@@ -1963,10 +1963,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             arity: (value as (...args: unknown[]) => unknown).length,
           })).slice(0, 24)
           : [];
-        const field = document.querySelector(
+        const field = document.getElementById("source--source")?.closest(
+          '[data-automation-id="formField"], [data-automation-id^="formField-"]',
+        ) ?? document.querySelector(
           '[data-automation-id="formField-source"], [data-automation-id^="formField-source--"]',
         );
         const selectors = [
+          '[id="source--source"]',
+          '[data-automation-id="selectedItem"]',
+          '[data-automation-id="multiSelectContainer"]',
           'input[data-automation-id="searchBox"]',
           '[data-automation-id="monikerSearchBox"]',
           '[data-automation-id="promptSearchButton"]',
