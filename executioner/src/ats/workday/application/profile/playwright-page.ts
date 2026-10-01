@@ -497,6 +497,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ? await exactPromptCatalogOwner(this.#page, control)
         : await exactObservedOptionOwner(this.#page, control);
       if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
+        await this.#captureSelectionDiagnostic("input-source-observation-empty", "search_select");
         const buttons = await visibleLocators(control.locator(
           'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
         ).locator('[data-automation-id="promptSearchButton"]'));
@@ -1960,6 +1961,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         });
       });
       process.stderr.write(`${JSON.stringify({ profileSelectionStructure: structure })}\n`);
+      const catalogs = await this.#page.locator(
+        '[role="listbox"], [data-automation-id="activeListContainer"], [data-automation-id="responsiveMonikerPrompt"]',
+      ).evaluateAll(elements => elements.slice(0, 16).map(element => ({
+        role: element.getAttribute("role"),
+        automationId: element.getAttribute("data-automation-id"),
+        visible: element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden",
+        optionCount: element.querySelectorAll('[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]').length,
+        ownsFocus: element.contains(document.activeElement),
+        sourceFieldOwned: element.closest('[data-automation-id="formField-source"]') !== null,
+      })));
+      process.stderr.write(`${JSON.stringify({ profileSelectionCatalogs: catalogs })}\n`);
     } catch {}
     const root = process.env.HUNT_C3_TRANSIENT_DIAGNOSTIC_ROOT;
     if (root === undefined || root === "") return;
