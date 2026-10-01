@@ -182,7 +182,20 @@ export async function completeWorkdayProfilePage(
   // page-level controls such as Skills and LinkedIn. A tenant-specific
   // optional widget can then fail closed without preventing the required
   // repeatable rows from being learned and verified first.
-  for (const plannedItem of effectivePlan.fields) {
+  // Settle expensive choice catalogs before text commits trigger independent
+  // page rescans. Country stays ahead of its dependent region. Live owner-only
+  // plans keep their original order.
+  const earlyChoices = ["address.country", "address.region", "source.how_did_you_hear"];
+  const fields = effectivePlan.mode === "synthetic_test_non_submittable"
+    ? [...effectivePlan.fields].sort((left, right) => {
+        const rank = (item: ProfileFieldPlan) => {
+          const index = earlyChoices.indexOf(item.fieldId);
+          return index < 0 ? earlyChoices.length : index;
+        };
+        return rank(left) - rank(right);
+      })
+    : effectivePlan.fields;
+  for (const plannedItem of fields) {
     if (plannedItem.answer.kind === "profile_answer_missing") continue;
     const matches = snapshot.controls.filter(({ fieldId }) => fieldId === plannedItem.fieldId);
     if (matches.length === 0) continue;

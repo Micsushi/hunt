@@ -1868,6 +1868,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       throw new TypeError("Workday prompt catalog value did not commit");
     }
+    if (await control.getAttribute("id") === "source--source") {
+      await this.#captureSelectionDiagnostic("prompt-committed", behavior);
+    }
     return true;
   }
 
@@ -1918,6 +1921,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         type Fiber = {
           readonly memoizedProps?: unknown;
           readonly pendingProps?: unknown;
+          readonly memoizedState?: unknown;
           readonly return?: Fiber | null;
           readonly type?: unknown;
           readonly elementType?: unknown;
@@ -1984,13 +1988,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")
             );
             let fiber = fiberKey === undefined ? undefined : record[fiberKey] as Fiber | undefined;
-            const fiberLayers: { component: string; handlers: ReturnType<typeof handlers> }[] = [];
+            const shape = (value: unknown): string => Array.isArray(value)
+              ? `array:${value.length}:${value[0] !== null && typeof value[0] === "object" ? Object.keys(value[0]).slice(0, 12).join(",") : typeof value[0]}`
+              : value !== null && typeof value === "object" ? `object:${Object.keys(value).slice(0, 12).join(",")}` : typeof value;
+            const propsShape = (props: unknown): Record<string, string> => props !== null && typeof props === "object"
+              ? Object.fromEntries(Object.entries(props).slice(0, 40).map(([key, value]) => [key, shape(value)])) : {};
+            const fiberLayers: { component: string; handlers: ReturnType<typeof handlers>; propsShape: Record<string, string>; stateShape: Record<string, string> }[] = [];
             for (let depth = 0; fiber !== undefined && fiber !== null && depth < 16; depth += 1) {
               const props = fiber.memoizedProps ?? fiber.pendingProps;
               const layerHandlers = handlers(props);
               const component = componentName(fiber.elementType ?? fiber.type);
               if (component !== "unknown" || layerHandlers.length > 0) {
-                fiberLayers.push({ component, handlers: layerHandlers });
+                fiberLayers.push({ component, handlers: layerHandlers, propsShape: propsShape(props), stateShape: propsShape(fiber.memoizedState) });
               }
               fiber = fiber.return ?? undefined;
             }

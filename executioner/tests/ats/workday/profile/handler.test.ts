@@ -65,6 +65,26 @@ const control = (
   readback,
 });
 
+test("synthetic Profile settles country-dependent and source choices before text fields", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+    fields: [
+      field("identity.given_name", "identity", "text", "Ada"),
+      field("source.how_did_you_hear", "application_source", "option", "Website", "owner_provided", "Website"),
+      field("address.region", "address", "option", "Alberta", "owner_provided", "Alberta"),
+      field("address.country", "address", "option", "Canada", "owner_provided", "Canada"),
+    ],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+    control("identity.given_name", "text"), control("source.how_did_you_hear", "search_select"),
+    control("address.region", "search_select"), control("address.country", "search_select"),
+  ] });
+  assert.equal((await completeWorkdayProfilePage(plan, port, AbortSignal.any([]))).kind, "verified");
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-address.country", "control-address.region", "control-source.how_did_you_hear", "control-identity.given_name",
+  ]);
+});
+
 test("fills identity, address, phone, dates, and search-selects with independent verification", async () => {
   const plan: ProfilePagePlan = {
     mode: "live",
