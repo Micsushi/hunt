@@ -2456,7 +2456,7 @@ for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workda
             input.value='';return;
           }
           const selected=document.createElement('span');selected.dataset.automationId='selectedItem';
-          selected.textContent=option.textContent;input.parentElement.append(selected);popup.remove();
+          selected.textContent=option.textContent;input.parentElement.append(selected);if('${searchMode}'!=='direct')popup.remove();
         };
         document.body.append(popup);
       };
@@ -2469,7 +2469,8 @@ for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workda
           popup.innerHTML='<div role="option"><div data-automation-id="promptLeafNode">Citizen</div></div><div role="option"><div data-automation-id="promptLeafNode">Permanent resident</div></div>';
         }else popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');
       }};
-      document.onkeydown=event=>{if(event.key==='Escape'){popup?.remove();input.value='';}};
+      document.onkeydown=event=>{if(event.key==='Escape' && !document.querySelector('[data-automation-id="selectedItem"]')){popup?.remove();input.value='';}};
+      document.querySelector('h2').onclick=()=>popup?.remove();
       }</script>`;
     const pageId = "questionnaire-hierarchical-prompt" as never;
     await page.setContent(fixture);
@@ -2491,6 +2492,7 @@ for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workda
     }, undefined, 1500), "applied");
     const after = await inspectPage(page, "session-hierarchical-prompt" as never, pageId, new Map());
     assert.deepEqual(after.targets.get(token)?.[0]?.readback, { kind: "selected", option: "Permanent resident" });
+    assert.equal(await page.locator('[role="listbox"]:visible').count(), 0);
   } finally { await browser.close(); }
 });
 

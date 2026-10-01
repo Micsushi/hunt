@@ -2059,10 +2059,32 @@ async function settleExactFieldPopupCommit(
   const control = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
   if (await control.count() !== 1) return false;
   await control.blur({ timeout: timeoutMs }).catch(() => undefined);
-  // A Workday single-select can retain its exact, target-owned prompt after
-  // committing. Popup visibility is presentation state; the admitted effect is
-  // proven by a unique rebound target and stable exact readback below.
+  if (await control.evaluate(element => element instanceof HTMLInputElement &&
+      element.closest('[data-automation-id="multiSelectContainer"]') !== null)) {
+    const popup = page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`);
+    if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) {
+      await control.press("Escape", { timeout: timeoutMs });
+      if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) {
+        await clickWorkdayApplicationHeading(control, timeoutMs);
+      }
+      if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) return false;
+    }
+  }
+  // Button-based single-selects can retain their prompt. Search-input prompts
+  // must close so their overlay cannot block the next field. Both still need
+  // unique target ownership and stable exact readback.
   return await stabilizeExactFieldPopupTarget(page, target, option, timeoutMs);
+}
+
+export async function clickWorkdayApplicationHeading(control: Locator, timeoutMs: number): Promise<void> {
+  const headings = control.locator(
+    'xpath=ancestor::*[starts-with(@data-automation-id,"applyFlow")][last()]',
+  ).locator('h1:visible, h2:visible, h3:visible, h4:visible, [role="heading"]:visible');
+  const safe = await headings.evaluateAll(elements => elements.flatMap((element, index) =>
+    element.closest('a, button, label, [role="button"], [role="link"], [role="listbox"], [data-hunt-popup-hydration-owner], [data-hunt-field-popup-owner]') === null &&
+    element.querySelector('a, button, input, select, textarea, [role="button"], [role="link"]') === null ? [index] : []
+  ));
+  if (safe[0] !== undefined) await headings.nth(safe[0]).click({ timeout: timeoutMs });
 }
 
 export async function clickNext(
