@@ -1734,9 +1734,10 @@ async function applyMutationUnchecked(
     }
     if (target.interaction === "field-popup") {
       const category = await locator.getAttribute("data-hunt-popup-category");
-      await locator.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+      const opener = await workdayPromptOpener(locator);
+      await opener.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
       await page.waitForTimeout(50);
-      const hitOwned = await locator.evaluate((element) => {
+      const hitOwned = await opener.evaluate((element) => {
         const box = element.getBoundingClientRect();
         if (box.width < 8 || box.height < 8) return false;
         const hit = document.elementFromPoint(
@@ -1747,7 +1748,7 @@ async function applyMutationUnchecked(
       });
       if (!hitOwned) return "invalid";
       await markPreexistingFieldPopupOwners(page, target);
-      await locator.click({ timeout: timeoutMs });
+      await opener.click({ timeout: timeoutMs });
       if (category !== null) {
         const deadline = Date.now() + Math.min(timeoutMs, 5_000);
         let bound = await bindOpenedFieldPopupOwner(page, target);
@@ -2036,12 +2037,13 @@ async function settleExactFieldPopupCommit(
   if (searchPrompt) {
     if (!await rebindExactFieldPopupTarget(page, target)) return false;
     const popup = page.locator(`[data-hunt-field-popup-owner="${target.declaredToken}"]`);
-    if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) {
+    const options = popup.locator(':is([role="option"], [data-automation-id="promptLeafNode"]):visible:not([data-automation-id="selectedItemList"] *)');
+    if (await options.count() > 0) {
       await control.press("Escape", { timeout: timeoutMs });
-      if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) {
+      if (await options.count() > 0) {
         await clickWorkdayApplicationHeading(control, timeoutMs);
       }
-      if (await popup.locator('[role="option"]:visible, [data-automation-id="promptLeafNode"]:visible').count() > 0) return false;
+      if (await options.count() > 0) return false;
     }
   }
   // Button-based single-selects can retain their prompt. Search-input prompts
@@ -2059,6 +2061,16 @@ export async function clickWorkdayApplicationHeading(control: Locator, timeoutMs
     element.querySelector('a, button, input, select, textarea, [role="button"], [role="link"]') === null ? [index] : []
   ));
   if (safe[0] !== undefined) await headings.nth(safe[0]).click({ timeout: timeoutMs });
+}
+
+export async function workdayPromptOpener(control: Locator): Promise<Locator> {
+  const saved = await control.evaluate(element => element instanceof HTMLInputElement &&
+    Boolean(element.closest('[data-automation-id="multiSelectContainer"]')?.querySelector('[data-automation-id="selectedItem"]')));
+  if (!saved) return control;
+  const icons = control.locator('xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]')
+    .locator('[data-automation-id="promptIcon"]:visible');
+  if (await icons.count() > 1) throw new TypeError("Workday prompt opener ambiguous");
+  return await icons.count() === 1 ? icons : control;
 }
 
 export async function clickNext(
@@ -2602,6 +2614,7 @@ export async function expandWorkdayPromptCategory(
     return owner.locator('[data-automation-id="promptLeafNode"], [role="option"]')
       .evaluateAll(elements => [...new Set(elements.filter(element =>
         element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        element.closest('[data-automation-id="selectedItemList"]') === null &&
         getComputedStyle(element).visibility !== "hidden" &&
         element.querySelector('svg[role="presentation"]') === null
       ).map(element => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
@@ -2650,6 +2663,7 @@ async function exactOwnedOption(
       exact: normalize(element.textContent) === expected,
       leaf: element.getAttribute("data-automation-id") === "promptLeafNode",
       visible: element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        element.closest('[data-automation-id="selectedItemList"]') === null &&
         getComputedStyle(element).display !== "none" &&
         getComputedStyle(element).visibility !== "hidden",
     })).filter(({ exact, visible }) => exact && visible);
@@ -2719,7 +2733,8 @@ async function markPreexistingFieldPopupOwners(
 ): Promise<void> {
   await page.evaluate((declaredToken) => {
     const visible = (element: Element): element is HTMLElement => {
-      if (!(element instanceof HTMLElement) || element.hidden ||
+      if (element.closest('[data-automation-id="selectedItemList"]') !== null ||
+          !(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
       const style = getComputedStyle(element);
       return style.display !== "none" && style.visibility !== "hidden" &&
@@ -2752,7 +2767,8 @@ async function bindOpenedFieldPopupOwner(
     const normalize = (value: string | null | undefined): string =>
       (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
     const visible = (element: Element): element is HTMLElement => {
-      if (!(element instanceof HTMLElement) || element.hidden ||
+      if (element.closest('[data-automation-id="selectedItemList"]') !== null ||
+          !(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
       const style = getComputedStyle(element);
       return style.display !== "none" && style.visibility !== "hidden" &&

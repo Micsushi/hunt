@@ -40,7 +40,7 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
-import { clickWorkdayApplicationHeading, expandWorkdayPromptCategory } from "../../adapter.ts";
+import { clickWorkdayApplicationHeading, expandWorkdayPromptCategory, workdayPromptOpener } from "../../adapter.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
@@ -3534,7 +3534,8 @@ export async function hydrateQuestionnairePopupOptions(
   const selectedBefore = await popupSelectedValue(target);
   await target.evaluate((_control, declaredToken) => {
     const visible = (element: Element): element is HTMLElement => {
-      if (!(element instanceof HTMLElement) || element.hidden ||
+      if (element.closest('[data-automation-id="selectedItemList"]') !== null ||
+          !(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
       const style = getComputedStyle(element);
       return style.display !== "none" && style.visibility !== "hidden" &&
@@ -3555,7 +3556,7 @@ export async function hydrateQuestionnairePopupOptions(
         owner.setAttribute("data-hunt-popup-hydration-preexisting", declaredToken)
       );
   }, targetToken);
-  await target.click({ timeout: timeoutMs });
+  await (await workdayPromptOpener(target)).click({ timeout: timeoutMs });
   await bindQuestionnaireTargets(page, pageId);
   const reboundOpenTarget = page.locator(`[data-hunt-target-token="${targetToken}"]`);
   if (await reboundOpenTarget.count() !== 1 || !await reboundOpenTarget.isVisible()) {
@@ -3563,7 +3564,8 @@ export async function hydrateQuestionnairePopupOptions(
   }
   const bindPopupOwner = async () => reboundOpenTarget.evaluate((control, declaredToken) => {
     const visible = (element: Element): element is HTMLElement => {
-      if (!(element instanceof HTMLElement) || element.hidden ||
+      if (element.closest('[data-automation-id="selectedItemList"]') !== null ||
+          !(element instanceof HTMLElement) || element.hidden ||
           element.getAttribute("aria-hidden") === "true") return false;
       const style = getComputedStyle(element);
       return style.display !== "none" && style.visibility !== "hidden" &&
@@ -3615,10 +3617,10 @@ export async function hydrateQuestionnairePopupOptions(
   if (!popupOwnerBound) throw new TypeError("questionnaire popup owner unavailable");
   const options = page.locator(
     `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
-      '[data-automation-id="promptOption"]:visible, ' +
-      `[data-hunt-popup-hydration-owner="${targetToken}"] [role="option"]:visible, ` +
+      '[data-automation-id="promptOption"]:visible:not([data-automation-id="selectedItemList"] *), ' +
+      `[data-hunt-popup-hydration-owner="${targetToken}"] [role="option"]:visible:not([data-automation-id="selectedItemList"] *), ` +
       `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
-      '[data-automation-id="promptLeafNode"]:visible',
+      '[data-automation-id="promptLeafNode"]:visible:not([data-automation-id="selectedItemList"] *)',
   );
   await options.first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
   let labels = [...new Set((await options.allInnerTexts())
@@ -3704,7 +3706,8 @@ async function ownedHydrationPopupOpen(page: Page, targetToken: string): Promise
         '[role="option"], [data-automation-id="promptOption"], ' +
           '[data-automation-id="promptLeafNode"]',
       )].some((option) => {
-        if (!(option instanceof HTMLElement) || option.hidden ||
+        if (option.closest('[data-automation-id="selectedItemList"]') !== null ||
+            !(option instanceof HTMLElement) || option.hidden ||
             option.getAttribute("aria-hidden") === "true") return false;
         const optionStyle = getComputedStyle(option);
         return optionStyle.display !== "none" && optionStyle.visibility !== "hidden" &&

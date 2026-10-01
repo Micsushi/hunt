@@ -2496,7 +2496,7 @@ for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workda
   } finally { await browser.close(); }
 });
 
-for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prompt inputs hydrate and commit with ${closeMode} close`, async () => {
+for (const closeMode of ["blur", "icon", "outside", "saved"]) test(`Workday roleless prompt inputs hydrate and commit with ${closeMode} close`, async () => {
   const browser = await chromium.launch({headless:true});
   const page = await browser.newPage();
   try {
@@ -2506,22 +2506,30 @@ for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prom
         <div data-automation-id="multiSelectContainer"><div data-automation-id="multiselectInputContainer"><input id="pronouns"><span data-automation-id="promptIcon">Toggle</span></div></div>
       </div></main></div><script>
         const input=document.querySelector('#pronouns');
+        if('${closeMode}'==='saved'){
+          input.style.cssText='width:180px;height:24px';input.parentElement.style.position='relative';
+          const selected=document.createElement('div');selected.dataset.automationId='selectedItemList';selected.setAttribute('role','listbox');
+          selected.innerHTML='<span role="option" data-automation-id="selectedItem" style="position:absolute;left:0;top:0;width:180px;height:28px;background:white">Prior answer</span>';
+          input.parentElement.append(selected);
+        }
         input.onclick=()=>{
           input.setAttribute('aria-label','Search');
           input.setAttribute('data-automation-id','searchBox');
-          if(document.querySelector('[role="listbox"]'))return;
+          if(document.querySelector('[role="listbox"]:not([data-automation-id="selectedItemList"])'))return;
           const popup=document.createElement('div'); popup.setAttribute('role','listbox');
+          if('${closeMode}'==='saved')popup.style.marginTop='40px';
           popup.innerHTML='<div role="option">Prefer not to say</div><div role="option">They/them</div>';
           popup.onmousedown=event=>event.preventDefault();
           popup.onclick=event=>{
             const option=event.target.closest('[role="option"]'); if(!option)return;
             const token=document.createElement('span'); token.setAttribute('data-automation-id','selectedItem'); token.textContent=option.textContent;
+            input.parentElement.querySelector('[data-automation-id="selectedItemList"]')?.remove();
             input.parentElement.append(token); popup.remove();
-          }; setTimeout(()=>document.body.append(popup),'${closeMode}'==='outside'?100:0);
+          }; setTimeout(()=>('${closeMode}'==='saved'?input.closest('[data-automation-id="formField-pronouns"]'):document.body).append(popup),'${closeMode}'==='outside'?100:0);
         };
-        const close=()=>{document.querySelector('[role="listbox"]')?.remove();input.removeAttribute('aria-label');input.removeAttribute('data-automation-id');};
+        const close=()=>{document.querySelector('[role="listbox"]:not([data-automation-id="selectedItemList"])')?.remove();input.removeAttribute('aria-label');input.removeAttribute('data-automation-id');};
         input.onblur=()=>{if('${closeMode}'==='blur')close();};
-        document.querySelector('[data-automation-id="promptIcon"]').onclick=()=>{if('${closeMode}'==='icon')close();};
+        document.querySelector('[data-automation-id="promptIcon"]').onclick=()=>{if('${closeMode}'==='icon')close();if('${closeMode}'==='saved')input.onclick();};
         document.querySelector('h3').onclick=close;
       </script>`);
     const pageId="questionnaire-roleless-prompt" as never;
@@ -2529,6 +2537,7 @@ for (const closeMode of ["blur", "icon", "outside"]) test(`Workday roleless prom
     const targets=await questionnairePopupHydrationTargets(page);
     assert.equal(targets.length,1);
     await hydrateQuestionnairePopupOptions(page,pageId,targets[0]!,3000);
+    assert.deepEqual(JSON.parse(await page.locator('#pronouns').getAttribute('data-hunt-popup-options') ?? '[]'), ['Prefer not to say', 'They/them']);
     const token=await page.locator('#pronouns').getAttribute('data-hunt-target-token');
     const inspected=await inspectPage(page,"session-roleless-prompt" as never,pageId,new Map());
     const target=inspected.targets.get(token!)?.[0];
