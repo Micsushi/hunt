@@ -2032,7 +2032,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     try {
       await this.#page.screenshot({
         path: `${root}\\profile-selection-${String(this.#selectionDiagnosticOrdinal).padStart(3, "0")}-${stage}.png`,
-        fullPage: true,
+        fullPage: false,
       });
     } catch {
       selectionDiagnostic("screenshot_failed", "multi_select", {});
