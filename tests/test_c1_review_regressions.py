@@ -291,3 +291,42 @@ def test_returning_to_default_profile_reclassifies_custom_occupation(database, m
     db.init_db(maintenance=False)
     assert db.get_job_by_id(job_id)["category"] == "other"
     assert db.get_job_by_id(job_id)["discovery_suppressed_reason"] == "outside_search_lanes"
+
+
+def test_jobright_country_selection_respects_quota_and_unsupported_country():
+    from hunter.discovery_jobright import _country_code, _select_search_country
+
+    page = Mock(url="https://jobright.ai/jobs/search?country=CA")
+    response = Mock()
+    response.value.json.return_value = {"success": False, "errorCode": 43004}
+    assert _select_search_country(page, "engineer", response, "ca") is response
+    with pytest.raises(ValueError, match="jobright_hourly_refresh_limit"):
+        _select_search_country(page, "engineer", response, "us")
+    page.get_by_role.assert_not_called()
+    response.value.json.return_value = {"success": True}
+    with pytest.raises(ValueError, match="jobright_search_country_unsupported"):
+        _select_search_country(page, "engineer", response, "de")
+    page.get_by_role.assert_not_called()
+    assert [_country_code(c) for c in ["United States", "UK", "Ireland", "CAN"]] == [
+        "us",
+        "gb",
+        "ie",
+        "ca",
+    ]
+
+
+def test_jobright_country_selection_checks_search_response_and_sort():
+    from unittest.mock import MagicMock
+
+    from hunter.discovery_jobright import _select_search_country
+
+    page = MagicMock(url="https://jobright.ai/jobs/search?country=CA")
+    response = Mock()
+    response.value.json.return_value = {"success": True}
+    selected = page.expect_response.return_value.__enter__.return_value
+    selected.value.url = "https://jobright.ai/swan/recommend/search?position=0&sortCondition=1"
+    assert _select_search_country(page, "engineer", response, "us") is selected
+    page.wait_for_function.assert_called_once()
+    selected.value.url = "https://jobright.ai/swan/recommend/search?position=0&sortCondition=0"
+    with pytest.raises(ValueError, match="jobright_recent_sort_unverified"):
+        _select_search_country(page, "engineer", response, "us")

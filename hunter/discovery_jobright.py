@@ -12,6 +12,26 @@ from hunter.discovery_policy import annotate_job, normalize_job_url
 from hunter.discovery_run import check_cancelled
 from hunter.discovery_sources import _job, _parse_date
 
+# Countries offered by the normal search-page country selector.
+_SEARCH_COUNTRIES = {
+    "ca": "Canada",
+    "us": "United States",
+    "gb": "United Kingdom",
+    "au": "Australia",
+    "ie": "Ireland",
+    "nz": "New Zealand",
+}
+
+
+def _country_code(value):
+    value = value.strip().casefold()
+    return {
+        **{name.casefold(): code for code, name in _SEARCH_COUNTRIES.items()},
+        "can": "ca",
+        "usa": "us",
+        "uk": "gb",
+    }.get(value, value)
+
 
 def parse_jobright_page(payload, *, hours_old=336):
     if isinstance(payload, dict) and payload.get("success") is False:
@@ -135,27 +155,17 @@ def discover_jobright(
                         query_health.append(current)
                         try:
                             response = _load_search(page, term)
+                            requested = {_country_code(c) for c in config.DISCOVERY_COUNTRIES}
+                            if len(requested) == 1:
+                                response = _select_search_country(
+                                    page, term, response, next(iter(requested))
+                                )
                             country = parse_qs(urlsplit(page.url).query).get("country", [""])[0]
-                            requested = {
-                                {
-                                    "canada": "ca",
-                                    "can": "ca",
-                                    "united states": "us",
-                                    "usa": "us",
-                                }.get(c.casefold(), c.casefold())
-                                for c in config.DISCOVERY_COUNTRIES
-                            }
-                            if not requested or requested != {country.casefold()}:
+                            if not requested or requested != {_country_code(country)}:
                                 current["error"] = (
                                     f"jobright_geography_partial: searched {country or 'unknown'} only; other countries were not searched"
                                 )
-                            if config.DISCOVERY_COUNTRIES and not any(
-                                country.casefold()
-                                == {"canada": "ca", "united states": "us", "usa": "us"}.get(
-                                    c.casefold(), c.casefold()
-                                )
-                                for c in config.DISCOVERY_COUNTRIES
-                            ):
+                            if requested and _country_code(country) not in requested:
                                 raise ValueError("jobright_search_country_mismatch")
                             query_seen = set()
                             oldest = None
@@ -340,6 +350,30 @@ def _load_search(page, term):
         with page.expect_response(lambda r: _search_response(r, term=term, position=0)) as response:
             page.get_by_text("Most Recent", exact=True).last.click()
     page.locator('.ant-select-selection-item[title="Most Recent"]').wait_for()
+    if parse_qs(urlsplit(response.value.url).query).get("sortCondition") != ["1"]:
+        raise ValueError("jobright_recent_sort_unverified")
+    return response
+
+
+def _select_search_country(page, term, response, country):
+    current = _country_code(parse_qs(urlsplit(page.url).query).get("country", [""])[0])
+    if current == country:
+        return response
+    payload = response.value.json()
+    if payload.get("success") is not True:
+        parse_jobright_page(payload)  # Honor quotas before issuing another search.
+    if country not in _SEARCH_COUNTRIES or current not in _SEARCH_COUNTRIES:
+        raise ValueError("jobright_search_country_unsupported")
+    page.get_by_role("button").filter(
+        has=page.locator(f'[title="{_SEARCH_COUNTRIES[current]}"]')
+    ).click()
+    page.get_by_text(_SEARCH_COUNTRIES[country], exact=True).last.click()
+    with page.expect_response(lambda r: _search_response(r, term=term, position=0)) as response:
+        page.get_by_role("button", name="Confirm", exact=True).click()
+    page.wait_for_function(
+        "country => new URL(location.href).searchParams.get('country')?.toLowerCase() === country",
+        arg=country,
+    )
     if parse_qs(urlsplit(response.value.url).query).get("sortCondition") != ["1"]:
         raise ValueError("jobright_recent_sort_unverified")
     return response

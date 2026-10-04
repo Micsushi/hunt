@@ -661,7 +661,9 @@ Do not start a second scan while the scheduled scan is already running.
    run Search boards, feeds and companies and check relevant results and their
    category. Restore the original profile after the experiment. Regional boards
    remain regional, and JobRight reports when its browser country is narrower
-   than the configured search countries.
+   than a multi-country or worldwide search. Single-country JobRight searches
+   can select Canada, the United States, United Kingdom, Australia, Ireland or
+   New Zealand through the normal search controls.
 9. **Ops: enrich a small batch.** Use Enrich 25 after discovery. Inspect resulting
    descriptions and application links. Confirm failures stay visible and
    retryable where appropriate; an enrichment count is not a count of submitted
@@ -676,3 +678,10 @@ If a check fails, record the page/action, job ID or source, expected and actual
 result, and time. The five employer limitations above are known external gaps,
 not acceptance evidence for complete coverage. Worldwide coverage and all
 JobRight titles are not guaranteed by a single completed outer scan.
+
+
+JobRight single-country discovery selects the configured supported country on the
+search page without changing saved account preferences. Its current selector
+supports Canada, the United States, United Kingdom, Australia, Ireland and New
+Zealand. Other countries fail explicitly. Multi-country/worldwide settings still
+receive a partial-coverage warning; hourly refresh quotas and page limits apply.
