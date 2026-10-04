@@ -10,12 +10,113 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def test_clickable_summary_card_uses_native_keyboard_button():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const React = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+const compiled = ts.transpileModule(fs.readFileSync('src/components/Card/index.tsx', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+});
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, {
+  module: moduleObj, exports: moduleObj.exports,
+  require: (id) => id.endsWith('.css') ? { default: {} } : require(id),
+});
+const { Card } = moduleObj.exports;
+console.log(JSON.stringify({
+  clickable: renderToStaticMarkup(React.createElement(Card, { label: 'Description + link', value: 3, onClick: () => {} })),
+  static: renderToStaticMarkup(React.createElement(Card, { label: 'Count', value: 3 })),
+}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], cwd=ROOT / "frontend", check=True, capture_output=True, text=True
+    )
+    html = json.loads(result.stdout)
+    assert html["clickable"].startswith("<button") and 'type="button"' in html["clickable"]
+    assert html["static"].startswith("<div") and "tabindex" not in html["static"]
+
+
+def test_discovery_labels_distinguish_unchecked_passed_and_excluded():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const compiled = ts.transpileModule(fs.readFileSync('src/utils/discovery.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+});
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, { module: moduleObj, exports: moduleObj.exports });
+const { discoveryLabel } = moduleObj.exports;
+console.log(JSON.stringify([
+  discoveryLabel({}),
+  discoveryLabel({ discovery_policy_version: 6 }),
+  discoveryLabel({ discovery_policy_version: 6, discovery_suppressed_reason: 'duplicate_canonical_job' }),
+  discoveryLabel({ discovery_suppressed_reason: 'geography_unverified' }),
+  discoveryLabel({ discovery_suppressed_reason: 'new_policy_reason' }),
+]));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], cwd=ROOT / "frontend", check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == [
+        "Discovery fit not checked",
+        "Passes discovery rules",
+        "Duplicate listing retained for history",
+        "Location eligibility needs checking",
+        "Set aside: new policy reason",
+    ]
+
+
 def test_jobs_filters_do_not_expose_operator_tag_filter():
     filters = read("frontend/src/components/Filters/index.tsx")
 
     assert "Tag filter" not in filters
     assert "tagInput" not in filters
     assert "Filter by tag" not in filters
+
+
+def test_discovery_coverage_combines_queue_and_health_without_duplicate_companies():
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const ts = require('typescript');
+const source = fs.readFileSync('src/pages/Ops/discoveryCoverage.ts', 'utf8');
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+});
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, { module: moduleObj, exports: moduleObj.exports });
+const { coverageRows } = moduleObj.exports;
+const data = {
+  sources: [
+    { source: 'company:Example', status: 'failed', lead_count: 0, last_error: 'http_403', checked_at: 'earlier' },
+    { source: 'jobright', status: 'partial', lead_count: 20, last_error: 'recommendation_coverage_only', checked_at: 'now' },
+  ],
+  company_fetch_queue: [
+    { company: 'Example', state: 'ok', lead_count: 3, last_error: null },
+    { company: 'New employer', state: 'pending', lead_count: 0, last_error: null },
+  ],
+};
+const original = JSON.stringify(data);
+console.log(JSON.stringify({ rows: coverageRows(data), empty: coverageRows(undefined), unchanged: original === JSON.stringify(data) }));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], cwd=ROOT / "frontend", check=True, capture_output=True, text=True
+    )
+    payload = json.loads(result.stdout)
+    rows = payload["rows"]
+    assert payload["empty"] == [] and payload["unchanged"]
+    assert [row["source"] for row in rows] == [
+        "company:Example",
+        "company:New employer",
+        "jobright",
+    ]
+    assert rows[0]["status"] == "ok" and rows[0]["lead_count"] == 3
+    assert rows[0]["last_error"] is None
+    assert rows[1]["status"] == "pending" and rows[2]["status"] == "partial"
 
 
 def test_jobs_table_keeps_id_on_one_line_and_truncates_long_titles():
@@ -71,22 +172,6 @@ def test_settings_exposes_resume_done_windows_notification_toggle():
     assert "AppNotificationSettings" in settings
     assert "Windows notification when Fletcher finishes a resume" in settings
     assert "resume_done_windows_notification_enabled" in notifications
-
-
-def test_settings_exposes_c1_target_titles_and_experience_levels():
-    settings = read("frontend/src/pages/Settings/index.tsx")
-    control = read("frontend/src/api/control.ts")
-
-    assert "Target job titles" in settings
-    assert "Experience levels" in settings
-    assert "Internship" in settings
-    assert "Junior" in settings
-    assert "New grad" in settings
-    assert "target_job_titles" in control
-    assert "experience_levels" in control
-    assert "search_terms" not in control
-    assert "co-op, and student searches" in settings
-    assert "Level 1, L1, and role I/1 variants" in settings
 
 
 def test_settings_exposes_c2_job_metadata_values():

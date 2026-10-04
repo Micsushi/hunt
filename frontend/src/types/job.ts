@@ -10,12 +10,13 @@ export type EnrichmentStatus =
   | 'blocked'
   | 'blocked_verified'
 
-export type JobSource = 'linkedin' | 'indeed'
+export type JobSource = string
 export type ApplyType = 'external_apply' | 'easy_apply' | 'unknown'
 
 /** Row returned by GET /api/jobs (list view - no description by default) */
 export interface Job {
   id: number
+  status?: string | null
   title: string
   company: string
   location: string | null
@@ -40,6 +41,8 @@ export interface Job {
   category: string | null
   operator_notes: string | null
   operator_tag: string | null
+  discovery_suppressed_reason?: string | null
+  discovery_policy_version?: number | null
   // Resume fields
   latest_resume_jd_usable: 0 | 1 | null
   latest_resume_jd_usable_reason: string | null

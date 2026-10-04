@@ -104,6 +104,13 @@ async def c1_queue(_auth: str = Depends(_require_auth)):
     return await _proxy_get(f"{HUNT_HUNTER_URL}/queue")
 
 
+@router.get("/c1/discovery/health")
+async def c1_discovery_health(_auth: str = Depends(_require_auth)):
+    from hunter.config import HUNT_HUNTER_URL
+
+    return await _proxy_get(f"{HUNT_HUNTER_URL}/discovery/health")
+
+
 @router.post("/c1/scrape")
 async def c1_scrape(request: Request, _auth: str = Depends(_require_auth)):
     from hunter.config import HUNT_HUNTER_URL
@@ -114,6 +121,13 @@ async def c1_scrape(request: Request, _auth: str = Depends(_require_auth)):
         else {}
     )
     return await _proxy_post(f"{HUNT_HUNTER_URL}/scrape", body)
+
+
+@router.post("/c1/discovery/preview")
+async def c1_company_preview(request: Request, _auth: str = Depends(_require_auth)):
+    from hunter.config import HUNT_HUNTER_URL
+
+    return await _proxy_post(f"{HUNT_HUNTER_URL}/discovery/preview", await request.json())
 
 
 @router.post("/c1/enrich")

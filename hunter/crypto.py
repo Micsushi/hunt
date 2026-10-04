@@ -27,7 +27,3 @@ def encrypt(plaintext: str) -> str:
 def decrypt(token: str) -> str:
     """Decrypt a Fernet token and return the original string."""
     return _get_fernet().decrypt(token.encode()).decode()
-
-
-def credential_key_is_set() -> bool:
-    return bool((os.environ.get("HUNT_CREDENTIAL_KEY") or "").strip())

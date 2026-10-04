@@ -97,14 +97,14 @@ class HunterLoggingIntegrationTests(unittest.TestCase):
                 self.addCleanup(setattr, db, "DB_PATH", old_db_path)
                 init_db()
                 with (
-                    mock.patch.object(scraper, "SEARCH_QUERIES", {"engineering": ["python"]}),
+                    mock.patch.object(scraper, "SEARCH_TERMS", {"engineering": ["python"]}),
                     mock.patch.object(scraper, "LOCATIONS", ["Remote"]),
                     mock.patch.object(scraper, "SITES", ["indeed"]),
                     mock.patch.object(scraper, "MAX_WORKERS", 1),
                     mock.patch.object(scraper, "scrape_single", return_value=[job_data]),
                     mock.patch.object(scraper, "add_job", return_value=("inserted", 1)),
                     mock.patch.object(scraper, "_notify_priority_jobs", return_value=None),
-                    mock.patch.object(scraper, "run_pending_linkedin_enrichment", return_value=0),
+                    mock.patch.object(scraper, "run_pending_job_enrichment", return_value=0),
                 ):
                     summary = scraper.scrape(enrich_pending=True, enrich_limit=5)
 

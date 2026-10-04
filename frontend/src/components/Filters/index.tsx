@@ -1,17 +1,18 @@
 import { useEffect, useRef, useCallback } from 'react'
 import styles from './Filters.module.css'
 import type { JobsQuery, SortField } from '@/types/job'
+import { detailQualityLabels } from '@/utils/discovery'
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
   { value: 'ready', label: 'Ready' },
-  { value: 'enriched', label: 'Enriched' },
-  { value: 'partial', label: 'Partial enriched' },
+  { value: 'enriched', label: detailQualityLabels.enriched },
+  { value: 'partial', label: detailQualityLabels.partial },
   { value: 'pending', label: 'Pending enrich' },
   { value: 'processing', label: 'Processing' },
   { value: 'done', label: 'Done' },
   { value: 'done_verified', label: 'Done verified' },
-  { value: 'failed', label: 'Failed' },
+  { value: 'failed', label: detailQualityLabels.failed },
   { value: 'failed_url', label: 'Failed URL' },
   { value: 'failed_description', label: 'Failed description' },
   { value: 'failed_enrichment', label: 'Failed enrichment' },
@@ -40,11 +41,29 @@ interface Props {
   query: JobsQuery
   onChange: (q: Partial<JobsQuery>) => void
   statusCounts?: Record<string, number>
+  sourceCounts?: Record<string, number>
   isFetching?: boolean
 }
 
-export function Filters({ query, onChange, statusCounts, isFetching }: Props) {
+export function Filters({ query, onChange, statusCounts, sourceCounts, isFetching }: Props) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sourceOptions = [
+    ...SOURCE_OPTIONS,
+    ...Object.keys({ ...sourceCounts, ...(query.source ? { [query.source]: 0 } : {}) })
+      .filter((source) => !SOURCE_OPTIONS.some((option) => option.value === source))
+      .sort()
+      .map((source) => ({
+        value: source,
+        label: source === 'jobright' ? 'JobRight' : source.replace(/_/g, ' '),
+      })),
+  ]
+
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    },
+    [],
+  )
 
   // Keep search input in sync when query changes externally (e.g. reset)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -135,7 +154,7 @@ export function Filters({ query, onChange, statusCounts, isFetching }: Props) {
             onChange={(e) => onChange({ source: e.target.value, page: 1 })}
             aria-label="Filter by source"
           >
-            {SOURCE_OPTIONS.map((o) => (
+            {sourceOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

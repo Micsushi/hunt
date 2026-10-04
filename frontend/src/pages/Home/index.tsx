@@ -11,6 +11,7 @@ import {
 } from '@/api/summary'
 import { fetchSystemStatus } from '@/api/control'
 import { Card } from '@/components/Card'
+import { detailQualityLabels } from '@/utils/discovery'
 import {
   PieChart,
   Pie,
@@ -113,7 +114,11 @@ function BreakdownChart() {
     staleTime: 60_000,
   })
 
-  const chartData = (data?.data ?? []).slice(0, 10)
+  const chartData = (data?.data ?? []).slice(0, 10).map((row) => ({
+    ...row,
+    displayLabel:
+      field === 'enrichment_status' ? (detailQualityLabels[row.label] ?? row.label) : row.label,
+  }))
 
   function handleSliceClick(entry: { label: string }) {
     if (field === 'enrichment_status') navigate(`/jobs?status=${entry.label}`)
@@ -150,7 +155,7 @@ function BreakdownChart() {
             <Pie
               data={chartData}
               dataKey="count"
-              nameKey="label"
+              nameKey="displayLabel"
               cx="50%"
               cy="50%"
               innerRadius={55}
@@ -183,7 +188,7 @@ function BreakdownChart() {
               className={styles.legendDot}
               style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
             />
-            {d.label} ({d.count})
+            {d.displayLabel} ({d.count})
           </span>
         ))}
       </div>
@@ -486,15 +491,19 @@ export function HomePage() {
           onClick={() => navigate('/jobs?status=pending')}
           accent={summary.pending_count > 0}
         />
-        <Card label="Enriched" value={done} onClick={() => navigate('/jobs?status=enriched')} />
         <Card
-          label="Partial enrich"
+          label={detailQualityLabels.enriched}
+          value={done}
+          onClick={() => navigate('/jobs?status=enriched')}
+        />
+        <Card
+          label={detailQualityLabels.partial}
           value={partial}
           onClick={() => navigate('/jobs?status=partial')}
           warning={partial > 0}
         />
         <Card
-          label="Failed"
+          label={detailQualityLabels.failed}
           value={failed}
           onClick={() => navigate('/jobs?status=failed')}
           danger={failed > 0}

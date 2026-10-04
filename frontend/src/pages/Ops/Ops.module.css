@@ -21,7 +21,6 @@
 
 .panelStrong {
   background: var(--panel-strong);
-  border-left: 4px solid var(--accent);
 }
 
 .panelHeader {
@@ -51,7 +50,7 @@
 
 .gridTwo {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 16px;
 }
 
@@ -85,8 +84,84 @@
 }
 .btn.btnPrimary {
   background: var(--accent);
-  color: white;
+  color: var(--accent-ink);
   border-color: var(--accent);
+}
+
+.coverage {
+  margin-top: 20px;
+  min-width: 0;
+}
+.coverage summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.coverageNote {
+  text-align: left;
+  color: var(--muted);
+  padding: 12px 0;
+}
+.coverage td {
+  overflow-wrap: anywhere;
+}
+.coverageResults {
+  max-height: 32rem;
+  overflow: auto;
+}
+.coverageResults table {
+  min-width: 640px;
+}
+.coverageResults th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-strong);
+}
+.coverageResults:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.coverage .input {
+  min-height: 44px;
+  font-size: 1rem;
+}
+@media (max-width: 600px) {
+  .coverageResults table {
+    min-width: 0;
+  }
+  .coverageResults thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .coverageResults tbody,
+  .coverageResults tr {
+    display: block;
+  }
+  .coverageResults tr {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .coverageResults td {
+    display: block;
+    padding: 3px 0;
+    border: 0;
+  }
+  .coverageResults td:first-child {
+    font-weight: 650;
+  }
+  .coverageResults td[data-label]::before {
+    content: attr(data-label) ': ';
+  }
+}
+.panel {
+  min-width: 0;
+}
+.btn:focus-visible,
+.coverage summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .btn.btnPrimary:hover:not(:disabled) {
   opacity: 0.85;

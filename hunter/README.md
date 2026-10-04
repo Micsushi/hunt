@@ -129,6 +129,30 @@ Examples:
 .\hunter.ps1 backfill-all 25 --source all
 ```
 
+Discovery itself has two rhythms. The normal scheduler uses a 24-hour board
+window, checks public sources hourly and employers every six hours when due.
+Once per day it performs the configured 14-day backfill.
+Every lane records health independently; a zero-result or failed lane does not
+erase leads from another lane. Run the same full discovery pass manually with:
+
+```powershell
+python hunter\scraper.py --backfill
+```
+
+The database retains canonical employer/requisition identity, every source
+observation, ranking, and suppression reasons. Senior, non-Canada, Easy Apply,
+LinkedIn-only, and employer-month overflow rows are retained for audit rather
+than deleted. `GET /discovery/health` exposes source and employer-queue state;
+Public feed and employer-ATS leads remain blocked and ineligible until their
+application flow is verified; discovering a URL does not verify it. Watchlist,
+title blacklist, lane, and geography rules still apply. A matching Indeed or
+LinkedIn observation can move a blocked lead into its supported enrichment queue.
+Remote leads without Canadian eligibility evidence remain geography-unverified.
+`GET /c3/ready` requires completed enrichment, an eligible external apply URL,
+and `priority=0`, in addition to discovery suppression and applied/canceled
+history exclusions; and
+`POST /jobs/{job_id}/c3-outcome` accepts compact factual C3 results.
+
 ### Auth commands
 
 - `auth-save`

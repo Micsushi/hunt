@@ -9,7 +9,7 @@ Automated Hunt runtime. The active runtime scope is **C0 (Frontend)**,
 Historical operator confidence snapshot (2026-07-30; not current acceptance):
 
 - **C0**: mostly done
-- **C1 / Hunter**: about 95% done
+- **C1 / Hunter**: AI-free scheduled discovery and searchable storage are implemented; source coverage and verification limits are documented in [the C1 runbook](docs/C1_LOCAL_RUNBOOK.md).
 - **C2 / Fletcher**: about 80% done
 - **C3**: v2 removed from `main`; v3 implementation has not started
 - **C4**: paused, excluded from active deployment and runtime paths; its direct
@@ -36,8 +36,8 @@ Historical priorities retained for context, not a current execution queue:
 
 ## C1 (Hunter) v0.1 : how it runs
 
-- **Discovery** : **JobSpy** fetches recent **LinkedIn** and **Indeed** listings for your search terms; rows land in the Hunt DB as **`pending`** enrichment when the board is supported. The DB uses Postgres when `HUNT_DB_URL` is set and SQLite as the local fallback. Indeed matching is loose; LinkedIn listing payloads are often thin until enrichment.
-- **Enrichment** : **Playwright** (and related workers) process the queue **by `source`** (**LinkedIn first**, then **Indeed**), **in batches** per run, usually **headless**. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Optional **headful** rerun for blocked rows when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers).
+- **Discovery** : C1 reads consecutive **LinkedIn** public search pages and uses **JobSpy** for **Indeed**. It also searches public boards, feeds, configured employer catalogs and a saved **JobRight** session. Supported-board rows enter **`pending`** enrichment; public-source leads remain blocked from automatic application until verified. Source failures and incomplete coverage are visible in Ops. The DB uses Postgres when `HUNT_DB_URL` is set and SQLite otherwise. See [C1 coverage and local operation](docs/C1_LOCAL_RUNBOOK.md).
+- **Enrichment** : The shared batch first verifies public Workday, Greenhouse, Lever, Ashby, SmartRecruiters, BambooHR and employer-scoped Workable postings against live employer data, then runs the **LinkedIn** and **Indeed** workers. The same dispatcher serves post-search enrichment, the command line and the dashboard. **LinkedIn** needs **auth** (saved session and/or env credentials). **Easy Apply** is **detected and labeled** so later automation ignores it as an external apply target. Browser workers usually run **headless**; an optional **headful** rerun for blocked board rows is available when **`ENRICHMENT_UI_VERIFY_BLOCKED`** is enabled (often on **Xvfb** on servers). Verifying an open posting does not start an application or prove C3 can finish its form.
 - **Service API** : **`hunter/service.py`** exposes status, queue, scrape, enrich, and account reauth endpoints for C0.
 - **Control plane** : **`backend/app.py`** serves the C0 dashboard plus filter, sort, search jobs, errors, artifacts, and gateway routes over the same DB.
 

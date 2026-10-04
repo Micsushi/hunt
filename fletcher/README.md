@@ -2,6 +2,9 @@
 
 This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **`docs/NAMING.md`** for component IDs and code names.
 
+Install C2 with `pip install -r fletcher/requirements.txt` from the repository root.
+This includes C1's requirements and Chroma for C2's optional retrieval workflow.
+
 ## Version targets
 
 | Version                           | Focus                                                                                                                                                                                                      |
@@ -20,6 +23,7 @@ This directory is the repo home for **C2 (Fletcher)** : resume tailoring. See **
 - **Fletcher queue and history**: DB-backed `fletcher_jobs` stores background Option B resume runs, status, input, result URLs, queue log path, review ID, and history metadata. Runs persist across app restarts and project stop/start as long as the DB persists.
 - **History actions**: completed Option B runs are ordered by latest finish time, searchable in the UI, selectable, downloadable as one ZIP containing chosen artifacts such as logs, no-summary PDFs, with-summary PDFs, and TeX files, and deletable from the DB-backed history list.
 - **Queue batch**: `python -m fletcher.cli generate-ready` (jobs with `enrichment_status` in `done` / `done_verified`). Jobs are skipped when there is already a resume attempt with `jd_usable = 0` and the job `description` text is unchanged (SHA-256 fingerprint). Re-enrich or edit the description to retry. `fletch run generate-job <job_id>` still forces a new attempt.
+- Automatic generation also skips C1 discovery-suppressed and applied/canceled jobs. Manual generation remains available, but does not make these jobs C3-ready.
 - **LLM I/O logging**: prompt and response are written to attempt directories when enabled.
 - **Review app**: per-attempt PDF/TeX/Keywords/LLM I/O links, keyword pills panel, LLM I/O viewer page at `/api/attempts/{id}/llm`, and Fletcher review workspace at `/fletcher/reviews/{review_id}`.
 - **Review workspace**: `review_package.json` preserves original, generated, and current editable `ResumeDocument` JSON for `no_summary` and `with_summary` versions. The UI shows a PDF-like resume surface with PR-style inline diffs, segment revert, block edit, draft undo/redo, undo-all, explicit save, compile, logs, keyword/RAG score inspection, and PDF/TeX downloads. Inline LaTeX formatting such as `\textbf{...}` and `\href{...}{...}` is rendered as bold text and links in the workspace.
@@ -129,6 +133,7 @@ Review API:
 
 ```bash
 fletch tests
+python ci.py c2
 ```
 
 Requires `pdflatex` and optionally `pdfinfo` on PATH for full pipeline tests. Unit tests mock `pdflatex` where possible.

@@ -1,4 +1,3 @@
-import argparse
 import os
 import re
 import sys
@@ -7,7 +6,6 @@ import time
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hunter.c1_logging import C1Logger
 from hunter.db import (
     claim_linkedin_job_for_enrichment,
     get_job_by_id,
@@ -21,15 +19,17 @@ from hunter.enrichment_policy import (
     compute_retry_after,
     format_sqlite_timestamp,
     is_retryable_error_code,
+    log_retry_exhausted,
+    summarize_batch,
 )
 from hunter.failure_artifacts import capture_page_artifacts
+from hunter.job_posting import normalize_description_text
 from hunter.linkedin_session import (
     LinkedInSessionError,
     assert_logged_in,
     attempt_auto_relogin,
     open_linkedin_context,
 )
-from hunter.notifications import send_discord_webhook_message
 from hunter.url_utils import (
     detect_ats_type,
     get_apply_host,
@@ -218,16 +218,6 @@ class LinkedInEnrichmentError(RuntimeError):
         self.code = code
         self.message = message
         self.partial_result = partial_result
-
-
-def normalize_description_text(text):
-    normalized = normalize_optional_str(text)
-    if not normalized:
-        return None
-
-    lines = [re.sub(r"\s+", " ", line).strip() for line in normalized.splitlines()]
-    cleaned = "\n".join(line for line in lines if line)
-    return cleaned or None
 
 
 def score_description_candidate(text):
@@ -1049,43 +1039,10 @@ def get_next_retry_timestamp(claimed_job, error_code, *, ui_verify=False):
     return format_sqlite_timestamp(retry_after) if retry_after else None
 
 
-def log_retry_exhausted(claimed_job, *, error_code, error_message):
-    C1Logger(discord=False).event(
-        key="hunt_last_retry_exhausted",
-        level="warn",
-        message="C1 enrichment retries exhausted.",
-        code="retry_exhausted",
-        details={
-            "job_id": claimed_job.get("id"),
-            "source": "linkedin",
-            "error_code": error_code,
-            "error_message": error_message,
-            "enrichment_attempts": claimed_job.get("enrichment_attempts"),
-        },
-    )
-
-
-def _notify_linkedin_auth_pause(claimed_job, error_message, *, relogin_result=None):
-    lines = [
-        "Hunt alert: LinkedIn enrichment auth is paused.",
-        f"Error: {error_message}",
-    ]
-    if relogin_result and relogin_result.get("attempted"):
-        lines.append(f"Auto relogin: {relogin_result.get('message')}")
-    if claimed_job:
-        lines.append(
-            f"Job: id={claimed_job['id']} company={claimed_job.get('company') or 'unknown'} "
-            f"title={claimed_job.get('title') or 'unknown'}"
-        )
-    return send_discord_webhook_message("\n".join(lines))
-
-
 def pause_linkedin_enrichment_for_auth(claimed_job, error_message, *, relogin_result=None):
     mark_linkedin_auth_unavailable(error_message)
     if claimed_job:
         restore_linkedin_enrichment_claim(claimed_job)
-    # if previous_auth_state.get("available"):
-    #     _notify_linkedin_auth_pause(claimed_job, error_message, relogin_result=relogin_result)
 
 
 def maybe_resume_linkedin_auth(
@@ -1268,6 +1225,7 @@ def process_claimed_job(
         if not ui_verify and is_retryable_error_code(error_code) and next_retry_timestamp is None:
             log_retry_exhausted(
                 claimed_job,
+                source="linkedin",
                 error_code=error_code,
                 error_message=error_message,
             )
@@ -1383,7 +1341,6 @@ def process_batch(
         return 1
 
     results = []
-    final_results_by_job_id = {}
     blocked_job_ids = []
 
     try:
@@ -1406,7 +1363,6 @@ def process_batch(
                     timeout_ms=timeout_ms,
                 )
                 results.append(result)
-                final_results_by_job_id[result["job_id"]] = result
 
                 if result["status"] == "auth_paused":
                     print(
@@ -1468,7 +1424,6 @@ def process_batch(
                         )
 
                     ui_verify_results.append(result)
-                    final_results_by_job_id[result["job_id"]] = result
 
                     if result["status"] == "auth_paused":
                         print(
@@ -1488,155 +1443,22 @@ def process_batch(
             pause_linkedin_enrichment_for_auth(None, error_message)
             print(f"[batch-ui] Stopping early because LinkedIn auth needs refresh: {error_message}")
 
-    total_elapsed = time.monotonic() - started_at
-    final_results = list(final_results_by_job_id.values())
-    successes = [result for result in final_results if result["status"] == "success"]
-    failures = [result for result in final_results if result["status"] == "failed"]
-    auth_paused_results = [result for result in final_results if result["status"] == "auth_paused"]
-    actionable_failures = [
-        result
-        for result in failures
-        if not is_non_actionable_failure_code(result.get("error_code"))
-    ]
-
-    print("\n[batch] Summary")
-    print(f"  attempted: {len(results)}")
-    if ui_verify_results:
-        print(f"  ui_verified: {len(ui_verify_results)}")
-    print(f"  succeeded: {len(successes)}")
-    print(f"  failed: {len(failures)}")
-    if auth_paused_results or not get_linkedin_auth_state().get("available"):
-        print(f"  auth_paused: {len(auth_paused_results) or 1}")
-    print(f"  total_elapsed_seconds: {total_elapsed:.1f}")
-    all_timed_results = results + ui_verify_results
-    if all_timed_results:
-        avg_seconds = sum(result["duration_seconds"] for result in all_timed_results) / len(
-            all_timed_results
-        )
-        print(f"  average_seconds_per_job: {avg_seconds:.1f}")
-
-    counts_by_error = {}
-    if failures:
-        for failure in failures:
-            counts_by_error[failure["error_code"]] = (
-                counts_by_error.get(failure["error_code"], 0) + 1
-            )
-        print("  failure_breakdown:")
-        for error_code, count in sorted(counts_by_error.items()):
-            print(f"    {error_code}: {count}")
-
-    stop_error_code = None
-    if auth_paused_results or not get_linkedin_auth_state().get("available"):
-        stop_error_code = "auth_expired"
-    for failure in failures:
-        error_code = failure.get("error_code")
-        if is_hard_stop_error_code(error_code):
-            stop_error_code = error_code
-            break
-
-    exit_code = 0 if not actionable_failures and not stop_error_code else 1
-    if return_summary:
-        return {
-            "exit_code": exit_code,
-            "attempted": len(results),
-            "ui_verified": len(ui_verify_results),
-            "succeeded": len(successes),
-            "failed": len(failures),
-            "actionable_failed": len(actionable_failures),
-            "failure_breakdown": counts_by_error,
-            "total_elapsed_seconds": total_elapsed,
-            "average_seconds_per_job": (
-                sum(result["duration_seconds"] for result in all_timed_results)
-                / len(all_timed_results)
-                if all_timed_results
-                else 0.0
-            ),
-            "stop_error_code": stop_error_code,
-        }
-
-    return exit_code
+    summary = summarize_batch(
+        results,
+        elapsed=time.monotonic() - started_at,
+        non_actionable=is_non_actionable_failure_code,
+        should_stop=is_hard_stop_error_code,
+        prefix="batch",
+        ui_results=ui_verify_results,
+        auth_paused=not get_linkedin_auth_state().get("available"),
+    )
+    return summary if return_summary else summary["exit_code"]
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Enrich one LinkedIn job using a saved Playwright session."
-    )
-    parser.add_argument("--job-id", type=int, help="Specific LinkedIn job id to enrich.")
-    parser.add_argument(
-        "--storage-state",
-        help="Path to Playwright storage state JSON. Defaults to LINKEDIN_STORAGE_STATE_PATH or .state/linkedin_auth_state.json.",
-    )
-    parser.add_argument(
-        "--headful", action="store_true", help="Run Chromium with a visible browser window."
-    )
-    parser.add_argument(
-        "--slow-mo", type=int, default=0, help="Optional Playwright slow_mo value in milliseconds."
-    )
-    parser.add_argument(
-        "--timeout-ms", type=int, default=45000, help="Navigation/action timeout in milliseconds."
-    )
-    parser.add_argument("--channel", help="Optional Playwright browser channel such as chrome.")
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Allow enriching a specific LinkedIn row even if it is not currently pending.",
-    )
-    parser.add_argument(
-        "--ui-verify",
-        action="store_true",
-        help="Re-run one specific LinkedIn row in a visible browser and mark the result as an interactive verification outcome.",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=1,
-        help="Number of pending LinkedIn jobs to enrich sequentially (default: 1).",
-    )
-    parser.add_argument(
-        "--ui-verify-blocked",
-        action="store_true",
-        help="For batch runs, rerun rows blocked by CAPTCHA/security challenges in a visible browser after the first pass.",
-    )
-    args = parser.parse_args()
+    from hunter.enrichment_cli import run_enrichment_cli
 
-    if args.force and args.job_id is None:
-        parser.error("--force requires --job-id")
-    if args.ui_verify and args.job_id is None:
-        parser.error("--ui-verify requires --job-id")
-    if args.job_id is not None and args.limit != 1:
-        parser.error("--limit cannot be used with --job-id")
-    if args.limit < 1:
-        parser.error("--limit must be at least 1")
-    if args.ui_verify and args.limit != 1:
-        parser.error("--ui-verify cannot be used with --limit")
-    if args.ui_verify and not args.headful:
-        print("[enrich] --ui-verify implies a visible browser window; running headful.")
-    if args.ui_verify_blocked and args.limit == 1:
-        parser.error("--ui-verify-blocked requires --limit greater than 1")
-    if args.ui_verify_blocked and args.job_id is not None:
-        parser.error("--ui-verify-blocked cannot be used with --job-id")
-
-    if args.limit > 1:
-        return process_batch(
-            limit=args.limit,
-            storage_state_path=args.storage_state,
-            headless=not args.headful,
-            slow_mo=args.slow_mo,
-            timeout_ms=args.timeout_ms,
-            browser_channel=args.channel,
-            ui_verify_blocked=args.ui_verify_blocked,
-        )
-
-    return process_one_job(
-        job_id=args.job_id,
-        storage_state_path=args.storage_state,
-        headless=not (args.headful or args.ui_verify),
-        slow_mo=args.slow_mo,
-        timeout_ms=args.timeout_ms,
-        browser_channel=args.channel,
-        force=(args.force or args.ui_verify),
-        ui_verify=args.ui_verify,
-    )
+    return run_enrichment_cli("LinkedIn", process_one_job, process_batch)
 
 
 if __name__ == "__main__":

@@ -139,6 +139,14 @@
   white-space: nowrap;
 }
 
+.discoveryNote {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .priorityBadge {
   display: inline-block;
   font-size: 0.68rem;

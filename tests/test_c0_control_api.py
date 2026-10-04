@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -54,6 +54,104 @@ class C0ControlApiTests(unittest.TestCase):
         if os.path.exists(self.path):
             os.remove(self.path)
         shutil.rmtree(self.runtime_dir, ignore_errors=True)
+
+    def test_public_employer_requeue_uses_worker_eligibility(self):
+        conn = self.db.get_connection()
+        for index, status, apply_type, ats in (
+            (1, "new", "unknown", "workday"),
+            (2, "applied", "unknown", "workday"),
+            (3, "new", "easy_apply", "workday"),
+            (4, "new", "unknown", "unsupported"),
+        ):
+            conn.execute(
+                "INSERT INTO jobs (id,title,job_url,source,status,apply_type,ats_type,enrichment_status,enrichment_attempts) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    index,
+                    "IT Support",
+                    f"https://example.com/{index}",
+                    "employer_workday",
+                    status,
+                    apply_type,
+                    ats,
+                    "blocked",
+                    99,
+                ),
+            )
+        conn.commit()
+        conn.close()
+        self.assertEqual(self.client.post("/api/jobs/1/requeue").status_code, 200)
+        self.assertEqual(self.db.get_job_by_id(1)["enrichment_status"], "pending")
+        self.assertEqual(self.db.count_ready_public_employer_jobs(), 1)
+        for index in (2, 3, 4):
+            self.assertEqual(self.client.post(f"/api/jobs/{index}/requeue").status_code, 400)
+            self.assertEqual(self.db.get_job_by_id(index)["enrichment_status"], "blocked")
+
+    def test_company_preview_gateway_requires_auth_and_forwards_read_only_request(self):
+        from fastapi.responses import JSONResponse
+
+        from hunter.config import HUNT_HUNTER_URL
+
+        body = {"company": "Example", "url": "https://example.com/careers"}
+        with patch("backend.gateway._proxy_post", new_callable=AsyncMock) as proxy:
+            proxy.return_value = JSONResponse({"saved": False, "sample": []})
+            response = self.client.post("/api/gateway/c1/discovery/preview", json=body)
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()["saved"])
+            proxy.assert_awaited_once_with(f"{HUNT_HUNTER_URL}/discovery/preview", body)
+        self.client.cookies.clear()
+        self.assertEqual(
+            self.client.post("/api/gateway/c1/discovery/preview", json=body).status_code, 401
+        )
+
+    def test_c1_discovery_health_gateway_preserves_results_and_requires_auth(self):
+        from fastapi.responses import JSONResponse
+
+        from hunter.config import HUNT_HUNTER_URL
+
+        payload = {
+            "sources": [{"source": "job_bank", "status": "partial"}],
+            "company_fetch_queue": [],
+        }
+        with patch("backend.gateway._proxy_get", new_callable=AsyncMock) as proxy:
+            proxy.return_value = JSONResponse(payload)
+            response = self.client.get("/api/gateway/c1/discovery/health")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), payload)
+            proxy.assert_awaited_once_with(f"{HUNT_HUNTER_URL}/discovery/health")
+            self.client.cookies.clear()
+            denied = self.client.get("/api/gateway/c1/discovery/health")
+            self.assertEqual(denied.status_code, 401)
+
+    def test_discovery_sources_can_be_filtered_without_enabling_workers(self):
+        conn = self.db.get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO jobs (id, title, company, source, job_url, enrichment_status) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (14499, "IT Support", "Example", "job_bank", "https://example.com/job", "blocked"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        for route in (
+            "/api/jobs",
+            "/api/jobs/count",
+            "/api/jobs/export?format=json",
+            "/api/jobs/14499/adjacent",
+            "/legacy/jobs",
+        ):
+            separator = "&" if "?" in route else "?"
+            with self.subTest(route=route):
+                result = self.client.get(f"{route}{separator}source=job_bank&status=all")
+                self.assertEqual(result.status_code, 200, result.text)
+                invalid = self.client.get(f"{route}{separator}source=unknown_source&status=all")
+                self.assertEqual(invalid.status_code, 400)
+        from fastapi import HTTPException
+
+        from backend.app import _parse_ops_requeue_payload
+
+        with self.assertRaises(HTTPException):
+            _parse_ops_requeue_payload({"source": "job_bank", "error_codes": ["rate_limited"]})
 
     def test_fletcher_progress_mapping_uses_milestone_order(self):
         from backend.app import (

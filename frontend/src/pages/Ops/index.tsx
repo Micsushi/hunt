@@ -4,6 +4,7 @@ import { useUiStore } from '@/store/ui'
 import { requeueErrors, requeueStaleProcessing, bulkRequeue } from '@/api/ops'
 import {
   fetchC1Queue,
+  fetchC1DiscoveryHealth,
   fetchC1Status,
   fetchLinkedInAccounts,
   fetchSettings,
@@ -17,6 +18,50 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { SystemStatusPanel } from '@/pages/Control/SystemStatus'
 import styles from './Ops.module.css'
+import { coverageRows } from './discoveryCoverage'
+import { CompanyPreview } from './CompanyPreview'
+
+function coverageIssue(error: string | null): string {
+  if (!error) return 'None reported'
+  const cooldown = 'jobright_cooldown_until_'
+  if (error.startsWith(cooldown)) {
+    const until = new Date(error.slice(cooldown.length))
+    if (!Number.isNaN(until.getTime()))
+      return `JobRight limit reached. Retry after ${until.toLocaleString()}.`
+  }
+  const messages: Record<string, string> = {
+    http_403: 'The site denied access. Listings could not be checked.',
+    http_404: 'The careers address was not found. Its configured URL needs checking.',
+    http_429: 'The site limited requests. C1 will retry later.',
+    http_500: 'The site returned a server error. C1 will retry later.',
+    security_checkpoint: 'The site requires a security check. Automated access is unavailable.',
+    career_adapter_unavailable: 'This careers page is not supported yet.',
+    ambiguous_career_boards:
+      'More than one hiring board was found. Choose the intended board in configuration.',
+    posting_details_unverified: 'Listings found; full job details still need verification.',
+    posting_date_unknown: 'Listings found, but their posting dates are not published or verified.',
+    catalog_total_unknown:
+      'Listings found, but the site does not confirm the complete catalog size.',
+    catalog_count_mismatch: 'Page counts did not match. This scan is incomplete.',
+    detail_identity_mismatch: 'A posting did not match its listing. Its details remain unverified.',
+    pagination_not_verified: 'More pages may remain. This scan is incomplete.',
+    catalog_changed_during_scan: 'The job list changed during the scan. C1 will retry later.',
+    repeated_page: 'The site repeated a page. More results may remain.',
+    jobright_hourly_refresh_limit:
+      'JobRight hourly limit reached. C1 will wait an hour before retrying.',
+    jobright_sign_in_required: 'Sign in to JobRight again and save its session.',
+    jobright_browser_not_configured: 'Save a JobRight session before searching this source.',
+    jobright_browser_crashed:
+      'The JobRight browser stopped unexpectedly. Saved results are retained.',
+    recommendation_coverage_only: 'Saved recommendations only; not the complete JobRight catalog.',
+    saved_recommendations_exhausted:
+      'Reached the end of saved recommendations, not the full catalog.',
+    page_limit_reached: 'Stopped at the requested page limit. More results may remain.',
+    pagination_repeated: 'The site repeated a page. More results may remain.',
+    application_links_not_verified: 'Listings found; application links still need verification.',
+  }
+  return messages[error] ?? error.replace(/_/g, ' ')
+}
 
 const REQUEUE_BUTTONS = [
   {
@@ -58,6 +103,31 @@ export function OpsPage() {
   const [accountPassword, setAccountPassword] = useState('')
   const [accountName, setAccountName] = useState('')
   const [c1Result, setC1Result] = useState<unknown>(null)
+  const [coverageSearch, setCoverageSearch] = useState('')
+  const [coverageFilter, setCoverageFilter] = useState('attention')
+  const discovery = useQuery({
+    queryKey: ['c1-discovery-health'],
+    queryFn: fetchC1DiscoveryHealth,
+    refetchInterval: 15_000,
+  })
+  const checks = coverageRows(discovery.data)
+  const scan = discovery.data?.scan
+  const elapsed = scan?.started_at
+    ? Math.max(
+        0,
+        Math.floor(
+          ((scan.running ? discovery.dataUpdatedAt / 1000 : (scan.finished_at ?? scan.started_at)) -
+            scan.started_at) /
+            60,
+        ),
+      )
+    : 0
+  const completedChecks = checks.filter((row) => row.status === 'ok').length
+  const visibleChecks = checks.filter(
+    (row) =>
+      (coverageFilter === 'all' || row.status !== 'ok') &&
+      row.source.toLocaleLowerCase().includes(coverageSearch.trim().toLocaleLowerCase()),
+  )
 
   const { data: accountsData } = useQuery({
     queryKey: ['linkedin-accounts'],
@@ -208,8 +278,6 @@ export function OpsPage() {
         <h1 className={styles.heroTitle}>Operator console</h1>
       </section>
 
-      <SystemStatusPanel />
-
       <div className={`${styles.panel} ${styles.panelStrong}`}>
         <div className={styles.panelHeader}>
           <h2 className={styles.panelTitle}>Hunter controls</h2>
@@ -233,9 +301,9 @@ export function OpsPage() {
           <button
             className={`${styles.btn} ${styles.btnPrimary}`}
             disabled={!!loadingBtn}
-            onClick={() => runC1('scrape', triggerC1Scrape)}
+            onClick={() => runC1('Search', () => triggerC1Scrape(true))}
           >
-            Scrape
+            Search boards, feeds and companies
           </button>
           <button
             className={styles.btn}
@@ -250,11 +318,153 @@ export function OpsPage() {
             onClick={() => runC1('drain', () => triggerC1Enrich(500))}
             title="Enrich up to 500 pending rows in one background run"
           >
-            Drain all
+            Enrich up to 500
           </button>
         </div>
         {c1Result ? <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre> : null}
+        <details className={styles.coverage} open>
+          <summary>Search coverage</summary>
+          {scan?.state && (
+            <div className={styles.coverageNote}>
+              <p role="status">
+                {scan.running
+                  ? scan.resumed
+                    ? 'Scan resumed'
+                    : 'Scan running'
+                  : scan.state === 'completed'
+                    ? 'Scan completed'
+                    : 'Scan interrupted; saved progress will resume on the next matching scan'}
+                . {scan.completed?.length ?? 0} steps completed · {elapsed} minutes.
+                {scan.last_saved_at && (
+                  <> Last saved: {new Date(scan.last_saved_at * 1000).toLocaleString()}.</>
+                )}
+              </p>
+              {scan.running && Object.keys(scan.active ?? {}).length > 0 && (
+                <details>
+                  <summary>Currently searching ({Object.keys(scan.active ?? {}).length})</summary>
+                  <ul>
+                    {Object.entries(scan.active ?? {}).map(([name, since]) => (
+                      <li key={name}>
+                        {name.startsWith('company:')
+                          ? name.slice(8).split(':http')[0]
+                          : name
+                              .replace(/^(board|public|query):/, '')
+                              .replace(/[()']/g, '')
+                              .replace(/_/g, ' ')}{' '}
+                        · {Math.max(0, Math.floor((discovery.dataUpdatedAt / 1000 - since) / 60))}{' '}
+                        minutes
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+          {discovery.isPending && <p role="status">Loading source results…</p>}
+          {!!discovery.data?.unimplemented_sources?.length && (
+            <p>
+              Not yet scripted: {discovery.data.unimplemented_sources.join(', ')}. These sources
+              have not been searched by this run.
+            </p>
+          )}
+          {discovery.isError && (
+            <p role="alert">
+              Source results could not be loaded.{' '}
+              <button className={styles.btn} onClick={() => discovery.refetch()}>
+                Retry
+              </button>
+            </p>
+          )}
+          {discovery.data && checks.length === 0 && (
+            <p>No source checks recorded yet. Run a search to collect results.</p>
+          )}
+          {!!checks.length && (
+            <>
+              <p className={styles.coverageNote}>
+                {completedChecks} checks completed; {checks.length - completedChecks} need
+                attention.
+              </p>
+              <div className={styles.formGrid}>
+                <label className={styles.field}>
+                  Find a source
+                  <input
+                    className={styles.input}
+                    type="search"
+                    value={coverageSearch}
+                    onChange={(event) => setCoverageSearch(event.target.value)}
+                  />
+                </label>
+                <label className={styles.field}>
+                  Show checks
+                  <select
+                    className={styles.input}
+                    value={coverageFilter}
+                    onChange={(event) => setCoverageFilter(event.target.value)}
+                  >
+                    <option value="attention">Need attention</option>
+                    <option value="all">All checks</option>
+                  </select>
+                </label>
+              </div>
+              <div
+                className={`${styles.tableWrap} ${styles.coverageResults}`}
+                tabIndex={0}
+                role="region"
+                aria-label="Source check results"
+              >
+                <table className={styles.table}>
+                  <caption className={styles.coverageNote}>
+                    Latest checks by source. Partial or failed checks do not mean there are no jobs.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Source / search</th>
+                      <th scope="col">Coverage</th>
+                      <th scope="col">Leads</th>
+                      <th scope="col">Unfinished work</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleChecks.map((source) => (
+                      <tr key={source.source}>
+                        <td>{source.source.replace(/^company:/, '')}</td>
+                        <td>
+                          {source.status === 'ok'
+                            ? 'Check completed'
+                            : source.last_error === 'posting_date_unknown'
+                              ? 'Catalog read; dates unknown'
+                              : source.last_error === 'application_links_not_verified'
+                                ? 'Leads found; links unverified'
+                                : source.status === 'pending_manual'
+                                  ? source.last_error === 'ambiguous_career_boards'
+                                    ? 'Needs setup'
+                                    : 'Not supported'
+                                  : source.status.replace(/_/g, ' ')}
+                        </td>
+                        <td data-label="Leads">{source.lead_count}</td>
+                        <td>{coverageIssue(source.last_error)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {visibleChecks.length === 0 && (
+                  <p role="status">
+                    {coverageSearch.trim()
+                      ? 'No checks match this search. Clear it or choose All checks.'
+                      : 'No checks need attention. Choose All checks to see completed scans.'}
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+        </details>
       </div>
+
+      <div className={styles.panel}>
+        <CompanyPreview />
+      </div>
+
+      <SystemStatusPanel />
 
       <div className={styles.gridTwo}>
         <div className={styles.panel}>

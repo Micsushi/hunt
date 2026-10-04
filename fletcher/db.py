@@ -750,6 +750,8 @@ def _job_is_ready_for_c3(job: dict) -> bool:
         and apply_type == "external_apply"
         and auto_apply_eligible == 1
         and priority == 0
+        and not job.get("discovery_suppressed_reason")
+        and str(job.get("status") or "").strip().lower() not in {"applied", "canceled", "cancelled"}
         and bool(apply_url)
     )
 
@@ -1278,6 +1280,10 @@ def list_jobs_ready_for_resume(
             for row in rows:
                 scanned += 1
                 r = dict(row)
+                if r.get("discovery_suppressed_reason") or str(
+                    r.get("status") or ""
+                ).strip().lower() in {"applied", "canceled", "cancelled"}:
+                    continue
                 if should_skip_resume_regeneration(
                     conn, job_id=int(r["id"]), description=r.get("description")
                 ):

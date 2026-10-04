@@ -437,6 +437,7 @@ class Stage32Tests(unittest.TestCase):
                 enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
             ) as mock_indeed_run,
             patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
+            patch.object(enrichment_dispatch, "count_ready_public_employer_jobs", return_value=0),
         ):
             mock_count.side_effect = lambda sources=None: 1
             summary = enrich_jobs.process_multi_source_batch(limit=2, return_summary=True)
@@ -495,6 +496,7 @@ class Stage32Tests(unittest.TestCase):
                 enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
             ) as mock_indeed_run,
             patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
+            patch.object(enrichment_dispatch, "count_ready_public_employer_jobs", return_value=0),
             patch.object(
                 enrichment_dispatch,
                 "count_ready_linkedin_jobs_for_hiring_cafe_fallback",
@@ -638,5 +640,127 @@ class Stage32Tests(unittest.TestCase):
         self.assertIsNotNone(row["next_enrichment_retry_at"])
 
 
+class EnrichmentCliTests(unittest.TestCase):
+    def test_dispatch_preserves_worker_options(self):
+        from unittest.mock import Mock
+
+        from hunter import enrich_hiring_cafe, enrich_indeed, enrich_linkedin
+
+        for worker in (enrich_linkedin, enrich_indeed, enrich_hiring_cafe):
+            for batch in (False, True):
+                with self.subTest(worker=worker.__name__, batch=batch):
+                    one, many = Mock(return_value=7), Mock(return_value=8)
+                    argv = (
+                        ["enrich", "--limit", "3"]
+                        if batch
+                        else ["enrich", "--job-id", "42", "--force"]
+                    )
+                    with (
+                        patch.object(sys, "argv", argv),
+                        patch.object(worker, "process_one_job", one),
+                        patch.object(worker, "process_batch", many),
+                    ):
+                        self.assertEqual(worker.main(), 8 if batch else 7)
+                    called = many if batch else one
+                    (one if batch else many).assert_not_called()
+                    expected = {"limit": 3} if batch else {"job_id": 42, "force": True}
+                    if worker != enrich_hiring_cafe:
+                        expected.update(timeout_ms=45000, browser_channel=None)
+                        expected["ui_verify_blocked" if batch else "ui_verify"] = False
+                    if worker == enrich_linkedin:
+                        expected.update(storage_state_path=None, headless=True, slow_mo=0)
+                    called.assert_called_once_with(**expected)
+
+    def test_invalid_cli_combinations_never_claim_jobs(self):
+        from unittest.mock import Mock
+
+        from hunter import enrich_hiring_cafe, enrich_indeed, enrich_linkedin
+
+        for worker in (enrich_linkedin, enrich_indeed, enrich_hiring_cafe):
+            invalid = [["--force"], ["--limit", "0"], ["--job-id", "42", "--limit", "2"]]
+            if worker != enrich_hiring_cafe:
+                invalid += [
+                    ["--ui-verify"],
+                    ["--ui-verify-blocked"],
+                    ["--job-id", "42", "--ui-verify-blocked"],
+                ]
+            for arguments in invalid:
+                with self.subTest(worker=worker.__name__, arguments=arguments):
+                    one, many = Mock(), Mock()
+                    with (
+                        patch.object(sys, "argv", ["enrich", *arguments]),
+                        patch.object(worker, "process_one_job", one),
+                        patch.object(worker, "process_batch", many),
+                    ):
+                        with self.assertRaises(SystemExit) as result:
+                            worker.main()
+                    self.assertEqual(result.exception.code, 2)
+                    one.assert_not_called()
+                    many.assert_not_called()
+
+    def test_interactive_verification_preserves_provider_claim_behavior(self):
+        from unittest.mock import Mock
+
+        from hunter import enrich_indeed, enrich_linkedin
+
+        for worker in (enrich_linkedin, enrich_indeed):
+            with self.subTest(worker=worker.__name__):
+                one = Mock(return_value=0)
+                with (
+                    patch.object(sys, "argv", ["enrich", "--job-id", "42", "--ui-verify"]),
+                    patch.object(worker, "process_one_job", one),
+                ):
+                    self.assertEqual(worker.main(), 0)
+                self.assertTrue(one.call_args.kwargs["ui_verify"])
+                self.assertEqual(one.call_args.kwargs["force"], worker == enrich_linkedin)
+                if worker == enrich_linkedin:
+                    self.assertFalse(one.call_args.kwargs["headless"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_batch_summary_uses_final_verification_outcome_and_all_attempt_timings():
+    from hunter.enrichment_policy import summarize_batch
+
+    initial = [
+        {
+            "job_id": 1,
+            "status": "failed",
+            "error_code": "security_verification",
+            "duration_seconds": 2,
+        },
+        {"job_id": 2, "status": "failed", "error_code": "job_removed", "duration_seconds": 1},
+    ]
+    verified = [{"job_id": 1, "status": "success", "duration_seconds": 6}]
+    summary = summarize_batch(
+        initial,
+        ui_results=verified,
+        elapsed=12,
+        non_actionable=lambda code: code == "job_removed",
+        should_stop=lambda code: code == "security_verification",
+        prefix="test",
+    )
+    assert summary == {
+        "exit_code": 0,
+        "attempted": 2,
+        "ui_verified": 1,
+        "succeeded": 1,
+        "failed": 1,
+        "actionable_failed": 0,
+        "failure_breakdown": {"job_removed": 1},
+        "total_elapsed_seconds": 12,
+        "average_seconds_per_job": 3,
+        "stop_error_code": None,
+    }
+    paused = summarize_batch(
+        [],
+        elapsed=1,
+        non_actionable=lambda _: False,
+        should_stop=lambda _: False,
+        prefix="test",
+        auth_paused=True,
+    )
+    assert paused["exit_code"] == 1 and paused["stop_error_code"] == "auth_expired"
+    assert paused["attempted"] == 0 and paused["average_seconds_per_job"] == 0

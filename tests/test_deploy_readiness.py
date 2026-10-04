@@ -28,6 +28,36 @@ from scripts import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_compose_scheduler_uses_complete_c1_runner():
+    import json
+
+    if shutil.which("docker") is None:
+        pytest.skip("Docker CLI is unavailable")
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            ".env.server.example",
+            "-f",
+            "docker-compose.pipeline.yml",
+            "-f",
+            "docker-compose.server.yml",
+            "--profile",
+            "server",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    scheduler = json.loads(result.stdout)["services"]["hunter-scheduler"]
+    assert scheduler["command"] == ["python", "-u", "-m", "hunter.runner"]
+
+
 def test_postgres_schema_does_not_provision_removed_c3_v2_ledger():
     schema = (REPO_ROOT / "schema" / "postgres_schema.sql").read_text(encoding="utf-8")
 
@@ -671,20 +701,22 @@ def test_public_examples_and_candidate_template_are_machine_neutral():
     assert "<replace-with-approved-fact>" in candidate
 
 
-def test_public_hunter_defaults_are_generic():
+def test_hunter_defaults_cover_canadian_technical_search_without_private_profile():
     config = (REPO_ROOT / "hunter/config.py").read_text(encoding="utf-8")
     example = (REPO_ROOT / "hunt_user_config.example.json").read_text(encoding="utf-8")
 
     assert "agent-hunt-review.mshi.ca" not in config
-    assert 'TARGET_JOB_TITLES", {}' in config
-    assert 'EXPERIENCE_LEVELS", []' in config
-    assert '_DEFAULT_LOCATIONS = ["Remote"]' in config
+    assert '"software engineer"' in config
+    assert '"IT support"' in config
+    assert '_DEFAULT_LOCATIONS = ["Canada"]' in config
     assert "_DEFAULT_WATCHLIST: list[str] = []" in config
     assert "_DEFAULT_TITLE_BLACKLIST: list[str] = []" in config
-    assert "Canada" not in config
+    assert "new grad" not in config
+    assert "intern" not in config
     assert "new grad" not in example
     assert "intern" not in example
-    assert "Canada" not in example
+    assert "Canada" in example
+    assert '"it_support"' in example
 
 
 def test_public_fletcher_master_resume_default_is_generic_and_local_data_is_ignored():
@@ -1131,6 +1163,22 @@ def test_component_test_runner_target_mapping(monkeypatch):
                 "tests/test_stage32.py",
                 "tests/test_stage4.py",
                 "tests/test_search_lanes.py",
+                "tests/test_c1_discovery_policy.py",
+                "tests/test_c1_review_regressions.py",
+                "tests/test_c1_public_discovery.py",
+                "tests/test_c1_structured_discovery.py",
+                "tests/test_c1_google_discovery.py",
+                "tests/test_c1_talentbrew_discovery.py",
+                "tests/test_c1_sap_discovery.py",
+                "tests/test_c1_rmk_discovery.py",
+                "tests/test_c1_taleo_discovery.py",
+                "tests/test_c1_schedule.py",
+                "tests/test_c1_packaged_runner.py",
+                "tests/test_c1_linkedin_discovery.py",
+                "tests/test_c1_indeed_discovery.py",
+                "tests/test_c1_public_verification.py",
+                "tests/test_c1_postgres_live.py",
+                "tests/test_component1_service_api.py",
                 "hunter/tests",
             ],
             run_component_tests.ROOT,
@@ -1157,6 +1205,22 @@ def test_component_test_runner_alias_mapping(monkeypatch):
         "tests/test_stage32.py",
         "tests/test_stage4.py",
         "tests/test_search_lanes.py",
+        "tests/test_c1_discovery_policy.py",
+        "tests/test_c1_review_regressions.py",
+        "tests/test_c1_public_discovery.py",
+        "tests/test_c1_structured_discovery.py",
+        "tests/test_c1_google_discovery.py",
+        "tests/test_c1_talentbrew_discovery.py",
+        "tests/test_c1_sap_discovery.py",
+        "tests/test_c1_rmk_discovery.py",
+        "tests/test_c1_taleo_discovery.py",
+        "tests/test_c1_schedule.py",
+        "tests/test_c1_packaged_runner.py",
+        "tests/test_c1_linkedin_discovery.py",
+        "tests/test_c1_indeed_discovery.py",
+        "tests/test_c1_public_verification.py",
+        "tests/test_c1_postgres_live.py",
+        "tests/test_component1_service_api.py",
         "hunter/tests",
     ]
 

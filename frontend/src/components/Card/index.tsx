@@ -21,16 +21,19 @@ export function Card({ label, value, tooltip, onClick, accent, danger, warning }
     .filter(Boolean)
     .join(' ')
 
-  return (
-    <div
-      className={cls}
-      onClick={onClick}
-      title={tooltip}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-    >
+  const content = (
+    <>
       <div className={styles.label}>{label}</div>
       <div className={styles.value}>{value}</div>
+    </>
+  )
+  return onClick ? (
+    <button className={cls} onClick={onClick} title={tooltip} type="button">
+      {content}
+    </button>
+  ) : (
+    <div className={cls} title={tooltip}>
+      {content}
     </div>
   )
 }

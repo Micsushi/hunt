@@ -129,6 +129,12 @@ SOURCE_OPTIONS = (
 )
 
 
+def validate_job_source_filter(source: str) -> None:
+    # Discovery sources can be viewed without enabling enrichment workers for them.
+    if source not in SOURCE_OPTIONS and source not in get_review_queue_summary()["source_counts"]:
+        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+
+
 def _raise_integrity_conflict(exc: BaseException) -> None:
     raise HTTPException(
         status_code=409,
@@ -219,7 +225,7 @@ FRONTEND_DIST = Path(REPO_ROOT) / "frontend" / "dist"
 
 @asynccontextmanager
 async def lifespan(app):
-    init_db(maintenance=False)
+    init_db(maintenance=False, refresh_discovery=False)
     init_hunt_extras()
     try:
         from fletcher.db import init_fletcher_queue_db, init_resume_db  # type: ignore
@@ -3311,8 +3317,7 @@ def api_jobs_count(
     _auth: str = Depends(require_auth),
 ):
     """Return total row count for current filter - used for pagination."""
-    if source not in SOURCE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    validate_job_source_filter(source)
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     source_filter = None if source == "all" else source
@@ -4705,8 +4710,7 @@ def api_jobs(
     direction: str = "desc",
     _auth: str = Depends(require_auth),
 ):
-    if source not in SOURCE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    validate_job_source_filter(source)
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 250))
@@ -4756,8 +4760,7 @@ def api_jobs_export(
 ):
     if export_format not in ("csv", "json"):
         raise HTTPException(status_code=400, detail="format must be csv or json.")
-    if source not in SOURCE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    validate_job_source_filter(source)
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 5000))
@@ -4824,8 +4827,7 @@ def api_job_adjacent(
     _auth: str = Depends(require_auth),
 ):
     """Return prev/next job IDs using the same filter and sort as the review list."""
-    if source not in SOURCE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    validate_job_source_filter(source)
     status_filter = status
     if status_filter is None:
         row = get_job_by_id(job_id)
@@ -5084,13 +5086,13 @@ def api_patch_job(job_id: int, payload: dict = Body(...)):
 @app.post("/api/jobs/{job_id}/requeue", dependencies=[Depends(review_ops_dependency)])
 def api_requeue_job(job_id: int):
     row = get_job_by_id(job_id)
-    if not row or row.get("source") not in {"linkedin", "indeed"}:
-        raise HTTPException(
-            status_code=400, detail="Requeue is only supported for rows with an enrichment worker."
-        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        raise HTTPException(
+            status_code=400, detail="This job is not eligible for an enrichment retry."
+        )
     try:
         append_review_audit_entry("requeue_job", {"job_id": job_id})
     except Exception:
@@ -5252,8 +5254,7 @@ def jobs_page(
     sort: str = "date_scraped",
     direction: str = "desc",
 ):
-    if source not in SOURCE_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
+    validate_job_source_filter(source)
     if status not in STATUS_OPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
     safe_limit = max(1, min(limit, 250))
@@ -5493,13 +5494,13 @@ async def requeue_job_post(job_id: int, request: Request):
     form = await request.form()
     assert_review_ops_allowed(request, str(form.get("ops_token") or ""))
     row = get_job_by_id(job_id)
-    if not row or row.get("source") not in {"linkedin", "indeed"}:
-        raise HTTPException(
-            status_code=400, detail="Requeue is only supported for rows with an enrichment worker."
-        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
     updated = requeue_review_job(job_id, source=row.get("source"))
     if updated != 1:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        raise HTTPException(
+            status_code=400, detail="This job is not eligible for an enrichment retry."
+        )
     return_to = request.query_params.get("return_to") or ""
     safe_return_to = normalize_return_to(return_to)
     try:
@@ -5531,7 +5532,7 @@ def main():
     )
     args, _ = parser.parse_known_args()
 
-    init_db(maintenance=False)
+    init_db(maintenance=False, refresh_discovery=False)
     init_hunt_extras()
     uvicorn.run(
         "backend.app:app" if args.reload else app,

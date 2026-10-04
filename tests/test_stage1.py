@@ -17,9 +17,8 @@ jobspy_stub.scrape_jobs = lambda **kwargs: None
 sys.modules.setdefault("jobspy", jobspy_stub)
 
 from hunter import config as config_module  # noqa: E402
-from hunter import db  # noqa: E402
+from hunter import db, discovery_policy  # noqa: E402
 from hunter import scraper as discovery  # noqa: E402  # C1 (Hunter) discovery module
-from hunter import user_config as user_config_module  # noqa: E402
 
 
 class FakeDf:
@@ -55,6 +54,27 @@ CREATE TABLE jobs (
 
 
 class Stage1Tests(unittest.TestCase):
+    def test_collection_environment_values_override_file_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SEARCH_TERMS": '{"healthcare":["nurse"]}',
+                "SITES": '["linkedin"]',
+                "COMPANY_CAREER_SITES": '{"New":"https://example.test/jobs"}',
+            },
+        ):
+            self.assertEqual(
+                config_module._get_config_dict("SEARCH_TERMS", {}), {"healthcare": ["nurse"]}
+            )
+            self.assertEqual(config_module._get_config_list("SITES", []), ["linkedin"])
+            self.assertEqual(
+                config_module._get_company_sites(),
+                {"New": "https://example.test/jobs"},
+            )
+        with patch.dict(os.environ, {"SITES": '"linkedin"'}):
+            with self.assertRaises(ValueError):
+                config_module._get_config_list("SITES", [])
+
     def make_temp_db_path(self):
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -100,8 +120,7 @@ class Stage1Tests(unittest.TestCase):
                         "results_wanted": 1000,
                         "sites": ["linkedin"],
                         "locations": ["Canada", "Remote"],
-                        "target_job_titles": {"engineering": ["software engineer"]},
-                        "experience_levels": ["new_grad"],
+                        "search_terms": {"engineering": ["software engineer new grad"]},
                         "enrich_after_scrape": False,
                         "linkedin_fetch_description": False,
                     },
@@ -120,8 +139,7 @@ class Stage1Tests(unittest.TestCase):
                     "RESULTS_WANTED",
                     "SITES",
                     "LOCATIONS",
-                    "TARGET_JOB_TITLES",
-                    "EXPERIENCE_LEVELS",
+                    "SEARCH_TERMS",
                     "ENRICH_AFTER_SCRAPE",
                     "LINKEDIN_FETCH_DESCRIPTION",
                 ):
@@ -131,8 +149,9 @@ class Stage1Tests(unittest.TestCase):
                 self.assertEqual(reloaded.RESULTS_WANTED, 1000)
                 self.assertEqual(reloaded.SITES, ["linkedin"])
                 self.assertEqual(reloaded.LOCATIONS, ["Canada", "Remote"])
-                self.assertEqual(reloaded.TARGET_JOB_TITLES, {"engineering": ["software engineer"]})
-                self.assertEqual(reloaded.EXPERIENCE_LEVELS, ["new_grad"])
+                self.assertEqual(
+                    reloaded.SEARCH_TERMS, {"engineering": ["software engineer new grad"]}
+                )
                 self.assertFalse(reloaded.ENRICH_AFTER_SCRAPE)
                 self.assertFalse(reloaded.LINKEDIN_FETCH_DESCRIPTION)
         finally:
@@ -159,104 +178,6 @@ class Stage1Tests(unittest.TestCase):
                 self.assertEqual(reloaded.HOURS_OLD, 24)
         finally:
             importlib.reload(config_module)
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_config_builds_search_terms_from_user_target_titles_and_levels(self):
-        fd, path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "target_job_titles": {"engineering": ["software developer"]},
-                        "experience_levels": ["internship", "junior", "new_grad"],
-                    },
-                    f,
-                )
-
-            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": path}, clear=False):
-                reloaded = importlib.reload(config_module)
-
-            self.assertEqual(
-                reloaded.SEARCH_QUERIES,
-                {
-                    "engineering": [
-                        "software developer intern",
-                        "software developer internship",
-                        "software developer co-op",
-                        "software developer student",
-                        "software developer junior",
-                        "software developer entry level",
-                        "software developer associate",
-                        "software developer level 1",
-                        "software developer level one",
-                        "software developer l1",
-                        "software developer i",
-                        "software developer 1",
-                        "software developer new grad",
-                        "software developer graduate",
-                    ],
-                },
-            )
-        finally:
-            importlib.reload(config_module)
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_config_does_not_fall_back_to_legacy_explicit_search_terms(self):
-        fd, path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "search_terms": {"product": ["product manager"]},
-                        "target_job_titles": {"data": ["data analyst"]},
-                        "experience_levels": ["new_grad"],
-                    },
-                    f,
-                )
-
-            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": path}, clear=False):
-                reloaded = importlib.reload(config_module)
-
-            self.assertEqual(
-                reloaded.SEARCH_QUERIES,
-                {
-                    "data": [
-                        "data analyst new grad",
-                        "data analyst graduate",
-                        "data analyst entry level",
-                    ]
-                },
-            )
-        finally:
-            importlib.reload(config_module)
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_user_config_migrates_away_from_legacy_explicit_search_terms(self):
-        fd, path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "search_terms": {"product": ["product manager"]},
-                        "target_job_titles": {"data": ["data analyst"]},
-                    },
-                    f,
-                )
-
-            with patch.dict(os.environ, {"HUNT_USER_CONFIG_PATH": path}, clear=False):
-                loaded = user_config_module.load()
-                user_config_module.patch({"locations": ["Canada"]})
-
-            self.assertNotIn("search_terms", loaded)
-            persisted = json.loads(open(path, encoding="utf-8").read())
-            self.assertNotIn("search_terms", persisted)
-        finally:
             if os.path.exists(path):
                 os.remove(path)
 
@@ -299,37 +220,6 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(job["apply_host"], "boards.greenhouse.io")
         self.assertEqual(job["ats_type"], "greenhouse")
 
-    def test_scrape_single_enforces_configured_role_and_experience_targets(self):
-        rows = [
-            {"title": "Software Engineer Intern", "job_url": "https://jobs/1"},
-            {"title": "Software Engineer", "job_url": "https://jobs/2"},
-            {"title": "AI/Machine Learning Engineer Intern", "job_url": "https://jobs/3"},
-            {"title": "Junior Data Scientist", "job_url": "https://jobs/4"},
-        ]
-        jobspy_fake = types.ModuleType("jobspy")
-        jobspy_fake.scrape_jobs = lambda **_kwargs: FakeDf(rows)
-        targets = {
-            "engineering": ["software engineer", "software developer"],
-            "data": ["data scientist", "data analyst"],
-        }
-
-        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
-            with patch.object(discovery, "TARGET_JOB_TITLES", targets):
-                with patch.object(
-                    discovery,
-                    "EXPERIENCE_LEVELS",
-                    ["internship", "junior", "new_grad"],
-                ):
-                    engineering = discovery.scrape_single(
-                        "indeed", "software engineer intern", "Canada", "engineering"
-                    )
-                    data = discovery.scrape_single(
-                        "indeed", "data scientist junior", "Canada", "data"
-                    )
-
-        self.assertEqual([job["title"] for job in engineering], ["Software Engineer Intern"])
-        self.assertEqual([job["title"] for job in data], ["Junior Data Scientist"])
-
     def test_scrape_batches_priority_discord_notifications(self):
         rows = [
             {
@@ -359,11 +249,15 @@ class Stage1Tests(unittest.TestCase):
         jobspy_fake = types.ModuleType("jobspy")
         jobspy_fake.scrape_jobs = lambda **_kwargs: FakeDf(rows)
 
-        with patch.dict(sys.modules, {"jobspy": jobspy_fake}):
-            with patch.object(discovery, "SEARCH_QUERIES", {"engineering": ["software engineer"]}):
+        with patch.object(
+            discovery,
+            "discover_linkedin_query",
+            return_value=(rows, {"status": "ok", "error": None, "lead_count": len(rows)}),
+        ):
+            with patch.object(discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}):
                 with patch.object(discovery, "LOCATIONS", ["Canada"]):
                     with patch.object(discovery, "SITES", ["linkedin"]):
-                        with patch.object(discovery, "WATCHLIST", ["amazon", "microsoft"]):
+                        with patch.object(discovery_policy, "WATCHLIST", ["amazon", "microsoft"]):
                             with patch.object(discovery, "MAX_WORKERS", 1):
                                 with patch.object(discovery, "init_db"):
                                     with patch.object(
@@ -662,7 +556,7 @@ class Stage1Tests(unittest.TestCase):
             self.assertEqual(row["ats_type"], "greenhouse")
             self.assertEqual(row["description"], "Feed description")
             self.assertEqual(row["level"], "junior")
-            self.assertEqual(row["priority"], 1)
+            self.assertEqual(row["priority"], 0)  # Priority is derived from the watchlist.
         finally:
             db.DB_PATH = old_db_path
             if os.path.exists(path):
@@ -693,13 +587,24 @@ class Stage1Tests(unittest.TestCase):
             jobspy_fake = types.ModuleType("jobspy")
             jobspy_fake.scrape_jobs = lambda **_kwargs: jobs_df
             with (
-                patch.object(discovery, "SEARCH_QUERIES", {"engineering": ["software engineer"]}),
+                patch.object(discovery, "SEARCH_TERMS", {"engineering": ["software engineer"]}),
                 patch.object(discovery, "LOCATIONS", ["Canada"]),
                 patch.object(discovery, "SITES", ["linkedin"]),
                 patch.object(discovery, "MAX_WORKERS", 1),
                 patch.dict(sys.modules, {"jobspy": jobspy_fake}),
                 patch.object(
-                    discovery, "run_pending_linkedin_enrichment", return_value=0
+                    discovery,
+                    "discover_linkedin_query",
+                    return_value=(
+                        [
+                            {**row, "source": "linkedin", "enrichment_status": "pending"}
+                            for _, row in jobs_df.iterrows()
+                        ],
+                        {"status": "ok", "error": None, "lead_count": 1},
+                    ),
+                ),
+                patch.object(
+                    discovery, "run_pending_job_enrichment", return_value=0
                 ) as mock_enrich,
             ):
                 summary = discovery.scrape(

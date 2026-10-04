@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -512,6 +513,44 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertIn(result["status"], {"done", "done_with_flags"})
         self.assertEqual(metadata["page_fit_retry_count"], 1)
         self.assertEqual(len(metadata["compile_history"]), 2)
+
+    def test_c1_exclusions_prevent_automatic_resume_and_application_readiness(self):
+        from fletcher.db import _job_is_ready_for_c3
+
+        init_resume_db(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("ALTER TABLE jobs ADD COLUMN discovery_suppressed_reason TEXT")
+        ready = {
+            "enrichment_status": "done_verified",
+            "apply_type": "external_apply",
+            "auto_apply_eligible": 1,
+            "priority": 0,
+            "apply_url": "https://example.com/job",
+        }
+        for status, reason in [
+            ("new", "outside_canada"),
+            ("applied", None),
+            ("canceled", None),
+            ("cancelled", None),
+        ]:
+            with self.subTest(status=status, reason=reason):
+                with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute(
+                        "UPDATE jobs SET status=?, discovery_suppressed_reason=? WHERE id=1",
+                        (status, reason),
+                    )
+                self.assertEqual(list_jobs_ready_for_resume(db_path=self.db_path), [])
+                self.assertFalse(
+                    _job_is_ready_for_c3(
+                        {**ready, "status": status, "discovery_suppressed_reason": reason}
+                    )
+                )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE jobs SET status='new', discovery_suppressed_reason=NULL WHERE id=1"
+            )
+        self.assertEqual([r["id"] for r in list_jobs_ready_for_resume(db_path=self.db_path)], [1])
+        self.assertTrue(_job_is_ready_for_c3(ready))
 
     def test_list_jobs_ready_for_resume_skips_unusable_jd_same_description(self):
         init_resume_db(self.db_path)

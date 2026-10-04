@@ -23,7 +23,7 @@ const TOOLTIPS: Record<string, string> = {
   failed_url: 'Description may exist, but no confident external apply URL was found',
   failed_description: 'Apply URL may exist, but no usable job description was found',
   failed_enrichment: 'Both description and apply URL enrichment failed',
-  blocked: 'Blocked by LinkedIn auth, rate limits, or anti-bot detection',
+  blocked: 'Needs verification or access. Open the job for the specific reason.',
   blocked_verified: 'Blocked and manually confirmed - needs operator attention',
 }
 

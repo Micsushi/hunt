@@ -27,6 +27,19 @@ def _auth():
 
 
 class HunterServiceApiTests(unittest.TestCase):
+    def test_service_initializes_a_fresh_database_before_serving_requests(self):
+        with tempfile.TemporaryDirectory(prefix="hunt-c1-startup-") as directory:
+            path = str(Path(directory) / "fresh.db")
+            with (
+                patch.dict(os.environ, {"HUNT_DB_PATH": path, "HUNT_DB_URL": ""}),
+                patch.object(db, "DB_PATH", path),
+                patch("hunter.config.HUNT_SERVICE_TOKEN", SERVICE_TOKEN),
+            ):
+                with TestClient(service.app, raise_server_exceptions=False) as client:
+                    for route in ("/status", "/queue", "/discovery/health"):
+                        self.assertEqual(client.get(route, headers=_auth()).status_code, 200)
+                    self.assertEqual(client.get("/status").status_code, 401)
+
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
@@ -81,7 +94,7 @@ class HunterServiceApiTests(unittest.TestCase):
     ):
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO jobs (
                     title, company, location, job_url, apply_url, description,
@@ -113,6 +126,7 @@ class HunterServiceApiTests(unittest.TestCase):
                 ),
             )
             conn.commit()
+            return cursor.lastrowid
         finally:
             conn.close()
 
@@ -135,6 +149,22 @@ class HunterServiceApiTests(unittest.TestCase):
         with patch("hunter.config.HUNT_SERVICE_TOKEN", SERVICE_TOKEN):
             response = client.get("/status")
         self.assertEqual(response.status_code, 401)
+
+    def test_service_restart_preserves_existing_processing_and_application_history(self):
+        job_id = self._insert_job(enrichment_status="processing", enrichment_attempts=7)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'applied', last_enrichment_started_at = '2000-01-01 00:00:00' WHERE id = ?",
+                (job_id,),
+            )
+        conn.close()
+        with TestClient(service.app):
+            pass
+        row = db.get_job_by_id(job_id)
+        self.assertEqual(row["status"], "applied")
+        self.assertEqual(row["enrichment_status"], "processing")
+        self.assertEqual(row["enrichment_attempts"], 7)
+        self.assertEqual(row["last_enrichment_started_at"], "2000-01-01 00:00:00")
 
     def test_status_reports_service_flags_queue_and_auth_state(self):
         self._insert_job(source="indeed", enrichment_status="pending", suffix="pending")
@@ -184,6 +214,36 @@ class HunterServiceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"pending": 1, "ready": 2})
 
+    def test_discovery_health_and_c3_handoff_endpoints(self):
+        job_id = self._insert_job(enrichment_status="done", suffix="c3")
+        db.update_selected_resume_for_job(
+            job_id,
+            version_id="resume-v1",
+            pdf_path="C:/private/resume.pdf",
+        )
+        db.record_discovery_source_health("feed", status="ok", lead_count=3)
+        client = self._make_client()
+
+        health = client.get("/discovery/health", headers=_auth())
+        ready = client.get("/c3/ready", headers=_auth())
+        outcome = client.post(
+            f"/jobs/{job_id}/c3-outcome",
+            headers=_auth(),
+            json={"outcome": "ready_for_review", "reason": "review_page_reached"},
+        )
+        rejected = client.post(
+            f"/jobs/{job_id}/c3-outcome",
+            headers=_auth(),
+            json={"outcome": "blocked", "reason": "contains personal prose"},
+        )
+
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["sources"][0]["lead_count"], 3)
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json()["jobs"][0]["job_id"], str(job_id))
+        self.assertEqual(outcome.status_code, 200)
+        self.assertEqual(rejected.status_code, 400)
+
     def test_scrape_starts_background_task_with_request_values(self):
         client = self._make_client()
 
@@ -206,6 +266,42 @@ class HunterServiceApiTests(unittest.TestCase):
             event = json.loads(stream.readline())
         self.assertEqual(event["component"], "c1")
         self.assertEqual(event["payload"]["details"]["route"], "/scrape")
+
+    def test_full_backfill_includes_public_and_company_sources(self):
+        client = self._make_client()
+        with (
+            patch("hunter.scraper.scrape") as scrape_mock,
+            patch("hunter.config.BACKFILL_HOURS_OLD", 336),
+        ):
+            response = client.post(
+                "/scrape",
+                headers=_auth(),
+                json={"full_backfill": True, "enrich_after": False},
+            )
+        self.assertEqual(response.status_code, 200)
+        scrape_mock.assert_called_once_with(
+            enrich_pending=False,
+            enrich_limit=None,
+            hours_old=336,
+            include_public_sources=True,
+            include_company_queue=True,
+        )
+
+    def test_query_health_does_not_overwrite_another_query_failure(self):
+        from hunter.scraper import _scrape_jobspy_task
+
+        with patch(
+            "hunter.scraper.discover_linkedin_query",
+            side_effect=[
+                RuntimeError("blocked"),
+                ([], {"status": "ok", "error": None, "lead_count": 0}),
+            ],
+        ):
+            _scrape_jobspy_task("linkedin", "developer", "Canada", "engineering", 336)
+            _scrape_jobspy_task("linkedin", "analyst", "Canada", "data", 336)
+        rows = db.list_discovery_source_health()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["status"] for row in rows}, {"ok", "failed"})
 
     def test_scrape_rejects_duplicate_run_while_first_is_active(self):
         client = self._make_client()
@@ -254,28 +350,6 @@ class HunterServiceApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"status": "started", "limit": 42})
         enrich_mock.assert_called_once_with(limit=42, return_summary=True)
         self.assertFalse(service._is_enrich_running())
-
-    def test_config_exposes_user_editable_target_titles_and_experience_levels(self):
-        client = self._make_client()
-        targets = {
-            "engineering": ["software engineer", "software developer"],
-            "data": ["data scientist", "data analyst"],
-        }
-
-        with patch("hunter.config.TARGET_JOB_TITLES", targets):
-            with patch(
-                "hunter.config.EXPERIENCE_LEVELS",
-                ["internship", "junior", "new_grad"],
-            ):
-                response = client.get("/config", headers=_auth())
-
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("search_terms", response.json())
-        self.assertEqual(response.json()["target_job_titles"], targets)
-        self.assertEqual(
-            response.json()["experience_levels"],
-            ["internship", "junior", "new_grad"],
-        )
 
     def test_enrich_rejects_duplicate_run_while_first_is_active(self):
         client = self._make_client()

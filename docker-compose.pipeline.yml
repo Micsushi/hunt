@@ -74,6 +74,7 @@ services:
       HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
       HUNT_DATA_DIR: /app/data
       LINKEDIN_STORAGE_STATE_PATH: /app/.state/linkedin_auth_state.json
+      JOBRIGHT_STORAGE_STATE_PATH: /app/.state/jobright_auth_state.json
       HUNT_USER_CONFIG_PATH: /app/.state/hunt_user_config.json
       LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL:-chromium}
       ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT:-25}
@@ -108,6 +109,7 @@ services:
       HUNT_CREDENTIAL_KEY: ${HUNT_CREDENTIAL_KEY:-472Pa6u8kvZjh58A3oN7v026YL-KxALGTo41gH4TBZM=}
       HUNT_DATA_DIR: /app/data
       LINKEDIN_STORAGE_STATE_PATH: /app/.state/linkedin_auth_state.json
+      JOBRIGHT_STORAGE_STATE_PATH: /app/.state/jobright_auth_state.json
       HUNT_USER_CONFIG_PATH: /app/.state/hunt_user_config.json
       LINKEDIN_BROWSER_CHANNEL: ${LINKEDIN_BROWSER_CHANNEL:-chromium}
       ENRICHMENT_BATCH_LIMIT: ${ENRICHMENT_BATCH_LIMIT:-25}
@@ -124,16 +126,7 @@ services:
     volumes:
       - ${HUNT_LOCAL_STATE_DIR:-./.hunt-state}:/app/.state
       - ${HUNT_LOCAL_DATA_DIR:-./.hunt-data}:/app/data
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import os, subprocess, sys, time
-        interval = int(os.environ.get("RUN_INTERVAL_SECONDS", "600"))
-        while True:
-            subprocess.run([sys.executable, "hunter/scraper.py"], check=False)
-            time.sleep(interval)
+    command: ["python", "-u", "-m", "hunter.runner"]
 
   ollama:
     image: ollama/ollama:latest

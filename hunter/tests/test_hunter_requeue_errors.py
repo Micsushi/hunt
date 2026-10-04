@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from hunter import db
 from hunter.db import (  # type: ignore
     get_connection,
     init_db,
@@ -14,11 +15,16 @@ class HunterRequeueErrorsTests(unittest.TestCase):
     def test_requeue_by_error_code_clears_error_and_sets_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = os.path.join(tmp, "hunt.db")
-            with mock.patch.dict(os.environ, {"HUNT_DB_PATH": db_path}, clear=False):
+            with (
+                mock.patch.dict(
+                    os.environ, {"HUNT_DB_PATH": db_path, "HUNT_DB_URL": ""}, clear=False
+                ),
+                mock.patch.object(db, "DB_PATH", db_path),
+            ):
                 init_db()
                 conn = get_connection()
+                self.assertEqual(conn.execute("PRAGMA database_list").fetchone()[2], db_path)
                 cur = conn.cursor()
-                cur.execute("DELETE FROM jobs")
                 cur.execute(
                     "INSERT INTO jobs (title, job_url, source, enrichment_status, last_enrichment_error) VALUES (?,?,?,?,?)",
                     ("T1", "http://t/auth", "linkedin", "failed", "auth_expired: test"),

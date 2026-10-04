@@ -3,9 +3,10 @@ import datetime
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from hunter.browser_runtime import (
     BrowserRuntimeError,
@@ -317,7 +318,7 @@ def _append_auth_trace_record(record):
 def _start_auth_trace_run(flow, **metadata):
     global _AUTH_TRACE_RUN_ID, _AUTH_TRACE_FLOW, _AUTH_TRACE_SEQUENCE, _AUTH_TRACE_LAST_SNAPSHOT_KEY
     now_utc = datetime.datetime.now(datetime.UTC)
-    _AUTH_TRACE_RUN_ID = now_utc.strftime("%Y%m%dT%H%M%S.%fZ") + f"-pid{os.getpid()}"
+    _AUTH_TRACE_RUN_ID = now_utc.strftime("%Y%m%dT%H%M%S.%fZ") + f"-{uuid4().hex}"
     _AUTH_TRACE_FLOW = flow
     _AUTH_TRACE_SEQUENCE = 0
     _AUTH_TRACE_LAST_SNAPSHOT_KEY = None
@@ -1185,10 +1186,14 @@ def attempt_auto_relogin(
         db_path=get_db_path(),
     )
 
-    def finalize(result):
-        result = dict(result)
-        result["trace_path"] = str(resolve_auth_trace_path())
-        result["db_path"] = get_db_path()
+    def finalize(message, *, recovered=False, attempted=True):
+        result = {
+            "message": message,
+            "recovered": recovered,
+            "attempted": attempted,
+            "trace_path": str(resolve_auth_trace_path()),
+            "db_path": get_db_path(),
+        }
         _finish_auth_trace_run(
             "success" if result.get("recovered") else "failure",
             message=result.get("message"),
@@ -1209,63 +1214,32 @@ def attempt_auto_relogin(
                 f'"{target_path}"\'.'
             )
             mark_linkedin_auth_unavailable(msg)
-            return finalize(
-                {
-                    "attempted": False,
-                    "recovered": False,
-                    "message": msg,
-                }
-            )
+            return finalize(msg, attempted=False)
 
         try:
-            if context is not None:
-                mode = _attempt_session_reuse_in_context(
-                    context,
-                    target_path,
-                    timeout_ms=timeout_ms,
-                )
-            else:
-                with open_browser_context(
+            with (
+                nullcontext(context)
+                if context is not None
+                else open_browser_context(
                     headless=headless,
                     slow_mo=slow_mo,
                     browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
                     storage_state_path=str(target_path),
-                ) as relogin_context:
-                    mode = _attempt_session_reuse_in_context(
-                        relogin_context,
-                        target_path,
-                        timeout_ms=timeout_ms,
-                    )
-        except LinkedInAutomationFlagged as exc:
-            msg = f"LinkedIn saved session check failed: {exc}"
-            mark_linkedin_auth_unavailable(msg)
-            return finalize(
-                {
-                    "attempted": True,
-                    "recovered": False,
-                    "message": msg,
-                }
-            )
+                )
+            ) as relogin_context:
+                mode = _attempt_session_reuse_in_context(
+                    relogin_context,
+                    target_path,
+                    timeout_ms=timeout_ms,
+                )
         except PlaywrightTargetClosedError as exc:
             msg = f"LinkedIn saved session check aborted: browser was closed before completion ({exc})."
             mark_linkedin_auth_unavailable(msg)
-            return finalize(
-                {
-                    "attempted": True,
-                    "recovered": False,
-                    "message": msg,
-                }
-            )
+            return finalize(msg)
         except (BrowserRuntimeError, LinkedInSessionError) as exc:
             msg = f"LinkedIn saved session check failed: {exc}"
             mark_linkedin_auth_unavailable(msg)
-            return finalize(
-                {
-                    "attempted": True,
-                    "recovered": False,
-                    "message": msg,
-                }
-            )
+            return finalize(msg)
 
         mark_linkedin_auth_available()
         action = (
@@ -1273,13 +1247,7 @@ def attempt_auto_relogin(
             if mode == "session_reused"
             else "refreshed the saved auth state"
         )
-        return finalize(
-            {
-                "attempted": True,
-                "recovered": True,
-                "message": f"LinkedIn auto relogin {action}.",
-            }
-        )
+        return finalize(f"LinkedIn auto relogin {action}.", recovered=True)
 
     # Find the first non-blocked account starting from the current active index.
     current = get_active_account_index()
@@ -1292,7 +1260,7 @@ def attempt_auto_relogin(
 
     if account_index is None:
         msg = _all_accounts_blocked_discord_alert(len(accounts))
-        return finalize({"attempted": True, "recovered": False, "message": msg})
+        return finalize(msg)
 
     if account_index != current:
         set_active_account_index(account_index)
@@ -1307,28 +1275,23 @@ def attempt_auto_relogin(
     storage_state = str(target_path) if target_path.exists() else None
 
     try:
-        if context is not None:
+        with (
+            nullcontext(context)
+            if context is not None
+            else open_browser_context(
+                headless=headless,
+                slow_mo=slow_mo,
+                browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
+                storage_state_path=storage_state,
+            )
+        ) as relogin_context:
             mode = _attempt_auto_relogin_in_context(
-                context,
+                relogin_context,
                 target_path,
                 email=account["email"],
                 password=account["password"],
                 timeout_ms=timeout_ms,
             )
-        else:
-            with open_browser_context(
-                headless=headless,
-                slow_mo=slow_mo,
-                browser_channel=browser_channel or DEFAULT_BROWSER_CHANNEL,
-                storage_state_path=storage_state,
-            ) as relogin_context:
-                mode = _attempt_auto_relogin_in_context(
-                    relogin_context,
-                    target_path,
-                    email=account["email"],
-                    password=account["password"],
-                    timeout_ms=timeout_ms,
-                )
     except LinkedInAutomationFlagged:
         block_account_for_days(account_index)
         C1Logger(discord=True).event(
@@ -1348,42 +1311,22 @@ def attempt_auto_relogin(
                 break
         if next_idx is None:
             msg = _all_accounts_blocked_discord_alert(len(accounts))
-            return finalize({"attempted": True, "recovered": False, "message": msg})
+            return finalize(msg)
         set_active_account_index(next_idx)
         mark_linkedin_auth_unavailable(
             f"Account {account_index} flagged for automation; rotated to {next_idx}."
         )
         return finalize(
-            {
-                "attempted": True,
-                "recovered": False,
-                "message": (
-                    f"LinkedIn account {account_index} flagged for automation and blocked "
-                    f"for {ACCOUNT_BLOCK_DAYS} days. Rotated to account {next_idx} "
-                    "for the next run."
-                ),
-            }
+            f"LinkedIn account {account_index} flagged for automation and blocked for {ACCOUNT_BLOCK_DAYS} days. Rotated to account {next_idx} for the next run."
         )
     except PlaywrightTargetClosedError as exc:
         msg = f"LinkedIn auto relogin aborted: browser was closed before completion ({exc})."
         mark_linkedin_auth_unavailable(msg)
-        return finalize(
-            {
-                "attempted": True,
-                "recovered": False,
-                "message": msg,
-            }
-        )
+        return finalize(msg)
     except (BrowserRuntimeError, LinkedInSessionError) as exc:
         msg = f"LinkedIn auto relogin failed: {exc}"
         mark_linkedin_auth_unavailable(msg)
-        return finalize(
-            {
-                "attempted": True,
-                "recovered": False,
-                "message": msg,
-            }
-        )
+        return finalize(msg)
 
     mark_linkedin_auth_available()
     action = (
@@ -1392,11 +1335,7 @@ def attempt_auto_relogin(
         else "signed in with stored credentials"
     )
     return finalize(
-        {
-            "attempted": True,
-            "recovered": True,
-            "message": f"LinkedIn auto relogin {action} and refreshed the saved auth state.",
-        }
+        f"LinkedIn auto relogin {action} and refreshed the saved auth state.", recovered=True
     )
 
 

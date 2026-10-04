@@ -124,28 +124,34 @@ function SearchConfig({
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
 }) {
-  const laneNames = Array.from(
-    new Set(['engineering', 'data', ...Object.keys(cfg.target_job_titles)]),
+  const configuredRoles = cfg.targeting_configured
+    ? (cfg.target_job_titles ?? {})
+    : (cfg.search_terms ?? {})
+  const [experienceLevels, setExperienceLevels] = useState(
+    () => new Set(cfg.experience_levels ?? []),
   )
-  const [targetTitles, setTargetTitles] = useState<Record<string, string>>(() =>
-    Object.fromEntries(laneNames.map((k) => [k, listToText(cfg.target_job_titles[k] ?? [])])),
+  const [lanes, setLanes] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.keys(configuredRoles).map((k) => [k, listToText(configuredRoles[k])]),
+    ),
   )
-  const [experienceLevels, setExperienceLevels] = useState(() => new Set(cfg.experience_levels))
+  const laneNames = Object.keys(lanes)
+  const [newLane, setNewLane] = useState('')
+  const [countries, setCountries] = useState(() =>
+    listToText(cfg.discovery_countries ?? ['Canada']),
+  )
+  const [indeedCountry, setIndeedCountry] = useState(cfg.country_indeed ?? 'Canada')
+  const [employmentTypes, setEmploymentTypes] = useState(() =>
+    listToText(cfg.employment_types ?? []),
+  )
+  const [experienced, setExperienced] = useState(cfg.include_experienced_roles ?? false)
+  const [remoteOnly, setRemoteOnly] = useState(cfg.remote_only ?? false)
   const [locations, setLocations] = useState(() => listToText(cfg.locations))
   const [linkedinOn, setLinkedinOn] = useState(() => cfg.sites.includes('linkedin'))
   const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
 
   function updateLane(name: string, val: string) {
-    setTargetTitles((prev) => ({ ...prev, [name]: val }))
-  }
-
-  function setExperienceLevel(level: string, enabled: boolean) {
-    setExperienceLevels((current) => {
-      const next = new Set(current)
-      if (enabled) next.add(level)
-      else next.delete(level)
-      return next
-    })
+    setLanes((prev) => ({ ...prev, [name]: val }))
   }
 
   return (
@@ -156,39 +162,120 @@ function SearchConfig({
       <div className={styles.lanesGrid}>
         {laneNames.map((name) => (
           <label key={name} className={styles.field}>
-            {name.charAt(0).toUpperCase() + name.slice(1)} - Target job titles
+            {name.charAt(0).toUpperCase() + name.slice(1)} lane - search queries
             <textarea
               className={styles.textarea}
-              value={targetTitles[name] ?? ''}
+              value={lanes[name] ?? ''}
               onChange={(e) => updateLane(name, e.target.value)}
             />
           </label>
         ))}
       </div>
       <div className={styles.field}>
-        Experience levels
-        {[
-          ['internship', 'Internship', 'Intern, internship, co-op, and student searches'],
-          [
-            'junior',
-            'Junior',
-            'Junior, entry level, associate, Level 1, L1, and role I/1 variants',
-          ],
-          ['new_grad', 'New grad', 'New grad, graduate, and entry-level searches'],
-        ].map(([value, label, hint]) => (
-          <label key={value} className={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={experienceLevels.has(value)}
-              onChange={(e) => setExperienceLevel(value, e.target.checked)}
-            />
-            <span>
-              {label}
-              <span className={styles.fieldHint}>{hint}</span>
-            </span>
-          </label>
-        ))}
+        <label className={styles.field}>
+          New job group
+          <input
+            className={styles.input}
+            value={newLane}
+            onChange={(event) => setNewLane(event.target.value)}
+            placeholder="Healthcare, teaching, trades…"
+          />
+        </label>
+        <button
+          className={styles.btn}
+          disabled={
+            !newLane.trim() ||
+            Object.prototype.hasOwnProperty.call(lanes, newLane.trim().toLowerCase())
+          }
+          onClick={() => {
+            updateLane(newLane.trim().toLowerCase(), '')
+            setNewLane('')
+          }}
+        >
+          Add job group
+        </button>
       </div>
+      {cfg.targeting_configured && (
+        <fieldset className={styles.experienceFieldset}>
+          <legend>Career levels</legend>
+          <p className={styles.fieldHint}>
+            Choose levels to require in job titles. Leave all unchecked for any level; senior roles
+            also require the option below.
+          </p>
+          {(
+            [
+              ['internship', 'Internship'],
+              ['junior', 'Junior'],
+              ['new_grad', 'New graduate'],
+            ] as const
+          ).map(([value, label]) => (
+            <label key={value} className={styles.checkLabel}>
+              <input
+                type="checkbox"
+                checked={experienceLevels.has(value)}
+                onChange={() =>
+                  setExperienceLevels((previous) => {
+                    const next = new Set(previous)
+                    if (next.has(value)) next.delete(value)
+                    else next.add(value)
+                    return next
+                  })
+                }
+              />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      <label className={styles.field}>
+        Eligible countries (one per line)
+        <span className={styles.fieldHint}>
+          Leave empty to include all countries. Regional sources still cover their own markets.
+        </span>
+        <textarea
+          className={styles.textarea}
+          value={countries}
+          onChange={(event) => setCountries(event.target.value)}
+          rows={3}
+        />
+      </label>
+      <label className={styles.field}>
+        Indeed market
+        <input
+          className={styles.input}
+          value={indeedCountry}
+          onChange={(event) => setIndeedCountry(event.target.value)}
+        />
+      </label>
+      <label className={styles.field}>
+        Employment types (one per line)
+        <span className={styles.fieldHint}>
+          Leave empty for all types. Examples: full time, part time, contract. Jobs with unknown
+          types need checking when this filter is set.
+        </span>
+        <textarea
+          className={styles.textarea}
+          value={employmentTypes}
+          onChange={(event) => setEmploymentTypes(event.target.value)}
+          rows={3}
+        />
+      </label>
+      <label className={styles.checkLabel}>
+        <input
+          type="checkbox"
+          checked={experienced}
+          onChange={(event) => setExperienced(event.target.checked)}
+        />
+        Include senior and experienced roles
+      </label>
+      <label className={styles.checkLabel}>
+        <input
+          type="checkbox"
+          checked={remoteOnly}
+          onChange={(event) => setRemoteOnly(event.target.checked)}
+        />
+        Require confirmed remote work
+      </label>
       <label className={styles.field}>
         Locations (one per line)
         <textarea
@@ -226,11 +313,24 @@ function SearchConfig({
             if (linkedinOn) sites.push('linkedin')
             if (indeedOn) sites.push('indeed')
             onSave({
-              target_job_titles: Object.fromEntries(
-                Object.entries(targetTitles).map(([k, v]) => [k, textToList(v)]),
-              ),
-              experience_levels: Array.from(experienceLevels),
+              ...(cfg.targeting_configured
+                ? {
+                    target_job_titles: Object.fromEntries(
+                      Object.entries(lanes).map(([k, v]) => [k, textToList(v)]),
+                    ),
+                    experience_levels: Array.from(experienceLevels),
+                  }
+                : {
+                    search_terms: Object.fromEntries(
+                      Object.entries(lanes).map(([k, v]) => [k, textToList(v)]),
+                    ),
+                  }),
               locations: textToList(locations),
+              discovery_countries: textToList(countries),
+              country_indeed: indeedCountry.trim(),
+              employment_types: textToList(employmentTypes),
+              include_experienced_roles: experienced,
+              remote_only: remoteOnly,
               sites,
             })
           }}
@@ -364,14 +464,14 @@ function RunSettings({
           disabled={saving}
           onClick={() =>
             onSave({
-              run_interval_seconds: parseInt(intervalSec, 10),
-              results_wanted: parseInt(resultsWanted, 10),
-              hours_old: parseInt(hoursOld, 10),
-              max_workers: parseInt(maxWorkers, 10),
+              run_interval_seconds: intervalSec.trim() ? Number(intervalSec) : NaN,
+              results_wanted: resultsWanted.trim() ? Number(resultsWanted) : NaN,
+              hours_old: hoursOld.trim() ? Number(hoursOld) : NaN,
+              max_workers: maxWorkers.trim() ? Number(maxWorkers) : NaN,
               enrich_after_scrape: enrichAfterScrape,
-              enrichment_batch_limit: parseInt(batchLimit, 10),
-              enrichment_timeout_ms: parseInt(timeoutMs, 10),
-              enrichment_max_attempts: parseInt(maxAttempts, 10),
+              enrichment_batch_limit: batchLimit.trim() ? Number(batchLimit) : NaN,
+              enrichment_timeout_ms: timeoutMs.trim() ? Number(timeoutMs) : NaN,
+              enrichment_max_attempts: maxAttempts.trim() ? Number(maxAttempts) : NaN,
             })
           }
         >
@@ -434,8 +534,8 @@ function AlertSettings({
           disabled={saving}
           onClick={() =>
             onSave({
-              enrichment_alert_failure_rate_percent: parseInt(failureRate, 10),
-              enrichment_alert_cooldown_minutes: parseInt(cooldownMin, 10),
+              enrichment_alert_failure_rate_percent: failureRate.trim() ? Number(failureRate) : NaN,
+              enrichment_alert_cooldown_minutes: cooldownMin.trim() ? Number(cooldownMin) : NaN,
             })
           }
         >
@@ -1648,8 +1748,8 @@ export function SettingsPage() {
 
   const mutation = useMutation({
     mutationFn: saveC1Config,
-    onSuccess: (res) => {
-      showToast(`Saved: ${res.updated_keys.join(', ')}`)
+    onSuccess: () => {
+      showToast('C1 settings saved. Restart C1 and its scheduler to apply changes.')
       qc.invalidateQueries({ queryKey: ['c1-config'] })
     },
     onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
@@ -1657,6 +1757,24 @@ export function SettingsPage() {
   })
 
   function save(section: string, updates: C1ConfigUpdates) {
+    for (const [key, value] of Object.entries(updates)) {
+      if (typeof value !== 'number') continue
+      const minimum = key.startsWith('enrichment_alert_')
+        ? 0
+        : key === 'run_interval_seconds'
+          ? 60
+          : key === 'enrichment_timeout_ms'
+            ? 5000
+            : 1
+      if (
+        !Number.isInteger(value) ||
+        value < minimum ||
+        (key === 'enrichment_alert_failure_rate_percent' && value > 100)
+      ) {
+        showToast(`Enter a valid whole number for ${key.replace(/_/g, ' ')}.`, 'error')
+        return
+      }
+    }
     setSavingSection(section)
     mutation.mutate(updates)
   }
@@ -1679,8 +1797,8 @@ export function SettingsPage() {
     return (
       <>
         <div className={styles.notice}>
-          Changes take effect on the next C1 scrape/enrich cycle. Restart C1 to apply scalar
-          settings immediately.
+          Saved changes take effect after restarting C1 and its scheduler. The current scan keeps
+          its existing settings.
           <br />
           Config file: <span className={styles.configPath}>{cfg.config_file}</span>
         </div>

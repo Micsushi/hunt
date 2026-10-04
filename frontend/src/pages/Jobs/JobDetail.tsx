@@ -18,6 +18,7 @@ import {
 } from '@/api/control'
 import { logHumanCommand } from '@/api/humanCommandLog'
 import { StatusBadge } from '@/components/StatusBadge'
+import { discoveryLabel } from '@/utils/discovery'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
 import type { JobsQuery, SortDirection, SortField } from '@/types/job'
@@ -481,6 +482,7 @@ export function JobDetailPage() {
                 ]}
               />
               <ReadonlyField label="Source" value={job.source} />
+              <ReadonlyField label="Discovery fit" value={discoveryLabel(job)} />
               <ReadonlyField label="Apply type" value={job.apply_type?.replace(/_/g, ' ')} />
               <ReadonlyField label="ATS type" value={job.ats_type} />
               <ReadonlyField label="Apply host" value={job.apply_host} mono />
@@ -575,7 +577,23 @@ export function JobDetailPage() {
               <button
                 className={styles.actionBtn}
                 onClick={handleRequeue}
-                disabled={!['linkedin', 'indeed'].includes(job.source ?? '')}
+                disabled={
+                  !(
+                    ['linkedin', 'indeed'].includes(job.source ?? '') ||
+                    (Boolean(job.source) &&
+                      [
+                        'workday',
+                        'greenhouse',
+                        'lever',
+                        'ashby',
+                        'smartrecruiters',
+                        'bamboohr',
+                        'workable',
+                      ].includes(job.ats_type ?? '') &&
+                      job.status === 'new' &&
+                      job.apply_type !== 'easy_apply')
+                  )
+                }
               >
                 Requeue
               </button>

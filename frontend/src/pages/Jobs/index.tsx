@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
+import { discoveryLabel } from '@/utils/discovery'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
@@ -268,6 +269,9 @@ export function JobsPage() {
         </td>
         <td className={styles.titleCell} title={job.title ?? undefined}>
           {job.title ?? '-'}
+          <small className={styles.discoveryNote} title={discoveryLabel(job)}>
+            {discoveryLabel(job)}
+          </small>
         </td>
         <td onClick={(e) => e.stopPropagation()}>
           {job.job_url && (
@@ -341,6 +345,7 @@ export function JobsPage() {
         query={query}
         onChange={updateQuery}
         statusCounts={statusCounts}
+        sourceCounts={summary?.source_counts}
         isFetching={isFetching && !isLoading}
       />
 
