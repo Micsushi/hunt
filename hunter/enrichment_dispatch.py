@@ -14,8 +14,8 @@ worker module's `process_batch`, then append the source id to `db.ENRICHMENT_SOU
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from hunter.c1_logging import C1Logger
@@ -28,6 +28,7 @@ from hunter.db import (
     ENRICHMENT_SOURCE_PRIORITY,
     count_ready_jobs_for_enrichment,
     count_ready_linkedin_jobs_for_hiring_cafe_fallback,
+    count_ready_public_employer_jobs,
     get_linkedin_auth_state,
     get_runtime_state,
 )
@@ -42,64 +43,22 @@ RATE_LIMIT_BLOCK_DAYS = 1
 HIGH_FAILURE_ALERT_RUNTIME_KEY = "hunt_last_high_failure_alert"
 
 
-def _get_linkedin_process_batch() -> Callable[..., dict[str, Any]]:
+def _run_linkedin_batch(**kwargs) -> dict[str, Any]:
     from hunter.enrich_linkedin import process_batch
 
-    return process_batch
+    return process_batch(**kwargs, return_summary=True)
 
 
-def _get_indeed_process_batch() -> Callable[..., dict[str, Any]]:
+def _run_indeed_batch(**kwargs) -> dict[str, Any]:
     from hunter.enrich_indeed import process_batch
 
-    return process_batch
-
-
-def _get_hiring_cafe_process_batch() -> Callable[..., dict[str, Any]]:
-    from hunter.enrich_hiring_cafe import process_batch
-
-    return process_batch
-
-
-def _run_linkedin_batch(
-    *,
-    limit: int,
-    storage_state_path: str | None,
-    headless: bool,
-    slow_mo: int,
-    timeout_ms: int,
-    browser_channel: str | None,
-    ui_verify_blocked: bool,
-) -> dict[str, Any]:
-    return _get_linkedin_process_batch()(
-        limit=limit,
-        storage_state_path=storage_state_path,
-        headless=headless,
-        slow_mo=slow_mo,
-        timeout_ms=timeout_ms,
-        browser_channel=browser_channel,
-        ui_verify_blocked=ui_verify_blocked,
-        return_summary=True,
-    )
-
-
-def _run_indeed_batch(
-    *,
-    limit: int,
-    timeout_ms: int,
-    browser_channel: str | None,
-    ui_verify_blocked: bool,
-) -> dict[str, Any]:
-    return _get_indeed_process_batch()(
-        limit=limit,
-        timeout_ms=timeout_ms,
-        browser_channel=browser_channel,
-        ui_verify_blocked=ui_verify_blocked,
-        return_summary=True,
-    )
+    return process_batch(**kwargs, return_summary=True)
 
 
 def _run_hiring_cafe_linkedin_fallback(*, limit: int) -> dict[str, Any]:
-    return _get_hiring_cafe_process_batch()(limit=limit, return_summary=True)
+    from hunter.enrich_hiring_cafe import process_batch
+
+    return process_batch(limit=limit, return_summary=True)
 
 
 # source id -> requires LinkedIn session before running this source's batch
@@ -107,11 +66,6 @@ _REQUIRES_LINKEDIN_SESSION: dict[str, bool] = {
     "linkedin": True,
     "indeed": False,
 }
-
-
-def registered_enrichment_sources() -> tuple[str, ...]:
-    """Sources with dispatch metadata (extend `_REQUIRES_LINKEDIN_SESSION` + run branch when adding one)."""
-    return tuple(s for s in ENRICHMENT_SOURCE_PRIORITY if s in _REQUIRES_LINKEDIN_SESSION)
 
 
 def _validate_registry() -> None:
@@ -336,6 +290,21 @@ def run_enrichment_round(
         "stop_error_code": None,
         "by_source": {},
     }
+
+    if remaining > 0 and count_ready_public_employer_jobs():
+        from hunter.verify_public import process_public_verification_batch
+
+        started = monotonic()
+        public = process_public_verification_batch(limit=remaining)
+        public_summary = {
+            **public,
+            "ui_verified": 0,
+            "succeeded": public["verified"],
+            "total_elapsed_seconds": monotonic() - started,
+            "stop_error_code": None,
+        }
+        _merge_source_summary(aggregate, source_key="public_employer", summary=public_summary)
+        remaining -= public["attempted"]
 
     for source in ENRICHMENT_SOURCE_PRIORITY:
         if remaining <= 0:

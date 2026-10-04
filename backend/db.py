@@ -411,7 +411,8 @@ def list_jobs_for_review(
                    enrichment_attempts, enriched_at, last_enrichment_error,
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
                    last_artifact_dir, last_artifact_screenshot_path, last_artifact_html_path, last_artifact_text_path,
-                   date_scraped, date_posted, is_remote, level, category, priority, operator_notes, operator_tag
+                   date_scraped, date_posted, is_remote, level, category, priority, operator_notes, operator_tag,
+                   discovery_suppressed_reason, discovery_policy_version
             FROM jobs
             WHERE 1=1
         """
@@ -580,7 +581,7 @@ def bulk_requeue_jobs_matching_review_filters(
         return 0
 
     placeholders = ", ".join(["?"] * len(targets))
-    where_status = f" AND enrichment_status IN ({placeholders})"
+    where_status = f" AND enrichment_status IN ({placeholders}) AND {hunter_db.REQUEUEABLE_JOB_SQL}"
     count_sql = f"SELECT COUNT(*) FROM jobs WHERE 1=1 {frag}{where_status}"
     count_params = tuple(filter_params + list(targets))
 

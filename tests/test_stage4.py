@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 import os
@@ -656,11 +657,18 @@ class Stage4Tests(unittest.TestCase):
                 initial_state="welcome",
             )
 
-            with patch.dict(
-                os.environ,
-                {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
-                clear=False,
+            frozen_time = datetime.datetime.now(datetime.UTC)
+            with (
+                patch.dict(
+                    os.environ,
+                    {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
+                    clear=False,
+                ),
+                patch.object(
+                    linkedin_session.datetime, "datetime", wraps=datetime.datetime
+                ) as clock,
             ):
+                clock.now.return_value = frozen_time
                 linkedin_session._start_auth_trace_run("auto_relogin", headless=False)
                 linkedin_session._trace_auth_screen(page, action="first_snapshot", force=True)
                 linkedin_session._finish_auth_trace_run("failure", message="first run failed")
@@ -883,6 +891,34 @@ class Stage4Tests(unittest.TestCase):
                     raise linkedin_session.LinkedInSessionError("inner relogin failure")
 
         self.assertEqual(str(ctx.exception), "inner relogin failure")
+
+    def test_open_browser_context_closes_browser_when_context_creation_or_cleanup_fails(self):
+        from contextlib import nullcontext
+        from unittest.mock import Mock
+
+        for stage in ("creation", "cleanup"):
+            with self.subTest(stage=stage):
+                browser = Mock()
+                context = browser.new_context.return_value
+                failure = RuntimeError("context failure")
+                if stage == "creation":
+                    browser.new_context.side_effect = failure
+                else:
+                    context.close.side_effect = failure
+                playwright = Mock()
+                playwright.chromium.launch.return_value = browser
+                with patch.object(
+                    browser_runtime,
+                    "load_sync_playwright",
+                    return_value=lambda: nullcontext(playwright),
+                ):
+                    expected = (
+                        browser_runtime.BrowserRuntimeError if stage == "creation" else RuntimeError
+                    )
+                    with self.assertRaises(expected):
+                        with browser_runtime.open_browser_context():
+                            pass
+                browser.close.assert_called_once_with()
 
     def test_save_storage_state_interactively_ignores_browser_close_error_on_cancel(self):
         class FakeBrowser:

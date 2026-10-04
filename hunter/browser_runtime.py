@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
 
@@ -49,29 +49,31 @@ def open_browser_context(
     if storage_state_path:
         storage_state = str(Path(storage_state_path).expanduser().resolve())
 
-    with sync_playwright() as playwright:
-        browser = None
-        context = None
+    with sync_playwright() as playwright, ExitStack() as cleanup:
         try:
             browser = playwright.chromium.launch(
                 headless=headless,
                 slow_mo=slow_mo,
                 channel=browser_channel or None,
             )
+            cleanup.callback(browser.close)
             context_kwargs = {}
             if storage_state:
                 context_kwargs["storage_state"] = storage_state
             context = browser.new_context(**context_kwargs)
+            cleanup.callback(context.close)
         except BrowserRuntimeError:
             raise
         except Exception as exc:
             raise BrowserRuntimeError(
                 _friendly_browser_launch_error(exc, headless=headless)
             ) from exc
-        try:
-            yield context
-        finally:
-            if context is not None:
-                context.close()
-            if browser is not None:
-                browser.close()
+        yield context
+
+
+@contextmanager
+def open_public_browser():
+    """Own an isolated headless browser for public catalog readers."""
+    with load_sync_playwright()() as playwright:
+        with closing(playwright.chromium.launch(headless=True)) as browser:
+            yield browser

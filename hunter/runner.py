@@ -6,10 +6,21 @@ if __package__ is None or __package__ == "":
 
 import signal
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
-from hunter.config import RUN_INTERVAL_SECONDS
-from hunter.db import get_review_queue_summary
+from hunter.config import (
+    BACKFILL_HOURS_OLD,
+    BACKFILL_INTERVAL_SECONDS,
+    PUBLIC_FEED_DISCOVERY,
+    RUN_INTERVAL_SECONDS,
+)
+from hunter.db import (
+    count_pending_jobs_for_enrichment,
+    count_ready_jobs_for_enrichment,
+    get_runtime_state,
+    set_runtime_state,
+)
+from hunter.discovery_run import stop_requested
 from hunter.scraper import scrape
 
 _shutdown = False
@@ -17,12 +28,29 @@ _shutdown = False
 
 def _handle_signal(signum, frame):
     global _shutdown
-    print(f"\n[runner] Received signal {signum}, will stop after current run completes.")
+    print(f"\n[runner] Received signal {signum}, saving progress and stopping new work.")
     _shutdown = True
+    stop_requested.set()
 
 
 signal.signal(signal.SIGTERM, _handle_signal)
 signal.signal(signal.SIGINT, _handle_signal)
+
+_LAST_BACKFILL_KEY = "hunt_last_discovery_backfill"
+
+
+def _backfill_due(now=None):
+    now = now or datetime.now(UTC)
+    row = get_runtime_state([_LAST_BACKFILL_KEY]).get(_LAST_BACKFILL_KEY)
+    if not row or not row.get("value"):
+        return True
+    try:
+        previous = datetime.fromisoformat(row["value"])
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return True
+    return (now - previous).total_seconds() >= BACKFILL_INTERVAL_SECONDS
 
 
 def main():
@@ -37,18 +65,21 @@ def main():
 
         start = time.time()
         try:
-            summary = scrape()
+            backfill = _backfill_due()
+            summary = scrape(
+                hours_old=BACKFILL_HOURS_OLD if backfill else None,
+                include_public_sources=PUBLIC_FEED_DISCOVERY,
+                include_company_queue=True,
+                discovery_due_only=not backfill,
+            )
+            if backfill and not (summary or {}).get("interrupted"):
+                set_runtime_state(_LAST_BACKFILL_KEY, datetime.now(UTC).isoformat())
             if summary and summary.get("enrichment_exit_code") not in (None, 0):
                 print("[runner] Post-scrape enrichment finished with some unresolved failures.")
-            queue_summary = get_review_queue_summary()
             print(
                 "[runner] Enrichment queue "
-                f"ready={queue_summary['ready_count']} "
-                f"pending={queue_summary['pending_count']} "
-                f"retry_ready={queue_summary['retry_ready_count']} "
-                f"processing={queue_summary['processing_count']} "
-                f"blocked={queue_summary['blocked_count']} "
-                f"stale_processing={queue_summary['stale_processing_count']}"
+                f"ready={count_ready_jobs_for_enrichment()} "
+                f"pending={count_pending_jobs_for_enrichment()}"
             )
         except Exception as e:
             print(f"[runner] Run #{run_number} failed with error: {e}")

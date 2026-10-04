@@ -30,6 +30,8 @@ logs/
 .hunt-ledger/
 hunt-logs/
 .playwright-mcp/
+.playwright-cli/
+output/
 
 # Local agent context (private, not for repo)
 CLAUDE.md

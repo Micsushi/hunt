@@ -5,34 +5,9 @@ import sys
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hunter.enrichment_dispatch import run_enrichment_round  # noqa: E402
-
-
-def process_multi_source_batch(
-    *,
-    limit,
-    storage_state_path=None,
-    headless=True,
-    slow_mo=0,
-    timeout_ms=45000,
-    browser_channel=None,
-    ui_verify_blocked=False,
-    return_summary=False,
-):
-    """
-    Run one enrichment round across sources (see `hunter.enrichment_dispatch`).
-    Rows are claimed by `jobs.source`; order and auth gates are centralized there.
-    """
-    return run_enrichment_round(
-        limit=limit,
-        storage_state_path=storage_state_path,
-        headless=headless,
-        slow_mo=slow_mo,
-        timeout_ms=timeout_ms,
-        browser_channel=browser_channel,
-        ui_verify_blocked=ui_verify_blocked,
-        return_summary=return_summary,
-    )
+from hunter.enrichment_dispatch import (
+    run_enrichment_round as process_multi_source_batch,  # noqa: E402
+)
 
 
 def main():

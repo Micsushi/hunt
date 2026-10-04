@@ -111,9 +111,52 @@ export function fetchC1Queue(): Promise<unknown> {
   return get('/api/gateway/c1/queue')
 }
 
-export function triggerC1Scrape(): Promise<unknown> {
+export function fetchC1DiscoveryHealth(): Promise<{
+  scan?: {
+    running: boolean
+    state?: string
+    started_at?: number
+    finished_at?: number
+    last_saved_at?: number
+    completed?: string[]
+    active?: Record<string, number>
+    resumed?: boolean
+  }
+  unimplemented_sources?: string[]
+  sources: {
+    source: string
+    coverage?: {
+      catalog: string
+      matched: number
+      descriptions: number
+      dates: number
+      verified_applications: number
+    } | null
+    status: string
+    lead_count: number
+    last_error: string | null
+    checked_at: string
+  }[]
+  company_fetch_queue: {
+    company: string
+    coverage?: {
+      catalog: string
+      matched: number
+      descriptions: number
+      dates: number
+      verified_applications: number
+    } | null
+    state: string
+    lead_count: number
+    last_error: string | null
+  }[]
+}> {
+  return get('/api/gateway/c1/discovery/health')
+}
+
+export function triggerC1Scrape(fullBackfill = false): Promise<unknown> {
   void logHumanCommand({ action: 'c1.scrape', buttonId: 'trigger-c1-scrape' })
-  return post('/api/gateway/c1/scrape', {})
+  return post('/api/gateway/c1/scrape', { full_backfill: fullBackfill })
 }
 
 export function triggerC1Enrich(limit = 25): Promise<unknown> {
@@ -418,8 +461,17 @@ export interface C1Config {
   config_file_exists: boolean
   watchlist: string[]
   title_blacklist: string[]
-  target_job_titles: Record<string, string[]>
-  experience_levels: string[]
+  search_terms: Record<string, string[]>
+  target_job_titles?: Record<string, string[]>
+  experience_levels?: string[]
+  targeting_configured?: boolean
+  company_blocklist?: string[]
+  discovery_countries?: string[]
+  country_indeed?: string
+  include_experienced_roles?: boolean
+  employment_types?: string[]
+  remote_only?: boolean
+  company_career_sites?: Record<string, string | string[]>
   locations: string[]
   sites: string[]
   max_workers: number
@@ -473,4 +525,25 @@ export function verifyEasyApply(jobId: number): Promise<EasyApplyVerifyResult> {
     details: { jobId },
   })
   return post<EasyApplyVerifyResult>(`/api/jobs/${jobId}/verify-easy-apply`, {})
+}
+
+export interface CompanyPreviewResult {
+  company: string
+  status: string
+  error: string | null
+  plan?: { method: string; url: string; boards?: { method: string; url: string }[] }
+  sample: {
+    title: string
+    location: string | null
+    job_url: string
+    date_posted: string | null
+    discovery_suppressed_reason?: string | null
+    discovery_policy_version?: number | null
+  }[]
+  matched?: number
+  saved: false
+}
+
+export function previewCompany(company: string, url: string): Promise<CompanyPreviewResult> {
+  return post('/api/gateway/c1/discovery/preview', { company, url })
 }

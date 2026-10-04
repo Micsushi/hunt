@@ -59,6 +59,24 @@ class ReviewOpsApiTests(unittest.TestCase):
         if os.path.exists(self.path):
             os.remove(self.path)
 
+    def test_jobs_list_exposes_discovery_reason_without_hiding_history(self):
+        from backend import app as control_plane_api
+
+        conn = self.db.get_connection()
+        conn.execute(
+            "UPDATE jobs SET discovery_suppressed_reason = ?, discovery_policy_version = 6 WHERE id = ?",
+            ("duplicate_canonical_job", self.job_id),
+        )
+        conn.commit()
+        conn.close()
+        payload = json.loads(control_plane_api.api_jobs().body)
+        self.assertEqual(payload["total"], 1)
+        row = payload["items"][0]
+        self.assertEqual(row["id"], self.job_id)
+        self.assertEqual(row["discovery_suppressed_reason"], "duplicate_canonical_job")
+        self.assertEqual(row["discovery_policy_version"], 6)
+        self.assertEqual(row["enrichment_status"], "failed")
+
     def test_api_ops_requeue_errors(self):
         from backend import app as control_plane_api
 
@@ -128,7 +146,7 @@ class ReviewOpsApiTests(unittest.TestCase):
 
         _, second_id = self.db.add_job(
             {
-                "title": "Analyst",
+                "title": "Product Manager",
                 "company": "Co",
                 "location": "CA",
                 "job_url": "https://www.linkedin.com/jobs/view/ops-test-2",

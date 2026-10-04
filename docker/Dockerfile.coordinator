@@ -5,8 +5,9 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY hunter/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY hunter/requirements.txt /app/hunter/requirements.txt
+COPY fletcher/requirements.txt /app/fletcher/requirements.txt
+RUN pip install --no-cache-dir -r /app/fletcher/requirements.txt
 
 COPY shared /app/shared
 COPY coordinator /app/coordinator

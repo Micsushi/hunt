@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 
 COPY shared /app/shared
 COPY hunter /app/hunter
+COPY wd_test_jobs.csv greenhouse_test_jobs.csv lever_test_jobs.csv ashby_test_jobs.csv /app/
 
 EXPOSE 8001
 

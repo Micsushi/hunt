@@ -1,4 +1,3 @@
-import argparse
 import os
 import random
 import re
@@ -10,7 +9,6 @@ import requests
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hunter.c1_logging import C1Logger  # noqa: E402
 from hunter.db import (  # noqa: E402
     claim_linkedin_job_for_hiring_cafe_fallback,
     get_job_by_id,
@@ -18,11 +16,14 @@ from hunter.db import (  # noqa: E402
     mark_job_enrichment_succeeded,
     set_hiring_cafe_cooldown_until,
 )
-from hunter.enrichment_policy import (  # noqa: E402
+from hunter.enrichment_policy import (
     compute_retry_after,
     format_sqlite_timestamp,
     is_retryable_error_code,
+    log_retry_exhausted,
+    summarize_batch,  # noqa: E402
 )
+from hunter.job_posting import normalize_description_text as _normalize_text
 from hunter.providers import hiring_cafe  # noqa: E402
 from hunter.url_utils import (  # noqa: E402
     detect_ats_type,
@@ -47,16 +48,6 @@ class HiringCafeEnrichmentError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-def _normalize_text(value):
-    normalized = normalize_optional_str(value)
-    if not normalized:
-        return None
-    normalized = re.sub(r"\r\n?", "\n", normalized)
-    lines = [re.sub(r"\s+", " ", line).strip() for line in normalized.splitlines()]
-    cleaned = "\n".join(line for line in lines if line)
-    return cleaned or None
 
 
 def _tokens(value):
@@ -249,23 +240,6 @@ def _should_stop_batch_after_failure(error_code):
     return error_code == "rate_limited"
 
 
-def _log_retry_exhausted(claimed_job, *, error_code, error_message):
-    C1Logger(discord=False).event(
-        key="hunt_last_retry_exhausted",
-        level="warn",
-        message="C1 HiringCafe fallback retries exhausted.",
-        code="retry_exhausted",
-        details={
-            "job_id": claimed_job.get("id"),
-            "source": SOURCE,
-            "provider": PROVIDER,
-            "error_code": error_code,
-            "error_message": error_message,
-            "enrichment_attempts": claimed_job.get("enrichment_attempts"),
-        },
-    )
-
-
 def _process_claimed_job(claimed_job):
     started_at = time.monotonic()
     print(
@@ -307,8 +281,10 @@ def _process_claimed_job(claimed_job):
         if error_code == "rate_limited" and next_retry_at:
             set_hiring_cafe_cooldown_until(next_retry_at)
         if is_retryable_error_code(error_code) and retry_after is None:
-            _log_retry_exhausted(
+            log_retry_exhausted(
                 claimed_job,
+                source="linkedin",
+                provider=PROVIDER,
                 error_code=error_code,
                 error_message=error_message,
             )
@@ -369,59 +345,14 @@ def process_batch(*, limit, return_summary=False):
         if index < limit - 1:
             _sleep_between_requests()
 
-    total_elapsed = time.monotonic() - started_at
-    successes = [result for result in results if result["status"] == "success"]
-    failures = [result for result in results if result["status"] == "failed"]
-    actionable_failures = [
-        result
-        for result in failures
-        if not _is_non_actionable_failure_code(result.get("error_code"))
-    ]
-    failure_breakdown = {}
-    for failure in failures:
-        failure_breakdown[failure["error_code"]] = (
-            failure_breakdown.get(failure["error_code"], 0) + 1
-        )
-
-    print("\n[hiring-cafe-batch] Summary")
-    print(f"  attempted: {len(results)}")
-    print(f"  succeeded: {len(successes)}")
-    print(f"  failed: {len(failures)}")
-    print(f"  total_elapsed_seconds: {total_elapsed:.1f}")
-    if results:
-        avg_seconds = sum(result["duration_seconds"] for result in results) / len(results)
-        print(f"  average_seconds_per_job: {avg_seconds:.1f}")
-    if failure_breakdown:
-        print("  failure_breakdown:")
-        for error_code, count in sorted(failure_breakdown.items()):
-            print(f"    {error_code}: {count}")
-
-    stop_error_code = None
-    for failure in failures:
-        error_code = failure.get("error_code")
-        if _should_stop_batch_after_failure(error_code):
-            stop_error_code = error_code
-            break
-
-    exit_code = 0 if not actionable_failures else 1
-    if return_summary:
-        return {
-            "exit_code": exit_code,
-            "attempted": len(results),
-            "ui_verified": 0,
-            "succeeded": len(successes),
-            "failed": len(failures),
-            "actionable_failed": len(actionable_failures),
-            "failure_breakdown": failure_breakdown,
-            "total_elapsed_seconds": total_elapsed,
-            "average_seconds_per_job": (
-                sum(result["duration_seconds"] for result in results) / len(results)
-                if results
-                else 0.0
-            ),
-            "stop_error_code": stop_error_code,
-        }
-    return exit_code
+    summary = summarize_batch(
+        results,
+        elapsed=time.monotonic() - started_at,
+        non_actionable=_is_non_actionable_failure_code,
+        should_stop=_should_stop_batch_after_failure,
+        prefix="hiring-cafe-batch",
+    )
+    return summary if return_summary else summary["exit_code"]
 
 
 def process_one_job(job_id=None, *, force=False):
@@ -438,28 +369,9 @@ def process_one_job(job_id=None, *, force=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Enrich LinkedIn rows through HiringCafe when LinkedIn auth is unavailable."
-    )
-    parser.add_argument("--job-id", type=int, help="Specific LinkedIn job id to enrich.")
-    parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Allow enriching a specific row even if it is not fallback-ready.",
-    )
-    args = parser.parse_args()
+    from hunter.enrichment_cli import run_enrichment_cli
 
-    if args.force and args.job_id is None:
-        parser.error("--force requires --job-id")
-    if args.job_id is not None and args.limit != 1:
-        parser.error("--limit cannot be used with --job-id")
-    if args.limit < 1:
-        parser.error("--limit must be at least 1")
-
-    if args.limit > 1:
-        return process_batch(limit=args.limit)
-    return process_one_job(job_id=args.job_id, force=args.force)
+    return run_enrichment_cli("HiringCafe", process_one_job, process_batch)
 
 
 if __name__ == "__main__":

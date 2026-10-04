@@ -4,16 +4,34 @@
   "watchlist": [],
 
   "title_blacklist": [],
+  "include_experienced_roles": false,
 
-  "target_job_titles": {
-    "engineering": [],
-    "data": []
+  "search_terms": {
+    "engineering": [
+      "software engineer", "backend developer", "frontend developer", "full stack developer",
+      "mobile developer", "devops cloud platform"
+    ],
+    "product": [
+      "technical product manager", "project coordinator", "implementation specialist",
+      "solutions engineer", "technical customer success"
+    ],
+    "data": [
+      "data analyst", "business analyst", "operations analyst", "data engineer", "machine learning"
+    ],
+    "it_support": [
+      "IT analyst", "IT compliance", "IT operations",
+      "IT support", "help desk", "desktop support", "network administrator", "database administrator", "computer technician"
+    ],
+    "quality_security": [
+      "QA engineer", "test automation", "cyber security"
+    ],
+    "hardware": [
+      "embedded engineer", "firmware engineer", "hardware technician", "robotics"
+    ]
   },
 
-  "experience_levels": [],
-
   "locations": [
-    "Remote"
+    "Canada"
   ],
 
   "sites": ["indeed", "linkedin"],
@@ -22,6 +40,12 @@
   "results_wanted": 500,
   "hours_old": 24,
   "run_interval_seconds": 600,
+  "backfill_interval_seconds": 86400,
+  "backfill_hours_old": 336,
+  "public_feed_discovery": true,
+  "public_discovery_interval_seconds": 3600,
+  "company_discovery_interval_seconds": 21600,
+  "company_career_sites": {},
   "enrich_after_scrape": true,
   "linkedin_fetch_description": true,
   "enrichment_batch_limit": 25,

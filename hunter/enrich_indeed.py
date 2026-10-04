@@ -1,5 +1,3 @@
-import argparse
-import json
 import os
 import re
 import sys
@@ -17,19 +15,21 @@ from hunter.browser_runtime import (  # noqa: E402
     PlaywrightTimeoutError,
     open_browser_context,
 )
-from hunter.c1_logging import C1Logger  # noqa: E402
 from hunter.db import (  # noqa: E402
     claim_job_for_enrichment,
     get_job_by_id,
     mark_job_enrichment_failed,
     mark_job_enrichment_succeeded,
 )
-from hunter.enrichment_policy import (  # noqa: E402
+from hunter.enrichment_policy import (
     compute_retry_after,
     format_sqlite_timestamp,
     is_retryable_error_code,  # noqa: E402
+    log_retry_exhausted,
+    summarize_batch,  # noqa: E402
 )
 from hunter.failure_artifacts import capture_page_artifacts, capture_text_artifacts  # noqa: E402
+from hunter.job_posting import normalize_description_text as _normalize_text
 from hunter.url_utils import (  # noqa: E402
     detect_ats_type,
     get_apply_host,
@@ -104,16 +104,6 @@ def _session():
     return session
 
 
-def _normalize_text(value):
-    normalized = normalize_optional_str(value)
-    if not normalized:
-        return None
-    normalized = re.sub(r"\r\n?", "\n", normalized)
-    lines = [re.sub(r"\s+", " ", line).strip() for line in normalized.splitlines()]
-    cleaned = "\n".join(line for line in lines if line)
-    return cleaned or None
-
-
 def _html_to_text(value):
     normalized = normalize_optional_str(value)
     if not normalized:
@@ -128,29 +118,9 @@ def _is_usable_description(value, *, minimum_length=50):
 
 
 def _find_job_posting_json(soup):
-    for script in soup.select('script[type="application/ld+json"]'):
-        raw = normalize_optional_str(script.string or script.get_text())
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    from hunter.job_posting import job_postings
 
-        stack = payload if isinstance(payload, list) else [payload]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, list):
-                stack.extend(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            if item.get("@type") == "JobPosting":
-                return item
-            for value in item.values():
-                if isinstance(value, (dict, list)):
-                    stack.append(value)
-    return None
+    return next(iter(job_postings(soup)), None)
 
 
 def _detect_job_removed(text):
@@ -503,22 +473,6 @@ def _is_non_actionable_failure_code(error_code):
     return error_code == "job_removed"
 
 
-def _log_retry_exhausted(claimed_job, *, error_code, error_message):
-    C1Logger(discord=False).event(
-        key="hunt_last_retry_exhausted",
-        level="warn",
-        message="C1 enrichment retries exhausted.",
-        code="retry_exhausted",
-        details={
-            "job_id": claimed_job.get("id"),
-            "source": SOURCE,
-            "error_code": error_code,
-            "error_message": error_message,
-            "enrichment_attempts": claimed_job.get("enrichment_attempts"),
-        },
-    )
-
-
 def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_verify=False):
     started_at = time.monotonic()
     print(
@@ -565,8 +519,9 @@ def _process_claimed_job(claimed_job, *, timeout_ms=45000, context=None, ui_veri
             None if ui_verify else (format_sqlite_timestamp(retry_after) if retry_after else None)
         )
         if not ui_verify and is_retryable_error_code(error_code) and retry_after is None:
-            _log_retry_exhausted(
+            log_retry_exhausted(
                 claimed_job,
+                source="indeed",
                 error_code=error_code,
                 error_message=error_message,
             )
@@ -602,7 +557,6 @@ def process_batch(
 ):
     started_at = time.monotonic()
     results = []
-    final_results_by_job_id = {}
     blocked_job_ids = []
 
     for index in range(limit):
@@ -614,7 +568,6 @@ def process_batch(
         print(f"\n[indeed-batch] Processing job {index + 1}/{limit}")
         result = _process_claimed_job(claimed_job, timeout_ms=timeout_ms)
         results.append(result)
-        final_results_by_job_id[result["job_id"]] = result
 
         if result["status"] == "failed":
             error_code = result.get("error_code")
@@ -659,7 +612,6 @@ def process_batch(
                         ui_verify=True,
                     )
                 ui_verify_results.append(result)
-                final_results_by_job_id[result["job_id"]] = result
                 if result["status"] == "failed" and _should_stop_batch_after_failure(
                     result.get("error_code"), ui_verify_blocked=False
                 ):
@@ -668,66 +620,15 @@ def process_batch(
                     )
                     break
 
-    total_elapsed = time.monotonic() - started_at
-    final_results = list(final_results_by_job_id.values()) or results
-    successes = [result for result in final_results if result["status"] == "success"]
-    failures = [result for result in final_results if result["status"] == "failed"]
-    actionable_failures = [
-        result
-        for result in failures
-        if not _is_non_actionable_failure_code(result.get("error_code"))
-    ]
-    failure_breakdown = {}
-    for failure in failures:
-        failure_breakdown[failure["error_code"]] = (
-            failure_breakdown.get(failure["error_code"], 0) + 1
-        )
-
-    print("\n[indeed-batch] Summary")
-    print(f"  attempted: {len(results)}")
-    if ui_verify_results:
-        print(f"  ui_verified: {len(ui_verify_results)}")
-    print(f"  succeeded: {len(successes)}")
-    print(f"  failed: {len(failures)}")
-    print(f"  total_elapsed_seconds: {total_elapsed:.1f}")
-    all_timed_results = results + ui_verify_results
-    if all_timed_results:
-        avg_seconds = sum(result["duration_seconds"] for result in all_timed_results) / len(
-            all_timed_results
-        )
-        print(f"  average_seconds_per_job: {avg_seconds:.1f}")
-    if failure_breakdown:
-        print("  failure_breakdown:")
-        for error_code, count in sorted(failure_breakdown.items()):
-            print(f"    {error_code}: {count}")
-
-    stop_error_code = None
-    for failure in failures:
-        error_code = failure.get("error_code")
-        if _should_stop_batch_after_failure(error_code, ui_verify_blocked=False):
-            stop_error_code = error_code
-            break
-
-    exit_code = 0 if not actionable_failures else 1
-    if return_summary:
-        return {
-            "exit_code": exit_code,
-            "attempted": len(results),
-            "ui_verified": len(ui_verify_results),
-            "succeeded": len(successes),
-            "failed": len(failures),
-            "actionable_failed": len(actionable_failures),
-            "failure_breakdown": failure_breakdown,
-            "total_elapsed_seconds": total_elapsed,
-            "average_seconds_per_job": (
-                sum(result["duration_seconds"] for result in all_timed_results)
-                / len(all_timed_results)
-                if all_timed_results
-                else 0.0
-            ),
-            "stop_error_code": stop_error_code,
-        }
-    return exit_code
+    summary = summarize_batch(
+        results,
+        elapsed=time.monotonic() - started_at,
+        non_actionable=_is_non_actionable_failure_code,
+        should_stop=_should_stop_batch_after_failure,
+        prefix="indeed-batch",
+        ui_results=ui_verify_results,
+    )
+    return summary if return_summary else summary["exit_code"]
 
 
 def process_one_job(
@@ -774,60 +675,9 @@ def process_one_job(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Enrich Indeed jobs using the shared Stage 3 queue model."
-    )
-    parser.add_argument("--job-id", type=int, help="Specific Indeed job id to enrich.")
-    parser.add_argument("--timeout-ms", type=int, default=45000)
-    parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Allow enriching a specific row even if it is not pending.",
-    )
-    parser.add_argument("--channel", help="Optional Playwright browser channel such as chrome.")
-    parser.add_argument(
-        "--ui-verify",
-        action="store_true",
-        help="Re-run one specific Indeed row in a visible browser.",
-    )
-    parser.add_argument(
-        "--ui-verify-blocked",
-        action="store_true",
-        help="For batch runs, rerun browser-verifiable Indeed rows in a visible browser after the first pass.",
-    )
-    args = parser.parse_args()
+    from hunter.enrichment_cli import run_enrichment_cli
 
-    if args.force and args.job_id is None:
-        parser.error("--force requires --job-id")
-    if args.job_id is not None and args.limit != 1:
-        parser.error("--limit cannot be used with --job-id")
-    if args.limit < 1:
-        parser.error("--limit must be at least 1")
-    if args.ui_verify and args.job_id is None:
-        parser.error("--ui-verify requires --job-id")
-    if args.ui_verify and args.limit != 1:
-        parser.error("--ui-verify cannot be used with --limit")
-    if args.ui_verify_blocked and args.limit == 1:
-        parser.error("--ui-verify-blocked requires --limit greater than 1")
-    if args.ui_verify_blocked and args.job_id is not None:
-        parser.error("--ui-verify-blocked cannot be used with --job-id")
-
-    if args.limit > 1:
-        return process_batch(
-            limit=args.limit,
-            timeout_ms=args.timeout_ms,
-            browser_channel=args.channel,
-            ui_verify_blocked=args.ui_verify_blocked,
-        )
-
-    return process_one_job(
-        job_id=args.job_id,
-        timeout_ms=args.timeout_ms,
-        force=args.force,
-        browser_channel=args.channel,
-        ui_verify=args.ui_verify,
-    )
+    return run_enrichment_cli("Indeed", process_one_job, process_batch)
 
 
 if __name__ == "__main__":

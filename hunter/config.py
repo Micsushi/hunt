@@ -1,6 +1,6 @@
+import json as _json
 import os as _os
 
-from hunter.search_lanes import build_search_queries as _build_search_queries
 from shared.config_utils import get_bool_env as _get_bool_env
 from shared.config_utils import get_int_env as _get_int_env
 from shared.config_utils import get_str_env as _get_str_env
@@ -25,15 +25,16 @@ try:
 except Exception:  # pragma: no cover
     _user_config = None  # type: ignore
 
-try:
-    _USER_CONFIG = _user_config.load() if _user_config is not None else {}
-except Exception:
-    _USER_CONFIG = {}
+_USER_CONFIG = _user_config.load() if _user_config is not None else {}
 
 
 def _config_value(name: str, default):
     if name in _os.environ:
-        return None
+        if isinstance(default, (dict, list)):
+            value = _json.loads(_os.environ[name])
+            if not isinstance(value, type(default)):
+                raise ValueError(f"{name} must be a JSON {type(default).__name__}")
+            return value
     return _USER_CONFIG.get(name.lower(), default)
 
 
@@ -63,7 +64,26 @@ def _get_config_dict(name: str, default: dict[str, list[str]]) -> dict[str, list
         if not isinstance(items, list):
             continue
         clean[str(key)] = [str(item) for item in items if str(item).strip()]
-    return clean or default
+    return clean
+
+
+def _get_company_sites():
+    value = _config_value("COMPANY_CAREER_SITES", {})
+    if not isinstance(value, dict):
+        return {}
+    sites = {}
+    for company, boards in value.items():
+        if not str(company).strip():
+            continue
+        if isinstance(boards, str) and boards.strip():
+            sites[str(company).strip()] = boards.strip()
+        elif isinstance(boards, list):
+            urls = list(
+                dict.fromkeys(url.strip() for url in boards if isinstance(url, str) and url.strip())
+            )
+            if urls:
+                sites[str(company).strip()] = urls
+    return sites
 
 
 def get_db_path():
@@ -93,14 +113,69 @@ HUNT_SERVICE_TOKEN = _get_str_env("HUNT_SERVICE_TOKEN", "")
 HUNT_HUNTER_URL = _get_str_env("HUNT_HUNTER_URL", "http://localhost:8001")
 HUNT_FLETCHER_URL = _get_str_env("HUNT_FLETCHER_URL", "http://localhost:8002")
 
-# User preferences are the only source of discovery queries. Each target title
-# is combined with the built-in aliases for every selected experience level.
-# Empty defaults prevent a fresh install from searching before the user opts in.
+# Discovery runs one query per (lane, term). Shared title matching uses these
+# terms for custom lanes and retains broad synonyms for the default lanes.
+_DEFAULT_SEARCH_TERMS = {
+    "engineering": [
+        "software engineer",
+        "backend developer",
+        "frontend developer",
+        "DevOps",
+        "cloud engineer",
+        "mobile developer",
+    ],
+    "data": [
+        "data analyst",
+        "business analyst",
+        "operations analyst",
+        "data engineer",
+        "machine learning",
+    ],
+    "it_support": [
+        "IT analyst",
+        "IT compliance",
+        "IT operations",
+        "IT support",
+        "IT specialist",
+        "help desk",
+        "service desk",
+        "desktop support",
+        "systems administrator",
+        "database administrator",
+        "network support",
+        "computer technician",
+    ],
+    "quality_security": ["QA engineer", "test automation", "cyber security"],
+    "hardware": ["embedded engineer", "firmware engineer", "hardware technician", "robotics"],
+    "product": [
+        "technical product manager",
+        "project coordinator",
+        "implementation specialist",
+        "solutions engineer",
+        "technical customer success",
+    ],
+}
+# Preserve the deployed role-title and experience-level settings. Explicit legacy
+# search terms remain supported for existing installations.
 TARGET_JOB_TITLES = _get_config_dict("TARGET_JOB_TITLES", {})
 EXPERIENCE_LEVELS = _get_config_list("EXPERIENCE_LEVELS", [])
-SEARCH_QUERIES = _build_search_queries(TARGET_JOB_TITLES, EXPERIENCE_LEVELS)
+TARGETING_CONFIGURED = (
+    "target_job_titles" in _USER_CONFIG or "TARGET_JOB_TITLES" in _os.environ
+) and not ("search_terms" in _USER_CONFIG or "SEARCH_TERMS" in _os.environ)
+if TARGETING_CONFIGURED:
+    from hunter.search_lanes import build_search_queries as _build_search_queries
 
-_DEFAULT_LOCATIONS = ["Remote"]
+    SEARCH_TERMS = _build_search_queries(TARGET_JOB_TITLES, EXPERIENCE_LEVELS)
+else:
+    SEARCH_TERMS = _get_config_dict("SEARCH_TERMS", _DEFAULT_SEARCH_TERMS)
+INCLUDE_EXPERIENCED_ROLES = _get_config_bool("INCLUDE_EXPERIENCED_ROLES", False)
+DISCOVERY_COUNTRIES = _get_config_list("DISCOVERY_COUNTRIES", ["Canada"])
+CAREER_STAGES = _get_config_list("CAREER_STAGES", [])
+EMPLOYMENT_TYPES = _get_config_list("EMPLOYMENT_TYPES", [])
+REMOTE_ONLY = _get_config_bool("REMOTE_ONLY", False)
+COUNTRY_INDEED = _get_str_env("COUNTRY_INDEED", _USER_CONFIG.get("country_indeed", "Canada"))
+
+_DEFAULT_LOCATIONS = ["Canada"]
 LOCATIONS = _get_config_list("LOCATIONS", _DEFAULT_LOCATIONS)
 
 SITES = _get_config_list("SITES", ["indeed", "linkedin"])
@@ -111,6 +186,12 @@ HOURS_OLD = _get_config_int(
     "HOURS_OLD", 24
 )  # 24h lookback: job_url uniqueness handles dedup across runs
 RUN_INTERVAL_SECONDS = _get_config_int("RUN_INTERVAL_SECONDS", 600)  # 10 minutes between runs
+BACKFILL_INTERVAL_SECONDS = _get_config_int("BACKFILL_INTERVAL_SECONDS", 86400)
+BACKFILL_HOURS_OLD = _get_config_int("BACKFILL_HOURS_OLD", 336)
+PUBLIC_FEED_DISCOVERY = _get_config_bool("PUBLIC_FEED_DISCOVERY", True)
+PUBLIC_DISCOVERY_INTERVAL_SECONDS = _get_config_int("PUBLIC_DISCOVERY_INTERVAL_SECONDS", 3600)
+COMPANY_DISCOVERY_INTERVAL_SECONDS = _get_config_int("COMPANY_DISCOVERY_INTERVAL_SECONDS", 21600)
+COMPANY_CAREER_SITES = _get_company_sites()
 ENRICH_AFTER_SCRAPE = _get_config_bool("ENRICH_AFTER_SCRAPE", True)
 LINKEDIN_FETCH_DESCRIPTION = _get_config_bool("LINKEDIN_FETCH_DESCRIPTION", True)
 ENRICHMENT_BATCH_LIMIT = _get_config_int("ENRICHMENT_BATCH_LIMIT", 25)
@@ -140,3 +221,33 @@ WATCHLIST = _get_config_list("WATCHLIST", _DEFAULT_WATCHLIST)
 
 _DEFAULT_TITLE_BLACKLIST: list[str] = []
 TITLE_BLACKLIST = _get_config_list("TITLE_BLACKLIST", _DEFAULT_TITLE_BLACKLIST)
+
+COMPANY_BLOCKLIST = _get_config_list("COMPANY_BLOCKLIST", [])
+
+
+# These are regional catalogs, not worldwide searches. Employer readers have
+# their own configured board scope; a Canada board cannot establish global coverage.
+CANADA_ONLY_DISCOVERY_SOURCES = (
+    "job_bank",
+    "jobillico",
+    "builtin",
+    "wellfound",
+    "talentegg",
+    "gc_jobs",
+    "eluta",
+    "jobs_ca_browser",
+)
+
+
+def discovery_geography_limits():
+    countries = [c for c in DISCOVERY_COUNTRIES if c.casefold() not in {"canada", "ca", "can"}]
+    if DISCOVERY_COUNTRIES and not countries:
+        return []
+    return [
+        {
+            "source": source,
+            "supported_countries": ["Canada"],
+            "unsearched_countries": countries or ["countries outside Canada"],
+        }
+        for source in CANADA_ONLY_DISCOVERY_SOURCES
+    ]

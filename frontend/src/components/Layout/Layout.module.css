@@ -157,6 +157,7 @@
 
 @media (max-width: 760px) {
   .header {
+    position: static;
     align-items: stretch;
     flex-direction: column;
   }

@@ -29,6 +29,25 @@ const EXACT_GET_ROUTES: Record<string, unknown> = {
   '/api/linkedin/accounts': MOCK_LINKEDIN_ACCOUNTS,
   '/api/gateway/c1/status': MOCK_C1_STATUS,
   '/api/gateway/c1/queue': MOCK_C1_QUEUE,
+  '/api/gateway/c1/discovery/health': {
+    sources: [
+      {
+        source: 'job_bank: it_support / IT support',
+        status: 'partial',
+        lead_count: 5,
+        last_error: 'page_limit_reached',
+        checked_at: '2026-10-01T12:00:00Z',
+      },
+      {
+        source: 'company: Example',
+        status: 'ok',
+        lead_count: 3,
+        last_error: null,
+        checked_at: '2026-10-01T12:00:00Z',
+      },
+    ],
+    company_fetch_queue: [],
+  },
   '/api/gateway/c2/status': MOCK_C2_STATUS,
 }
 
