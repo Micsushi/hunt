@@ -1,0 +1,17 @@
+Software Engineering Intern / New Grad Software Engineer
+
+We are looking for a software engineering intern or new graduate engineer to build reliable user-facing and backend systems. The role involves designing, implementing, testing, and maintaining software features in collaboration with product managers, designers, and senior engineers.
+
+Responsibilities:
+- Build and maintain backend services, APIs, and frontend features.
+- Write clean, tested, maintainable code in Python, Java, Kotlin, JavaScript, or TypeScript.
+- Work with cloud infrastructure, relational databases, CI/CD pipelines, monitoring, and debugging tools.
+- Collaborate in Agile development, code reviews, incident response, and technical design discussions.
+- Communicate tradeoffs clearly and document technical decisions.
+
+Qualifications:
+- Pursuing or recently completed a degree in Computer Science, Software Engineering, or related field.
+- Experience with data structures, algorithms, REST APIs, databases, Git, and automated testing.
+- Experience with React, Next.js, Vue, Node.js, FastAPI, Flask, AWS, Docker, Kubernetes, Terraform, PostgreSQL, DynamoDB, or similar technologies is a plus.
+- Internship, co-op, open source, hackathon, or production project experience preferred.
+- Strong problem-solving ability, ownership, collaboration, and willingness to learn.

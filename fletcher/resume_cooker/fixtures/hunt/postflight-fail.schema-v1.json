@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "command": "compare",
+  "run_id": "synthetic-postflight-fail",
+  "status": "fail",
+  "content_left_machine": false,
+  "checks": [
+    {
+      "id": "synthetic_fact_regression",
+      "status": "fail",
+      "metadata": {
+        "changed_count": 1
+      }
+    }
+  ]
+}

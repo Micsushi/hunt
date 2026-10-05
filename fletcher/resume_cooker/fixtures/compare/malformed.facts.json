@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "facts": [
+    {
+      "id": "experience.missing-entry.title",
+      "kind": "experience",
+      "field": "title",
+      "value": "Synthetic Builder",
+      "immutable": true
+    }
+  ]
+}

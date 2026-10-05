@@ -46,7 +46,9 @@ class ResumeReviewVersion(BaseModel):
     pdf_url: str
     tex_url: str
     dirty: bool = False
+    document_revision: int = 0
     compiled_revision: int = 0
+    compiled_document_revision: int = 0
     compile_status: str | None = None
 
 

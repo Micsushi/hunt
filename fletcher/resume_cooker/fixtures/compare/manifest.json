@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "privacy_reviewed": true,
+  "synthetic_only": true,
+  "cases": [
+    {
+      "id": "formatting-equivalent",
+      "after_facts": "tailored-valid.facts.json",
+      "pdf": "public",
+      "expected_status": "pass",
+      "expected_exit": 0
+    },
+    {
+      "id": "immutable-fact-change",
+      "after_facts": "tailored-fact-change.facts.json",
+      "pdf": "public",
+      "expected_status": "fail",
+      "expected_exit": 2
+    },
+    {
+      "id": "protected-strength-loss",
+      "after_facts": "tailored-strength-loss.facts.json",
+      "policy": "protected-policy.json",
+      "pdf": "public",
+      "expected_status": "pass_with_warnings",
+      "expected_exit": 0
+    },
+    {
+      "id": "intentional-omission",
+      "after_facts": "tailored-strength-loss.facts.json",
+      "policy": "omission-policy.json",
+      "pdf": "public",
+      "expected_status": "pass",
+      "expected_exit": 0
+    },
+    {
+      "id": "profile-grounded-addition",
+      "after_facts": "tailored-grounded-addition.facts.json",
+      "profile_facts": "approved-profile.facts.json",
+      "pdf": "public",
+      "expected_status": "pass",
+      "expected_exit": 0
+    },
+    {
+      "id": "jd-only-ungrounded-addition",
+      "after_facts": "tailored-ungrounded-addition.facts.json",
+      "jd": "synthetic-jd.txt",
+      "pdf": "public",
+      "expected_status": "fail",
+      "expected_exit": 2
+    },
+    {
+      "id": "synonym-only-ambiguity",
+      "after_facts": "tailored-synonym-addition.facts.json",
+      "profile_facts": "approved-profile.facts.json",
+      "pdf": "public",
+      "expected_status": "pass_with_warnings",
+      "expected_exit": 0
+    },
+    {
+      "id": "nonmaterial-addition",
+      "after_facts": "tailored-nonmaterial-addition.facts.json",
+      "pdf": "public",
+      "expected_status": "pass",
+      "expected_exit": 0
+    },
+    {
+      "id": "source-only-ambiguity",
+      "after": "source-ambiguous.tex",
+      "source_only": true,
+      "pdf": "public",
+      "expected_status": "pass_with_warnings",
+      "expected_exit": 0
+    },
+    {
+      "id": "malformed-structured-facts",
+      "after_facts": "malformed.facts.json",
+      "expected_status": "invalid_usage",
+      "expected_exit": 64
+    },
+    {
+      "id": "corrupt-pdf",
+      "after_facts": "tailored-valid.facts.json",
+      "pdf": "corrupt.pdf",
+      "expected_status": "fail",
+      "expected_exit": 2
+    }
+  ]
+}

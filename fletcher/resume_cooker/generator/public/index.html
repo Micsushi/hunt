@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Resume Cooker</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        --ink: #18211b;
+        --muted: #5d675f;
+        --paper: #f4f1e8;
+        --panel: #fffdf7;
+        --line: #d8d2c3;
+        --accent: #285c45;
+        --danger: #a12d2d;
+        --warning: #8a5b00;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+      }
+      header {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      h1,
+      h2 {
+        margin: 0;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      h2 {
+        font-size: 0.95rem;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        padding: 0.55rem 0.8rem;
+        border: 1px solid var(--accent);
+        border-radius: 0.35rem;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      select:focus-visible {
+        outline: 3px solid #82b99f;
+        outline-offset: 2px;
+      }
+      .toolbar,
+      .output-controls {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .status {
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+      .status[data-state="error"] {
+        color: var(--danger);
+      }
+      .status[data-state="warning"] {
+        color: var(--warning);
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(28rem, 1fr) minmax(28rem, 1fr);
+        min-height: calc(100vh - 4rem);
+      }
+      .column {
+        min-width: 0;
+        padding: 1rem;
+      }
+      .column + .column {
+        border-left: 1px solid var(--line);
+      }
+      .section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        padding: 0.8rem;
+        margin-bottom: 0.8rem;
+      }
+      .section-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 0.65rem;
+      }
+      textarea {
+        width: 100%;
+        min-height: 55vh;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 0.35rem;
+        background: #fff;
+        color: #17221c;
+        padding: 0.75rem;
+        font-family: "Cascadia Code", Consolas, monospace;
+        line-height: 1.45;
+        tab-size: 2;
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        min-height: 52vh;
+        border: 1px solid var(--line);
+        border-radius: 0.35rem;
+        background: #e7e5df;
+      }
+      #findings {
+        margin: 0;
+        padding-left: 1.2rem;
+      }
+      #findings li {
+        margin: 0.55rem 0;
+      }
+      .finding-status {
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+      }
+      .privacy {
+        border-radius: 999px;
+        padding: 0.25rem 0.55rem;
+        font-size: 0.78rem;
+        background: #dcece2;
+        color: #16412c;
+      }
+      label {
+        font-size: 0.86rem;
+      }
+      input[type="text"] {
+        padding: 0.48rem;
+        border: 1px solid var(--line);
+        border-radius: 0.3rem;
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (max-width: 960px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+        .column + .column {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Resume Cooker</h1>
+        <div id="source-name" class="status">Loading approved source…</div>
+      </div>
+      <div class="toolbar" aria-label="Source and build actions">
+        <span id="dirty-state" class="status">Saved</span>
+        <button id="save" type="button" disabled>
+          Save <span aria-hidden="true">Ctrl+S</span>
+        </button>
+        <button id="build" type="button">Build <span aria-hidden="true">Ctrl+B</span></button>
+        <button id="cancel-build" type="button" class="secondary" disabled>Cancel</button>
+      </div>
+    </header>
+    <div id="live-status" class="visually-hidden" role="status" aria-live="polite"></div>
+    <main>
+      <section class="column" aria-labelledby="editor-title">
+        <div class="section">
+          <div class="section-header">
+            <h2 id="editor-title">LaTeX source</h2>
+            <button id="reload" type="button" class="secondary">Reload</button>
+          </div>
+          <label for="editor" class="visually-hidden">Approved LaTeX source</label>
+          <textarea id="editor" spellcheck="false" disabled></textarea>
+        </div>
+        <div class="section" aria-labelledby="checks-title">
+          <div class="section-header">
+            <h2 id="checks-title">Local findings</h2>
+            <div class="toolbar">
+              <span id="privacy" class="privacy">Stayed local</span>
+              <button id="check" type="button">
+                Run checks <span aria-hidden="true">Ctrl+Enter</span>
+              </button>
+            </div>
+          </div>
+          <p id="check-summary" class="status">No local check has run.</p>
+          <ul id="findings"></ul>
+        </div>
+      </section>
+      <section class="column" aria-labelledby="preview-title">
+        <div class="section">
+          <div class="section-header">
+            <h2 id="preview-title">Temporary PDF preview</h2>
+            <span id="build-status" class="status">Not built</span>
+          </div>
+          <iframe id="pdf" title="Temporary resume PDF preview"></iframe>
+        </div>
+        <div class="section" aria-labelledby="output-title">
+          <div class="section-header">
+            <h2 id="output-title">Intentional saved output</h2>
+          </div>
+          <div class="output-controls">
+            <label for="output-name">Filename</label>
+            <input id="output-name" type="text" value="resume.pdf" autocomplete="off" />
+            <label><input id="overwrite" type="checkbox" /> Confirm overwrite</label>
+            <button id="save-output" type="button">Save verified PDF</button>
+          </div>
+          <p id="output-status" class="status">Preview files are temporary until saved here.</p>
+        </div>
+        <div class="section" aria-labelledby="tools-title">
+          <div class="section-header">
+            <h2 id="tools-title">Tool readiness</h2>
+            <button id="refresh-tools" type="button" class="secondary">Refresh</button>
+          </div>
+          <ul id="tools"></ul>
+        </div>
+      </section>
+    </main>
+    <script>
+      const elements = Object.fromEntries(
+        [
+          "source-name",
+          "dirty-state",
+          "save",
+          "build",
+          "cancel-build",
+          "reload",
+          "editor",
+          "check",
+          "check-summary",
+          "findings",
+          "privacy",
+          "pdf",
+          "build-status",
+          "output-name",
+          "overwrite",
+          "save-output",
+          "output-status",
+          "refresh-tools",
+          "tools",
+          "live-status"
+        ].map((id) => [id, document.getElementById(id)])
+      );
+      const state = {
+        csrf: "",
+        source: "",
+        revision: "",
+        savedText: "",
+        building: false,
+        statusRequest: 0,
+        refreshing: false
+      };
+
+      async function request(path, options = {}) {
+        const headers = { ...(options.headers || {}) };
+        if (options.method && !["GET", "HEAD"].includes(options.method)) {
+          headers["x-resume-cooker-csrf"] = state.csrf;
+          headers["content-type"] = "application/json";
+        }
+        const response = await fetch(path, { ...options, headers });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Request failed.");
+        return data;
+      }
+
+      function announce(message) {
+        elements["live-status"].textContent = message;
+      }
+
+      function renderDirty() {
+        const dirty = elements.editor.value !== state.savedText;
+        elements["dirty-state"].textContent = dirty ? "Unsaved changes" : "Saved";
+        elements.save.disabled = !dirty;
+      }
+
+      async function loadSource() {
+        const source = await request("/api/source");
+        state.source = source.source;
+        state.revision = source.revision;
+        state.savedText = source.text;
+        elements.editor.value = source.text;
+        elements.editor.disabled = false;
+        elements["source-name"].textContent = source.name;
+        renderDirty();
+        announce("Source loaded.");
+      }
+
+      async function saveSource() {
+        elements.save.disabled = true;
+        try {
+          const source = await request("/api/source", {
+            method: "PUT",
+            body: JSON.stringify({ text: elements.editor.value, revision: state.revision })
+          });
+          state.revision = source.revision;
+          state.savedText = source.text;
+          renderDirty();
+          announce("Source saved.");
+        } catch (error) {
+          elements["dirty-state"].textContent = error.message;
+          elements["dirty-state"].dataset.state = "error";
+          announce(error.message);
+        }
+      }
+
+      function renderBuild(data) {
+        state.statusRequest += 1;
+        const previousMessage = elements["build-status"].textContent;
+        state.building = data.state === "running";
+        elements.build.disabled = state.building;
+        elements["cancel-build"].disabled = !state.building;
+        const suffix = data.stale ? " (last good PDF is stale)" : "";
+        elements["build-status"].textContent = `${data.message}${suffix}`;
+        elements["build-status"].dataset.state = data.ok ? "" : data.stale ? "warning" : "error";
+        if (data.pdfUrl && elements.pdf.getAttribute("src") !== data.pdfUrl)
+          elements.pdf.src = data.pdfUrl;
+        if (data.pdfUrl === "" && data.state !== "running") elements.pdf.removeAttribute("src");
+        if (previousMessage !== elements["build-status"].textContent) {
+          announce(elements["build-status"].textContent);
+        }
+      }
+
+      async function refreshBuild() {
+        if (state.refreshing || document.hidden || !state.csrf) return;
+        state.refreshing = true;
+        const requestId = ++state.statusRequest;
+        try {
+          const data = await request("/api/status", { signal: AbortSignal.timeout(5000) });
+          if (requestId === state.statusRequest) renderBuild(data);
+        } catch {
+          if (requestId === state.statusRequest) {
+            elements["build-status"].textContent =
+              "Preview freshness unavailable. Reconnect or reload to verify.";
+            elements["build-status"].dataset.state = "warning";
+          }
+        } finally {
+          state.refreshing = false;
+        }
+      }
+
+      let statusTimer = setInterval(refreshBuild, 2000);
+      window.addEventListener("focus", refreshBuild);
+      window.addEventListener("pagehide", () => clearInterval(statusTimer));
+      window.addEventListener("pageshow", () => {
+        clearInterval(statusTimer);
+        statusTimer = setInterval(refreshBuild, 2000);
+      });
+
+      async function build() {
+        renderBuild({ state: "running", message: "Building…", stale: false, ok: false });
+        try {
+          renderBuild(await request("/api/compile", { method: "POST", body: "{}" }));
+        } catch (error) {
+          renderBuild({ state: "failed", message: error.message, stale: false, ok: false });
+        }
+      }
+
+      async function runChecks() {
+        elements.check.disabled = true;
+        elements["check-summary"].textContent = "Running local checks…";
+        try {
+          const result = await request("/api/check", {
+            method: "POST",
+            body: JSON.stringify({ suite: "local", profile: "normal" })
+          });
+          elements["check-summary"].textContent = result.message;
+          elements.privacy.textContent = result.report?.content_left_machine
+            ? "Content left this machine"
+            : "Stayed local";
+          elements.findings.replaceChildren();
+          for (const finding of result.report?.checks || []) {
+            if (finding.status === "pass") continue;
+            const item = document.createElement("li");
+            const label = document.createElement("span");
+            label.className = "finding-status";
+            label.textContent = finding.status;
+            item.append(label, document.createTextNode(` ${finding.id}: ${finding.evidence}`));
+            elements.findings.append(item);
+          }
+          if (!elements.findings.children.length) {
+            const item = document.createElement("li");
+            item.textContent = "No active findings.";
+            elements.findings.append(item);
+          }
+          announce(`Checks complete: ${result.status}.`);
+        } catch (error) {
+          elements["check-summary"].textContent = error.message;
+          announce(error.message);
+        } finally {
+          elements.check.disabled = false;
+        }
+      }
+
+      async function saveOutput() {
+        elements["save-output"].disabled = true;
+        try {
+          const result = await request("/api/output", {
+            method: "POST",
+            body: JSON.stringify({
+              name: elements["output-name"].value,
+              overwrite: elements.overwrite.checked
+            })
+          });
+          elements["output-status"].textContent =
+            `${result.name} saved and verified (${result.bytes} bytes).`;
+          announce(elements["output-status"].textContent);
+        } catch (error) {
+          elements["output-status"].textContent = error.message;
+          elements["output-status"].dataset.state = "error";
+          announce(error.message);
+        } finally {
+          elements["save-output"].disabled = false;
+        }
+      }
+
+      async function loadTools() {
+        elements["refresh-tools"].disabled = true;
+        try {
+          const result = await request("/api/tools");
+          elements.tools.replaceChildren();
+          for (const tool of result.tools) {
+            const item = document.createElement("li");
+            item.textContent = `${tool.tool}: ${tool.usable ? "ready" : tool.reason}`;
+            elements.tools.append(item);
+          }
+        } catch (error) {
+          elements.tools.replaceChildren();
+          const item = document.createElement("li");
+          item.textContent = error.message;
+          elements.tools.append(item);
+        } finally {
+          elements["refresh-tools"].disabled = false;
+        }
+      }
+
+      elements.editor.addEventListener("input", renderDirty);
+      elements.save.addEventListener("click", saveSource);
+      elements.reload.addEventListener("click", loadSource);
+      elements.build.addEventListener("click", build);
+      elements["cancel-build"].addEventListener("click", async () =>
+        renderBuild(await request("/api/compile/cancel", { method: "POST", body: "{}" }))
+      );
+      elements.check.addEventListener("click", runChecks);
+      elements["save-output"].addEventListener("click", saveOutput);
+      elements["refresh-tools"].addEventListener("click", loadTools);
+      document.addEventListener("keydown", (event) => {
+        if (!event.ctrlKey) return;
+        if (event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          if (!elements.save.disabled) saveSource();
+        } else if (event.key.toLowerCase() === "b") {
+          event.preventDefault();
+          if (!elements.build.disabled) build();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          if (!elements.check.disabled) runChecks();
+        }
+      });
+
+      async function initialize() {
+        try {
+          const bootstrap = await request("/api/bootstrap");
+          state.csrf = bootstrap.csrf_token;
+          await loadSource();
+          renderBuild(await request("/api/status"));
+          await loadTools();
+        } catch (error) {
+          announce(error.message);
+          elements["source-name"].textContent = error.message;
+        }
+      }
+
+      initialize();
+    </script>
+  </body>
+</html>

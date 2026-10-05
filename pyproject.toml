@@ -1,6 +1,7 @@
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["fletcher/resume_cooker"]
 
 [tool.ruff.lint]
 select = [

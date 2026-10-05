@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Event
+
+import pytest
 
 from fletcher.config import resolve_base_resume_path
 from fletcher.db import (
@@ -38,10 +42,13 @@ from fletcher.resume.review_models import (
     document_to_review_blocks,
 )
 from fletcher.resume.review_store import (
+    RevisionConflictError,
     artifact_download_filename,
     artifact_path_for_review,
     compile_current_document,
+    load_review_package,
     register_review,
+    save_current_document,
     write_review_package,
 )
 from fletcher.storage import build_attempt_dir
@@ -324,6 +331,226 @@ def test_compile_failure_does_not_promote_missing_revision(tmp_path, monkeypatch
     assert version.compiled_revision == 0
     assert version.compile_status == "failed"
     assert artifact_path_for_review(review_id, "no_summary", "pdf") == attempt_dir / "output.pdf"
+
+
+def test_review_mutations_are_serialized_per_review(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "serialized"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    write_review_package(
+        attempt_dir,
+        ResumeReviewPackage(
+            review_id=build_review_id(attempt_dir),
+            log_url="/log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/pdf",
+                    tex_url="/tex",
+                )
+            },
+        ),
+    )
+    review_id = build_review_id(attempt_dir)
+    compile_started = Event()
+    release_compile = Event()
+    save_started = Event()
+    save_finished = Event()
+
+    def fake_compile(tex_path):
+        compile_started.set()
+        assert release_compile.wait(30)
+        tex_path.with_suffix(".pdf").write_bytes(b"%PDF compiled")
+        return {"compile_status": "ok", "pdf_path": str(tex_path.with_suffix(".pdf"))}
+
+    monkeypatch.setattr("fletcher.resume.review_store.compile_tex", fake_compile)
+    saved_doc = _doc()
+    saved_doc.header.name = "Saved after compile"
+
+    def save_after_compile():
+        save_started.set()
+        try:
+            return save_current_document(review_id, "no_summary", saved_doc, expected_revision=0)
+        finally:
+            save_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        compile_future = executor.submit(
+            compile_current_document, review_id, "no_summary", expected_revision=0
+        )
+        assert compile_started.wait(2)
+        save_future = executor.submit(save_after_compile)
+        assert save_started.wait(2)
+        assert not save_finished.wait(0.05)
+        release_compile.set()
+        compiled = compile_future.result(timeout=2)
+        saved = save_future.result(timeout=2)
+
+    assert compiled.versions[ResumeReviewVersionName.NO_SUMMARY].compiled_revision == 1
+    assert saved.versions[ResumeReviewVersionName.NO_SUMMARY].document_revision == 1
+    final = load_review_package(review_id)
+    final_version = final.versions[ResumeReviewVersionName.NO_SUMMARY]
+    assert final_version.current.header.name == "Saved after compile"
+    assert final_version.dirty is True
+
+
+def test_review_mutations_reject_stale_revision(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "revision-conflict"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    review_id = build_review_id(attempt_dir)
+    write_review_package(
+        attempt_dir,
+        ResumeReviewPackage(
+            review_id=review_id,
+            log_url="/log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/pdf",
+                    tex_url="/tex",
+                )
+            },
+        ),
+    )
+    edited = _doc()
+    edited.header.name = "Revision one"
+    saved = save_current_document(review_id, "no_summary", edited, expected_revision=0)
+    assert saved.versions[ResumeReviewVersionName.NO_SUMMARY].document_revision == 1
+
+    with pytest.raises(RevisionConflictError, match="current revision is 1"):
+        save_current_document(review_id, "no_summary", doc, expected_revision=0)
+    with pytest.raises(RevisionConflictError, match="current revision is 1"):
+        compile_current_document(review_id, "no_summary", expected_revision=0)
+
+
+def test_review_http_mutations_require_revision_precondition(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    runtime = tmp_path / "runtime"
+    db_path = tmp_path / "hunt.db"
+    home = tmp_path / "home"
+    config = tmp_path / "config"
+    runtime.mkdir()
+    home.mkdir()
+    config.mkdir()
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    monkeypatch.setenv("HUNT_DB_PATH", str(db_path))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(config))
+    monkeypatch.setenv("LOCALAPPDATA", str(config))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+
+    from backend.app import app, require_auth
+
+    app.dependency_overrides[require_auth] = lambda: "synthetic"
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        path = "/api/fletcher/reviews/synthetic/versions/no_summary/compile"
+        missing = client.post(path, json={})
+        assert missing.status_code == 428
+        invalid = client.post(path, json={"expected_revision": None})
+        assert invalid.status_code == 400
+    finally:
+        app.dependency_overrides.pop(require_auth, None)
+
+
+def test_failed_compile_keeps_last_good_exact_artifact(tmp_path, monkeypatch):
+    from fletcher.resume import review_store
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "last-good"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    review_id = build_review_id(attempt_dir)
+    write_review_package(
+        attempt_dir,
+        ResumeReviewPackage(
+            review_id=review_id,
+            log_url="/log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/pdf",
+                    tex_url="/tex",
+                )
+            },
+        ),
+    )
+
+    def successful_compile(tex_path):
+        pdf_path = tex_path.with_suffix(".pdf")
+        pdf_path.write_bytes(b"%PDF last good")
+        return {"compile_status": "ok", "pdf_path": str(pdf_path)}
+
+    monkeypatch.setattr(review_store, "compile_tex", successful_compile)
+    first = compile_current_document(review_id, "no_summary", expected_revision=0)
+    first_version = first.versions[ResumeReviewVersionName.NO_SUMMARY]
+    assert first_version.compiled_revision == 1
+    assert first_version.compiled_document_revision == 0
+    last_good = artifact_path_for_review(review_id, "no_summary", "pdf")
+    assert last_good.name == "output.pdf"
+
+    edited = _doc()
+    edited.header.name = "Edited"
+    saved = save_current_document(review_id, "no_summary", edited, expected_revision=0)
+    assert saved.versions[ResumeReviewVersionName.NO_SUMMARY].document_revision == 1
+    monkeypatch.setattr(
+        review_store,
+        "compile_tex",
+        lambda _tex_path: {"compile_status": "failed", "pdf_path": None},
+    )
+    failed = compile_current_document(review_id, "no_summary", expected_revision=1)
+    failed_version = failed.versions[ResumeReviewVersionName.NO_SUMMARY]
+    assert failed_version.compiled_revision == 1
+    assert failed_version.compiled_document_revision == 0
+    assert failed_version.dirty is True
+    assert artifact_path_for_review(review_id, "no_summary", "pdf") == last_good
+
+
+def test_artifact_lookup_does_not_fall_back_to_older_revision(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt_dir = runtime / "ad_hoc" / "missing-latest"
+    attempt_dir.mkdir(parents=True)
+    doc = _doc()
+    review_id = build_review_id(attempt_dir)
+    revision_one = attempt_dir / "versions" / "no_summary" / "revisions" / "0001"
+    revision_one.mkdir(parents=True)
+    (revision_one / "output.pdf").write_bytes(b"%PDF old")
+    write_review_package(
+        attempt_dir,
+        ResumeReviewPackage(
+            review_id=review_id,
+            log_url="/log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/pdf",
+                    tex_url="/tex",
+                    compiled_revision=2,
+                    compiled_document_revision=2,
+                )
+            },
+        ),
+    )
+
+    with pytest.raises(FileNotFoundError, match="revision 2"):
+        artifact_path_for_review(review_id, "no_summary", "pdf")
 
 
 def test_artifact_download_filename_uses_version_family_and_timestamp(tmp_path, monkeypatch):

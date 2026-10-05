@@ -1,0 +1,236 @@
+\documentclass[10pt, letterpaper]{article}
+
+\usepackage[
+    ignoreheadfoot,
+    top=0.7 cm,
+    bottom=1 cm,
+    left=1 cm,
+    right=1 cm,
+    footskip=1.0 cm,
+]{geometry}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[dvipsnames]{xcolor}
+\definecolor{primaryColor}{RGB}{0, 0, 0}
+\usepackage{enumitem}
+\usepackage{fontawesome5}
+\usepackage{amsmath}
+\usepackage[
+    pdftitle={Jordan Lee's CV},
+    pdfauthor={Jordan Lee},
+    pdfcreator={LaTeX},
+    colorlinks=true,
+    urlcolor=primaryColor
+]{hyperref}
+\usepackage[pscoord]{eso-pic}
+\usepackage{calc}
+\usepackage{bookmark}
+
+\usepackage{changepage}
+\usepackage{paracol}
+\usepackage{ifthen}
+\usepackage{needspace}
+\usepackage{iftex}
+
+\ifPDFTeX
+    \input{glyphtounicode}
+    \pdfgentounicode=1
+    \usepackage[T1]{fontenc}
+    \usepackage[utf8]{inputenc}
+    \usepackage{lmodern}
+\fi
+
+\usepackage{charter}
+
+\raggedright
+\AtBeginEnvironment{adjustwidth}{\partopsep0pt}
+\pagestyle{empty}
+\setcounter{secnumdepth}{0}
+\setlength{\parindent}{0pt}
+\setlength{\topskip}{0pt}
+\setlength{\columnsep}{0.15cm}
+\pagenumbering{gobble}
+
+\titleformat{\section}{\needspace{4\baselineskip}\bfseries\large}{}{0pt}{}[\vspace{1pt}\titlerule]
+
+\titlespacing{\section}{
+    -1pt
+}{
+    0.2 cm
+}{
+    0.2 cm
+}
+
+\renewcommand\labelitemi{$\vcenter{\hbox{\small$\bullet$}}$}
+
+\newenvironment{highlights}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=0 cm + 10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{highlightsforbulletentries}{
+    \begin{itemize}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=10pt
+    ]
+}{
+    \end{itemize}
+}
+
+\newenvironment{onecolentry}{
+    \begin{adjustwidth}{
+        0 cm + 0.00001 cm
+    }{
+        0 cm + 0.00001 cm
+    }
+}{
+    \end{adjustwidth}
+}
+
+\newenvironment{twocolentry}[2][]{
+    \onecolentry
+    \def\secondColumn{#2}
+    \setcolumnwidth{\fill, 6 cm}
+    \begin{paracol}{2}
+}{
+    \switchcolumn \raggedleft \secondColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\newenvironment{threecolentry}[3][]{
+    \onecolentry
+    \def\thirdColumn{#3}
+    \setcolumnwidth{, \fill, 4.5 cm}
+    \begin{paracol}{3}
+    {\raggedright #2} \switchcolumn
+}{
+    \switchcolumn \raggedleft \thirdColumn
+    \end{paracol}
+    \endonecolentry
+}
+
+\let\hrefWithoutArrow\href
+
+\begin{document}
+    \begin{center}
+        {\fontsize{24pt}{24pt}\selectfont\textbf{Jordan Lee}}
+
+        \vspace{0.2cm}
+
+        Tacoma, WA | \href{mailto:jordan.lee@example.net}{jordan.lee@example.net} | \href{https://jordanlee.example}{jordanlee.example} | \href{https://linkedin.com/in/jordanlee-demo}{linkedin.com/in/jordanlee-demo} | \href{https://github.com/jordanlee-demo}{github.com/jordanlee-demo}
+
+        \vspace{0.1cm}
+        Software Engineer Intern | Backend, Cloud, Frontend, and Infrastructure
+    \end{center}
+
+    \vspace{0.10 cm}
+    \section{Education}
+
+    \begin{twocolentry}{Expected Graduation: \textbf{Dec 2026}}
+        \textbf{Cascade Technical University}, BSc in Software Engineering
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item \textbf{Awards:} Computing Leadership Prize, 3x Engineering Faculty Scholarship, Dean's Honor Roll
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Experience}
+
+
+    \begin{twocolentry}{May 2025 - Feb 2026}
+        \textbf{Junior Software Developer}, Harbor Metrics - Tacoma, WA
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Built Kotlin microservices and REST APIs for real-time shipment routing across inventory, forecasting, and analytics platforms.
+            \item Established an AWS S3 optimization blueprint for \textbf{90+} developers, cutting storage cost by \textbf{68\% (\$17,500)} with Terraform-managed intelligent-tiering and lifecycle policies.
+            \item Accelerated cloud release cycles by automating CI/CD through GitHub Actions, Amazon ECR, and Kubernetes, saving 3 hours of weekly developer time.
+            \item Improved service reliability by configuring Grafana metrics, monitors, centralized logging, alerting, and on-call incident response workflows.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{May 2024 - May 2025}
+        \textbf{Software Developer Intern}, Harbor Metrics - Tacoma, WA
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Reduced backend operating cost by \textbf{82\% (\$35,000)} and removed noisy alerts by migrating Redis-backed workloads to AWS Aurora PostgreSQL.
+            \item Improved authentication latency by \textbf{28\%} by separating OAuth permissions into SPA and M2M flows across TypeScript/React frontend code and Kotlin services.
+            \item Reduced mapping API cost by implementing route caching in DynamoDB-backed synchronization services.
+            \item Maintained delivery velocity during team transitions by facilitating Agile ceremonies, sprint planning, and Scrum workflows.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+
+    \begin{twocolentry}{Sep 2023 - Present}
+        \textbf{Undergraduate Teaching Assistant}, Cascade Technical University - Tacoma, WA
+    \end{twocolentry}
+
+   \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Mentored \textbf{450+} students across upper-level Software Engineering courses in programming, architecture, and project delivery.
+            \item Improved grading consistency and reduced evaluation time by \textbf{80\%} by building Python automation for rubric-driven grading workflows.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Projects}
+
+    \begin{twocolentry}{\href{https://github.com/jordanlee-demo/TrailSignal}{github.com/jordanlee-demo/TrailSignal}}
+        \textbf{TrailSignal: Cascadia Hacks Winner}
+    \end{twocolentry}
+
+    \vspace{0.10 cm}
+    \begin{onecolentry}
+        \begin{itemize}[leftmargin=2em, itemsep=1pt, parsep=0pt, topsep=0pt, partopsep=0pt]
+            \item Led a team of 5 to win Cascadia Hacks and secure \textbf{\$3,500} in pilot funding for a sensor-based trail safety web app.
+            \item Engineered a full-stack cloud architecture on Cloudflare and Supabase designed for \textbf{8,000+} concurrent users.
+            \item Achieved \textbf{87\%} hazard-classification accuracy with a Python backend for real-time sensor processing.
+            \item Built a responsive frontend with Next.js and Framer Motion and integrated automated summaries to reduce incident review time by \textbf{78\%}.
+        \end{itemize}
+    \end{onecolentry}
+
+    \vspace{0.10 cm}
+    \section{Technical Skills}
+
+    \begin{onecolentry}
+        \textbf{Languages:} Python, C, C++, Java, Kotlin, Go, JavaScript, TypeScript, Bash
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Frameworks:} Node.js, REST APIs, Express.js, Flask, FastAPI, React, Next.js, Svelte, Tailwind, Supabase
+    \end{onecolentry}
+
+    \vspace{0.1 cm}
+
+    \begin{onecolentry}
+        \textbf{Developer Tools:} Git, Docker, Kubernetes, MongoDB, Redis, PostgreSQL, AWS, Aurora, DynamoDB, Gradle, Terraform, Grafana, Trivy, CI/CD
+    \end{onecolentry}
+
+\end{document}

@@ -52,6 +52,9 @@ TEST_TARGETS = {
         "hunter/tests",
     ],
     "c2": [
+        "tests/test_fletcher_resume_checker.py",
+        "tests/test_resume_compiler.py",
+        "tests/test_fletcher_review_workspace.py",
         "tests/test_component2_stage1.py",
         "tests/test_component2_pipeline.py",
         "tests/test_component2_ollama.py",

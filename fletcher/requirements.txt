@@ -1,2 +1,3 @@
 -r ../hunter/requirements.txt
 chromadb
+pypdf>=6.16.2,<7

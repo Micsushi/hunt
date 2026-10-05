@@ -1,0 +1,84 @@
+\documentclass[10pt, letterpaper]{article}
+
+\usepackage[
+    ignoreheadfoot,
+    top=0.55in,
+    bottom=0.55in,
+    left=0.55in,
+    right=0.55in
+]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage[
+    pdftitle={Jordan Lee ATS Resume},
+    pdfauthor={Jordan Lee},
+    colorlinks=true,
+    urlcolor=black
+]{hyperref}
+
+\input{glyphtounicode}
+\pdfgentounicode=1
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlist[itemize]{leftmargin=1.1em, itemsep=1pt, topsep=2pt, parsep=0pt}
+\titleformat{\section}{\bfseries\large}{}{0pt}{}[\titlerule]
+\titlespacing{\section}{0pt}{5pt}{3pt}
+
+\begin{document}
+
+\begin{center}
+    {\Large \textbf{Jordan Lee}}\\
+    Tacoma, WA \textbar{}
+    \href{mailto:jordan.lee@example.net}{jordan.lee@example.net} \textbar{}
+    \href{https://jordanlee.example}{jordanlee.example} \textbar{}
+    \href{https://linkedin.com/in/jordanlee-demo}{linkedin.com/in/jordanlee-demo} \textbar{}
+    \href{https://github.com/jordanlee-demo}{github.com/jordanlee-demo}\\
+    Software Engineer Intern \textbar{} Backend, Cloud, Frontend, and Infrastructure
+\end{center}
+
+\section{Education}
+\textbf{Cascade Technical University}, BSc in Software Engineering \hfill Expected Dec 2026\\
+\textbf{Awards:} Computing Leadership Prize, 3x Engineering Faculty Scholarship, Dean's Honor Roll
+
+\section{Experience}
+\textbf{Junior Software Developer}, Harbor Metrics, Tacoma, WA \hfill May 2025 -- Feb 2026
+\begin{itemize}
+    \item Built Kotlin microservices and REST APIs for real-time shipment routing across inventory, forecasting, and analytics platforms.
+    \item Established an AWS S3 optimization blueprint for 90+ developers, cutting storage cost by 68\% (\$17,500) with Terraform-managed intelligent-tiering and lifecycle policies.
+    \item Accelerated cloud release cycles by automating CI/CD through GitHub Actions, Amazon ECR, and Kubernetes, saving 3 hours of weekly developer time.
+    \item Improved service reliability by configuring Grafana metrics, monitors, centralized logging, alerting, and on-call incident response workflows.
+\end{itemize}
+
+\textbf{Software Developer Intern}, Harbor Metrics, Tacoma, WA \hfill May 2024 -- May 2025
+\begin{itemize}
+    \item Reduced backend operating cost by 82\% (\$35,000) and removed noisy alerts by migrating Redis-backed workloads to AWS Aurora PostgreSQL.
+    \item Improved authentication latency by 28\% by separating OAuth permissions into SPA and M2M flows across TypeScript/React frontend code and Kotlin services.
+    \item Reduced mapping API cost by implementing route caching in DynamoDB-backed synchronization services.
+    \item Maintained delivery velocity during team transitions by facilitating Agile ceremonies, sprint planning, and Scrum workflows.
+\end{itemize}
+
+\textbf{Undergraduate Teaching Assistant}, Cascade Technical University, Tacoma, WA \hfill Sep 2023 -- Present
+\begin{itemize}
+    \item Mentored 450+ students across upper-level Software Engineering courses in programming, architecture, and project delivery.
+    \item Improved grading consistency and reduced evaluation time by 80\% by building Python automation for rubric-driven grading workflows.
+\end{itemize}
+
+\section{Projects}
+\textbf{TrailSignal: Cascadia Hacks Winner} \hfill \href{https://github.com/jordanlee-demo/TrailSignal}{github.com/jordanlee-demo/TrailSignal}
+\begin{itemize}
+    \item Led a team of 5 to win Cascadia Hacks and secure \$3,500 in pilot funding for a sensor-based trail safety web app.
+    \item Engineered a full-stack cloud architecture on Cloudflare and Supabase designed for 8,000+ concurrent users.
+    \item Achieved 87\% hazard-classification accuracy with a Python backend for real-time sensor processing.
+    \item Built a responsive frontend with Next.js and Framer Motion and integrated automated summaries to reduce incident review time by 78\%.
+\end{itemize}
+
+\section{Technical Skills}
+\textbf{Languages:} Python, C, C++, Java, Kotlin, Go, JavaScript, TypeScript, Bash\\
+\textbf{Frameworks:} Node.js, REST APIs, Express.js, Flask, FastAPI, React, Next.js, Svelte, Tailwind, Supabase\\
+\textbf{Developer Tools:} Git, Docker, Kubernetes, MongoDB, Redis, PostgreSQL, AWS, Aurora, DynamoDB, Gradle, Terraform, Grafana, Trivy, CI/CD
+
+\end{document}

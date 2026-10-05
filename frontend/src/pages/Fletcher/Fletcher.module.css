@@ -4,6 +4,26 @@
   gap: 20px;
 }
 
+.checkResults {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.checkResults ul {
+  padding-left: 20px;
+}
+
+.checkResults li + li {
+  margin-top: 8px;
+}
+
+.checkResults summary {
+  cursor: pointer;
+}
+
 .pageHeader {
   display: flex;
   align-items: flex-start;

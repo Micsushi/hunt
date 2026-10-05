@@ -15,6 +15,11 @@ This includes C1's requirements and Chroma for C2's optional retrieval workflow.
 
 ## Runtime (what exists today)
 
+- **Resume checks**: the Fletcher page's **Check resume** action assesses PDF/TeX
+  uploads locally, with optional job keyword coverage. Scores are advisory and
+  separate from tailoring; checks never rewrite or reformat a resume. See
+  [resume checking](../docs/RESUME_CHECKING.md) for setup, APIs, and limitations.
+
 - Parse / render a neutral tracked **`main.tex`** template or an ignored personal source selected with `HUNT_OG_RESUME_PATH`. Optional family sources live as ignored `main.local.tex` files under `fletcher/base_resumes/<family>/`, or under `HUNT_BASE_RESUMES_ROOT`.
 - **Keywords** (`fletcher/keyword_extractor.py`): tiny draft from the job title when the backend is `heuristic`. With Ollama or another configured provider, Fletcher can fill metadata, judge JD usability, extract grounded keywords, rewrite bullets, validate rewrites, restore original inline `\textbf{...}` formatting for surviving rewritten phrases, normalize added Technical Skills phrases so their first letter is capitalized, and generate/validate summaries.
 - **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score. Keywords are never force-injected into unrelated bullets.

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "command": "check",
+  "run_id": "synthetic-preflight-warning",
+  "status": "pass_with_warnings",
+  "content_left_machine": false,
+  "checks": [
+    {
+      "id": "synthetic_source_warning",
+      "status": "warning",
+      "metadata": {
+        "optional_check_skipped": true
+      }
+    }
+  ]
+}

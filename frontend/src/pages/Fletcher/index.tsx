@@ -14,6 +14,7 @@ import {
 import type { FletcherBatchArtifact } from '@/api/control'
 import { useUiStore } from '@/store/ui'
 import styles from './Fletcher.module.css'
+import { ResumeCheck } from './ResumeCheck'
 import {
   loadPersistedFletcherResumeFile,
   savePersistedFletcherResumeFile,
@@ -510,6 +511,7 @@ export function FletcherPage() {
             >
               {optionBSubmitText}
             </button>
+            <ResumeCheck resume={resumeFile} jobDetails={jobDetails} />
             {matchingActiveJob ? (
               <div className={styles.activeRunNotice}>
                 This description already has a background run. Open it from the queue below when it

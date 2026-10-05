@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "facts": [
+    {
+      "id": "identity.name",
+      "kind": "identity",
+      "field": "name",
+      "value": "Riley Example",
+      "immutable": true
+    },
+    {
+      "id": "contact.email",
+      "kind": "contact",
+      "field": "email",
+      "value": "riley@example.test",
+      "immutable": true
+    },
+    {
+      "id": "contact.phone",
+      "kind": "contact",
+      "field": "phone",
+      "value": "555-010-0200",
+      "immutable": true
+    },
+    {
+      "id": "education.primary.institution",
+      "kind": "education",
+      "field": "institution",
+      "entry_id": "education.primary",
+      "value": "Example Polytechnic",
+      "immutable": true
+    },
+    {
+      "id": "education.primary.degree",
+      "kind": "education",
+      "field": "degree",
+      "entry_id": "education.primary",
+      "value": "Bachelor of Synthetic Engineering",
+      "immutable": true
+    },
+    {
+      "id": "education.primary.date",
+      "kind": "education",
+      "field": "date",
+      "entry_id": "education.primary",
+      "value": "May 2026",
+      "immutable": true
+    },
+    {
+      "id": "experience.primary.employer",
+      "kind": "experience",
+      "field": "employer",
+      "entry_id": "experience.primary",
+      "value": "Synthetic Systems Cooperative",
+      "immutable": true
+    },
+    {
+      "id": "experience.primary.title",
+      "kind": "experience",
+      "field": "title",
+      "entry_id": "experience.primary",
+      "value": "Systems Builder",
+      "immutable": true
+    },
+    {
+      "id": "experience.primary.date",
+      "kind": "experience",
+      "field": "date",
+      "entry_id": "experience.primary",
+      "value": "January 2024 - Current",
+      "immutable": true
+    },
+    {
+      "id": "experience.primary.location",
+      "kind": "experience",
+      "field": "location",
+      "entry_id": "experience.primary",
+      "value": "Denver, CO",
+      "immutable": true
+    },
+    {
+      "id": "skill.typescript",
+      "kind": "skill",
+      "field": "name",
+      "value": "TypeScript",
+      "material": true
+    },
+    { "id": "skill.react", "kind": "skill", "field": "name", "value": "React", "material": true },
+    { "id": "skill.python", "kind": "skill", "field": "name", "value": "Python", "material": true }
+  ]
+}

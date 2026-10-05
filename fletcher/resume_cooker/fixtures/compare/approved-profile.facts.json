@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "facts": [
+    {
+      "id": "profile.skill.python",
+      "kind": "skill",
+      "field": "name",
+      "value": "Python",
+      "material": true
+    },
+    {
+      "id": "profile.skill.javascript",
+      "kind": "skill",
+      "field": "name",
+      "value": "JavaScript",
+      "material": true
+    }
+  ]
+}

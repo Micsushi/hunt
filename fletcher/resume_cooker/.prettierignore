@@ -1,0 +1,15 @@
+testers/
+node_modules/
+.runtime/
+resume/output/
+coverage/
+build/
+dist/
+out/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.tex

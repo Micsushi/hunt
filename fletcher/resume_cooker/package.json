@@ -1,0 +1,56 @@
+{
+  "name": "resume-cooker",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "resume-cooker": "cli/resume-cooker.mjs"
+  },
+  "files": [
+    "cli/",
+    "!cli/*.test.mjs",
+    "checker/scripts/",
+    "!checker/scripts/*.test.mjs",
+    "generator/public/",
+    "generator/scripts/",
+    "!generator/scripts/*.test.mjs",
+    "fixtures/",
+    "!fixtures/resume_extracted_text.txt",
+    "docs/cli-contract.md",
+    "docs/container-boundary.md",
+    "docs/platform-acceptance.md",
+    "README.md",
+    "WINDOWS_COMPATIBILITY.md",
+    "MACOS_COMPATIBILITY.md",
+    "LINUX_COMPATIBILITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build:pdf": "node generator/scripts/build-pdf.mjs",
+    "build:pdf:ats": "node generator/scripts/build-pdf.mjs --source resume/source/ats.tex",
+    "preview": "node generator/scripts/preview-server.mjs",
+    "check:tools": "node generator/scripts/check-tools.mjs",
+    "check:local": "node checker/scripts/check.mjs --suite local --resume resume/source/current.tex --jd fixtures/software_engineering_intern_jd.txt --out .runtime/reports/local-check.json",
+    "check:local:ats": "node checker/scripts/check.mjs --suite local --resume resume/source/ats.tex --build --jd fixtures/software_engineering_intern_jd.txt --text-out resume/output/ats.txt --out .runtime/reports/local-ats-check.json",
+    "check:local:ats:strict": "node checker/scripts/check.mjs --suite local --profile strict --resume resume/source/ats.tex --build --jd fixtures/software_engineering_intern_jd.txt --text-out resume/output/ats.txt --out .runtime/reports/local-ats-strict-check.json",
+    "check:api": "node checker/scripts/check.mjs --suite api --resume resume/source/current.tex --jd fixtures/software_engineering_intern_jd.txt --out .runtime/reports/api-check.json",
+    "check:full": "node checker/scripts/check.mjs --suite full --resume resume/source/current.tex --jd fixtures/software_engineering_intern_jd.txt --out .runtime/reports/full-check.json",
+    "check:testers": "node checker/scripts/tester-runner.mjs --pdf resume/output/ats.pdf --text resume/output/ats.txt --jd fixtures/software_engineering_intern_jd.txt --out .runtime/reports/testers-check.json",
+    "check:testers:strict": "node checker/scripts/tester-runner.mjs --profile strict --pdf resume/output/ats.pdf --text resume/output/ats.txt --jd fixtures/software_engineering_intern_jd.txt --out .runtime/reports/testers-strict-check.json",
+    "compare": "node checker/scripts/compare.mjs --before resume/source/current.tex --after resume/source/current.tex --out .runtime/reports/compare.json",
+    "compare:fixtures": "node checker/scripts/compare-fixtures.mjs",
+    "format": "prettier --write \"**/*.{md,json,yml,yaml,html,js,mjs}\"",
+    "format:check": "prettier --check \"**/*.{md,json,yml,yaml,html,js,mjs}\"",
+    "lint": "eslint .",
+    "test": "node --test \"cli/*.test.mjs\" \"generator/scripts/*.test.mjs\" \"checker/scripts/*.test.mjs\" \"scripts/*.test.mjs\"",
+    "acceptance:platform": "node scripts/platform-acceptance.mjs",
+    "package:audit": "node scripts/package-audit.mjs",
+    "ci": "npm run format:check && npm run lint && npm test && npm run check:tools && npm run package:audit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^10.0.0",
+    "prettier": "^3.0.0"
+  }
+}

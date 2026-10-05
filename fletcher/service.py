@@ -8,12 +8,15 @@ import threading
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from fletcher.check_api import router as resume_check_router
 from hunter.service_auth import require_service_token
 from hunter.service_request_id import ServiceRequestIDMiddleware
 from shared.mutation_audit import audit_mutation_request
 
 app = FastAPI(title="C2 Fletcher Service")
 app.add_middleware(ServiceRequestIDMiddleware, service_name="c2-fletcher")
+
+app.include_router(resume_check_router, dependencies=[Depends(require_service_token)])
 
 
 @app.middleware("http")

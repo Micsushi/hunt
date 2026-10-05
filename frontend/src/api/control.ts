@@ -428,20 +428,22 @@ export function saveFletcherReviewVersion(
   reviewId: string,
   version: ReviewVersionName,
   doc: ResumeDocument,
+  expectedRevision: number,
 ): Promise<ResumeReviewPackage> {
   return patch<ResumeReviewPackage>(
     `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}`,
-    doc,
+    { current: doc, expected_revision: expectedRevision },
   )
 }
 
 export function compileFletcherReviewVersion(
   reviewId: string,
   version: ReviewVersionName,
+  expectedRevision: number,
 ): Promise<ResumeReviewPackage> {
   return post<ResumeReviewPackage>(
     `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}/compile`,
-    {},
+    { expected_revision: expectedRevision },
   )
 }
 
@@ -449,10 +451,11 @@ export function revertFletcherReviewVersion(
   reviewId: string,
   version: ReviewVersionName,
   target: 'original' | 'generated',
+  expectedRevision: number,
 ): Promise<ResumeReviewPackage> {
   return post<ResumeReviewPackage>(
     `/api/fletcher/reviews/${encodeURIComponent(reviewId)}/versions/${version}/revert`,
-    { target },
+    { target, expected_revision: expectedRevision },
   )
 }
 

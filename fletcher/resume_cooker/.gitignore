@@ -1,0 +1,42 @@
+# Generated resume outputs
+resume/output/*
+!resume/output/.gitkeep
+.runtime/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+
+# Local environments and dependencies
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.py[cod]
+
+# Build/cache output
+.cache/
+.next/
+build/
+dist/
+out/
+
+# Private planning notes
+docs/superpowers/
+
+# Local/editor noise
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example

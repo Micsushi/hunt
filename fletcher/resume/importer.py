@@ -119,12 +119,27 @@ def _parse_entries(lines: list[str], *, project: bool = False):
         bullets = []
 
     date_pat = re.compile(r"\b(20\d{2}|19\d{2}|present|current)\b", re.I)
-    for line in lines:
+    for index, line in enumerate(lines):
         if _is_bullet(line):
             bullets.append(_strip_bullet(line))
             continue
-        if date_pat.search(line) and current_header and not current_date:
+        is_link = bool(re.match(r"(?:https?://|www\.|github\.com/)", line, re.I))
+        if (
+            current_header
+            and not bullets
+            and not current_date
+            and (date_pat.search(line) or is_link)
+        ):
             current_date = line
+            continue
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        next_is_metadata = not _is_bullet(next_line) and bool(
+            date_pat.search(next_line)
+            or re.match(r"(?:https?://|www\.|github\.com/)", next_line, re.I)
+        )
+        if bullets and not next_is_metadata:
+            # PDF extraction splits a wrapped bullet into separate physical lines.
+            bullets[-1] += " " + line
             continue
         if bullets or current_header:
             flush()
@@ -143,13 +158,23 @@ def _parse_skills(lines: list[str]) -> SkillsSection:
         "tools": "developer_tools",
         "skills": "developer_tools",
     }
+    joined: list[str] = []
     for line in lines:
+        if ":" in line or not joined:
+            joined.append(line)
+        else:
+            joined[-1] += " " + line
+    categories = {}
+    for line in joined:
         label, sep, values = line.partition(":")
         key = label_map.get(label.strip().lower()) if sep else "developer_tools"
         raw_values = values if sep else line
-        items = [item.strip() for item in re.split(r",|·|\|", raw_values) if item.strip()]
+        items = [
+            item.strip() for item in re.split(r",(?![^()]*\))|·|\|", raw_values) if item.strip()
+        ]
         buckets[key or "developer_tools"].extend(items)
-    return SkillsSection(**buckets)
+        categories[label.strip() if sep else "Skills"] = items
+    return SkillsSection(**buckets, categories=categories)
 
 
 def parse_resume_text(

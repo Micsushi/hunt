@@ -1,0 +1,5 @@
+{
+  "protected_ids": ["skill.typescript"],
+  "omitted_ids": ["skill.typescript"],
+  "strength_severity": "warning"
+}

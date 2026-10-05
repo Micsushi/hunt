@@ -13,6 +13,12 @@ import {
   skillRowsForDoc,
   type ReviewBlock,
 } from './documentBlocks'
+import {
+  draftBaselineForEdit,
+  expectedRevisionForDraft,
+  selectDraft,
+  type DraftState,
+} from './draftState'
 import { humanizeLatex, latexInlineParts } from './latexInline'
 import type { KeywordScore, ResumeDocument, ResumeReviewPackage, ReviewVersionName } from './types'
 import styles from './ResumeReviewWorkspace.module.css'
@@ -20,13 +26,6 @@ import styles from './ResumeReviewWorkspace.module.css'
 interface WorkspaceSelection {
   block: ReviewBlock
   segment?: DiffSegment
-}
-
-interface DraftState {
-  doc: ResumeDocument
-  savedJson: string
-  undoStack: ResumeDocument[]
-  redoStack: ResumeDocument[]
 }
 
 function cloneDoc(doc: ResumeDocument): ResumeDocument {
@@ -52,8 +51,15 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   })
 
   const saveMutation = useMutation({
-    mutationFn: ({ version, doc }: { version: ReviewVersionName; doc: ResumeDocument }) =>
-      saveFletcherReviewVersion(reviewId, version, doc),
+    mutationFn: ({
+      version,
+      doc,
+      expectedRevision,
+    }: {
+      version: ReviewVersionName
+      doc: ResumeDocument
+      expectedRevision: number
+    }) => saveFletcherReviewVersion(reviewId, version, doc, expectedRevision),
     onSuccess: (review) => {
       qc.setQueryData(['fletcher-review', reviewId], review)
       showToast('Resume edits saved')
@@ -62,8 +68,14 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   })
 
   const compileMutation = useMutation({
-    mutationFn: (version: ReviewVersionName) => compileFletcherReviewVersion(reviewId, version),
-    onSuccess: (review, compiledVersion) => {
+    mutationFn: ({
+      version,
+      expectedRevision,
+    }: {
+      version: ReviewVersionName
+      expectedRevision: number
+    }) => compileFletcherReviewVersion(reviewId, version, expectedRevision),
+    onSuccess: (review, { version: compiledVersion }) => {
       qc.setQueryData(['fletcher-review', reviewId], review)
       const status = review.versions[compiledVersion]?.compile_status
       if (status && status !== 'ok') {
@@ -83,11 +95,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   const draftKey = `${reviewId}:${activeVersionName}`
   const storedDraft = drafts[draftKey]
   const versionJson = version ? docJson(version.current) : ''
-  const storedDraftDirty = storedDraft && docJson(storedDraft.doc) !== storedDraft.savedJson
-  const draft =
-    storedDraft && (storedDraftDirty || storedDraft.savedJson === versionJson)
-      ? storedDraft
-      : undefined
+  const draft = selectDraft(storedDraft, versionJson, version?.document_revision ?? 0)
   const draftDoc = draft?.doc || version?.current
   const hasUnsavedDraft = !!draft && docJson(draft.doc) !== draft.savedJson
   const blocks = useMemo(
@@ -114,12 +122,14 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   function pushDraft(doc: ResumeDocument) {
     setDrafts((current) => {
       const previous = current[draftKey]
-      const base = previous || {
-        doc: cloneDoc(version?.current || doc),
-        savedJson: docJson(version?.current || doc),
-        undoStack: [],
-        redoStack: [],
-      }
+      const serverDoc = version?.current || doc
+      const serverJson = docJson(serverDoc)
+      const base = draftBaselineForEdit(
+        draft && previous === draft ? draft : undefined,
+        serverDoc,
+        serverJson,
+        version?.document_revision ?? 0,
+      )
       if (docJson(base.doc) === docJson(doc)) return current
       return {
         ...current,
@@ -133,12 +143,14 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
     })
   }
 
-  async function saveDraft(): Promise<boolean> {
+  async function saveDraft(): Promise<number | false> {
     if (!draftDoc) return false
     try {
+      const expectedRevision = expectedRevisionForDraft(draft, version?.document_revision ?? 0)
       const review = await saveMutation.mutateAsync({
         version: activeVersionName,
         doc: draftDoc,
+        expectedRevision,
       })
       const savedDoc = review.versions[activeVersionName]?.current || draftDoc
       setDrafts((current) => {
@@ -148,23 +160,27 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
           [draftKey]: {
             doc: cloneDoc(savedDoc),
             savedJson: docJson(savedDoc),
+            baseRevision:
+              review.versions[activeVersionName]?.document_revision ?? expectedRevision + 1,
             undoStack: existing?.undoStack || [],
             redoStack: existing?.redoStack || [],
           },
         }
       })
-      return true
+      return review.versions[activeVersionName]?.document_revision ?? expectedRevision + 1
     } catch {
       return false
     }
   }
 
   async function compileDraft() {
+    let expectedRevision = expectedRevisionForDraft(draft, version?.document_revision ?? 0)
     if (hasUnsavedDraft) {
       const saved = await saveDraft()
-      if (!saved) return
+      if (saved === false) return
+      expectedRevision = saved
     }
-    compileMutation.mutate(activeVersionName)
+    compileMutation.mutate({ version: activeVersionName, expectedRevision })
   }
 
   function updateBlock(block: ReviewBlock, value: string) {
