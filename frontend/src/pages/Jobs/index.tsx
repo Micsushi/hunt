@@ -329,16 +329,6 @@ export function JobsPage() {
     <div className={styles.page}>
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Jobs</h1>
-        <p className="muted">
-          {isLoading ? 'Loading…' : `${jobs.length} of ${total} rows shown.`}
-          {isFetching && !isLoading && (
-            <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>
-          )}
-          <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: '0.83rem' }}>
-            Keyboard: <kbd className={styles.kbd}>j</kbd>/<kbd className={styles.kbd}>k</kbd> move ·{' '}
-            <kbd className={styles.kbd}>Enter</kbd> open
-          </span>
-        </p>
       </section>
 
       <Filters
@@ -351,6 +341,10 @@ export function JobsPage() {
 
       {/* Export row */}
       <div className={styles.exportRow}>
+        <span role="status" className="muted">
+          {isLoading ? 'Loading…' : `${jobs.length} of ${total} jobs`}
+          {isFetching && !isLoading ? ' · Refreshing…' : ''}
+        </span>
         <span className={styles.exportRowLabel}>Export current view</span>
         <a
           className={styles.exportBtn}
@@ -379,7 +373,7 @@ export function JobsPage() {
       </div>
 
       {/* Table */}
-      <div className={styles.tableWrap}>
+      <div className={styles.tableWrap} role="region" aria-label="Jobs table" tabIndex={0}>
         <table className={styles.table}>
           <thead>
             <tr>

@@ -12,7 +12,6 @@ export function CompanyPreview() {
   return (
     <details className={styles.coverage}>
       <summary>Preview an employer</summary>
-      <p>Check a careers page and sample matching jobs before adding it to scheduled searches.</p>
       <form
         onSubmit={(event) => {
           event.preventDefault()

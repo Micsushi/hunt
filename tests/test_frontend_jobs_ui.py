@@ -208,7 +208,7 @@ def test_fletcher_option_a_queues_by_job_id():
     control = read("frontend/src/api/control.ts")
 
     assert "enqueueFletcherJob({ jobId: id })" in fletcher
-    assert "Queue resume run" in fletcher
+    assert "Tailor for saved job" in fletcher
     assert "Fletcher job queued" in fletcher
     assert "jobId?: number" in control
     assert "job_id: payload.jobId" in control
@@ -332,7 +332,7 @@ def test_job_detail_resume_actions_use_queue_and_resume_workspace_label():
 
     assert "enqueueFletcherJob({ jobId })" in detail
     assert "triggerC2Generate" not in detail
-    assert "Queue resume run" in detail
+    assert "Tailor for saved job" in detail
     assert "Resume run queued" in detail
     assert "Resume workspace" in detail
     assert "Review diff" not in detail
@@ -388,7 +388,7 @@ def test_fletcher_active_queue_shows_progress_bar_and_percent():
     types = read("frontend/src/pages/Fletcher/review/types.ts")
 
     assert "fletcherProgressPercent" in fletcher
-    assert "Untitled pasted JD" in fletcher
+    assert "Untitled job" in fletcher
     assert "Ad-hoc resume" not in fletcher
     assert 'role="progressbar"' in fletcher
     assert "{progressPercent}%" in fletcher
@@ -446,7 +446,7 @@ def test_fletcher_active_queue_shows_progress_bar_and_percent():
     assert "progressFill" in styles
     assert "queueListScrollable" in styles
     assert "overflow-y: auto" in styles
-    assert "transition: width 220ms linear" in styles
+    assert "transition: width" not in styles
     assert "prefers-reduced-motion" in styles
     assert "percent?: number" in types
 

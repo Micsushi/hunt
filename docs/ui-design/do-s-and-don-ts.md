@@ -12,6 +12,9 @@
 - Empty states: short message + call-to-action.
 
 **Don't:**
+- No subtitles or eyebrow labels below or above headings. Let headings and action labels explain the task.
+- No raw API responses in the normal workflow. Keep diagnostic output behind a clearly named disclosure.
+- Do not add helper text that repeats a label. Keep only decision-relevant limits, consequences, status and recovery guidance next to the affected control.
 - No light mode toggle - dark green only.
 - No cold Tailwind grays (#6b7280 style) - stay warm green-tinted.
 - No multiple accent colours - `#3ecf6e` is the only intent colour.

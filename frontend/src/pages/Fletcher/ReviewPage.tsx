@@ -12,7 +12,6 @@ export function FletcherReviewPage() {
       <div className={styles.pageHeader}>
         <div>
           <h1 className={styles.heroTitle}>Resume workspace</h1>
-          <div className={styles.heroMeta}>Diff, edit, compile, and export tailored resumes</div>
         </div>
         <a className={styles.btn} href="/fletcher">
           Back to Fletcher

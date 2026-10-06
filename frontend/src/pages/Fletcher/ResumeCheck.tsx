@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import styles from './Fletcher.module.css'
 
 interface CheckReport {
@@ -10,7 +11,15 @@ interface CheckReport {
   checks: { id: string; status: string; evidence: string; suggested_fix: string }[]
 }
 
-export function ResumeCheck({ resume, jobDetails }: { resume: File | null; jobDetails: string }) {
+export function ResumeCheck({
+  resume,
+  jobDetails,
+  children,
+}: {
+  resume: File | null
+  jobDetails: string
+  children?: ReactNode
+}) {
   const check = useMutation({
     mutationFn: async (input: { resume: File; jobDetails: string }) => {
       const body = new FormData()
@@ -32,25 +41,25 @@ export function ResumeCheck({ resume, jobDetails }: { resume: File | null; jobDe
   const report = current ? check.data : undefined
   return (
     <section aria-label="Resume checks">
-      <button
-        className={styles.btn}
-        disabled={!resume || check.isPending}
-        onClick={() => resume && check.mutate({ resume, jobDetails })}
-      >
-        {check.isPending ? 'Checking resume…' : 'Check resume'}
-      </button>
-      <p className={styles.workflowDesc}>
-        Local checks only. Job details are optional. Checking does not edit your resume.
-      </p>
+      <div className={styles.checkActions}>
+        <button
+          className={styles.btn}
+          disabled={!resume || check.isPending}
+          onClick={() => resume && check.mutate({ resume, jobDetails })}
+        >
+          {check.isPending ? 'Checking resume…' : 'Check resume'}
+        </button>
+        {children}
+      </div>
+      <p className={styles.workflowDesc}>Checked locally; your resume is not edited.</p>
       <div className={styles.checkResults} aria-live="polite" aria-busy={check.isPending}>
         {current && check.error && <p role="alert">{check.error.message}</p>}
         {report && (
           <>
-            <h3>Local checks: {report.score}% passed</h3>
-            <p>
-              {report.passed_checks} of {report.total_checks} checks passed. {report.limitations}
-            </p>
-            {!report.job_specific && <p>Add job details to check keyword coverage.</p>}
+            <h3>
+              {report.passed_checks} of {report.total_checks} checks passed
+            </h3>
+            <p>Parsing checks, not an employer ATS score.</p>
             <ul>
               {report.checks
                 .filter((item) => item.status !== 'pass')

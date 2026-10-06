@@ -307,7 +307,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
           onEdit={startEdit}
         />
         <aside className={styles.inspector}>
-          <h2>Inspector</h2>
+          <h2>Edit resume</h2>
           {selected ? (
             <div className={styles.smallStack}>
               <div className={styles.meta}>{selected.block.label}</div>
@@ -324,12 +324,13 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
               </button>
             </div>
           ) : (
-            <div className={styles.meta}>Select a block, changed segment, or edit a block.</div>
+            <div className={styles.meta}>Select resume text to edit it.</div>
           )}
           {editingBlockId ? (
             <div className={styles.smallStack}>
               <textarea
                 className={styles.textarea}
+                aria-label="Resume text"
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
               />
@@ -341,7 +342,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
                   setEditingBlockId(null)
                 }}
               >
-                Save block
+                Apply edit
               </button>
               <button className={styles.button} onClick={() => setEditingBlockId(null)}>
                 Cancel
@@ -708,6 +709,7 @@ function ReviewToolbar({
               key={item}
               className={item === versionName ? styles.active : ''}
               onClick={() => onVersion(item)}
+              aria-pressed={item === versionName}
             >
               {item === 'starting'
                 ? 'Starting'

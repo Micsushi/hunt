@@ -30,9 +30,14 @@
 
 .table {
   width: 100%;
+  min-width: 960px;
   border-collapse: collapse;
   font-size: 0.9rem;
   table-layout: fixed;
+}
+.tableWrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .table th {

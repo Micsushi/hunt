@@ -3,11 +3,11 @@
 On the Fletcher page, select a PDF or TeX file and choose **Check resume**.
 Job details are optional; supplying them adds keyword coverage findings. Checks
 are read-only and local. The result is hidden when either input changes.
-**Tailor from description** remains a separate action using the configured C2
+**Tailor resume** remains a separate action using the configured C2
 provider. No score-driven rewrite, formatting optimization, quality gate, C3
 selection change, or C4 dependency is introduced.
 
-The percentage is the fraction of local non-JD checks that passed, with equal
+The API percentage is the fraction of local non-JD checks that passed, with equal
 weight. It is not an employer ATS score, a writing-quality score, or a hiring
 prediction. Findings and their evidence matter more than the percentage.
 Keyword coverage is advisory and uses a limited technical vocabulary; it does

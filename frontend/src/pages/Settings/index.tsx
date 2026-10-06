@@ -76,7 +76,7 @@ function DiscoveryFilters({
       <label className={styles.field}>
         Watchlist - priority companies (one per line)
         <span className={styles.fieldHint}>
-          Jobs from these companies get priority=1 and trigger a Discord alert on scrape.
+          Matching companies are prioritized and trigger a Discord alert.
         </span>
         <textarea
           className={styles.textarea}
@@ -87,9 +87,6 @@ function DiscoveryFilters({
       </label>
       <label className={styles.field}>
         Title blacklist - phrases to exclude (one per line)
-        <span className={styles.fieldHint}>
-          Jobs whose title contains any of these phrases are filtered out during scrape.
-        </span>
         <textarea
           className={styles.textarea}
           value={blacklist}
@@ -368,9 +365,6 @@ function RunSettings({
       <div className={styles.gridTwo}>
         <label className={styles.field}>
           Run interval (seconds)
-          <span className={styles.fieldHint}>
-            How often the scrape+enrich cycle repeats (default 600).
-          </span>
           <input
             type="number"
             className={styles.input}
@@ -380,10 +374,7 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Results wanted per search
-          <span className={styles.fieldHint}>
-            Max listings to fetch per search term (default 500).
-          </span>
+          Maximum results per search
           <input
             type="number"
             className={styles.input}
@@ -393,10 +384,7 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Hours old (lookback window)
-          <span className={styles.fieldHint}>
-            Only fetch jobs posted within this many hours (default 24).
-          </span>
+          Maximum posting age (hours)
           <input
             type="number"
             className={styles.input}
@@ -406,8 +394,7 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Max parallel workers
-          <span className={styles.fieldHint}>Concurrent scrape/enrich workers (default 10).</span>
+          Parallel workers
           <input
             type="number"
             className={styles.input}
@@ -417,8 +404,7 @@ function RunSettings({
           />
         </label>
         <label className={styles.field}>
-          Enrichment batch limit
-          <span className={styles.fieldHint}>Jobs enriched per cycle (default 25).</span>
+          Jobs to enrich per cycle
           <input
             type="number"
             className={styles.input}
@@ -429,7 +415,6 @@ function RunSettings({
         </label>
         <label className={styles.field}>
           Enrichment timeout (ms)
-          <span className={styles.fieldHint}>Playwright page timeout per job (default 45000).</span>
           <input
             type="number"
             className={styles.input}
@@ -440,7 +425,6 @@ function RunSettings({
         </label>
         <label className={styles.field}>
           Max enrichment attempts
-          <span className={styles.fieldHint}>Retries before marking a job failed (default 4).</span>
           <input
             type="number"
             className={styles.input}
@@ -502,9 +486,6 @@ function AlertSettings({
       <div className={styles.gridTwo}>
         <label className={styles.field}>
           High failure rate threshold (%)
-          <span className={styles.fieldHint}>
-            Discord alert fires when enrichment failure rate exceeds this (default 50%).
-          </span>
           <input
             type="number"
             className={styles.input}
@@ -516,9 +497,6 @@ function AlertSettings({
         </label>
         <label className={styles.field}>
           Alert cooldown (minutes)
-          <span className={styles.fieldHint}>
-            Minimum time between repeat Discord failure alerts (default 60).
-          </span>
           <input
             type="number"
             className={styles.input}
@@ -739,8 +717,7 @@ function C2ProviderRuntimeSettings() {
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 provider and runtime</h2>
-        <span className={styles.panelMeta}>Secrets are stored redacted</span>
+        <h2 className={styles.panelTitle}>Model and runtime</h2>
       </div>
       <div className={styles.gridTwo}>
         <label className={styles.field}>
@@ -1355,9 +1332,7 @@ function JobMetadataSettings() {
       <div className={styles.gridTwo}>
         <label className={styles.field}>
           Default target title
-          <span className={styles.fieldHint}>
-            Used when Option B has no usable title. Avoid role-specific hardcoded fallbacks.
-          </span>
+          <span className={styles.fieldHint}>Used when a pasted job description has no title.</span>
           <input
             className={styles.input}
             value={defaultTargetTitle}
@@ -1706,10 +1681,10 @@ function JobMetadataSettings() {
 
 type SettingsTab = 'c1' | 'c2' | 'integrations'
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
-  { id: 'c1', label: 'C1 discovery', description: 'Scrape, filters, enrich cadence' },
-  { id: 'c2', label: 'C2 Fletcher', description: 'Resume LLM, queue, prompt policy' },
-  { id: 'integrations', label: 'Integrations', description: 'Discord and shared services' },
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: 'c1', label: 'Hunter' },
+  { id: 'c2', label: 'Fletcher' },
+  { id: 'integrations', label: 'Integrations' },
 ]
 
 export function SettingsPage() {
@@ -1799,8 +1774,6 @@ export function SettingsPage() {
         <div className={styles.notice}>
           Saved changes take effect after restarting C1 and its scheduler. The current scan keeps
           its existing settings.
-          <br />
-          Config file: <span className={styles.configPath}>{cfg.config_file}</span>
         </div>
         <DiscoveryFilters
           cfg={cfg}
@@ -1828,7 +1801,7 @@ export function SettingsPage() {
         <h2 className={styles.panelTitle}>Integrations</h2>
       </div>
       <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-        Verify Discord webhook is configured and reachable. Sends a test message via C1.
+        Sends a test message to the configured Discord channel.
       </p>
       <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
         {testingDiscord ? 'Sending...' : 'Test Discord webhook'}
@@ -1841,36 +1814,34 @@ export function SettingsPage() {
     <div className={styles.page}>
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Settings</h1>
-        <p className={styles.heroMeta}>Component controls for Hunt runtime behavior.</p>
       </section>
 
-      <div className={styles.tabBar} role="tablist" aria-label="Settings components">
+      <div className={styles.tabBar} role="group" aria-label="Settings components">
         {SETTINGS_TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
+            aria-pressed={activeTab === tab.id}
             className={`${styles.tabButton} ${activeTab === tab.id ? styles.tabButtonActive : ''}`}
             onClick={() => setActiveTab(tab.id)}
           >
             <span>{tab.label}</span>
-            <small>{tab.description}</small>
           </button>
         ))}
       </div>
 
-      {activeTab === 'c1' && c1Content}
+      <section hidden={activeTab !== 'c1'}>{c1Content}</section>
 
-      {activeTab === 'c2' && (
-        <>
-          <C2ProviderRuntimeSettings />
-          <AppNotificationSettings />
+      <section hidden={activeTab !== 'c2'}>
+        <C2ProviderRuntimeSettings />
+        <AppNotificationSettings />
+        <details className={styles.panel}>
+          <summary className={styles.sectionSummary}>Advanced tailoring rules</summary>
           <JobMetadataSettings />
-        </>
-      )}
+        </details>
+      </section>
 
-      {activeTab === 'integrations' && integrationsContent}
+      <section hidden={activeTab !== 'integrations'}>{integrationsContent}</section>
     </div>
   )
 }

@@ -701,7 +701,7 @@ export function JobDetailPage() {
             </div>
             <div className={styles.panelActions}>
               <button className={styles.actionBtn} onClick={handleGenerate} disabled={generating}>
-                {generating ? 'Queueing...' : 'Queue resume run'}
+                {generating ? 'Queueing...' : 'Tailor for saved job'}
               </button>
               <button
                 className={styles.actionBtn}

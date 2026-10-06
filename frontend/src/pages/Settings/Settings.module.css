@@ -3,11 +3,24 @@
   flex-direction: column;
   gap: 16px;
 }
+.page > section:not([hidden]) {
+  display: grid;
+  gap: 16px;
+}
+.sectionSummary {
+  cursor: pointer;
+  font-weight: 600;
+}
+details.panel > .panel {
+  border: 0;
+  background: none;
+  padding: 20px 0 0;
+}
 .hero {
   margin-bottom: 4px;
 }
 .heroTitle {
-  font-size: 2rem;
+  font-size: 1.5rem;
   margin-bottom: 6px;
 }
 .heroMeta {
@@ -21,8 +34,7 @@
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: 18px;
-  box-shadow: var(--shadow);
+  padding: 20px;
 }
 
 .panelHeader {
@@ -47,7 +59,7 @@
 
 .notice {
   background: var(--panel-strong);
-  border-left: 4px solid var(--accent);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   font-size: 0.86rem;
@@ -57,7 +69,7 @@
 
 .tabBar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -71,7 +83,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: 68px;
+  min-height: 40px;
   padding: 11px 12px;
   text-align: left;
   transition:
@@ -82,18 +94,11 @@
 
 .tabButton:hover {
   background: var(--panel-strong);
-  transform: translateY(-1px);
 }
 
 .tabButton span {
   font-size: 0.9rem;
   font-weight: 750;
-}
-
-.tabButton small {
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.35;
 }
 
 .tabButtonActive {
@@ -103,7 +108,7 @@
 
 .gridTwo {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   gap: 16px;
 }
 
@@ -194,9 +199,15 @@
     background var(--ease),
     transform var(--ease),
     opacity var(--ease);
+
+  min-height: 40px;
+  height: auto;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 .btn:hover:not(:disabled) {
-  transform: translateY(-1px);
   background: var(--accent-soft);
 }
 .btn:disabled {
@@ -205,11 +216,11 @@
 }
 .btnPrimary {
   background: var(--accent);
-  color: white;
+  color: var(--ink-inverse);
   border-color: var(--accent);
 }
 .btnPrimary:hover:not(:disabled) {
-  background: var(--accent-ink);
+  background: var(--accent-dim);
 }
 
 .savedMsg {

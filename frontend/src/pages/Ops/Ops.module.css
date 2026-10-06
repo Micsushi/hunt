@@ -15,8 +15,7 @@
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: 18px;
-  box-shadow: var(--shadow);
+  padding: 20px;
 }
 
 .panelStrong {
@@ -32,11 +31,9 @@
 }
 
 .panelTitle {
-  font-size: 0.82rem;
+  font-size: 1rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--ink);
   margin-bottom: 12px;
 }
 .panelHeader .panelTitle {
@@ -73,6 +70,13 @@
     background var(--ease),
     transform var(--ease),
     opacity var(--ease);
+
+  min-height: 40px;
+  height: auto;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 .btn:hover:not(:disabled) {
   background: var(--accent-soft);
@@ -91,6 +95,37 @@
 .coverage {
   margin-top: 20px;
   min-width: 0;
+}
+.panel > .coverage:only-child {
+  margin-top: 0;
+}
+.sectionSummary {
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+details.panel[open] > .sectionSummary {
+  margin-bottom: 20px;
+}
+details.panel > .panel,
+details.panel > .gridTwo > .panel {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 20px;
+  margin-top: 20px;
+}
+.serviceStatus {
+  display: grid;
+  gap: 12px;
+}
+.serviceStatus > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.serviceStatus dd {
+  color: var(--muted);
 }
 .coverage summary {
   cursor: pointer;

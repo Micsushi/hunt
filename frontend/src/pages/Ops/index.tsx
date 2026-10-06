@@ -65,15 +65,15 @@ function coverageIssue(error: string | null): string {
 
 const REQUEUE_BUTTONS = [
   {
-    label: 'LinkedIn: auth_expired + rate_limited',
+    label: 'LinkedIn: both',
     source: 'linkedin',
     codes: ['auth_expired', 'rate_limited'],
     primary: true,
   },
-  { label: 'LinkedIn: auth_expired only', source: 'linkedin', codes: ['auth_expired'] },
-  { label: 'LinkedIn: rate_limited only', source: 'linkedin', codes: ['rate_limited'] },
-  { label: 'Indeed: rate_limited', source: 'indeed', codes: ['rate_limited'] },
-  { label: 'All sources: both codes', source: 'all', codes: ['auth_expired', 'rate_limited'] },
+  { label: 'LinkedIn: expired session', source: 'linkedin', codes: ['auth_expired'] },
+  { label: 'LinkedIn: rate limited', source: 'linkedin', codes: ['rate_limited'] },
+  { label: 'Indeed: rate limited', source: 'indeed', codes: ['rate_limited'] },
+  { label: 'All sources: both', source: 'all', codes: ['auth_expired', 'rate_limited'] },
 ]
 
 const BULK_STATUS_OPTIONS = [
@@ -275,13 +275,12 @@ export function OpsPage() {
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
-        <h1 className={styles.heroTitle}>Operator console</h1>
+        <h1 className={styles.heroTitle}>Hunter</h1>
       </section>
 
       <div className={`${styles.panel} ${styles.panelStrong}`}>
         <div className={styles.panelHeader}>
-          <h2 className={styles.panelTitle}>Hunter controls</h2>
-          <span className={styles.panelMeta}>C1 via C0 gateway</span>
+          <h2 className={styles.panelTitle}>Job search</h2>
         </div>
         <div className={styles.buttons}>
           <button
@@ -303,7 +302,7 @@ export function OpsPage() {
             disabled={!!loadingBtn}
             onClick={() => runC1('Search', () => triggerC1Scrape(true))}
           >
-            Search boards, feeds and companies
+            Search jobs
           </button>
           <button
             className={styles.btn}
@@ -321,7 +320,12 @@ export function OpsPage() {
             Enrich up to 500
           </button>
         </div>
-        {c1Result ? <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre> : null}
+        {c1Result ? (
+          <details className={styles.coverage}>
+            <summary>Response details</summary>
+            <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre>
+          </details>
+        ) : null}
         <details className={styles.coverage} open>
           <summary>Search coverage</summary>
           {scan?.state && (
@@ -466,271 +470,278 @@ export function OpsPage() {
 
       <SystemStatusPanel />
 
-      <div className={styles.gridTwo}>
-        <div className={styles.panel}>
-          <div className={styles.panelHeader}>
-            <h2 className={styles.panelTitle}>LinkedIn accounts</h2>
-            <span className={styles.panelMeta}>{accountsData?.accounts.length ?? 0} saved</span>
-          </div>
-          <div className={styles.formGrid}>
-            <label className={styles.field}>
-              Username
-              <input
-                className={styles.input}
-                value={accountUsername}
-                onChange={(e) => setAccountUsername(e.target.value)}
-                placeholder="user@example.com"
-              />
-            </label>
-            <label className={styles.field}>
-              Display name
-              <input
-                className={styles.input}
-                value={accountName}
-                onChange={(e) => setAccountName(e.target.value)}
-                placeholder="Primary"
-              />
-            </label>
-            <label className={styles.field}>
-              Password
-              <input
-                className={styles.input}
-                value={accountPassword}
-                onChange={(e) => setAccountPassword(e.target.value)}
-                type="password"
-                autoComplete="new-password"
-                placeholder="Leave blank to keep existing"
-              />
-            </label>
-            <button
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              disabled={accountMutation.isPending}
-              onClick={saveAccount}
-            >
-              Save account
-            </button>
-          </div>
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Account</th>
-                  <th>State</th>
-                  <th>Password</th>
-                  <th>Active</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {(accountsData?.accounts ?? []).map((a) => (
-                  <tr key={a.id}>
-                    <td>
-                      <div>{a.display_name || a.username}</div>
-                      <div className="mono">{a.username}</div>
-                    </td>
-                    <td>{a.auth_state}</td>
-                    <td>{a.has_password ? 'saved' : 'missing'}</td>
-                    <td>{a.active ? 'yes' : 'no'}</td>
-                    <td>
-                      <button
-                        className={styles.btn}
-                        onClick={() => runC1('reauth', () => triggerC1Reauth(a.id))}
-                      >
-                        Reauth
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={styles.panel}>
-          <div className={styles.panelHeader}>
-            <h2 className={styles.panelTitle}>Component settings</h2>
-            <span className={styles.panelMeta}>{settingsData?.settings.length ?? 0} keys</span>
-          </div>
-          <div className={styles.formGrid}>
-            <label className={styles.field}>
-              Component
-              <select
-                className={styles.input}
-                value={settingComponent}
-                onChange={(e) => setSettingComponent(e.target.value as ComponentId)}
-              >
-                {(['c0', 'c1', 'c2'] as ComponentId[]).map((c) => (
-                  <option key={c} value={c}>
-                    {c.toUpperCase()}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              Key
-              <input
-                className={styles.input}
-                value={settingKey}
-                onChange={(e) => setSettingKey(e.target.value)}
-                placeholder="setting_key"
-              />
-            </label>
-            <label className={styles.field}>
-              Value
-              <input
-                className={styles.input}
-                value={settingValue}
-                onChange={(e) => setSettingValue(e.target.value)}
-                placeholder="value"
-              />
-            </label>
-            <label className={styles.checkLabel}>
-              <input
-                type="checkbox"
-                checked={settingSecret}
-                onChange={() => setSettingSecret((v) => !v)}
-              />
-              Secret
-            </label>
-            <button
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              disabled={settingMutation.isPending}
-              onClick={submitSetting}
-            >
-              Save setting
-            </button>
-          </div>
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Component</th>
-                  <th>Key</th>
-                  <th>Value</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(settingsData?.settings ?? []).map((s) => (
-                  <tr key={`${s.component}-${s.key}`}>
-                    <td>{s.component.toUpperCase()}</td>
-                    <td className="mono">{s.key}</td>
-                    <td>{s.secret ? (s.has_value ? 'redacted' : 'empty') : s.value || 'empty'}</td>
-                    <td className="mono">{s.updated_at ?? '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* Transient failures */}
-      <div className={styles.panel}>
-        <h2 className={styles.panelTitle}>Transient failures: one-click requeue</h2>
-        <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-          Moves failed rows back to pending (clears retry timers). Use after auth is refreshed or a
-          rate-limit window has passed.
-        </p>
-        <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
-          Current failed counts: <strong>auth_expired</strong> {authN} ·{' '}
-          <strong>rate_limited</strong> {rateN}
-        </p>
-        <div className={styles.buttons}>
-          {REQUEUE_BUTTONS.map((btn) => {
-            const key = `${btn.source}-${btn.codes.join(',')}`
-            return (
+      <details className={styles.panel}>
+        <summary className={styles.sectionSummary}>Accounts and advanced settings</summary>
+        <div className={styles.gridTwo}>
+          <div className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <h2 className={styles.panelTitle}>LinkedIn accounts</h2>
+              <span className={styles.panelMeta}>{accountsData?.accounts.length ?? 0} saved</span>
+            </div>
+            <div className={styles.formGrid}>
+              <label className={styles.field}>
+                Username
+                <input
+                  className={styles.input}
+                  value={accountUsername}
+                  onChange={(e) => setAccountUsername(e.target.value)}
+                  placeholder="user@example.com"
+                />
+              </label>
+              <label className={styles.field}>
+                Display name
+                <input
+                  className={styles.input}
+                  value={accountName}
+                  onChange={(e) => setAccountName(e.target.value)}
+                  placeholder="Primary"
+                />
+              </label>
+              <label className={styles.field}>
+                Password
+                <input
+                  className={styles.input}
+                  value={accountPassword}
+                  onChange={(e) => setAccountPassword(e.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Leave blank to keep existing"
+                />
+              </label>
               <button
-                key={key}
-                className={`${styles.btn} ${btn.primary ? styles.btnPrimary : ''}`}
-                onClick={() => handleRequeue(btn.source, btn.codes, key)}
-                disabled={loadingBtn === key}
-                title={`Requeue ${btn.source} rows with error codes: ${btn.codes.join(', ')}`}
+                className={`${styles.btn} ${styles.btnPrimary}`}
+                disabled={accountMutation.isPending}
+                onClick={saveAccount}
               >
-                {loadingBtn === key ? 'Working…' : btn.label}
+                Save account
               </button>
-            )
-          })}
-        </div>
-      </div>
+            </div>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Account</th>
+                    <th>State</th>
+                    <th>Password</th>
+                    <th>Active</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(accountsData?.accounts ?? []).map((a) => (
+                    <tr key={a.id}>
+                      <td>
+                        <div>{a.display_name || a.username}</div>
+                        <div className="mono">{a.username}</div>
+                      </td>
+                      <td>{a.auth_state}</td>
+                      <td>{a.has_password ? 'saved' : 'missing'}</td>
+                      <td>{a.active ? 'yes' : 'no'}</td>
+                      <td>
+                        <button
+                          className={styles.btn}
+                          onClick={() => runC1('reauth', () => triggerC1Reauth(a.id))}
+                        >
+                          Reauth
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-      {/* Stale processing */}
-      <div className={styles.panel}>
-        <h2 className={styles.panelTitle}>Stale processing reset</h2>
-        <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-          Rows stuck in "processing" state are moved back to "pending". Use when a worker crashed
-          mid-enrichment.
-        </p>
-        <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
-          Current stale processing rows: <strong>{staleN}</strong>
-        </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button
-            className={`${styles.btn} ${styles.btnPrimary}`}
-            onClick={handleStale}
-            disabled={loadingBtn === 'stale'}
-            title="Move all stale processing rows back to pending"
-          >
-            {loadingBtn === 'stale' ? 'Working…' : 'Requeue stale processing'}
-          </button>
-          {staleResult && (
-            <span className="muted" style={{ fontSize: '0.88rem' }}>
-              {staleResult}
-            </span>
-          )}
+          <div className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <h2 className={styles.panelTitle}>Component settings</h2>
+              <span className={styles.panelMeta}>{settingsData?.settings.length ?? 0} keys</span>
+            </div>
+            <div className={styles.formGrid}>
+              <label className={styles.field}>
+                Component
+                <select
+                  className={styles.input}
+                  value={settingComponent}
+                  onChange={(e) => setSettingComponent(e.target.value as ComponentId)}
+                >
+                  {(['c0', 'c1', 'c2'] as ComponentId[]).map((c) => (
+                    <option key={c} value={c}>
+                      {c.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                Key
+                <input
+                  className={styles.input}
+                  value={settingKey}
+                  onChange={(e) => setSettingKey(e.target.value)}
+                  placeholder="setting_key"
+                />
+              </label>
+              <label className={styles.field}>
+                Value
+                <input
+                  className={styles.input}
+                  value={settingValue}
+                  onChange={(e) => setSettingValue(e.target.value)}
+                  placeholder="value"
+                />
+              </label>
+              <label className={styles.checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={settingSecret}
+                  onChange={() => setSettingSecret((v) => !v)}
+                />
+                Secret
+              </label>
+              <button
+                className={`${styles.btn} ${styles.btnPrimary}`}
+                disabled={settingMutation.isPending}
+                onClick={submitSetting}
+              >
+                Save setting
+              </button>
+            </div>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Key</th>
+                    <th>Value</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(settingsData?.settings ?? []).map((s) => (
+                    <tr key={`${s.component}-${s.key}`}>
+                      <td>{s.component.toUpperCase()}</td>
+                      <td className="mono">{s.key}</td>
+                      <td>
+                        {s.secret ? (s.has_value ? 'redacted' : 'empty') : s.value || 'empty'}
+                      </td>
+                      <td className="mono">{s.updated_at ?? '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      </details>
 
-      {/* Bulk requeue */}
-      <div className={styles.panel}>
-        <h2 className={styles.panelTitle}>Bulk requeue by status</h2>
-        <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-          Moves all rows with the selected statuses back to pending. Operates across all sources.
-          Server caps batch size. Use dry run first to count before committing.
-        </p>
-        <div className={styles.checkboxRow}>
-          {BULK_STATUS_OPTIONS.map((o) => (
-            <label
-              key={o.value}
-              className={styles.checkLabel}
-              title={`Include ${o.label} rows in the requeue`}
+      <details className={styles.panel}>
+        <summary className={styles.sectionSummary}>Retry failed jobs</summary>
+        {/* Transient failures */}
+        <div className={styles.panel}>
+          <h2 className={styles.panelTitle}>Expired sessions and rate limits</h2>
+          <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
+            Moves failed rows back to pending (clears retry timers). Use after auth is refreshed or
+            a rate-limit window has passed.
+          </p>
+          <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
+            Failed jobs: <strong>Expired session</strong> {authN} · <strong>Rate limited</strong>{' '}
+            {rateN}
+          </p>
+          <div className={styles.buttons}>
+            {REQUEUE_BUTTONS.map((btn) => {
+              const key = `${btn.source}-${btn.codes.join(',')}`
+              return (
+                <button
+                  key={key}
+                  className={`${styles.btn} ${btn.primary ? styles.btnPrimary : ''}`}
+                  onClick={() => handleRequeue(btn.source, btn.codes, key)}
+                  disabled={loadingBtn === key}
+                  title={`Requeue ${btn.source} rows with error codes: ${btn.codes.join(', ')}`}
+                >
+                  {loadingBtn === key ? 'Working…' : btn.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Stale processing */}
+        <div className={styles.panel}>
+          <h2 className={styles.panelTitle}>Interrupted jobs</h2>
+          <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
+            Rows stuck in "processing" state are moved back to "pending". Use when a worker crashed
+            mid-enrichment.
+          </p>
+          <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
+            Interrupted jobs: <strong>{staleN}</strong>
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              onClick={handleStale}
+              disabled={loadingBtn === 'stale'}
+              title="Move all stale processing rows back to pending"
             >
-              <input
-                type="checkbox"
-                checked={bulkStatuses.includes(o.value)}
-                onChange={() => toggleBulkStatus(o.value)}
-              />
-              {o.label}
-            </label>
-          ))}
+              {loadingBtn === 'stale' ? 'Working…' : 'Requeue stale processing'}
+            </button>
+            {staleResult && (
+              <span className="muted" style={{ fontSize: '0.88rem' }}>
+                {staleResult}
+              </span>
+            )}
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            className={styles.btn}
-            onClick={() => handleBulk(true)}
-            disabled={!!loadingBtn}
-            title="Count how many rows would be moved without changing anything"
-          >
-            {loadingBtn === 'bulk-dry' ? 'Counting…' : 'Count only (dry run)'}
-          </button>
-          <button
-            className={`${styles.btn} ${styles.btnPrimary}`}
-            onClick={() => handleBulk(false)}
-            disabled={!!loadingBtn}
-            title="Move all matching rows to pending"
-          >
-            {loadingBtn === 'bulk-run' ? 'Working…' : 'Requeue matching rows'}
-          </button>
-          {bulkDryResult && (
-            <span className="muted" style={{ fontSize: '0.88rem' }}>
-              {bulkDryResult}
-            </span>
-          )}
-        </div>
-      </div>
 
-      <div className={styles.panel}>
-        <h2 className={styles.panelTitle}>API reference</h2>
+        {/* Bulk requeue */}
+        <div className={styles.panel}>
+          <h2 className={styles.panelTitle}>Bulk requeue by status</h2>
+          <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
+            Moves all rows with the selected statuses back to pending. Operates across all sources.
+            Server caps batch size. Use dry run first to count before committing.
+          </p>
+          <div className={styles.checkboxRow}>
+            {BULK_STATUS_OPTIONS.map((o) => (
+              <label
+                key={o.value}
+                className={styles.checkLabel}
+                title={`Include ${o.label} rows in the requeue`}
+              >
+                <input
+                  type="checkbox"
+                  checked={bulkStatuses.includes(o.value)}
+                  onChange={() => toggleBulkStatus(o.value)}
+                />
+                {o.label}
+              </label>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              className={styles.btn}
+              onClick={() => handleBulk(true)}
+              disabled={!!loadingBtn}
+              title="Count how many rows would be moved without changing anything"
+            >
+              {loadingBtn === 'bulk-dry' ? 'Counting…' : 'Count matching jobs'}
+            </button>
+            <button
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              onClick={() => handleBulk(false)}
+              disabled={!!loadingBtn}
+              title="Move all matching rows to pending"
+            >
+              {loadingBtn === 'bulk-run' ? 'Working…' : 'Requeue matching rows'}
+            </button>
+            {bulkDryResult && (
+              <span className="muted" style={{ fontSize: '0.88rem' }}>
+                {bulkDryResult}
+              </span>
+            )}
+          </div>
+        </div>
+      </details>
+      <details className={styles.panel}>
+        <summary className={styles.sectionSummary}>API reference</summary>
         <pre className={styles.apiRef}>
           {`POST /api/ops/requeue-errors
   { "source": "linkedin", "error_codes": ["auth_expired", "rate_limited"] }
@@ -756,7 +767,7 @@ CLI equivalent:
   python3 scripts/hunterctl.py requeue-retryable
   python3 scripts/hunterctl.py requeue-errors --error-code auth_expired`}
         </pre>
-      </div>
+      </details>
     </div>
   )
 }

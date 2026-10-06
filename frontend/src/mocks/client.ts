@@ -1,3 +1,4 @@
+import { MOCK_FLETCHER_JOBS, MOCK_REVIEW } from './fletcher'
 import {
   MOCK_ATTEMPTS,
   MOCK_AUTH,
@@ -49,6 +50,30 @@ const EXACT_GET_ROUTES: Record<string, unknown> = {
     company_fetch_queue: [],
   },
   '/api/gateway/c2/status': MOCK_C2_STATUS,
+  '/api/gateway/c1/config': {
+    config_file: 'mock-config.json',
+    config_file_exists: true,
+    watchlist: ['Example Labs'],
+    title_blacklist: ['sales'],
+    search_terms: { engineering: ['Software engineer'] },
+    target_job_titles: { engineering: ['Software engineer'] },
+    targeting_configured: true,
+    experience_levels: ['junior'],
+    locations: ['Edmonton'],
+    sites: ['linkedin', 'indeed'],
+    max_workers: 4,
+    results_wanted: 100,
+    hours_old: 24,
+    run_interval_seconds: 600,
+    enrich_after_scrape: true,
+    enrichment_batch_limit: 25,
+    enrichment_timeout_ms: 45000,
+    enrichment_max_attempts: 4,
+    enrichment_alert_failure_rate_percent: 50,
+    enrichment_alert_cooldown_minutes: 60,
+  },
+  '/api/fletcher/tailor/jobs': { jobs: MOCK_FLETCHER_JOBS },
+  '/api/fletcher/reviews/example': MOCK_REVIEW,
 }
 
 function matchRoute(path: string): unknown | undefined {

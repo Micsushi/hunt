@@ -82,7 +82,7 @@ function formatRunTime(value: string | null | undefined): string {
 }
 
 function fletcherTitle(job: FletcherQueueItem): string {
-  return [job.input.title || 'Untitled pasted JD', job.input.company].filter(Boolean).join(' : ')
+  return [job.input.title || 'Untitled job', job.input.company].filter(Boolean).join(' : ')
 }
 
 function fletcherLogFilename(job: FletcherQueueItem): string {
@@ -212,7 +212,7 @@ function historySearchText(job: FletcherQueueItem): string {
 }
 
 function fletcherSourceLabel(job: FletcherQueueItem): string {
-  return job.input.job_id ? `Option A : Hunt job ${job.input.job_id}` : 'Option B : pasted JD'
+  return job.input.job_id ? `Saved job ${job.input.job_id}` : 'Uploaded resume'
 }
 
 function fletcherQueueRefetchInterval(query: {
@@ -237,7 +237,7 @@ function upsertFletcherJob(cache: FletcherJobsCache | undefined, job: FletcherQu
 
 export function FletcherPage() {
   const [jobId, setJobId] = useState(() => readStoredText(FLETCHER_JOB_ID_STORAGE_KEY))
-  const [jobIdResult, setJobIdResult] = useState<unknown>(null)
+  const [inputMode, setInputMode] = useState<'upload' | 'saved'>('upload')
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
 
@@ -311,7 +311,6 @@ export function FletcherPage() {
   const generate = useMutation({
     mutationFn: (id: number) => enqueueFletcherJob({ jobId: id }),
     onSuccess: (res) => {
-      setJobIdResult(res)
       showToast('Fletcher job queued')
       qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
         upsertFletcherJob(cache, res),
@@ -394,21 +393,21 @@ export function FletcherPage() {
   const matchingActiveJob = activeFletcherJobs.find(
     (job) => (job.input.description || '').trim() === jobDetails.trim(),
   )
-  const optionBSubmitDisabled = enqueue.isPending || !!matchingActiveJob
+  const optionBSubmitDisabled =
+    enqueue.isPending || !!matchingActiveJob || !resumeFile || !jobDetails.trim()
   const optionBSubmitText = enqueue.isPending
     ? 'Queueing...'
     : matchingActiveJob?.status === 'running'
       ? 'Resume run in progress'
       : matchingActiveJob
         ? 'Resume run queued'
-        : 'Queue resume run'
+        : 'Tailor resume'
 
   return (
     <div className={styles.page}>
       <div className={styles.pageHeader}>
         <div>
           <h1 className={styles.heroTitle}>Fletcher</h1>
-          <div className={styles.heroMeta}>C2 - resume tailoring service</div>
         </div>
         <div
           className={`${styles.statusPill} ${serviceOnline ? styles.statusPillOnline : styles.statusPillOffline}`}
@@ -418,15 +417,26 @@ export function FletcherPage() {
         </div>
       </div>
 
-      <div className={styles.workflowGrid}>
+      <section className={styles.panel} aria-label="Resume input">
+        <div className={styles.inputModes} role="group" aria-label="Resume source">
+          <button
+            className={styles.modeButton}
+            aria-pressed={inputMode === 'upload'}
+            onClick={() => setInputMode('upload')}
+          >
+            Upload resume
+          </button>
+          <button
+            className={styles.modeButton}
+            aria-pressed={inputMode === 'saved'}
+            onClick={() => setInputMode('saved')}
+          >
+            Saved job
+          </button>
+        </div>
         {/* Path A */}
-        <div className={styles.panel}>
-          <div className={styles.workflowLabel}>Option A</div>
-          <h2 className={styles.workflowTitle}>Generate for queued job</h2>
-          <p className={styles.workflowDesc}>
-            Trigger resume tailoring for a job already in the pipeline by its ID.
-          </p>
-          <div className={styles.formGrid} style={{ marginTop: 16 }}>
+        <div hidden={inputMode !== 'saved'}>
+          <div className={styles.formGrid}>
             <label className={styles.field}>
               Job ID
               <input
@@ -442,35 +452,16 @@ export function FletcherPage() {
               disabled={generate.isPending}
               onClick={submitJobId}
             >
-              {generate.isPending ? 'Queueing...' : 'Queue resume run'}
+              {generate.isPending ? 'Queueing...' : 'Tailor for saved job'}
             </button>
           </div>
-          {jobIdResult ? (
-            <pre className={styles.pre}>{JSON.stringify(jobIdResult, null, 2)}</pre>
-          ) : null}
         </div>
 
-        <div className={styles.orDivider}>or</div>
-
         {/* Path B */}
-        <div className={styles.panel}>
-          <div className={styles.workflowLabel}>Option B</div>
-          <h2 className={styles.workflowTitle}>Tailor from description</h2>
-          <p className={styles.workflowDesc}>
-            Paste a job description and upload your resume to generate a tailored PDF.
-          </p>
-          <div className={styles.formGrid} style={{ marginTop: 16 }}>
-            <label className={styles.field}>
-              Job details
-              <textarea
-                className={styles.textarea}
-                value={jobDetails}
-                onChange={(e) => setJobDetails(e.target.value)}
-                placeholder="Paste the job title, company, and full description here..."
-              />
-            </label>
-            <label className={styles.field}>
-              Resume file
+        <div hidden={inputMode !== 'upload'}>
+          <div className={styles.formGrid}>
+            <div className={styles.field}>
+              <label htmlFor="resume-file">Resume (.pdf or .tex)</label>
               <div
                 className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ''}`}
                 onDrop={handleDrop}
@@ -484,6 +475,7 @@ export function FletcherPage() {
                   {resumeFile ? resumeFile.name : 'Choose .pdf or .tex file'}
                   <input
                     ref={fileRef}
+                    id="resume-file"
                     type="file"
                     accept=".tex,.pdf"
                     className={styles.fileInput}
@@ -496,37 +488,43 @@ export function FletcherPage() {
                     onClick={() => {
                       setResumeFile(null)
                       if (fileRef.current) fileRef.current.value = ''
+                      fileRef.current?.focus()
                     }}
                   >
                     Remove
                   </button>
                 ) : null}
               </div>
+            </div>
+            <label className={styles.field}>
+              Job description (for tailoring)
+              <textarea
+                className={styles.textarea}
+                value={jobDetails}
+                onChange={(e) => setJobDetails(e.target.value)}
+                placeholder="Job title, company and description"
+              />
             </label>
-            <button
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              disabled={optionBSubmitDisabled}
-              onClick={submitTailor}
-              style={{ alignSelf: 'flex-start' }}
-            >
-              {optionBSubmitText}
-            </button>
-            <ResumeCheck resume={resumeFile} jobDetails={jobDetails} />
+            <ResumeCheck resume={resumeFile} jobDetails={jobDetails}>
+              <button
+                className={`${styles.btn} ${styles.btnPrimary}`}
+                disabled={optionBSubmitDisabled}
+                onClick={submitTailor}
+                style={{ alignSelf: 'flex-start' }}
+              >
+                {optionBSubmitText}
+              </button>
+            </ResumeCheck>
             {matchingActiveJob ? (
-              <div className={styles.activeRunNotice}>
-                This description already has a background run. Open it from the queue below when it
-                finishes.
-              </div>
+              <div className={styles.activeRunNotice}>This job is already in the queue.</div>
             ) : activeFletcherJobs.length ? (
               <div className={styles.activeRunNotice}>
-                {activeFletcherJobs.length} background run
-                {activeFletcherJobs.length === 1 ? '' : 's'} active. You can still queue a different
-                resume.
+                {activeFletcherJobs.length} active run{activeFletcherJobs.length === 1 ? '' : 's'}.
               </div>
             ) : null}
           </div>
         </div>
-      </div>
+      </section>
       <FletcherQueuePanel
         jobs={queueData?.jobs || []}
         onMove={(id, direction) => moveJob.mutate({ id, direction })}
@@ -921,8 +919,7 @@ function FletcherQueuePanel({
       <section className={styles.queuePanel}>
         <div className={styles.queueHeader}>
           <div>
-            <h2 className={styles.workflowTitle}>Fletcher queue</h2>
-            <div className={styles.workflowDesc}>Background resume runs continue across tabs.</div>
+            <h2 className={styles.workflowTitle}>Queue</h2>
           </div>
           <span className={styles.meta}>
             {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
@@ -1068,10 +1065,7 @@ function FletcherQueuePanel({
       <section className={styles.queuePanel}>
         <div className={styles.queueHeader}>
           <div>
-            <h2 className={styles.workflowTitle}>Fletcher history</h2>
-            <div className={styles.workflowDesc}>
-              Previous Option B runs are stored in the Hunt DB for this project.
-            </div>
+            <h2 className={styles.workflowTitle}>History</h2>
           </div>
           <span className={styles.meta}>
             {historyJobs.length} previous run{historyJobs.length === 1 ? '' : 's'}
@@ -1205,9 +1199,10 @@ function FletcherQueuePanel({
                       {title}
                     </button>
                     <div className={styles.historyMetaGrid}>
-                      <span>Status: {job.status}</span>
-                      <span>Started: {formatRunTime(job.started_at || job.created_at)}</span>
-                      <span>Finished: {formatRunTime(job.finished_at)}</span>
+                      <span>{job.status === 'succeeded' ? 'Completed' : job.status}</span>
+                      <span>
+                        {formatRunTime(job.finished_at || job.started_at || job.created_at)}
+                      </span>
                     </div>
                     {job.error ? (
                       <div className={`${styles.llmErrorDetail} ${styles.queueErrorPreview}`}>
