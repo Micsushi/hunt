@@ -587,8 +587,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     } catch (error) {
       this.#trace?.("profile_option_observation_failed", {
         fieldId: resolved.fieldId,
-        stage: observationStage,
-        timedOut: error instanceof Error && error.name === "TimeoutError",
+        failureStage: observationStage,
+        errorType: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "other",
         durationMs: Math.round(performance.now() - started),
       });
       if (resolved.uiBehavior === "search_select" || resolved.uiBehavior === "select" ||
