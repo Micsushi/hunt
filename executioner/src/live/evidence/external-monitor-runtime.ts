@@ -829,10 +829,14 @@ function exactTaxonomy(value: Record<string, unknown>): Record<string, unknown> 
   const arrays = [value.controlTypes, value.questionTypes, value.answerTypes];
   const exactZeroControlArrays = value.fieldCount === 0 &&
     arrays.every((item) => Array.isArray(item) && item.length === 0);
+  const unopenedRepeatables = value.fieldCount === 0 &&
+    Array.isArray(value.controlTypes) && value.controlTypes.length === 1 &&
+    value.controlTypes[0] === "repeatable" && stringArray(value.questionTypes) &&
+    Array.isArray(value.answerTypes) && value.answerTypes.length === 0;
   const exactNonemptyArrays = arrays.every(stringArray);
   if (!count(value.fieldCount) || !count(value.requiredFieldCount) ||
       (value.requiredFieldCount as number) > (value.fieldCount as number) ||
-      (!exactZeroControlArrays && !exactNonemptyArrays) || value.validationState !== "clear" ||
+      (!exactZeroControlArrays && !unopenedRepeatables && !exactNonemptyArrays) || value.validationState !== "clear" ||
       typeof value.submitPresent !== "boolean" || value.submitActivated !== false) denied();
   return Object.freeze({ ...value });
 }

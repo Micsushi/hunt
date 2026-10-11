@@ -2343,7 +2343,9 @@ async function monitorTaxonomy(
   page: Page,
   pageName: "resume" | "profile" | "questionnaire" | "review",
 ) {
-  if (pageName === "profile" &&
+  const experienceRoot = (pageName === "resume" || pageName === "profile") &&
+    await page.locator(WORKDAY_APPLICATION_PAGE_SELECTORS.experience).filter({ visible: true }).count() === 1;
+  if (pageName === "profile" && !experienceRoot &&
       await page.locator("html[data-hunt-page-id]").count() === 0) {
     return settledProfileMonitorTaxonomy(page);
   }
@@ -2370,10 +2372,7 @@ async function monitorTaxonomy(
         [type, await page.locator(selector).count()] as const
       ))
     : selectors.map(([type]) => [type, questionnaireCoverage.typeCounts[type] ?? 0] as const);
-  const experience = pageName === "resume" && await page.locator(
-      '[data-automation-id="applyFlowMyExperiencePage"]:visible, ' +
-        '[data-automation-id="applyFlowMyExpPage"]:visible',
-    ).count() === 1
+  const experience = experienceRoot
     ? await monitorExperienceTaxonomy(page)
     : undefined;
   const controlTypes = experience?.controlTypes ??
@@ -2444,7 +2443,7 @@ async function monitorTaxonomy(
     requiredFieldCount,
     controlTypes: canonicalSharedUiTypes(controlTypes.length === 0 ? ["text"] : controlTypes),
     questionTypes,
-    answerTypes: Object.freeze(answerTypes.size === 0 ? ["text"] : [...answerTypes]),
+    answerTypes: Object.freeze(answerTypes.size === 0 && experience === undefined ? ["text"] : [...answerTypes]),
     validationState: "clear" as const,
     submitPresent: submitCount === 1,
     submitActivated: false as const,
@@ -2648,9 +2647,10 @@ async function monitorExperienceTaxonomy(page: Page): Promise<{
     ) result = candidate;
   }
   if (
-    result === null || result.fieldCount < 1 ||
+    result === null ||
+    (result.fieldCount === 0 && !result.controlTypes.includes("repeatable")) ||
     result.requiredFieldCount > result.fieldCount || result.controlTypes.length < 1 ||
-    result.questionTypes.length < 1 || result.answerTypes.length < 1
+    result.questionTypes.length < 1 || (result.fieldCount > 0 && result.answerTypes.length < 1)
   ) throw new TypeError("application monitor taxonomy denied");
   if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
     try {

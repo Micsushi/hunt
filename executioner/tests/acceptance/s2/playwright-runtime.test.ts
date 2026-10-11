@@ -2214,6 +2214,27 @@ test("application taxonomy reports real numeric structure and rejects validation
         },
       },
       {
+        name: "My Experience with unopened repeatable sections and no upload",
+        body: `<body><main data-automation-id="applyFlowMyExpPage">
+          <h1>My Experience</h1>
+          <section><h2>Work Experience</h2><button>Add</button></section>
+          <section><h2>Education</h2><button>Add</button></section>
+          <section><h2>Languages</h2><button>Add</button></section>
+        </main></body>`,
+        denied: false,
+        expected: {
+          fieldCount: 0, requiredFieldCount: 0,
+          controlTypes: ["repeatable"], answerTypes: [],
+          questionTypes: ["employment", "education", "language"],
+        },
+      },
+      {
+        name: "empty My Experience shell is not a repeatable page",
+        body: '<body><main data-automation-id="applyFlowMyExpPage"><h1>My Experience</h1></main></body>',
+        denied: true,
+        expected: undefined,
+      },
+      {
         name: "visible validation error",
         body: '<body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Given name<input aria-invalid="true"></label><div role="alert">Required</div></main></body>',
         denied: true,
@@ -2235,6 +2256,9 @@ test("application taxonomy reports real numeric structure and rejects validation
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.setContent(`<!doctype html><html data-hunt-page-id="page-taxonomy" data-hunt-submit-activated="false">${scenario.body}</html>`);
+      if (!scenario.body.includes("data-hunt-application-page")) {
+        await page.locator("html").evaluate((element) => element.removeAttribute("data-hunt-page-id"));
+      }
       let monitorCalls = 0;
       const taxonomies: {
         readonly fieldCount: number;

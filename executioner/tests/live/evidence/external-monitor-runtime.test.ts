@@ -1193,7 +1193,7 @@ test("application monitor retains the exact mutation, readback, navigation, tran
   }
 });
 
-test("application monitor admits a value-free page-state observation before any mutation", async () => {
+for (const unopened of [false, true]) test(`application monitor admits a value-free page-state observation before any mutation (unopened repeatables: ${unopened})`, async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-page-state-"));
   try {
     const runtime = createStage2ExternalMonitorRuntime({
@@ -1213,13 +1213,22 @@ test("application monitor admits a value-free page-state observation before any 
       fixturePage(),
       "profile",
       "state_observed",
-      taxonomy(),
+      unopened ? {
+        ...taxonomy(), fieldCount: 0, requiredFieldCount: 0,
+        controlTypes: ["repeatable"], questionTypes: ["employment", "education"], answerTypes: [],
+      } : taxonomy(),
       { operationId: "operation_profile_state_0001", attempt: 1 },
       new AbortController().signal,
     );
     runtime.close();
     const files = readdirSync(join(root, "monitor"));
     assert.equal(files.some((file) => file === "0001-profile-state_observed.ack.json"), true);
+    const retained = JSON.parse(readFileSync(join(root, "monitor", "0001-profile-state_observed.taxonomy.json"), "utf8"));
+    if (unopened) {
+      assert.equal(retained.fieldCount, 0);
+      assert.deepEqual(retained.controlTypes, ["repeatable"]);
+      assert.deepEqual(retained.answerTypes, []);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
