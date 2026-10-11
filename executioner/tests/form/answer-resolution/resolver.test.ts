@@ -19,6 +19,7 @@ import type {
 import { createApplicationAnswerResolver as createAnswerResolver } from
   "../../../src/form/answers/resolver.ts";
 import { mapVisibleOption } from "../../../src/form/options/mapper.ts";
+import { testingQuestionSemanticType } from "../../../src/form/answers/testing-policy.ts";
 import type { ApplicationFieldObservation } from "../../../src/form/answers/application-types.ts";
 import {
   createProfileQueryFake,
@@ -435,6 +436,23 @@ test("unknown dates use the injected local calendar date only in synthetic mode"
       assert.equal(answer.value.intent.provenance, "reviewed_catalog");
     }
   }
+});
+
+test("synthetic birth dates use an adult year while live unknown dates stay unresolved", async () => {
+  const profile = createProfileQueryFake();
+  const resolver = createAnswerResolver(profile.port, undefined, "2028-02-29");
+  for (const label of ["Date of Birth", "Birth date", "DOB"]) {
+    assert.equal(testingQuestionSemanticType(label), "identity");
+    const answer = await resolver.resolve(syntheticRequest(field(label, "date")), new AbortController().signal);
+    assert.equal(answer.ok, true);
+    assert.ok(answer.ok && answer.value.kind === "resolved" && answer.value.intent.kind === "date");
+    if (answer.ok && answer.value.kind === "resolved" && answer.value.intent.kind === "date") {
+      assert.equal(answer.value.intent.isoDate, "1998-01-01");
+      assert.equal(answer.value.lane, "synthetic_test_default");
+    }
+  }
+  const live = await resolver.resolve(request(field("Date of Birth", "date")), new AbortController().signal);
+  assert.ok(!live.ok || live.value.kind !== "resolved");
 });
 
 test("configured narrative is owner-bound while the selected resume artifact bypasses ProfileQuery", async () => {

@@ -3,6 +3,8 @@ const normalized = (value: string): string => value.normalize("NFKC")
   .replace(/[^\p{L}\p{N}]+/gu, " ")
   .trim();
 
+const birthDateQuestion = /\b(?:date of birth|birth date|birthdate|birthday|dob)\b/u;
+
 export type TestingQuestionSemanticType =
   | "qualification_requirement"
   | "employee_referral"
@@ -19,6 +21,7 @@ export type TestingQuestionSemanticType =
 
 export function testingQuestionSemanticType(label: string): TestingQuestionSemanticType {
   const value = normalized(label);
+  if (birthDateQuestion.test(value)) return "identity";
   if (/\b(?:referred|referral)\b.*\b(?:associate|employee)\b/u.test(value)) {
     return "employee_referral";
   }
@@ -52,4 +55,13 @@ export function semanticSyntheticTestDefault(label: string): boolean | string | 
   if (type === "employee_referral" || type === "prior_employment") return false;
   if (type === "identity" && normalized(label) === "language") return "English";
   return undefined;
+}
+
+const syntheticBirthAgeYears = 30;
+
+export function syntheticTestDate(label: string, today: string): string {
+  if (!birthDateQuestion.test(normalized(label))) return today;
+  // A stable adult test date, never an asserted owner fact. January 1 also
+  // avoids producing an invalid leap-day date when subtracting years.
+  return `${String(Number(today.slice(0, 4)) - syntheticBirthAgeYears).padStart(4, "0")}-01-01`;
 }

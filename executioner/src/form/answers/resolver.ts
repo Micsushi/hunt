@@ -37,7 +37,7 @@ import {
   protectedQuestionCategory,
 } from
   "../../ats/workday/application/questions/protected.ts";
-import { semanticSyntheticTestDefault } from "./testing-policy.ts";
+import { semanticSyntheticTestDefault, syntheticTestDate } from "./testing-policy.ts";
 
 const cancelled = Object.freeze({
   ok: false as const,
@@ -265,7 +265,7 @@ function generatedLearningIntent(
         behavior: "date",
         fieldId: field.fieldId,
         target: field.target,
-        isoDate: generatedDate,
+        isoDate: syntheticTestDate(field.label, generatedDate),
         provenance: "reviewed_catalog",
       },
     };
