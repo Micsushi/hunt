@@ -221,7 +221,7 @@ export async function completeWorkdayProfilePage(
       page,
       signal,
       effectivePlan.mode === "synthetic_test_non_submittable" &&
-          plannedItem.fieldId.startsWith("unknown.required.")
+          /^unknown\.(?:required|optional)\./u.test(plannedItem.fieldId)
         ? (control) => {
             const rebound = syntheticProfileField(
               control,
@@ -468,8 +468,7 @@ function withSupportedSyntheticUnknowns(
   const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
     if (planned.has(control.fieldId)) return [];
     const guide = retainedProfileControlGuide.find(({ identity }) => identity === control.fieldId);
-    if (guide === undefined && (!control.required ||
-        !control.fieldId.startsWith("unknown.required."))) return [];
+    if (guide === undefined && !/^unknown\.(?:required|optional)\./u.test(control.fieldId)) return [];
     const template = guide === undefined ? undefined : Object.freeze({
       fieldId: control.fieldId,
       questionType: guide.normalizedQuestionType,
@@ -523,8 +522,8 @@ function syntheticProfileField(
   country?: string,
   region?: string,
 ): ProfileFieldPlan | undefined {
-  const unknownRequired = control.required && control.fieldId.startsWith("unknown.required.");
-  if (!unknownRequired && (template === undefined ||
+  const unknown = /^unknown\.(?:required|optional)\./u.test(control.fieldId);
+  if (!unknown && (template === undefined ||
       template.answer.kind !== "profile_answer_missing")) return undefined;
   const options = [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "");
   const prior = fallbacks.get(slot);
@@ -620,7 +619,7 @@ async function reconcileSupportedSyntheticUnknowns(
         rowKey: rowKeys.get(row.rowId),
       }))),
     ].filter(({ control, rowId, rowKey }) =>
-      control.required && control.fieldId.startsWith("unknown.required.") &&
+      /^unknown\.(?:required|optional)\./u.test(control.fieldId) &&
       (rowId === undefined || rowKey !== undefined)
     );
     const pending = candidates.find(({ control, rowKey }) =>

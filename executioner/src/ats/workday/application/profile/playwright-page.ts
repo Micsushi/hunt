@@ -11,7 +11,7 @@ import {
   type ProfileControlCatalogEntry,
   type ProfileRepeatableCatalogEntry,
 } from "./catalog.ts";
-import { retainedProfileTextSha256 } from "./catalog.ts";
+import { retainedProfileLabelSha256Matches, retainedProfileTextSha256 } from "./catalog.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -123,9 +123,24 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
+    const unresolvedSelectors = new Set<string>();
     const scalarSnapshots = new Map<ProfileControlCatalogEntry, ProfileControlSnapshot[]>();
     const inspectScalar = async (entry: ProfileControlCatalogEntry) => {
       try {
+        const matches = await visibleLocators(profile.locator(entry.selector));
+        if (matches.length === 1 && retainedProfileControlGuide.some((guide) =>
+          guide.identity === entry.fieldId && guide.uiVariant === entry.uiVariant)) {
+          const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
+          // A selector locates a control; it does not establish the meaning of
+          // unfamiliar wording. Preserve it in the ordinary unknown UI inventory.
+          if (label !== null && !retainedProfileLabelSha256Matches(
+            entry.fieldId, retainedProfileTextSha256(label),
+          )) {
+            unresolvedSelectors.add(entry.selector);
+            scalarSnapshots.set(entry, []);
+            return;
+          }
+        }
         scalarSnapshots.set(entry, await this.#inspectControls(entry, profile.locator(entry.selector), undefined, inspectInteractiveOptions));
       } catch (error) {
         throw this.#recordInspectionFailure(
@@ -177,7 +192,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     }
     try {
-      controls.push(...await this.#inspectUnknownControls(profile, inspectInteractiveOptions));
+      controls.push(...await this.#inspectUnknownControls(profile, inspectInteractiveOptions, unresolvedSelectors));
     } catch (error) {
       throw this.#recordInspectionFailure(
         "unknown_controls",
@@ -1099,12 +1114,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #inspectUnknownControls(
     profile: Locator,
     inspectInteractiveOptions: boolean,
+    unresolvedSelectors: ReadonlySet<string>,
   ): Promise<ProfileControlSnapshot[]> {
     const candidates = await visibleLocators(
       profile.locator(`${profileInteractiveControlSelector}, ${profileRequiredControlSelector}`),
     );
     const catalog = {
-      scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector),
+      scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector)
+        .filter((selector) => !unresolvedSelectors.has(selector)),
       choiceSelectors: profileScalarControlCatalog
         .filter(({ uiBehavior }) => uiBehavior === "search_select")
         .map(({ selector }) => selector),
@@ -2795,14 +2812,21 @@ async function observedControlLabel(
   const value = await locator.evaluate((element, radioGroup) => {
     const normalized = (text: string | null | undefined) => (text ?? "")
       .normalize("NFC").replace(/\s+/gu, " ").trim()
-      .replace(/\s+(?:Required)$/iu, "").replace(/\s*\*\s*$/u, "").trim();
+      .replace(/\s+(?:Not )?Required$/iu, "").replace(/\s*\*\s*$/u, "").trim();
+    const labelText = (label: Element | null | undefined): string => {
+      if (label == null) return "";
+      const copy = label.cloneNode(true) as Element;
+      copy.querySelectorAll('input, select, textarea, button, [role="listbox"], [role="option"], [data-automation-id="selectedItem"]')
+        .forEach((child) => child.remove());
+      return normalized(copy.textContent);
+    };
     if (radioGroup) {
       const legend = element.closest("fieldset")?.querySelector("legend");
       return normalized(legend?.textContent);
     }
     if (element.id !== "") {
       const owned = [...document.querySelectorAll("label")].find((label) => label.htmlFor === element.id);
-      const label = normalized(owned?.textContent);
+      const label = labelText(owned);
       if (label !== "") return label;
     }
     const labelledBy = element.getAttribute("aria-labelledby");
@@ -2811,14 +2835,21 @@ async function observedControlLabel(
       const label = normalized(labels.join(" "));
       if (label !== "") return label;
     }
-    const aria = normalized(element.getAttribute("aria-label"));
+    let aria = normalized(element.getAttribute("aria-label"));
+    if (element.getAttribute("role") === "combobox" || element.hasAttribute("aria-haspopup")) {
+      const values = [element.getAttribute("aria-valuetext"), element.getAttribute("data-selected-label"),
+        element instanceof HTMLButtonElement ? element.textContent : null, "Select One"];
+      for (const value of values.map(normalized).filter(Boolean)) {
+        if (aria.endsWith(` ${value}`)) { aria = aria.slice(0, -value.length).trim(); break; }
+      }
+    }
     if (aria !== "") return aria;
-    const parentLabel = normalized(element.closest("label")?.textContent);
+    const parentLabel = labelText(element.closest("label"));
     if (parentLabel !== "") return parentLabel;
     const field = element.closest(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
-    return normalized(field?.querySelector("legend, label")?.textContent);
+    return labelText(field?.querySelector("legend, label"));
   }, behavior === "radio_group");
   return value === "" ? null : value;
 }

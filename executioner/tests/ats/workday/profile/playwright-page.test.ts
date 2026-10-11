@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { chromium, type Locator } from "playwright";
@@ -12,6 +14,10 @@ import {
 } from "../../../../src/ats/workday/application/profile/index.ts";
 import { retainedProfileTextSha256 } from
   "../../../../src/ats/workday/application/profile/catalog.ts";
+import { createProfileFieldLearningCapture } from
+  "../../../../src/live/evidence/profile-field-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../../src/contracts/application-execution-policy.ts";
 
 const fixture = await readFile(
   new URL("./fixtures/profile-contact.html", import.meta.url),
@@ -2181,6 +2187,65 @@ test("inventories unknown active form controls by structural UI type without ret
   } finally {
     await browser.close();
   }
+});
+
+test("unfamiliar scalar labels use observed UI and editable defaults without claiming known meaning", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-label-fallback-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <label for="name--legalName--firstName">First Name</label>
+      <input id="name--legalName--firstName" required>
+      <label for="socialNetworkAccounts--linkedInAccount">Public profile link for review</label>
+      <input id="socialNetworkAccounts--linkedInAccount" type="url">
+      <label for="socialNetworkAccounts--twitterAccount">Describe your preferred contact channel</label>
+      <textarea id="socialNetworkAccounts--twitterAccount" required minlength="4" maxlength="20"></textarea>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = {
+      mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("identity.given_name", "identity", "text", "Alex"),
+        field("social.linkedin", "social_network", "url", "https://example.com/old-meaning")],
+      repeatables: [],
+    };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior }) => [fieldId, uiBehavior]), [
+      ["identity.given_name", "text"], ["unknown.optional.1", "url"], ["unknown.required.2", "textarea"],
+    ]);
+    assert.equal(capture.page.metadataReconciliationFailure?.(), undefined);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[id="name--legalName--firstName"]').inputValue(), "Alex");
+    const url = await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').inputValue();
+    assert.ok(url.startsWith("https://"));
+    assert.notEqual(url, "https://example.com/old-meaning");
+    assert.equal(await page.locator('textarea').evaluate(element =>
+      element instanceof HTMLTextAreaElement && element.checkValidity()), true);
+    if (result.kind === "verified") {
+      const generated = result.effectivePlan.fields.filter(({ fieldId }) => fieldId.startsWith("unknown."));
+      assert.equal(generated.length, 2);
+      assert.ok(generated.every(({ questionType, answer }) => questionType === "unknown" &&
+        answer.kind === "answered" && answer.lane === "synthetic_test_default"));
+    }
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    const unknowns = evidence.fields.filter((item: { questionCategory: string }) => item.questionCategory === "unknown");
+    assert.equal(unknowns.length, 2);
+    assert.ok(unknowns.every((item: { metadataReconciliation: string; terminalDisposition: string }) =>
+      item.metadataReconciliation === "unresolved" && item.terminalDisposition === "verified"));
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("unknown questions discover closed choice options before generating an answer", async () => {
