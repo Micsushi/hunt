@@ -128,7 +128,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const inspectScalar = async (entry: ProfileControlCatalogEntry) => {
       try {
         const matches = await visibleLocators(profile.locator(entry.selector));
-        if (matches.length === 1 && retainedProfileControlGuide.some((guide) =>
+        if ((matches.length === 1 || entry.uiBehavior === "radio_group" && matches.length > 0) && retainedProfileControlGuide.some((guide) =>
           guide.identity === entry.fieldId && guide.uiVariant === entry.uiVariant)) {
           const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
           // A selector locates a control; it does not establish the meaning of
@@ -136,6 +136,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           if (label !== null && !retainedProfileLabelSha256Matches(
             entry.fieldId, retainedProfileTextSha256(label),
           )) {
+            if (entry.uiBehavior === "radio_group") {
+              if (!(await Promise.all(matches.map(unknownUiBehavior))).every((type) => type === "radio_group")) {
+                throw new TypeError("profile radio group UI binding unavailable");
+              }
+              const key = `radio-group:${entry.selector}`;
+              let ordinal = this.#unknownControlOrdinals.get(key);
+              if (ordinal === undefined) {
+                ordinal = this.#nextUnknownControlOrdinal++;
+                this.#unknownControlOrdinals.set(key, ordinal);
+              }
+              const isRequired = (await Promise.all(matches.map(async (match) =>
+                !await validationCleared(match) || await required(match, "radiogroup")))).some(Boolean);
+              const snapshots = await this.#inspectControls({
+                ...entry, fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
+                uiVariant: "workday_unknown_required_v1",
+              }, profile.locator(entry.selector), undefined, inspectInteractiveOptions);
+              scalarSnapshots.set(entry, snapshots.map((snapshot) => ({ ...snapshot, label })));
+              return;
+            }
             unresolvedSelectors.add(entry.selector);
             scalarSnapshots.set(entry, []);
             return;
@@ -982,7 +1001,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         fieldId: entry.fieldId,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        binderStrategy: "catalog_selector_exact",
+        binderStrategy: entry.fieldId.startsWith("unknown.") ? "opaque_machine_key" : "catalog_selector_exact",
       });
       const valid = (await Promise.all(matches.map((match) =>
         validationCleared(match)

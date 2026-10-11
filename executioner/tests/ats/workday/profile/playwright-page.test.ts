@@ -547,7 +547,7 @@ test("exact owner inputs commit the reviewed source button leaf and previous-wor
           <div data-automation-id="formField-previousWorker">
             <span data-automation-id="required">*</span>
             <fieldset role="radiogroup">
-              <legend>Have you previously worked for the organization?</legend>
+              <legend>Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.</legend>
               <input id="previous-yes" type="radio"
                 name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
               <input id="previous-no" type="radio"
@@ -1511,7 +1511,7 @@ test("search select reconciles an exact nested leaf revealed by the focused row"
   }
 });
 
-test("previous-worker radio recognizes Workday's visible required legend suffix", async () => {
+test("unfamiliar previous-worker radio preserves Workday's visible required legend suffix", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1533,7 +1533,7 @@ test("previous-worker radio recognizes Workday's visible required legend suffix"
     const control = (await new PlaywrightWorkdayProfilePage(page, {
       pageType: "profile",
     }).inspect(AbortSignal.any([]))).controls.find(
-      ({ fieldId }) => fieldId === "employment.previously_worked_for_organization",
+      ({ fieldId }) => fieldId === "unknown.required.1",
     );
     assert.equal(control?.required, true);
   } finally {
@@ -2187,6 +2187,52 @@ test("inventories unknown active form controls by structural UI type without ret
   } finally {
     await browser.close();
   }
+});
+
+test("unfamiliar radio questions remain one group with observed options and verified default evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-radio-fallback-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span>
+        <fieldset role="radiogroup"><legend>Unfamiliar compound employment question?</legend>
+          <input id="previous-yes" type="radio" name="candidateIsPreviousWorker" value="true">
+          <label for="previous-yes">Yes</label>
+          <input id="previous-no" type="radio" name="candidateIsPreviousWorker" value="false">
+          <label for="previous-no">No</label>
+        </fieldset>
+      </div></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [], repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]?.fieldId, "unknown.required.1");
+    assert.equal(snapshot.controls[0]?.uiBehavior, "radio_group");
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Yes", "No"]);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('#previous-no').isChecked(), true);
+    assert.equal(await page.locator('#previous-yes').isChecked(), false);
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields.length, 1);
+    assert.equal(evidence.fields[0].questionCategory, "unknown");
+    assert.equal(evidence.fields[0].terminalDisposition, "verified");
+    assert.equal(evidence.fields[0].metadataReconciliation, "unresolved");
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("social question aliases share existing answer formats after UI label punctuation is removed", async () => {
