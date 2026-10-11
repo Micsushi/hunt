@@ -121,7 +121,8 @@ try {
           processIssuedAt,
           processOwnerPid: process.pid,
           processOwnerStartedAt: currentProcessStartedAt(),
-          acknowledgementTimeoutMs: 10_000,
+          // Leave transport headroom beyond the native observer's 20-second budget.
+          acknowledgementTimeoutMs: 30_000,
           acknowledgementPollMs: 25,
           observer: readStage2ExternalMonitorObserverBinding(monitorRuntimeRoot, {
             journeyId: "journey_readiness_synthetic_01",
