@@ -66,7 +66,7 @@ test("maps every closed control to its exact Workday semantic locator", async ()
   const cases = [
     ["password", { method: "locator", selector: '[data-automation-id="password"]' }],
     ["password_confirmation", { method: "locator", selector: '[data-automation-id="verifyPassword"]' }],
-    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
+    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"], [data-automation-id="SignInWithEmailButton"]' }],
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
     ["submit_create_account", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],
@@ -455,7 +455,7 @@ test("reports only whether the exact semantic field is empty", async () => {
 
 test("activates each exact semantic link or button without returning page state", async () => {
   const cases = [
-    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"]' }],
+    ["show_sign_in", { method: "locator", selector: '[data-automation-id="signInLink"], [data-automation-id="SignInWithEmailButton"]' }],
     ["show_create_account", { method: "locator", selector: '[data-automation-id="createAccountLink"]' }],
     ["show_password_reset", { method: "locator", selector: '[data-automation-id="forgotPasswordLink"]' }],
     ["submit_sign_in", { method: "locator", selector: '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="signInSubmitButton"]) [data-automation-id="click_filter"][role="button"]' }],

@@ -802,6 +802,27 @@ test("missing, ambiguous, hidden, and disabled controls deny before secret resol
   }
 });
 
+test("sign-in reveals an exact provider choice before resolving credentials", async () => {
+  const fixture = accountFixture(["existing_account", "existing_account", "verification_required"]);
+  fixture.controls.set("email", { cardinality: 0, actionable: false });
+  fixture.controls.set("password", { cardinality: 0, actionable: false });
+  const activate = fixture.access.activate;
+  fixture.access.activate = async action => {
+    if (action === "show_sign_in") {
+      assert.equal(fixture.resolverCalls, 0);
+      fixture.controls.set("email", { cardinality: 1, actionable: true });
+      fixture.controls.set("password", { cardinality: 1, actionable: true });
+    }
+    return activate(action);
+  };
+  const result = await createAccountEntryCredentialMutationAdapter(fixture.dependencies)
+    .mutate(request("sign_in"), new AbortController().signal);
+  assert.equal(result.ok && result.value.kind, "verification_required");
+  assert.equal(fixture.resolverCalls, 1);
+  assert.equal(fixture.operations.filter(operation => operation === "activate:show_sign_in").length, 1);
+  assert.ok(fixture.operations.indexOf("activate:show_sign_in") < fixture.operations.indexOf("fill:email"));
+});
+
 test("a field mismatch clears the exact field and verifies emptiness before denial", async () => {
   const fixture = accountFixture(["existing_account"]);
   fixture.matchResults.set("email", false);

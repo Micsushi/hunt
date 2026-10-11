@@ -775,7 +775,7 @@ function semanticLocator(
       };
     case "show_sign_in":
       return {
-        locator: semanticPage.locator('[data-automation-id="signInLink"]'),
+        locator: semanticPage.locator('[data-automation-id="signInLink"], [data-automation-id="SignInWithEmailButton"]'),
         field: false,
       };
     case "show_create_account":

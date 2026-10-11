@@ -169,12 +169,34 @@ async function mutateOnce(
       const submit = request.mode === "sign_in"
         ? "submit_sign_in"
         : "submit_create_account";
-      const admittedControls = await admitCredentialFields(
+      let admittedControls = await admitCredentialFields(
         dependencies,
         access,
         fields,
         signal,
       );
+      if (!admittedControls.ok && admittedControls.error.code === "browser_target_invalid" &&
+          request.mode === "sign_in") {
+        const email = await access.inspectField("email");
+        const password = await access.inspectField("password");
+        if (email.ok && password.ok && email.value.cardinality === 0 && password.value.cardinality === 0) {
+          const reveal = await uniqueActionableAction(access, "show_sign_in");
+          if (reveal.ok) {
+            const activated = await access.activate("show_sign_in");
+            if (!activated.ok) {
+              localFailure = mapBrowserFailure(activated.error.code);
+              return;
+            }
+            admittedControls = await admitCredentialFields(dependencies, access, fields, signal);
+            const revealed = await classify(dependencies, request, signal);
+            if (!revealed.ok || revealed.value.kind !== "classified_account" ||
+                revealed.value.state.kind !== "existing_account") {
+              localFailure = failure("credential_mutation_denied");
+              return;
+            }
+          }
+        }
+      }
       if (!admittedControls.ok) {
         localFailure = mapBrowserFailure(admittedControls.error.code);
         return;
