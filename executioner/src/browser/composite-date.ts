@@ -2,6 +2,10 @@ import type { Locator, Page } from "playwright";
 
 type BackingStatus = "uncontrolled" | "committed" | "uncommitted";
 
+// Birth dates can be decades from the calendar's initial month. Each step
+// still requires the exact next header before another click is admitted.
+const maximumCalendarMonthSteps = 100 * 12;
+
 const parts = [
   ["dateSectionMonth", "dateSectionMonth-input"],
   ["dateSectionDay", "dateSectionDay-input"],
@@ -225,14 +229,14 @@ async function navigateCalendarMonth(picker: Locator, date: Date, timeoutMs: num
     new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(2000, month, 1))
   );
   const target = date.getFullYear() * 12 + date.getMonth();
-  for (let step = 0; step <= 24; step += 1) {
+  for (let step = 0; step <= maximumCalendarMonthSteps; step += 1) {
     const label = (await header.innerText()).replace(/\s+/gu, " ").trim();
     const match = /^(\w+) (\d{4})$/u.exec(label);
     const month = match === null ? -1 : months.indexOf(match[1]!);
     if (match === null || month < 0) return false;
     const current = Number(match[2]) * 12 + month;
     if (current === target) return true;
-    if (step === 24 || Math.abs(target - current) > 24 - step) return false;
+    if (step === maximumCalendarMonthSteps || Math.abs(target - current) > maximumCalendarMonthSteps - step) return false;
     const delta = target > current ? 1 : -1;
     const next = current + delta;
     const button = header.getByRole("button", { name: delta > 0 ? "Next month" : "Previous month", exact: true });

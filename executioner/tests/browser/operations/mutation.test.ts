@@ -369,7 +369,8 @@ test("Workday calendar navigates bounded months and verifies the exact day", asy
       {date: "2025-12-01", stuck: false, expected: true},
       {date: "2026-10-01", stuck: true, expected: false},
       {date: "2026-10-01", stuck: false, expected: false, prefix: "Unavailable "},
-      {date: "2029-01-01", stuck: false, expected: false},
+      {date: "1996-01-01", stuck: false, expected: true},
+      {date: "2127-01-01", stuck: false, expected: false},
     ]) {
       await page.setContent(`<div data-automation-id="formField-date">
         <div data-automation-id="dateInputWrapper">
@@ -407,7 +408,7 @@ test("Workday calendar navigates bounded months and verifies the exact day", asy
         })();</script>`);
       assert.equal(await applyCompositeDateMutation(page, page.locator('[data-automation-id="dateInputWrapper"]'), date, 1000), expected, date);
       const clicks = await page.evaluate(() => (globalThis as typeof globalThis & {monthClicks:number}).monthClicks);
-      assert.equal(clicks, date === "2029-01-01" ? 0 : stuck || date === "2025-12-01" ? 1 : 9);
+      assert.equal(clicks, date === "2127-01-01" ? 0 : date === "1996-01-01" ? 360 : stuck || date === "2025-12-01" ? 1 : 9);
     }
     await page.locator('[data-automation-id="datePicker"]').evaluate(element => element.after(element.cloneNode(true)));
     assert.equal(await applyCompositeDateMutation(page, page.locator('[data-automation-id="dateInputWrapper"]'), "2026-10-01", 1000), false);
