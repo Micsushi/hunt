@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import type { ElementHandle, Locator, Page } from "playwright";
 
 import {
@@ -2189,6 +2190,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (root === undefined || root === "") return;
     this.#selectionDiagnosticOrdinal += 1;
     try {
+      const structure = await this.#page.locator(
+        '[data-automation-id="formField-source"], [data-automation-id="activeListContainer"]',
+      ).evaluateAll(elements => elements.filter(element => element.getClientRects().length > 0)
+        .map(element => element.outerHTML));
+      writeFileSync(`${root}\\profile-selection-${String(this.#selectionDiagnosticOrdinal).padStart(3, "0")}-${stage}.json`,
+        JSON.stringify(structure), { mode: 0o600 });
       await this.#page.screenshot({
         path: `${root}\\profile-selection-${String(this.#selectionDiagnosticOrdinal).padStart(3, "0")}-${stage}.png`,
         fullPage: false,
