@@ -78,6 +78,7 @@ const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly str
       "Have you previously worked for NAIT? If yes, please answer the questions below. If no, please continue to the next question. Current NAIT employees: Please apply through Jobs Hub in your internal Workday account to ensure your application is processed correctly.",
       "Have you worked for BDO Canada?",
       "Have you previously been employed by Bird Construction or Stuart Olson? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
+      "Have you previously been employed by Orion Steel Mills or any subsidiary (Rocky Mountain Steel Mills, Oregon Steel Mills, Interpro Pipe & Steel), division, or unit of Orion Steel Mills (Previously known as EVRAZ North America)? CURRENT EMPLOYEES: Please apply via your internal Workday account via Internal Careers.",
       "Have you previously worked for SNDL or any of its affiliates, including, but not limited to: Liquor Depot, Solo Liquor, Ace Liquor, Deep Discount Liquor, Wine & Beyond, Liquor Barn, Nova Cannabis, Deep Discount Cannabis, Value Buds, YSS, Sweet Tree, Spiritleaf, Superette, Valens, Liquor Stores North America, Sundial Growers or Alcanna?",
       "Have you previously been employed or a student at UBC? If yes, please review the questions below.",
       "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",

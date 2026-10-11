@@ -403,6 +403,10 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
     "b244d36babd8b6f140d6df0e12d9604d73e95adac122b8620b788b5ba16e150e",
   ), true);
   assert.equal(retainedProfileLabelSha256Matches(
+    "employment.previously_worked_for_organization",
+    "a103b2bc246b315094938c4474b6b971366e01eb9bfa8741d068a6cdf2d3b13f",
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
     "address.region",
     "c697d2981bf416569a16cfbcdec1542b5398f3cc77d2b905819aa99c46ecf6f6",
   ), true);
