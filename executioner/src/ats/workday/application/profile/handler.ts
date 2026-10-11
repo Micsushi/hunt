@@ -138,12 +138,13 @@ export async function completeWorkdayProfilePage(
     });
   }
   const syntheticFallbacks = new Map<string, ProfileFieldPlan>();
+  const syntheticRows = new Map<string, string>();
   const fallbackEnabled = answerFallbackPolicy === "deterministic_site_valid_editable";
   const executionPlan = fallbackEnabled && plan.mode === "live"
     ? Object.freeze({ ...plan, mode: "synthetic_test_non_submittable" as const })
     : plan;
   const preparedPlan = fallbackEnabled
-    ? withSupportedSyntheticUnknowns(executionPlan, observed.snapshot, syntheticFallbacks)
+    ? withSupportedSyntheticUnknowns(executionPlan, observed.snapshot, syntheticFallbacks, syntheticRows)
     : executionPlan;
   registerGeneratedFields(plan, preparedPlan, page);
   const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, observed.snapshot);
@@ -173,6 +174,7 @@ export async function completeWorkdayProfilePage(
       snapshot,
       page,
       signal,
+      syntheticRows,
     );
     if (result.kind === "blocked") return result;
     verified.push(...result.fields);
@@ -443,6 +445,7 @@ function withSupportedSyntheticUnknowns(
   plan: ProfilePagePlan,
   snapshot: ProfilePageSnapshot,
   fallbacks: Map<string, ProfileFieldPlan>,
+  sourceRows: Map<string, string>,
 ): ProfilePagePlan {
   const controls = new Map(snapshot.controls.map((control) => [control.fieldId, control]));
   const countryField = plan.fields.find(({ fieldId }) => fieldId === "address.country");
@@ -489,16 +492,20 @@ function withSupportedSyntheticUnknowns(
   for (const catalog of profileRepeatableCatalog) {
     if (repeatables.some(({ section }) => section === catalog.section)) continue;
     const rows = snapshot.rows.filter((row) => row.section === catalog.section &&
-      row.controls.some(({ required }) => required)).map((row, index) => ({
-      rowKey: `synthetic-${catalog.section}-${index + 1}`,
-      fields: row.controls.flatMap((control): ProfileFieldPlan[] => {
-        const template = profileRepeatableFieldTemplate(control);
-        const field = template === undefined ? undefined : syntheticProfileField(
-          control, fallbacks, `${row.rowId}\u0000${control.fieldId}`, template,
-        );
-        return field === undefined ? [] : [field];
-      }),
-    }));
+      row.controls.some(({ required }) => required)).map((row, index) => {
+      const rowKey = `synthetic-${catalog.section}-${index + 1}`;
+      sourceRows.set(rowKey, row.rowId);
+      return {
+        rowKey,
+        fields: row.controls.flatMap((control): ProfileFieldPlan[] => {
+          const template = profileRepeatableFieldTemplate(control);
+          const field = template === undefined ? undefined : syntheticProfileField(
+            control, fallbacks, `${row.rowId}\u0000${control.fieldId}`, template,
+          );
+          return field === undefined ? [] : [field];
+        }),
+      };
+    });
     if (rows.length > 0) repeatables.push({ section: catalog.section, rows });
   }
   return generated.length === 0 && !changed && repeatables.length === plan.repeatables.length ? plan : {
@@ -1138,6 +1145,7 @@ async function reconcileSection(
   initial: ProfilePageSnapshot,
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
+  syntheticRows: ReadonlyMap<string, string>,
 ): Promise<
   | { readonly kind: "verified"; readonly fields: readonly VerifiedProfileField[]; readonly snapshot: ProfilePageSnapshot }
   | Extract<ProfilePageCompletionResult, { readonly kind: "blocked" }>
@@ -1146,7 +1154,11 @@ async function reconcileSection(
   const used = new Set<string>();
   const verified: VerifiedProfileField[] = [];
   for (const desired of rows) {
-    let current = selectRepeatableRow(snapshot.rows, section, used, desired.fields);
+    const sourceRowId = syntheticRows.get(desired.rowKey);
+    let current = sourceRowId === undefined
+      ? selectRepeatableRow(snapshot.rows, section, used, desired.fields)
+      : snapshot.rows.find(row => row.section === section && row.rowId === sourceRowId && !used.has(row.rowId));
+    if (sourceRowId !== undefined && current === undefined) return blocked("profile_row_unverified");
     if (current === undefined) {
       let rowId: string;
       try {

@@ -90,17 +90,23 @@ test("synthetic Profile fills a required unplanned work-history row without addi
   }
 });
 
-test("synthetic education generates a numeric GPA without explicit input constraints", async () => {
+test("synthetic education retains its partly completed source row and generates numeric GPA", async () => {
   const plan: ProfilePagePlan = {
     mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
   };
   const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [{
     section: "education", rowId: "education-row", ownedByC3: false,
-    controls: [control("education.school", "text"), control("education.gpa", "number")],
+    controls: [
+      { ...control("education.school", "search_select", "Other", "workday_search_select_v2"), allowedOptions: ["Other"] },
+      { ...control("education.degree", "select"), allowedOptions: ["Diploma"] },
+      control("education.gpa", "number"),
+    ],
   }] });
   const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
   assert.equal(result.kind, "verified");
-  assert.equal(port.commits.length, 2);
+  assert.equal(port.commits.length, 3);
+  assert.deepEqual(port.added, []);
+  assert.deepEqual(port.removed, []);
   assert.equal(port.commits.find(({ controlId }) => controlId === "control-education.gpa")!.value, "0");
 });
 

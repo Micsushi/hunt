@@ -2454,6 +2454,37 @@ test("education option discovery searches owned catalogs without committing a se
   } finally { await browser.close(); }
 });
 
+test("education discovers a newly opened portal catalog and dismisses it without selecting", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h2>My Experience</h2>
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" required>
+      </div>
+    </main>
+    <div data-automation-id="activeListContainer" role="listbox"><div role="option">Unrelated</div></div>
+    <script>
+      const input = document.querySelector('input');
+      input.onclick = () => setTimeout(() => {
+        const popup = document.createElement('div');
+        popup.id = 'study-portal'; popup.setAttribute('data-automation-id', 'activeListContainer');
+        popup.setAttribute('role', 'listbox');
+        popup.innerHTML = '<div role="option"><input type="radio">Accounting</div>';
+        document.body.append(popup);
+      }, 100);
+      document.querySelector('h2').onclick = () => document.getElementById('study-portal')?.remove();
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.rows.flatMap(row => row.controls).find(control =>
+      control.fieldId === "education.field_of_study")?.allowedOptions, ["Accounting"]);
+    assert.equal(await page.locator('#study-portal').count(), 0);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
 test("source option observation waits for its delayed owned catalog without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

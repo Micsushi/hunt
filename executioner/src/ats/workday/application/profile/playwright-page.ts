@@ -503,7 +503,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
-    const priorCatalogs = resolved.fieldId === "source.how_did_you_hear"
+    const promptCatalog = ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
+    const priorCatalogs = promptCatalog
       ? await Promise.all((await visibleLocators(this.#page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
       ))).map(locator => locator.elementHandle()))
@@ -514,7 +515,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await control.focus({ timeout: this.#timeoutMs });
       await control.click({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
-      let owner = resolved.fieldId === "source.how_did_you_hear"
+      let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
       if (owner === undefined &&
@@ -523,9 +524,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         searchDraft = await control.inputValue();
         await control.fill("Other", { timeout: this.#timeoutMs });
         await control.press("Enter", { timeout: this.#timeoutMs });
-        const deadline = Date.now() + this.#timeoutMs;
+        const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
         do {
-          owner = await exactObservedOptionOwner(this.#page, control);
+          owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
           if (owner !== undefined) break;
           await this.#page.waitForTimeout(50);
         } while (Date.now() < deadline);
@@ -590,6 +591,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
       await this.#page.keyboard.press("Escape");
       await control.blur({ timeout: this.#timeoutMs });
+      if (promptCatalog && (await visibleLocators(this.#page.locator(
+        '[data-automation-id="activeListContainer"][role="listbox"]',
+      ))).length > 0) {
+        const heading = (await this.#assertPageType()).locator('h1, h2, h3, [role="heading"]').first();
+        if (await heading.count() === 1) await heading.click({ timeout: this.#timeoutMs });
+      }
       await this.#page.waitForTimeout(25);
       if (before !== await this.#resolvedReadback(resolved) ||
           validationBefore !== await validationCleared(control)) {
@@ -1226,7 +1233,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "select" | "multi_select",
   ): Promise<void> {
-    const priorCatalogs = await control.getAttribute("id") === "source--source"
+    const priorCatalogs = /^(?:source--source|education-[^\s]+--(?:school|fieldOfStudy))$/u.test(await control.getAttribute("id") ?? "")
       ? await Promise.all((await visibleLocators(this.#page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
       ))).map(catalog => catalog.elementHandle()))
@@ -2992,7 +2999,8 @@ async function exactPromptCatalogOwner(
   priorCatalogs?: readonly (ElementHandle | null)[],
 ): Promise<Locator | undefined> {
   const source = await control.getAttribute("id") === "source--source";
-  const deadline = Date.now() + (source ? 1_500 : 0);
+  const education = /^education-[^\s]+--(?:school|fieldOfStudy)$/u.test(await control.getAttribute("id") ?? "");
+  const deadline = Date.now() + (source || education ? 1_500 : 0);
   do {
     const focused = page.locator(":focus");
     if (
@@ -3001,7 +3009,7 @@ async function exactPromptCatalogOwner(
     ) return focused;
     const observed = await exactObservedOptionOwner(page, control);
     if (observed !== undefined) return observed;
-    if (source) {
+    if (source || education && priorCatalogs !== undefined) {
       const candidates = await visibleLocators(page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
       ));
