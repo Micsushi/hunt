@@ -709,6 +709,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday checkbox value did not commit");
       }
     } else {
+      // Workday collapses date segments on blur; focusing opens their editable UI.
+      if (request.uiBehavior === "month" || request.uiBehavior === "year") {
+        await resolved.locator.focus({ timeout: this.#timeoutMs });
+      }
       await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       await resolved.locator.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);

@@ -145,6 +145,31 @@ test("indexed Workday dates bind month and year inputs instead of legacy date co
   }
 });
 
+test("Workday date segments regain focus after the previous segment collapses", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <style>.collapsed input { width: 0; height: 0; padding: 0; border: 0; }
+        .collapsed input:focus { width: 60px; height: 20px; }</style>
+      <div id="date">
+        <input id="workExperience-4--startDate-dateSectionMonth-input" role="spinbutton"
+          onblur="this.parentElement.className = 'collapsed'">
+        <input id="workExperience-4--startDate-dateSectionYear-input" role="spinbutton">
+      </div></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    for (const control of initial.rows[0]!.controls) {
+      await adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior,
+        value: control.uiBehavior === "month" ? "1" : "2000" }, AbortSignal.any([]));
+      assert.equal(adapter.interaction(control.controlId)?.backingValueCommitted, true);
+    }
+    assert.equal(await page.locator('[id$="Year-input"]').inputValue(), "2000");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Workday month commit accepts the spinbutton's unpadded numeric readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
