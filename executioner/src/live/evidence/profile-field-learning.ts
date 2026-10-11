@@ -37,6 +37,7 @@ import {
 } from "../../ats/workday/application/profile/index.ts";
 import {
   retainedProfileControlGuide,
+  nativeSocialAccountNames,
   profileRepeatableFieldTemplate,
   retainedProfileLabelSha256Matches,
   retainedProfileTextSha256,
@@ -77,7 +78,7 @@ const persistentReadbacks = new Set([
   "not_attempted", "pending_rescan", "verified_after_rescan",
   "unverified_after_rescan", "driver_failed",
 ]);
-const binderStrategies = new Set(["catalog_selector_exact", "opaque_machine_key"]);
+const binderStrategies = new Set(["catalog_selector_exact", "native_social_account", "opaque_machine_key"]);
 const metadataReconciliations = new Set(["pending", "matched", "unresolved", "mismatch"]);
 const backingStates = new Set(["unknown", "set", "unset"]);
 const validationStates = new Set(["unknown", "clear", "invalid"]);
@@ -144,7 +145,7 @@ export interface ProfileFieldLearningRecordV2 {
   readonly required: boolean;
   readonly answerState: "answered" | "unset";
   readonly lane: AnswerProvenanceLane | null;
-  readonly binderStrategy: "catalog_selector_exact" | "opaque_machine_key" | null;
+  readonly binderStrategy: ProfileControlObservation["binderStrategy"] | null;
   readonly sanitizedLabelSha256: string | null;
   readonly metadataReconciliation: "pending" | "matched" | "unresolved" | "mismatch";
   readonly backingState: "unknown" | "set" | "unset";
@@ -543,8 +544,9 @@ function metadataMismatchReasons(
     "plan_binding" as const,
   ]);
   const reasons: ProfileMetadataMismatchReason[] = [];
-  if (record.binderStrategy !== "catalog_selector_exact") reasons.push("binder_strategy");
-  if (!retainedProfileLabelSha256Matches(guide.identity, record.sanitizedLabelSha256)) {
+  const nativeBinding = nativeGuideBinding(record, guide.identity);
+  if (record.binderStrategy !== "catalog_selector_exact" && !nativeBinding) reasons.push("binder_strategy");
+  if (!nativeBinding && !retainedProfileLabelSha256Matches(guide.identity, record.sanitizedLabelSha256)) {
     reasons.push("label_digest");
   }
   if (record.questionCategory !== guide.normalizedQuestionType) {
@@ -832,6 +834,14 @@ function validMetadataReconciliation(field: ProfileFieldLearningRecordV2): boole
     field.sanitizedLabelSha256 === null;
 }
 
+function nativeGuideBinding(
+  field: Pick<ProfileFieldLearningRecordV2, "binderStrategy" | "sanitizedLabelSha256">,
+  identity: string,
+): boolean {
+  return field.binderStrategy === "native_social_account" &&
+    Object.hasOwn(nativeSocialAccountNames, identity) && field.sanitizedLabelSha256 !== null;
+}
+
 function guideMetadataMatches(
   field: Pick<ProfileFieldLearningRecordV2,
     "binderStrategy" | "sanitizedLabelSha256" | "questionCategory" | "answerCategory" |
@@ -845,8 +855,9 @@ function guideMetadataMatches(
     field.optionCatalogState === "observed" &&
     JSON.stringify(field.visibleOptionIds) === JSON.stringify(expectedOptions)
   );
-  return field.binderStrategy === "catalog_selector_exact" &&
-    retainedProfileLabelSha256Matches(guide.identity, field.sanitizedLabelSha256) &&
+  return (nativeGuideBinding(field, guide.identity) ||
+      field.binderStrategy === "catalog_selector_exact" &&
+      retainedProfileLabelSha256Matches(guide.identity, field.sanitizedLabelSha256)) &&
     field.questionCategory === guide.normalizedQuestionType &&
     field.answerCategory === guide.answerType &&
     guideBehaviorMatches(guide.behavior, field.uiType, field.uiVariant) &&
@@ -1373,7 +1384,8 @@ function freezeRecord(value: MutableRecord): ProfileFieldLearningRecordV2 {
 function liveEligibleField(field: ProfileFieldLearningRecordV2): boolean {
   if (
     field.metadataReconciliation !== "matched" ||
-    field.binderStrategy !== "catalog_selector_exact" ||
+    (field.binderStrategy !== "catalog_selector_exact" &&
+      !nativeGuideBinding(field, field.fieldIdentity.slice("profile.".length))) ||
     field.backingState === "unknown" || field.validationState !== "clear" ||
     !isObservationBinding(field.observationBinding)
   ) return false;

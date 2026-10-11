@@ -67,6 +67,15 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
     retained("website.portfolio", "Portfolio Website", "website", "text", "text", false, "workday_text_v2"),
   ]);
 
+// Workday's native account keys establish the field contract independently of
+// employer-authored labels. The browser must also verify the matching owner.
+export const nativeSocialAccountNames: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "social.linkedin": Object.freeze(["linkedInAccount"]),
+  "social.facebook": Object.freeze(["facebookAccount"]),
+  "social.twitter": Object.freeze(["twitterAccount"]),
+  "social.github": Object.freeze(["githubAccount", "github"]),
+});
+
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
     "address.country": Object.freeze(["Country / Territory"]),

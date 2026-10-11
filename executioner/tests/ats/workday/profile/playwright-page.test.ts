@@ -14,7 +14,7 @@ import {
 } from "../../../../src/ats/workday/application/profile/index.ts";
 import { retainedProfileTextSha256 } from
   "../../../../src/ats/workday/application/profile/catalog.ts";
-import { createProfileFieldLearningCapture } from
+import { admitProfileFieldLearningEvidence, createProfileFieldLearningCapture } from
   "../../../../src/live/evidence/profile-field-learning.ts";
 import { liveApplicationExecutionPolicy } from
   "../../../../src/contracts/application-execution-policy.ts";
@@ -2235,13 +2235,21 @@ test("unfamiliar radio questions remain one group with observed options and veri
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-for (const linkedInLabel of ["Linkedin:", "Please provide the URL to your LinkedIn profile."]) test(`social question alias ${linkedInLabel} shares the existing URL answer format`, async () => {
+for (const [linkedInLabel, native] of [
+  ["Linkedin:", false],
+  ["Please provide the URL to your LinkedIn profile.", false],
+  ["Please provide a link to your LinkedIn profile:", true],
+  ["Adresse de votre profil professionnel", true],
+] as const) test(`social question binding ${linkedInLabel} shares the existing URL answer format`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-native-social-test-"));
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      ${native ? '<div data-automation-id="formField-linkedInAccount">' : ""}
       <label for="socialNetworkAccounts--linkedInAccount">${linkedInLabel}</label>
-      <input id="socialNetworkAccounts--linkedInAccount">
+      <input id="socialNetworkAccounts--linkedInAccount" ${native ? 'name="linkedInAccount"' : ""}>
+      ${native ? "</div>" : ""}
       <label for="socialNetworkAccounts--twitterAccount">X:</label>
       <input id="socialNetworkAccounts--twitterAccount">
     </main>`);
@@ -2251,7 +2259,7 @@ for (const linkedInLabel of ["Linkedin:", "Please provide the URL to your Linked
       fields: [], repeatables: [] };
     let observation = 0;
     const capture = createProfileFieldLearningCapture({
-      page: adapter, plan, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
       observeControl: async (control, signal) => ({
         observation: await adapter.observeControl(control.controlId, signal),
         binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
@@ -2271,7 +2279,27 @@ for (const linkedInLabel of ["Linkedin:", "Please provide the URL to your Linked
       "https://www.linkedin.com/in/hunt-test-owner-review");
     assert.equal(await page.locator('[id="socialNetworkAccounts--twitterAccount"]').inputValue(),
       "https://twitter.com/hunt_test_26");
-  } finally { await browser.close(); }
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.ok(capture.write());
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.doesNotThrow(() => admitProfileFieldLearningEvidence(evidence));
+    const linkedin = evidence.fields.find((record: { fieldIdentity: string }) => record.fieldIdentity === "profile.social.linkedin");
+    assert.equal(linkedin.binderStrategy, native ? "native_social_account" : "catalog_selector_exact");
+    assert.equal(linkedin.metadataReconciliation, "matched");
+    // Keep the actual observed-label digest, not a fabricated canonical label.
+    assert.equal(linkedin.sanitizedLabelSha256, retainedProfileTextSha256(linkedInLabel.replace(/:$/u, "")));
+    if (native) {
+      const control = (await adapter.inspect(signal)).controls.find(item => item.fieldId === "social.linkedin")!;
+      await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').evaluate(element => element.setAttribute("name", "unrelated"));
+      await assert.rejects(() => adapter.observeControl(control.controlId, signal));
+      assert.ok((await adapter.inspect(signal)).controls.some(item => item.fieldId.startsWith("unknown.")));
+      await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').evaluate(element => element.setAttribute("name", "linkedInAccount"));
+      await page.locator('[data-automation-id="formField-linkedInAccount"]').evaluate(element => element.setAttribute("data-automation-id", "formField-other"));
+      assert.ok((await adapter.inspect(signal)).controls.some(item => item.fieldId.startsWith("unknown.")));
+      linkedin.fieldIdentity = "profile.identity.given_name";
+      assert.throws(() => admitProfileFieldLearningEvidence(evidence));
+    }
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("unfamiliar scalar labels use observed UI and editable defaults without claiming known meaning", async () => {

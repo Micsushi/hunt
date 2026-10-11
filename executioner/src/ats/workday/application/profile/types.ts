@@ -116,7 +116,7 @@ export interface ProfileControlSnapshot {
 
 export interface ProfileControlObservation {
   readonly controlId: string;
-  readonly binderStrategy: "catalog_selector_exact" | "opaque_machine_key";
+  readonly binderStrategy: "catalog_selector_exact" | "native_social_account" | "opaque_machine_key";
   readonly sanitizedLabelSha256: string | null;
   readonly backingState: "set" | "unset";
   readonly validationState: "clear" | "invalid";

@@ -11,7 +11,7 @@ import {
   type ProfileControlCatalogEntry,
   type ProfileRepeatableCatalogEntry,
 } from "./catalog.ts";
-import { retainedProfileLabelSha256Matches, retainedProfileTextSha256 } from "./catalog.ts";
+import { nativeSocialAccountNames, retainedProfileLabelSha256Matches, retainedProfileTextSha256 } from "./catalog.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -131,11 +131,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if ((matches.length === 1 || entry.uiBehavior === "radio_group" && matches.length > 0) && retainedProfileControlGuide.some((guide) =>
           guide.identity === entry.fieldId && guide.uiVariant === entry.uiVariant)) {
           const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
-          // A selector locates a control; it does not establish the meaning of
-          // unfamiliar wording. Preserve it in the ordinary unknown UI inventory.
+          // Generic selectors do not establish question meaning. Native account
+          // fields additionally bind their input name and owning form field.
           if (label !== null && !retainedProfileLabelSha256Matches(
             entry.fieldId, retainedProfileTextSha256(label),
-          )) {
+          ) && !await nativeSocialAccountBinding(matches[0]!, entry.fieldId)) {
             if (entry.uiBehavior === "radio_group") {
               if (!(await Promise.all(matches.map(unknownUiBehavior))).every((type) => type === "radio_group")) {
                 throw new TypeError("profile radio group UI binding unavailable");
@@ -424,6 +424,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const controls = await visibleLocators(resolved.locator);
       if (controls.length === 0) {
         throw new TypeError("profile control observation target unavailable");
+      }
+      if (resolved.binderStrategy === "native_social_account" &&
+          !await nativeSocialAccountBinding(controls[0]!, resolved.fieldId)) {
+        throw new TypeError("profile native account binding changed");
       }
       const before = await this.#resolvedReadback(resolved);
       const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
@@ -1046,7 +1050,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         fieldId: entry.fieldId,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        binderStrategy: "catalog_selector_exact",
+        binderStrategy: await nativeSocialAccountBinding(match, entry.fieldId)
+          ? "native_social_account" : "catalog_selector_exact",
       });
       const [currentReadback, valid, isRequired] = await Promise.all([
         this.#readback(match, entry.uiBehavior), validationCleared(match), required(match),
@@ -2849,6 +2854,19 @@ async function resolvedReadback(
     return radioReadback(await visibleLocators(control.locator));
   }
   return readback(control.locator, control.uiBehavior, trace);
+}
+
+async function nativeSocialAccountBinding(locator: Locator, fieldId: string): Promise<boolean> {
+  const names = nativeSocialAccountNames[fieldId];
+  if (names === undefined) return false;
+  return locator.evaluate((element, allowedNames) => {
+    if (!(element instanceof HTMLInputElement) || !["text", "url"].includes(element.type) ||
+        !allowedNames.includes(element.name) ||
+        element.id !== `socialNetworkAccounts--${element.name}`) return false;
+    const owner = element.closest('[data-automation-id^="formField-"]');
+    return owner?.getAttribute("data-automation-id") === `formField-${element.name}` &&
+      owner.querySelectorAll("input:not([type=hidden]),textarea,select").length === 1;
+  }, names);
 }
 
 async function observedControlLabel(
