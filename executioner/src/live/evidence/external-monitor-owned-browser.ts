@@ -205,8 +205,8 @@ try {
     ], {
       encoding: "utf8",
       windowsHide: true,
-      // Includes launching PowerShell and loading the native accessibility APIs.
-      timeout: 20_000,
+      // Includes PowerShell startup and native accessibility traversal under host load.
+      timeout: 60_000,
       env: { ...process.env, HUNT_C3_OBSERVER_RUNTIME_ROOT: runtimeRoot },
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
