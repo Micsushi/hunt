@@ -70,6 +70,15 @@ try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes
 } catch { exit 44 }
+$cache = [Windows.Automation.CacheRequest]::new()
+$cache.TreeScope = [Windows.Automation.TreeScope]::Element
+$cache.TreeFilter = [Windows.Automation.Condition]::TrueCondition
+$cache.Add([Windows.Automation.AutomationElement]::NameProperty)
+$cache.Add([Windows.Automation.AutomationElement]::IsOffscreenProperty)
+$cache.Add([Windows.Automation.AutomationElement]::ControlTypeProperty)
+$cache.Add([Windows.Automation.AutomationElement]::AutomationIdProperty)
+$cacheScope = $cache.Activate()
+try {
 try {
   $processCondition = [Windows.Automation.PropertyCondition]::new(
     [Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -80,7 +89,7 @@ try {
     $processCondition
   )
   $windows = @($ownedWindows | Where-Object {
-    -not $_.Current.IsOffscreen -and -not [string]::IsNullOrWhiteSpace([string]$_.Current.Name)
+    -not $_.Cached.IsOffscreen -and -not [string]::IsNullOrWhiteSpace([string]$_.Cached.Name)
   })
 } catch { exit 42 }
 if ($windows.Count -eq 0) { exit 47 }
@@ -114,7 +123,7 @@ $stageCounts = [ordered]@{
 }
 $fieldControlTypes = @(50002, 50003, 50004, 50013, 50016)
 foreach ($document in @($elements | Where-Object {
-  -not $_.Current.IsOffscreen -and $_.Current.ControlType.Id -eq 50030
+  -not $_.Cached.IsOffscreen -and $_.Cached.ControlType.Id -eq 50030
 })) {
   try {
     $documentElements = $document.FindAll(
@@ -124,9 +133,9 @@ foreach ($document in @($elements | Where-Object {
     $ownsNavigation = $false
     $documentFieldCount = 0
     foreach ($candidate in $documentElements) {
-      if ($candidate.Current.IsOffscreen) { continue }
-      $candidateType = [int]$candidate.Current.ControlType.Id
-      if ([string]$candidate.Current.Name -eq 'Save and Continue' -and
+      if ($candidate.Cached.IsOffscreen) { continue }
+      $candidateType = [int]$candidate.Cached.ControlType.Id
+      if ([string]$candidate.Cached.Name -eq 'Save and Continue' -and
           ($candidateType -eq 50000 -or $candidateType -eq 50005 -or $candidateType -eq 50031)) {
         $ownsNavigation = $true
       }
@@ -138,9 +147,9 @@ foreach ($document in @($elements | Where-Object {
 $address = $null
 foreach ($element in $elements) {
   try {
-    $name = [string]$element.Current.Name
-    $visible = -not $element.Current.IsOffscreen
-    $controlType = [int]$element.Current.ControlType.Id
+    $name = [string]$element.Cached.Name
+    $visible = -not $element.Cached.IsOffscreen
+    $controlType = [int]$element.Cached.ControlType.Id
     $normalizedName = [regex]::Replace($name, '\\s+', ' ').Trim()
     if ($visible -and $normalizedName -cmatch '${numberedQuestionnaireTitlePattern}') {
       [void]$seen.Add('Application Questions')
@@ -162,7 +171,7 @@ foreach ($element in $elements) {
       'Review' { if ($visible) { $stageCounts.review = 1 + [int]$stageCounts.review } }
     }
     if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
-        $element.Current.ControlType.Id -eq 50019) {
+        $controlType -eq 50019) {
       $selection = $null
       if ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection) -and
           ([Windows.Automation.SelectionItemPattern]$selection).Current.IsSelected) {
@@ -170,11 +179,11 @@ foreach ($element in $elements) {
       }
     }
     if ($visible -and -not [string]::IsNullOrWhiteSpace($name) -and
-        $element.Current.ControlType.Id -eq 50030 -and $documentTitles.Count -lt 8) {
+        $controlType -eq 50030 -and $documentTitles.Count -lt 8) {
       [void]$documentTitles.Add($name)
     }
-    if ($visible -and $address -eq $null -and $element.Current.ControlType.Id -eq 50004 -and
-        ([string]$element.Current.AutomationId -eq 'view_1021' -or $name -eq 'Address and search bar')) {
+    if ($visible -and $address -eq $null -and $controlType -eq 50004 -and
+        ([string]$element.Cached.AutomationId -eq 'view_1021' -or $name -eq 'Address and search bar')) {
       $pattern = $null
       if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
         $address = ([Windows.Automation.ValuePattern]$pattern).Current.Value
@@ -184,7 +193,7 @@ foreach ($element in $elements) {
 }
 $payload = [ordered]@{
   pid = $browsers[0].Pid
-  title = [string]$window.Current.Name
+  title = [string]$window.Cached.Name
   selectedTabTitles = @($selectedTabTitles)
   documentTitles = @($documentTitles)
   applicationFieldCount = $applicationFieldCount
@@ -198,6 +207,7 @@ $payload = [ordered]@{
 try {
   [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
 } catch { exit 46 }
+} finally { $cacheScope.Dispose() }
 } catch {
   $failureId = ([string]$_.FullyQualifiedErrorId).Split(',')[0]
   if ($failureId -notmatch '^[A-Za-z][A-Za-z0-9_.]{0,127}$') { $failureId = 'Unknown' }
