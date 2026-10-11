@@ -881,8 +881,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
       });
-      const currentReadback = await this.#readback(match, entry.uiBehavior);
-      const valid = await validationCleared(match);
+      const [currentReadback, valid] = await Promise.all([
+        this.#readback(match, entry.uiBehavior), validationCleared(match),
+      ]);
       const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
           ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
@@ -991,15 +992,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     };
     const unreviewed: { readonly candidate: Locator; readonly machineKey: string | null }[] = [];
     for (const candidate of candidates) {
-      if (await candidate.isDisabled()) continue;
-      if (await candidate.evaluate((element) =>
-        element.getAttribute("role") === "radio" &&
-        element.closest('[role="radiogroup"]') !== null
-      )) continue;
-      if (await candidate.evaluate((element) => element.matches(
-        'input[type="file"][data-automation-id="file-upload-input-ref"]',
-      ))) continue;
       const admitted = await candidate.evaluate((element, reviewed) => {
+        if (element.getAttribute("role") === "radio" &&
+            element.closest('[role="radiogroup"]') !== null) return true;
+        if (element.matches('input[type="file"][data-automation-id="file-upload-input-ref"]')) {
+          return true;
+        }
         if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
           return true;
         }
@@ -1042,6 +1040,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         });
       }, catalog);
       if (admitted) continue;
+      if (await candidate.isDisabled()) continue;
       unreviewed.push({ candidate, machineKey: await unknownMachineKey(candidate) });
     }
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1" && unreviewed.length > 0) {

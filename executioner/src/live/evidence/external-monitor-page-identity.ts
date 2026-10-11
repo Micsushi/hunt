@@ -39,10 +39,10 @@ export function observedStructurePage(
       (owned.actionFlags.has("Next") || owned.actionFlags.has("Save and Continue"))) {
     return activeApplicationPage;
   }
+  if (observedSubmitPresent(owned) && flags.has("Review")) return "review";
   if (owned.actionFlags.has("Create Account") || flags.has("Create Account")) {
     return "account_entry";
   }
-  if (observedSubmitPresent(owned) && flags.has("Review")) return "review";
   if (flags.has("Reset Password")) return "password_reset_set";
   if (flags.has("Send Verification Email")) return "verification_required";
   if (flags.has("Forgot Password")) return "password_reset_request";

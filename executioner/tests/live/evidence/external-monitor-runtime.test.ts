@@ -91,6 +91,19 @@ test("numbered questionnaire progress steps do not combine into an active stage"
   assert.throws(() => observedNumberedQuestionnaireStages({ "Application Questions 0 of 2": 2 }));
 });
 
+test("an owned Review submit outranks a stale account label and tied section headings", () => {
+  const flags = new Set(["Create Account", "My Information", "My Experience", "Review", "Submit"]);
+  const titles = observedActiveStageTitles({ myInformation: 2, myExperience: 1,
+    applicationQuestions: 1, voluntaryDisclosures: 1, selfIdentify: 0, review: 2 });
+  assert.deepEqual(titles, []);
+  assert.equal(observedStructurePage(flags, titles, {
+    actionFlags: new Set(["Submit"]), editFlags: new Set(),
+  }), "review");
+  assert.equal(observedStructurePage(flags, titles, {
+    actionFlags: new Set(["Create Account"]), editFlags: new Set(),
+  }), "account_entry");
+});
+
 test("external monitor canonicalizes Workday posting URL case", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-posting-case-"));
   try {
