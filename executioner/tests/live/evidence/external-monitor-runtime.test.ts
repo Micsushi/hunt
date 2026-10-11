@@ -9,6 +9,7 @@ import test from "node:test";
 import { deflateSync } from "node:zlib";
 
 import { applicationPages } from "../../../src/ats/workday/application/page-walk-contract.ts";
+import { observedNumberedQuestionnaireStages } from "../../../src/live/evidence/external-monitor-browser-identity.ts";
 import {
   createStage2ExternalMonitorRuntime,
   canonicalMonitorIdentityTitle,
@@ -77,6 +78,17 @@ test("independent monitor recognizes numbered Workday questionnaire titles", () 
   for (const title of ["Application Questions 0 of 2", "Application Questions about benefits"]) {
     assert.throws(() => observedStructurePageFromIdentityTitle(title));
   }
+});
+
+test("numbered questionnaire progress steps do not combine into an active stage", () => {
+  const navigation = { "Application Questions 1 of 2": 1, "Application Questions 2 of 2": 1 };
+  assert.deepEqual(observedNumberedQuestionnaireStages(navigation), { count: 1, repeatedTitles: [] });
+  const active = observedNumberedQuestionnaireStages({ ...navigation, "Application Questions 2 of 2": 2 });
+  assert.deepEqual(active, { count: 2, repeatedTitles: ["Application Questions 2 of 2"] });
+  const expected = digest(Buffer.from("Application Questions 2 of 2"));
+  assert.equal(selectObservedChromeIdentityTitle(expected, "Insurance Advisor Level 1", active.repeatedTitles),
+    "Application Questions 2 of 2");
+  assert.throws(() => observedNumberedQuestionnaireStages({ "Application Questions 0 of 2": 2 }));
 });
 
 test("external monitor canonicalizes Workday posting URL case", async () => {

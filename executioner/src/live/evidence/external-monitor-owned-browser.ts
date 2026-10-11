@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   normalizeObservedAddressHost,
   numberedQuestionnaireTitlePattern,
+  observedNumberedQuestionnaireStages,
   observedChromeIdentityTitleSha256s,
   observedStructurePageWithIdentity,
   selectObservedChromeIdentityTitle,
@@ -100,6 +101,7 @@ $actionSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordin
 $editSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $selectedTabTitles = [Collections.Generic.List[string]]::new()
 $documentTitles = [Collections.Generic.List[string]]::new()
+$numberedStageCounts = @{}
 $applicationFieldCount = 0
 $stageCounts = [ordered]@{
   myInformation = 0
@@ -136,11 +138,13 @@ $address = $null
 foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
-    if ([regex]::Replace($name, '\s+', ' ').Trim() -cmatch '${numberedQuestionnaireTitlePattern}') {
-      $name = 'Application Questions'
-    }
     $visible = -not $element.Current.IsOffscreen
     $controlType = [int]$element.Current.ControlType.Id
+    $normalizedName = [regex]::Replace($name, '\s+', ' ').Trim()
+    if ($visible -and $normalizedName -cmatch '${numberedQuestionnaireTitlePattern}') {
+      [void]$seen.Add('Application Questions')
+      $numberedStageCounts[$normalizedName] = 1 + [int]$numberedStageCounts[$normalizedName]
+    }
     if ($visible -and $allow -contains $name) {
       [void]$seen.Add($name)
       if ($controlType -eq 50000 -or $controlType -eq 50005 -or $controlType -eq 50031) {
@@ -184,6 +188,7 @@ $payload = [ordered]@{
   documentTitles = @($documentTitles)
   applicationFieldCount = $applicationFieldCount
   stageCounts = $stageCounts
+  numberedStageCounts = $numberedStageCounts
   address = $address
   flags = @($seen | Sort-Object)
   actionFlags = @($actionSeen | Sort-Object)
@@ -223,6 +228,7 @@ try {
     readonly documentTitles?: unknown;
     readonly applicationFieldCount?: unknown;
     readonly stageCounts?: unknown;
+    readonly numberedStageCounts?: unknown;
     readonly address?: unknown;
     readonly flags?: unknown;
     readonly actionFlags?: unknown;
@@ -247,7 +253,10 @@ try {
       (observed.applicationFieldCount as number) > 512) {
     observerFailure("accessibility_payload");
   }
-  const stageCounts = admitObservedStageCounts(observed.stageCounts);
+  const numberedStages = observedNumberedQuestionnaireStages(observed.numberedStageCounts);
+  const baseStageCounts = admitObservedStageCounts(observed.stageCounts);
+  const stageCounts = { ...baseStageCounts,
+    applicationQuestions: Math.max(baseStageCounts.applicationQuestions, numberedStages.count) };
   if (typeof observed.address === "string" && observed.address.length > 0) {
     let host: string;
     try { host = normalizeObservedAddressHost(observed.address); }
@@ -286,6 +295,7 @@ try {
   const identityTitles = [
     ...(observed.selectedTabTitles as string[]),
     ...(observed.documentTitles as string[]),
+    ...numberedStages.repeatedTitles,
     ...activeStageTitles,
     ...observedStructureIdentityTitles(page, flags, activeStageTitles),
   ];

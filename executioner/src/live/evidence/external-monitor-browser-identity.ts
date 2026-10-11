@@ -20,6 +20,20 @@ export function normalizeObservedAddressHost(address: string): string {
 
 export const numberedQuestionnaireTitlePattern = "^Application Questions [1-9][0-9]* of [1-9][0-9]*$";
 
+export function observedNumberedQuestionnaireStages(value: unknown): {
+  readonly count: number; readonly repeatedTitles: readonly string[];
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) denied();
+  const entries = Object.entries(value);
+  if (entries.length > 8 || entries.some(([title, count]) =>
+    !new RegExp(numberedQuestionnaireTitlePattern, "u").test(title) ||
+    !Number.isSafeInteger(count) || count < 1 || count > 512)) denied();
+  return {
+    count: Math.max(0, ...entries.map(([, count]) => count as number)),
+    repeatedTitles: entries.filter(([, count]) => count >= 2).map(([title]) => title),
+  };
+}
+
 export function observedStructurePageFromIdentityTitle(title: string): string {
   const normalized = normalizeObservedChromeTitle(title);
   if (normalized === "My Information" || normalized === "My Experience") return "profile";
