@@ -898,11 +898,12 @@ async function inspectAndPreflight(
   plan: ProfilePagePlan,
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
+  inspectInteractiveOptions = true,
 ): Promise<
   | { readonly kind: "inspected"; readonly snapshot: ProfilePageSnapshot }
   | BlockedResult
 > {
-  const snapshot = await inspect(page, signal);
+  const snapshot = await inspect(page, signal, inspectInteractiveOptions);
   if (snapshot.snapshot === undefined) {
     return portFailure(signal, {
       profileInspectionDiagnostic: snapshot.profileInspectionDiagnostic,
@@ -1200,7 +1201,9 @@ async function reconcileSection(
       const result = await reconcileField(
         item,
         async () => {
-          const fresh = await page.inspect(signal);
+          // The initial discovery already supplied this row's choice plan.
+          // Verify backing without reopening unrelated, still-unfilled popups.
+          const fresh = await page.inspect(signal, false);
           return fresh.rows.find((row) => row.rowId === rowId)?.controls ?? [];
         },
         page,
@@ -1215,7 +1218,7 @@ async function reconcileSection(
           (result.code === "profile_port_unavailable" ||
             result.code === "profile_commit_unverified")
         ) {
-          const refreshed = await inspectAndPreflight(plan, page, signal);
+          const refreshed = await inspectAndPreflight(plan, page, signal, false);
           if (refreshed.kind === "blocked") return refreshed;
           snapshot = refreshed.snapshot;
           current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
@@ -1224,7 +1227,7 @@ async function reconcileSection(
         return result;
       }
       verified.push({ ...result.field, rowKey: desired.rowKey });
-      const refreshed = await inspectAndPreflight(plan, page, signal);
+      const refreshed = await inspectAndPreflight(plan, page, signal, false);
       if (refreshed.kind === "blocked") return refreshed;
       snapshot = refreshed.snapshot;
       current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
@@ -1238,7 +1241,7 @@ async function reconcileSection(
   } catch {
     return portFailure(signal);
   }
-  const refreshed = await inspectAndPreflight(plan, page, signal);
+  const refreshed = await inspectAndPreflight(plan, page, signal, false);
   if (refreshed.kind === "blocked") return refreshed;
   snapshot = refreshed.snapshot;
   return { kind: "verified", fields: verified, snapshot };
@@ -1589,6 +1592,7 @@ function ownedDuplicateCount(rows: readonly ProfileRowSnapshot[]): number {
 async function inspect(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
+  inspectInteractiveOptions = true,
 ): Promise<{
   readonly snapshot?: ProfilePageSnapshot;
   readonly profileInspectionDiagnostic?: BlockedResult["profileInspectionDiagnostic"];
@@ -1602,7 +1606,7 @@ async function inspect(
   while (true) {
     try {
       if (signal.aborted) return {};
-      return { snapshot: await page.inspect(signal) };
+      return { snapshot: await page.inspect(signal, inspectInteractiveOptions) };
     } catch (error) {
       lastError = error;
       retryCount += 1;

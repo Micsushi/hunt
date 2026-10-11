@@ -662,7 +662,7 @@ export class OwnedWorkdayApplicationRuntime {
             "deterministic_site_valid_editable",
         });
         const profilePage: WorkdayProfilePagePort = {
-          inspect: (innerSignal) => playwrightProfilePage.inspect(innerSignal),
+          inspect: (innerSignal, inspectInteractiveOptions) => playwrightProfilePage.inspect(innerSignal, inspectInteractiveOptions),
           inspectionFailure: () => playwrightProfilePage.inspectionFailure(),
           inspectionFacts: () => playwrightProfilePage.inspectionFacts(),
           commit: async (commit, innerSignal) => {

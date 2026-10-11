@@ -244,11 +244,11 @@ export function createProfileFieldLearningCapture(input: {
         }
       }
     },
-    async inspect(signal) {
+    async inspect(signal, inspectInteractiveOptions) {
       inspectionFailure = undefined;
       let snapshot: ProfilePageSnapshot;
       try {
-        snapshot = await input.page.inspect(signal);
+        snapshot = await input.page.inspect(signal, inspectInteractiveOptions);
       } catch (error) {
         inspectionFailure = input.page.inspectionFailure?.() ??
           profileInspectionFailureFromError(error);

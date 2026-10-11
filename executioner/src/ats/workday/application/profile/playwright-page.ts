@@ -103,7 +103,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     return selectionReadbackIncludes(locator, behavior, value, this.#trace);
   }
 
-  async inspect(signal: AbortSignal): Promise<ProfilePageSnapshot> {
+  async inspect(signal: AbortSignal, inspectInteractiveOptions = true): Promise<ProfilePageSnapshot> {
     const started = performance.now();
     abort(signal);
     this.#inspectionFailure = undefined;
@@ -125,7 +125,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const scalarSnapshots = new Map<ProfileControlCatalogEntry, ProfileControlSnapshot[]>();
     const inspectScalar = async (entry: ProfileControlCatalogEntry) => {
       try {
-        scalarSnapshots.set(entry, await this.#inspectControls(entry, profile.locator(entry.selector)));
+        scalarSnapshots.set(entry, await this.#inspectControls(entry, profile.locator(entry.selector), undefined, inspectInteractiveOptions));
       } catch (error) {
         throw this.#recordInspectionFailure(
           "scalar",
@@ -139,7 +139,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     // Read-only controls can be observed together. Choice discovery may open a
     // popup, so keep those operations sequential and outside the read batch.
     const opensChoices = (entry: ProfileControlCatalogEntry) =>
-      this.#inspectMissingOptions && isChoice(entry.uiBehavior);
+      this.#inspectMissingOptions && inspectInteractiveOptions && isChoice(entry.uiBehavior);
     const reads = await Promise.allSettled(profileScalarControlCatalog
       .filter((entry) => !opensChoices(entry)).map(inspectScalar));
     for (const result of reads) {
@@ -155,7 +155,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const sections = await visibleLocators(section);
         if (sections.length > 1) throw new TypeError("ambiguous Workday repeatable section");
         if (sections.length === 0) {
-          const indexed = await this.#inspectIndexedRows(entry, profile);
+          const indexed = await this.#inspectIndexedRows(entry, profile, inspectInteractiveOptions);
           if (indexed.length > 0) {
             repeatableSections.push(entry.section);
             rows.push(...indexed);
@@ -164,7 +164,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         }
         repeatableSections.push(entry.section);
         const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
-        for (const row of candidates) rows.push(await this.#inspectRow(entry, row));
+        for (const row of candidates) rows.push(await this.#inspectRow(entry, row, inspectInteractiveOptions));
       } catch (error) {
         throw this.#recordInspectionFailure(
           "repeatable",
@@ -925,6 +925,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     entry: ProfileControlCatalogEntry,
     locator: Locator,
     rowIdValue?: string,
+    inspectInteractiveOptions = true,
   ): Promise<ProfileControlSnapshot[]> {
     const matches = await visibleLocators(locator);
     if (entry.uiBehavior === "radio_group") {
@@ -968,7 +969,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const [currentReadback, valid, isRequired] = await Promise.all([
         this.#readback(match, entry.uiBehavior), validationCleared(match), required(match),
       ]);
-      const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
+      const allowedOptions = this.#inspectMissingOptions && inspectInteractiveOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
           ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
             entry.fieldId !== "phone.country_code" && entry.fieldId !== "skills.values")
@@ -990,6 +991,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #inspectRow(
     entry: ProfileRepeatableCatalogEntry,
     row: Locator,
+    inspectInteractiveOptions: boolean,
   ): Promise<ProfileRowSnapshot> {
     const identifier = await rowId(row);
     const controls: ProfileControlSnapshot[] = [];
@@ -1000,7 +1002,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         selector: "",
         uiBehavior: field.uiBehavior,
         uiVariant: field.uiVariant,
-      }, locator, identifier));
+      }, locator, identifier, inspectInteractiveOptions));
     }
     return {
       section: entry.section,
@@ -1013,6 +1015,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
   async #inspectIndexedRows(
     entry: ProfileRepeatableCatalogEntry,
     profile: Locator,
+    inspectInteractiveOptions: boolean,
   ): Promise<ProfileRowSnapshot[]> {
     if (entry.section !== "experience" && entry.section !== "education") return [];
     const prefix = entry.section === "experience" ? "workExperience-" : "education-";
@@ -1027,7 +1030,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           selector: "",
           uiBehavior: field.uiBehavior,
           uiVariant: field.uiVariant,
-        }, profile.locator(`[id="${identifier}--${field.suffix}"]`), identifier));
+        }, profile.locator(`[id="${identifier}--${field.suffix}"]`), identifier, inspectInteractiveOptions));
       }
       rows.push({
         section: entry.section,

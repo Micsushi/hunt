@@ -300,7 +300,7 @@ export interface ProfileInspectionDiagnostic extends ProfileInspectionFailure {
 }
 
 export interface WorkdayProfilePagePort {
-  inspect(signal: AbortSignal): Promise<ProfilePageSnapshot>;
+  inspect(signal: AbortSignal, inspectInteractiveOptions?: boolean): Promise<ProfilePageSnapshot>;
   registerSyntheticField?(field: ProfileFieldPlan): void;
   inspectionFailure?(): ProfileInspectionFailure | undefined;
   inspectionFacts?(): ProfileInspectionFacts | undefined;

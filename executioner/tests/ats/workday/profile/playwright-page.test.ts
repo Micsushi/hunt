@@ -2583,7 +2583,9 @@ test("education discovers a newly opened portal catalog and dismisses it without
     <div data-automation-id="activeListContainer" role="listbox"><div role="option">Unrelated</div></div>
     <script>
       const input = document.querySelector('input');
+      window.studyOpenCount = 0;
       input.onclick = () => setTimeout(() => {
+        window.studyOpenCount += 1;
         const popup = document.createElement('div');
         popup.id = 'study-portal'; popup.setAttribute('data-automation-id', 'activeListContainer');
         popup.setAttribute('role', 'listbox');
@@ -2598,6 +2600,10 @@ test("education discovers a newly opened portal catalog and dismisses it without
       control.fieldId === "education.field_of_study")?.allowedOptions, ["Accounting"]);
     assert.equal(await page.locator('#study-portal').count(), 0);
     assert.equal(await page.locator('input').inputValue(), "");
+    const readback = await adapter.inspect(AbortSignal.any([]), false);
+    assert.equal(readback.rows[0]?.controls[0]?.readback, null);
+    assert.equal(await page.evaluate(() => Reflect.get(window, 'studyOpenCount')), 1);
+    assert.equal(await page.locator('#study-portal').count(), 0);
   } finally { await browser.close(); }
 });
 
