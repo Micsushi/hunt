@@ -133,6 +133,46 @@ test("question learning stores observed choices, fallback, provenance, and repla
   }
 });
 
+test("question learning retains large choice catalogs in both editable records", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-large-choice-learning-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const labels = Array.from({ length: 250 }, (_, index) => `Nationality ${index}`);
+    recordVerified(capture, {
+      questionId: questionId("question-nationality"),
+      field: {
+        fieldId: fieldId("nationality"), target: browserTargetToken("target-nationality"),
+        label: boundedText("Primary Nationality"), required: false, behavior: "select",
+        options: labels.map((label, index) => ({ id: optionId(`nationality-${index}`), label: boundedText(label) })),
+        state: "empty",
+      },
+      intent: {
+        kind: "choice", behavior: "select", fieldId: fieldId("nationality"),
+        target: browserTargetToken("target-nationality"), optionId: optionId("nationality-249"),
+        expectedOption: boundedText(labels[249]!), provenance: "visible_option",
+      },
+      lane: "synthetic_test_default", protectedCategory: "legal", generatedDefault: false,
+      conditionalReveal: false, semanticQuestionType: "demographic",
+    }, 1);
+    capture.write();
+    const learning = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(join(root, "question-answer-learning.json"), "utf8")));
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")));
+    assert.deepEqual(learning.questions[0]?.possibleAnswers, labels);
+    assert.deepEqual(pending.pendingProfileQuestions[0]?.options, labels);
+    assert.equal(pending.pendingProfileQuestions[0]?.actualOwnerValue, null);
+    assert.equal(pending.pendingProfileQuestions[0]?.testDefault, labels[249]);
+    const oversized = Array.from({ length: 513 }, (_, i) => `Choice ${i}`);
+    assert.throws(() => admitQuestionAnswerLearningEvidence({
+      ...learning, questions: [{ ...learning.questions[0]!, possibleAnswers: oversized }],
+    }));
+    assert.throws(() => admitPendingProfileQuestionsEvidence({
+      ...pending, pendingProfileQuestions: [{ ...pending.pendingProfileQuestions[0]!, options: oversized }],
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("question learning redacts owner text while preserving the question contract", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-owner-"));
   try {

@@ -1,5 +1,9 @@
 export const MAX_IDENTIFIER_CODE_POINTS = 128 as const;
 
+// Country and nationality catalogs exceed 128 choices. Preserve their options
+// through browser inspection and editable learning records.
+export const MAX_OBSERVED_CHOICE_OPTIONS = 512 as const;
+
 declare const identifierBrand: unique symbol;
 type Identifier<Kind extends string> = string & {
   readonly [identifierBrand]: Kind;

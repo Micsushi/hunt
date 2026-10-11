@@ -380,6 +380,44 @@ test("questionnaire popup hydration ignores a stale unrelated portal across cont
   }
 });
 
+test("questionnaire hydration preserves a large nationality catalog without selecting an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+        <div data-automation-id="formField-nationality">
+          <label for="nationality">Primary Nationality</label>
+          <button id="nationality" type="button" aria-haspopup="listbox" aria-controls="nationalities">Select One</button>
+        </div>
+      </main>
+      <script>
+        document.querySelector('button').onclick = () => {
+          const popup = document.createElement('div');
+          popup.id = 'nationalities';
+          popup.setAttribute('role', 'listbox');
+          popup.innerHTML = Array.from({length: 250}, (_, i) => '<div role="option">Nationality ' + i + '</div>').join('');
+          document.body.append(popup);
+        };
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') document.querySelector('#nationalities')?.remove();
+        });
+      </script>
+    `);
+    const pageId = "large-nationality-catalog" as never;
+    await bindQuestionnaireTargets(page, pageId);
+    const token = await page.locator('#nationality').getAttribute('data-hunt-target-token');
+    await hydrateQuestionnairePopupOptions(page, pageId, token!, 5_000);
+    const options = JSON.parse(await page.locator('#nationality').getAttribute('data-hunt-popup-options') ?? '[]');
+    assert.equal(options.length, 250);
+    assert.equal(options[249], 'Nationality 249');
+    assert.equal(await page.locator('#nationality').innerText(), 'Select One');
+    assert.equal(await page.locator('#nationalities').count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("eight questionnaire hydrations close the exact owned portal before semantic inspection", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

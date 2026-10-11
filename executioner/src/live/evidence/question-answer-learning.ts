@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_OBSERVED_CHOICE_OPTIONS } from "../../contracts/index.ts";
 
 import type {
   AnswerProvenance,
@@ -531,7 +532,7 @@ export function admitPendingProfileQuestionsEvidence(
       typeof question.required !== "boolean" ||
       !testingQuestionTypes.has(question.semanticQuestionType) ||
       !answerTypes.has(question.answerType) || !isSupportedUiBehavior(question.controlType) ||
-      !Array.isArray(question.options) || question.options.length > 128 ||
+      !Array.isArray(question.options) || question.options.length > MAX_OBSERVED_CHOICE_OPTIONS ||
       question.options.some((option: string) => !bounded(option, 512)) ||
       !validPendingConstraints(question.constraints) ||
       typeof question.conditionalReveal !== "boolean" ||
@@ -583,7 +584,7 @@ export function admitQuestionAnswerLearningEvidence(
       !identifier(record.pageId) || !identifier(record.questionId) || !identifier(record.fieldId) ||
       !bounded(record.label, 512) || fields.has(questionIdentity(record.pageId, record.fieldId)) ||
       typeof record.required !== "boolean" || !isSupportedUiBehavior(record.uiType) ||
-      !answerTypes.has(record.answerType) || record.possibleAnswers.length > 128 ||
+      !answerTypes.has(record.answerType) || record.possibleAnswers.length > MAX_OBSERVED_CHOICE_OPTIONS ||
       record.possibleAnswers.some((answer) => !bounded(answer, 512)) ||
       !["answered", "unset"].includes(record.answerState) ||
       (record.lane !== null && !["live_owner_fact", "synthetic_test_default"].includes(record.lane)) ||

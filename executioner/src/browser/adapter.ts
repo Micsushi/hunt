@@ -4,6 +4,7 @@ import {
   boundedText,
   browserTargetToken,
   MAX_RESUME_ARTIFACT_BYTES,
+  MAX_OBSERVED_CHOICE_OPTIONS,
   sha256Digest,
   type BrowserControl,
   type BrowserMutation,
@@ -2622,7 +2623,7 @@ export async function expandWorkdayPromptCategory(
         .filter(label => label !== "" && !/^no (?:items|matches found|results found)\.?$/iu.test(label)))]);
   };
   let leaves = await readLeaves();
-  if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+  if (leaves.length > 0 && leaves.length <= MAX_OBSERVED_CHOICE_OPTIONS && leaves.every(label => label.length <= 512)) return leaves;
   let branch = await waitForExactOwnedOption(page, owner, category, Math.min(timeoutMs, 1_000));
   if (branch.count === 0 && await control.getAttribute("data-automation-id") === "searchBox" &&
       await owner.isVisible() && await page.getByRole("button", { name: /^submit$/iu }).count() === 0) {
@@ -2630,7 +2631,7 @@ export async function expandWorkdayPromptCategory(
     const searchDeadline = Date.now() + Math.min(timeoutMs, 5_000);
     do {
       leaves = await readLeaves();
-      if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+      if (leaves.length > 0 && leaves.length <= MAX_OBSERVED_CHOICE_OPTIONS && leaves.every(label => label.length <= 512)) return leaves;
       branch = await owner.count() === 1 ? await exactOwnedOption(owner, category) : { count: 0 };
       if (branch.count > 0) break;
       await page.waitForTimeout(50);
@@ -2654,7 +2655,7 @@ export async function expandWorkdayPromptCategory(
     let expanded = false;
     do {
       const leaves = await readLeaves();
-      if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+      if (leaves.length > 0 && leaves.length <= MAX_OBSERVED_CHOICE_OPTIONS && leaves.every(label => label.length <= 512)) return leaves;
       const branches = await owner.count() === 1 ? await owner.locator(
         '[data-automation-id="promptLeafNode"], [role="option"]',
       ).evaluateAll(elements => [...new Set(elements.filter(element =>

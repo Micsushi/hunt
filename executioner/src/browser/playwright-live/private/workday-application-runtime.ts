@@ -50,6 +50,7 @@ import {
 import {
   browserTargetToken,
   boundedText,
+  MAX_OBSERVED_CHOICE_OPTIONS,
   createGeneratedIdAllocator,
   fieldId,
   guardRevision,
@@ -3476,7 +3477,7 @@ async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> 
   await page.locator(
     'button[aria-haspopup="listbox"]:not([data-hunt-popup-options])' +
       ':not([data-hunt-deferred-options])',
-  ).evaluateAll((controls) => {
+  ).evaluateAll((controls, maxOptions) => {
     const normalize = (value: string | null | undefined) =>
       (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
     const visible = (element: Element): element is HTMLElement => {
@@ -3504,11 +3505,11 @@ async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> 
           '[data-automation-id="formField"], [data-automation-id^="formField-"]',
         ) === field);
       const labels = [...new Set(options.map((option) => normalize(option.textContent)).filter(Boolean))];
-      if (labels.length > 0 && labels.length <= 128 && labels.every((label) => label.length <= 512)) {
+      if (labels.length > 0 && labels.length <= maxOptions && labels.every((label) => label.length <= 512)) {
         control.setAttribute("data-hunt-popup-options", JSON.stringify(labels));
       }
     }
-  });
+  }, MAX_OBSERVED_CHOICE_OPTIONS);
 }
 
 export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promise<void> {
@@ -3684,7 +3685,7 @@ export async function hydrateQuestionnairePopupOptions(
   if (!await waitForOwnedHydrationPopupClose(page, targetToken, Math.min(timeoutMs, 5_000))) {
     throw new TypeError("questionnaire popup remained open after exact-owner close");
   }
-  if (labels.length === 0 || labels.length > 128 || labels.some((label) => label.length > 512)) {
+  if (labels.length === 0 || labels.length > MAX_OBSERVED_CHOICE_OPTIONS || labels.some((label) => label.length > 512)) {
     throw new TypeError("questionnaire popup options denied");
   }
   const rebound = page.locator(`[data-hunt-target-token="${targetToken}"]`);
