@@ -1936,6 +1936,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw error;
       }
     }
+    await this.#page.keyboard.press("Escape");
+    await control.blur({ timeout: this.#timeoutMs });
     await this.#page.waitForTimeout(100);
     interaction.popupClosed = (await visibleLocators(options)).length === 0;
     interaction.backingValueCommitted = await selectionReadbackIncludes(

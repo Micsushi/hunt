@@ -2514,6 +2514,37 @@ test("education school ignores empty catalog status and searches before committi
   } finally { await browser.close(); }
 });
 
+test("education prompt closes before verifying a selection saved on dismissal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" required>
+        <div id="selected-study"></div>
+        <div role="listbox" hidden><div data-automation-id="promptLeafNode">Accounting</div></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.querySelector('[role="listbox"]');
+      let pending = false;
+      input.onclick = () => { popup.hidden = false; };
+      popup.onclick = () => { pending = true; };
+      document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        if (pending) document.getElementById('selected-study').innerHTML = '<span data-automation-id="selectedItem">Accounting</span>';
+        popup.hidden = true; input.value = '';
+      });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const study = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study")!;
+    await adapter.commit({ controlId: study.controlId, uiBehavior: "multi_select", value: '["Accounting"]' }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(study.controlId)?.backingValueCommitted, true);
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
 test("education discovers a newly opened portal catalog and dismisses it without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
