@@ -99,7 +99,10 @@ try:
                 if isinstance(value, str):
                     parts.append(value)
             content = '\n'.join([str(message.get('Subject', ''))] + parts)
-            if request['companyName'].casefold() not in content.casefold():
+            # A tenant-specific Workday host binds the company even when its
+            # email uses a short brand name. Shared hosts still need the name.
+            tenant_host = re.fullmatch(r'[a-z0-9-]+\.wd[0-9]+\.myworkdayjobs\.com', request['verificationHost'])
+            if not tenant_host and request['companyName'].casefold() not in content.casefold():
                 continue
             target = verification_url(content, request['verificationHost'])
             if target is None:
