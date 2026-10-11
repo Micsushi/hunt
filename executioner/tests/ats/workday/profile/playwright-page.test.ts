@@ -2454,6 +2454,27 @@ test("education option discovery searches owned catalogs without committing a se
   } finally { await browser.close(); }
 });
 
+test("education school reconciles canonical saved tokens with presentation mirrors", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" required>
+        <div data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span><button data-automation-id="DELETE_charm">Remove Other</button></div>
+        <div data-automation-id="selectedItem">Other</div>
+      </div>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.equal(school.readback, "Other");
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
 test("education discovers a newly opened portal catalog and dismisses it without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

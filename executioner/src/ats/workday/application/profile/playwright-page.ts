@@ -701,10 +701,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     } else if (request.uiBehavior === "search_select" || request.uiBehavior === "select") {
       if (resolved.fieldId === "source.how_did_you_hear" &&
-          await committedPromptPrefill(resolved.locator, request.value)) {
+          await committedPromptPrefill(resolved.locator, request.value) ||
+          resolved.fieldId === "education.school" &&
+          equivalentOption(await committedMultiSelectReadback(resolved.locator) ?? "", request.value)) {
         interaction.backingValueCommitted = true;
         interaction.validationCleared = await validationCleared(resolved.locator);
-        if (!interaction.validationCleared) throw new TypeError("Workday saved source validation is invalid");
+        if (!interaction.validationCleared) throw new TypeError("Workday saved prompt validation is invalid");
       } else if (
         request.uiBehavior === "select" &&
         await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)
@@ -2659,10 +2661,11 @@ async function readback(
     const value = await locator.inputValue();
     return value === "" ? null : value;
   }
-  const committed = behavior === "multi_select"
+  const committed = behavior === "multi_select" || behavior === "search_select"
     ? await committedMultiSelectReadback(locator, trace)
     : null;
-  if (committed !== null) return committed;
+  if (committed !== null) return behavior === "search_select" && optionReadbackList(committed).length !== 1
+    ? null : committed;
   const ariaValue = (await locator.getAttribute("aria-valuetext"))?.trim() ?? "";
   if (ariaValue !== "") return ariaValue;
   const selected = (await locator.getAttribute("data-selected-label"))?.trim() ?? "";
