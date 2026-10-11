@@ -535,23 +535,27 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (owner !== undefined) {
         if (resolved.fieldId === "source.how_did_you_hear") {
           this.#observedSourceCategories.clear();
-          const category = await preferredPromptOption(
-            await visibleLocators(owner.locator('[role="option"]')),
-            new Set(["career websites"]),
-          );
-          if (category !== undefined && await category.locator(
-            '[data-automation-id="promptLeafNode"] svg[role="presentation"]',
-          ).count() === 1) {
+          const categories: Locator[] = [];
+          for (const option of await visibleLocators(owner.locator('[role="option"]'))) {
+            if (await option.locator(
+              '[data-automation-id="promptLeafNode"] svg[role="presentation"]',
+            ).count() === 1 && await option.locator(
+              'input, [role="checkbox"], [role="radio"]',
+            ).count() === 0) categories.push(option);
+          }
+          const category = await preferredPromptOption(categories, new Set(["career websites"])) ?? categories[0];
+          if (category !== undefined) {
+            const categoryLabel = (await category.innerText()).trim();
             await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
             await this.#page.waitForTimeout(100);
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
             if (owner === undefined) throw new TypeError("Workday source category options are unavailable");
             const leaves = await visibleLocators(owner.locator('[role="option"]'));
             const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())));
-            if (leafLabels.some(label => normalize(label) === "career websites")) {
+            if (leafLabels.some(label => normalize(label) === normalize(categoryLabel))) {
               throw new TypeError("Workday source category did not expand");
             }
-            for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), "Career Websites");
+            for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), categoryLabel);
           }
         }
         const options = await visibleLocators(owner.locator([

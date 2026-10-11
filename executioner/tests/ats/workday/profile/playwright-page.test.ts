@@ -2474,7 +2474,8 @@ test("a matching saved source proves controlled backing without clicking its cov
   } finally { await browser.close(); }
 });
 
-test("source discovery exposes the career-site leaf rather than its category", async () => {
+for (const categoryLabel of ["Career Websites", "Company Careers Page"]) {
+test(`source discovery exposes a leaf below ${categoryLabel} rather than its category`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2486,7 +2487,7 @@ test("source discovery exposes the career-site leaf rather than its category", a
         const input = document.querySelector('input'); const popup = document.querySelector('#popup');
         input.onclick = () => {
           popup.hidden = false;
-          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode">Career Websites<svg role="presentation"></svg></div></div>';
+          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode">${categoryLabel}<svg role="presentation"></svg></div></div>';
           popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
             popup.innerHTML = '';
             setTimeout(() => {
@@ -2509,6 +2510,7 @@ test("source discovery exposes the career-site leaf rather than its category", a
     assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Example Careers");
   } finally { await browser.close(); }
 });
+}
 
 test("source observation binds only its newly visible unfocused portal catalog", async () => {
   const browser = await chromium.launch({ headless: true });
