@@ -2615,10 +2615,11 @@ export async function expandWorkdayPromptCategory(
       .evaluateAll(elements => [...new Set(elements.filter(element =>
         element instanceof HTMLElement && element.getClientRects().length > 0 &&
         element.closest('[data-automation-id="selectedItemList"]') === null &&
+        element.getAttribute("aria-disabled") !== "true" &&
         getComputedStyle(element).visibility !== "hidden" &&
         element.querySelector('svg[role="presentation"]') === null
       ).map(element => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
-        .filter(Boolean))]);
+        .filter(label => label !== "" && !/^no (?:items|matches found|results found)\.?$/iu.test(label)))]);
   };
   let leaves = await readLeaves();
   if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
@@ -2638,12 +2639,37 @@ export async function expandWorkdayPromptCategory(
   if (branch.count !== 1 || branch.locator === undefined ||
       await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
   await branch.locator.click({ timeout: timeoutMs });
-  const deadline = Date.now() + Math.min(timeoutMs, 5_000);
-  do {
-    const leaves = await readLeaves();
-    if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
-    if (Date.now() < deadline) await page.waitForTimeout(50);
-  } while (Date.now() < deadline);
+  const visited = new Set([category]);
+  // ponytail: expose the first leaf-bearing subtree, at most eight levels.
+  // Enumerating sibling subtrees requires retaining each answer's full path.
+  for (let depth = 0; depth < 8; depth += 1) {
+    const deadline = Date.now() + Math.min(timeoutMs, 5_000);
+    let expanded = false;
+    do {
+      const leaves = await readLeaves();
+      if (leaves.length > 0 && leaves.length <= 128 && leaves.every(label => label.length <= 512)) return leaves;
+      const branches = await owner.count() === 1 ? await owner.locator(
+        '[data-automation-id="promptLeafNode"], [role="option"]',
+      ).evaluateAll(elements => [...new Set(elements.filter(element =>
+        element instanceof HTMLElement && element.getClientRects().length > 0 &&
+        getComputedStyle(element).visibility !== "hidden" &&
+        element.getAttribute("aria-disabled") !== "true" &&
+        element.querySelector('svg[role="presentation"]') !== null
+      ).map(element => (element.textContent ?? "").normalize("NFC").replace(/\s+/gu, " ").trim())
+        .filter(label => label !== "" && label.length <= 512))]) : [];
+      const next = branches.find(label => !visited.has(label));
+      if (next !== undefined) {
+        const branch = await exactOwnedOption(owner, next);
+        if (branch.count !== 1 || branch.locator === undefined) return undefined;
+        visited.add(next);
+        await branch.locator.click({ timeout: timeoutMs });
+        expanded = true;
+        break;
+      }
+      if (Date.now() < deadline) await page.waitForTimeout(50);
+    } while (Date.now() < deadline);
+    if (!expanded) return undefined;
+  }
   return undefined;
 }
 

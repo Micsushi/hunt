@@ -2432,7 +2432,7 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
-for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
+for (const searchMode of ["keyup", "enter", "direct", "nested"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2450,7 +2450,9 @@ for (const searchMode of ["keyup", "enter", "direct"]) test(`hierarchical Workda
         popup.onclick=event=>{
           const option=event.target.closest('[role="option"]');if(!option)return;
           if(option.querySelector('svg')){
-            popup.innerHTML=option.textContent==='Canada'
+            popup.innerHTML=option.textContent==='Canada' && '${searchMode}'==='nested'
+              ? '<div role="option" aria-disabled="true">No matches found</div>'+branch('First Nations')+branch('Inuit')+branch('Métis')
+              : option.textContent==='Canada' || option.textContent==='First Nations'
               ? '<div role="option"><div data-automation-id="promptLeafNode">Citizen</div></div><div role="option"><div data-automation-id="promptLeafNode">Permanent resident</div></div>'
               : '<div>No Items.</div>';
             input.value='';return;
