@@ -40,6 +40,7 @@ export interface RetainedProfileControlGuideEntry {
 
 export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEntry[] =
   Object.freeze([
+    retained("identity.prefix", "Prefix", "identity", "search_select", "single_select", false, "workday_search_select_v2"),
     retained("identity.given_name", "First Name", "identity", "text", "text", true, "workday_text_v2"),
     retained("identity.middle_name", "Middle Name", "identity", "text", "text", false, "workday_text_v2"),
     retained("identity.family_name", "Last Name", "identity", "text", "text", true, "workday_text_v2"),
@@ -68,6 +69,7 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
 
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
+    "address.country": Object.freeze(["Country / Territory"]),
     "address.region": Object.freeze(["Region"]),
     "social.linkedin": Object.freeze(["If desired, enter the link to your LinkedIn profile"]),
     "social.twitter": Object.freeze(["If desired, enter the link to your Twitter profile"]),
@@ -234,6 +236,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiBehavior: "radio_group",
       uiVariant: "workday_previous_worker_radio_v1",
     },
+    v2Search("identity.prefix", "name--legalName--title"),
     v2Text("identity.given_name", "name--legalName--firstName"),
     v2Text("identity.middle_name", "name--legalName--middleName"),
     v2Text("identity.family_name", "name--legalName--lastName"),

@@ -356,7 +356,12 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
       uiVariant,
       allowedOptions,
     }));
-  assert.deepEqual(retainedProfileControlGuide, retainedProfile);
+  assert.deepEqual(retainedProfileControlGuide.filter(({ identity }) => identity !== "identity.prefix"), retainedProfile);
+  assert.deepEqual(retainedProfileControlGuide.find(({ identity }) => identity === "identity.prefix"), {
+    identity: "identity.prefix", sanitizedLabel: "Prefix", normalizedQuestionType: "identity",
+    behavior: "search_select", answerType: "single_select", required: false,
+    uiVariant: "workday_search_select_v2", allowedOptions: [],
+  });
   assert.equal(
     retainedProfileTextSha256("  Have You\u2019re Applied  "),
     retainedIntakeTextSha256("  Have You\u2019re Applied  "),
@@ -396,6 +401,12 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
   assert.equal(retainedProfileLabelSha256Matches(
     "address.region",
     "c697d2981bf416569a16cfbcdec1542b5398f3cc77d2b905819aa99c46ecf6f6",
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
+    "address.country", retainedProfileTextSha256("Country / Territory"),
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
+    "identity.prefix", retainedProfileTextSha256("Prefix"),
   ), true);
   assert.equal(retainedProfileLabelSha256Matches(
     "employment.previously_worked_for_organization",
