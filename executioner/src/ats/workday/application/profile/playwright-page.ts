@@ -177,7 +177,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     }
     try {
-      controls.push(...await this.#inspectUnknownControls(profile));
+      controls.push(...await this.#inspectUnknownControls(profile, inspectInteractiveOptions));
     } catch (error) {
       throw this.#recordInspectionFailure(
         "unknown_controls",
@@ -493,12 +493,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     const control = controls[0]!;
     if (await control.evaluate((element) => element instanceof HTMLSelectElement)) {
-      return uniqueObservedOptions(await control.evaluate((element) =>
-        element instanceof HTMLSelectElement
-          ? [...element.options].filter((option) => !option.disabled)
-            .map((option) => option.label || option.textContent || "")
-          : []
-      ));
+      return uniqueObservedOptions(await unknownAllowedOptions(control));
     }
     if (!inspectInteractiveOptions) return [];
     const started = performance.now();
@@ -1033,6 +1028,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const controls: ProfileControlSnapshot[] = [];
     for (const field of entry.fields) {
       const locator = row.locator(`[data-automation-id$="--${field.suffix}"]`);
+      const variants = entry.fields.filter(candidate =>
+        candidate.fieldId === field.fieldId && candidate.suffix === field.suffix);
+      if (variants.length > 1) {
+        const visible = await visibleLocators(locator);
+        if (visible.length === 1) {
+          const observedBehavior = await unknownUiBehavior(visible[0]!);
+          const variant = variants.find(candidate => candidate.uiBehavior === observedBehavior);
+          if (variant === undefined) throw new TypeError("unsupported Workday repeatable control variant");
+          if (variant !== field) continue;
+        }
+      }
       controls.push(...await this.#inspectControls({
         fieldId: field.fieldId,
         selector: "",
@@ -1092,6 +1098,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
 
   async #inspectUnknownControls(
     profile: Locator,
+    inspectInteractiveOptions: boolean,
   ): Promise<ProfileControlSnapshot[]> {
     const candidates = await visibleLocators(
       profile.locator(`${profileInteractiveControlSelector}, ${profileRequiredControlSelector}`),
@@ -1242,7 +1249,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       const isRequired = await required(candidate);
       const uiBehavior = await unknownUiBehavior(candidate);
-      const allowedOptions = await unknownAllowedOptions(candidate);
+      const resolved: ResolvedControl = {
+        locator: candidate,
+        fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
+        uiBehavior,
+        uiVariant: "workday_unknown_required_v1",
+        binderStrategy: "opaque_machine_key",
+      };
+      let allowedOptions = await unknownAllowedOptions(candidate);
+      if (allowedOptions.length === 0 && isChoice(uiBehavior) &&
+          uiBehavior !== "radio_group" && this.#inspectMissingOptions && inspectInteractiveOptions) {
+        allowedOptions = await this.#observeOptionLabels(resolved, [candidate], true);
+      }
       const constraints = await unknownConstraints(candidate);
       const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
       const label = await observedControlLabel(candidate, uiBehavior) ?? stableKey;
@@ -1257,13 +1275,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
         ...(constraints === undefined ? {} : { constraints }),
       });
-      this.#controls.set(`unknown-required:${ordinal}`, {
-        locator: candidate,
-        fieldId: unknown[unknown.length - 1]!.fieldId,
-        uiBehavior: unknown[unknown.length - 1]!.uiBehavior,
-        uiVariant: "workday_unknown_required_v1",
-        binderStrategy: "opaque_machine_key",
-      });
+      this.#controls.set(`unknown-required:${ordinal}`, resolved);
     }
     return unknown;
   }
@@ -2574,6 +2586,7 @@ async function unknownUiBehavior(
     if (element instanceof HTMLSelectElement) {
       return element.multiple ? "multi_select" : "select";
     }
+    if (element instanceof HTMLTextAreaElement) return "textarea";
     if (
       role === "combobox" ||
       element.getAttribute("aria-haspopup") === "listbox"
@@ -2653,7 +2666,9 @@ async function unknownAllowedOptions(locator: Locator): Promise<readonly string[
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     ) ?? element;
     const options = element instanceof HTMLSelectElement
-      ? [...element.options].map((option) => normalize(option.label || option.textContent))
+      ? [...element.options].filter((option) => !option.disabled &&
+          !(option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled))
+        .map((option) => normalize(option.label || option.textContent))
       : [...owner.querySelectorAll(
           '[role="option"], [role="radio"], input[type="radio"], input[type="checkbox"]',
         )].map((option) => {

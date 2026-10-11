@@ -2183,6 +2183,74 @@ test("inventories unknown active form controls by structural UI type without ret
   }
 });
 
+test("unknown questions discover closed choice options before generating an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<aside role="listbox"><div role="option">Unrelated answer</div></aside>
+      <main data-automation-id="applyFlowMyInfoPage">
+      <label for="tenant-choice">Unfamiliar tenant question</label>
+      <button id="tenant-choice" type="button" role="combobox" aria-required="true"
+        aria-controls="tenant-options" aria-expanded="false">Select One</button>
+      <div id="tenant-options" role="listbox" hidden>
+        <div role="option">Alpha</div><div role="option">Beta</div>
+      </div>
+      <script>
+        const control = document.getElementById('tenant-choice');
+        const options = document.getElementById('tenant-options');
+        window.opens = 0;
+        control.onclick = () => { window.opens++; options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') { options.hidden = true; control.setAttribute('aria-expanded', 'false'); }
+        });
+        options.querySelectorAll('[role="option"]').forEach(option => {
+          option.onclick = () => { control.textContent = option.textContent; options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+        });
+      </script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+    });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    assert.equal(snapshot.controls[0]?.fieldId, "unknown.required.1");
+    assert.equal(snapshot.controls[0]?.uiBehavior, "search_select");
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Alpha", "Beta"]);
+    assert.equal(await page.locator('#tenant-choice').innerText(), "Select One");
+    assert.equal(await page.locator('#tenant-options').isVisible(), false);
+    const opens = await page.evaluate(() => Reflect.get(window, "opens"));
+    await adapter.inspect(signal, false);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "opens")), opens);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.ok(["Alpha", "Beta"].includes(await page.locator('#tenant-choice').innerText()));
+  } finally { await browser.close(); }
+});
+
+test("unknown UI inventory preserves textarea constraints and excludes disabled choices", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <textarea id="tenant-note" required minlength="4" maxlength="20"></textarea>
+      <select id="tenant-choice" required>
+        <option disabled selected>Select One</option><option disabled>Unavailable</option>
+        <optgroup label="Closed" disabled><option>Also unavailable</option></optgroup>
+        <option>Available</option>
+      </select></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const note = snapshot.controls.find(control => control.uiBehavior === "textarea");
+    assert.equal(note?.constraints?.minLength, 4);
+    assert.equal(note?.constraints?.maxLength, 20);
+    assert.deepEqual(snapshot.controls.find(control => control.uiBehavior === "select")?.allowedOptions, ["Available"]);
+    const choice = snapshot.controls.find(control => control.uiBehavior === "select")!;
+    const observed = await adapter.observeControl(choice.controlId, AbortSignal.any([]));
+    assert.deepEqual(observed.visibleOptionIds, [`option_sha256_${retainedProfileTextSha256("Available")}`]);
+  } finally { await browser.close(); }
+});
+
 test("inventories optional custom ARIA and contenteditable controls", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -3069,6 +3137,25 @@ fields: [
   } finally {
     await browser.close();
   }
+});
+
+test("repeatable question variants bind one handler from the observed UI type", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const [attributes, behavior] of [["", "text"], ['role="combobox"', "search_select"]] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+        <section data-automation-id="educationSection"><div data-row-id="education-1">
+          <label>School<input data-automation-id="education-1--school" ${attributes}></label>
+        </div></section></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      const snapshot = await adapter.inspect(AbortSignal.any([]));
+      const schools = snapshot.rows.flatMap(row => row.controls)
+        .filter(control => control.fieldId === "education.school");
+      assert.equal(schools.length, 1);
+      assert.equal(schools[0]?.uiBehavior, behavior);
+    }
+  } finally { await browser.close(); }
 });
 
 test("real adapter and handler reconcile every profile section without owned duplicates", async () => {
