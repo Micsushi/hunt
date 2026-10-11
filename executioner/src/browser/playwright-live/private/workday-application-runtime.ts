@@ -1216,42 +1216,59 @@ export class OwnedWorkdayApplicationRuntime {
           });
         },
       });
-      const semanticObservationStartedAt = performance.now();
-      const observed = await semantic.observe(signal);
-      this.#trace?.("questionnaire_semantic_observation_completed", {
-        durationMs: monotonicDuration(semanticObservationStartedAt),
-        status: observed.ok ? "succeeded" : "failed",
-      });
-      if (!observed.ok) return applicationFailure(observed.error.code, "question_control", "ui_behavior");
-      const discovered = discoverFields(observed.value.targets);
-      const applicationFields = await enrichQuestionnaireFields(page, discovered);
-      const snapshot = createSemanticSnapshot(
-        { kind: "workday", page: "questionnaire" }, applicationFields,
-      );
-      // Application observation owns the shared two-phase checkbox grouping
-      // annotation. Let it finish before the independent taxonomy reads the
-      // DOM so neither observer can see the annotation's transient gap.
-      const application = await new PlaywrightWorkdayApplicationPage(
-        page,
-        { timeoutMs: this.#timeoutMs },
-      ).observe(signal);
-      const taxonomy = await monitorTaxonomy(page, monitorPageName);
-      const visibleFields = snapshot.fields.filter(({ state }) => state !== "hidden");
-      const requiredFieldCount = visibleFields.filter(({ required }) => required).length;
-      this.#trace?.("questionnaire_coverage_observed", {
-        semanticFields: visibleFields.length,
-        semanticRequired: requiredFieldCount,
-        applicationFields: application.ok ? application.value.requiredFields.length : -1,
-        taxonomyFields: taxonomy.fieldCount,
-        taxonomyRequired: taxonomy.requiredFieldCount,
-      });
-      if (
-        visibleFields.length === 0 ||
-        !application.ok || application.value.page !== "questionnaire" ||
-        application.value.requiredFields.length !== requiredFieldCount ||
-        taxonomy.fieldCount !== visibleFields.length ||
-        taxonomy.requiredFieldCount !== requiredFieldCount
-      ) throw new TypeError(`questionnaire field coverage mismatch:${JSON.stringify({
+      const observeCoverage = async () => {
+        const semanticObservationStartedAt = performance.now();
+        const observed = await semantic!.observe(signal);
+        this.#trace?.("questionnaire_semantic_observation_completed", {
+          durationMs: monotonicDuration(semanticObservationStartedAt),
+          status: observed.ok ? "succeeded" : "failed",
+        });
+        if (!observed.ok) throw new TypeError("questionnaire semantic observation unavailable");
+        const discovered = discoverFields(observed.value.targets);
+        const applicationFields = await enrichQuestionnaireFields(page, discovered);
+        const snapshot = createSemanticSnapshot(
+          { kind: "workday", page: "questionnaire" }, applicationFields,
+        );
+        // Application observation owns the shared two-phase checkbox grouping
+        // annotation. Let it finish before the independent taxonomy reads the
+        // DOM so neither observer can see the annotation's transient gap.
+        const application = await new PlaywrightWorkdayApplicationPage(
+          page,
+          { timeoutMs: this.#timeoutMs },
+        ).observe(signal);
+        const taxonomy = await monitorTaxonomy(page, monitorPageName);
+        const visibleFields = snapshot.fields.filter(({ state }) => state !== "hidden");
+        const requiredFieldCount = visibleFields.filter(({ required }) => required).length;
+        this.#trace?.("questionnaire_coverage_observed", {
+          semanticFields: visibleFields.length,
+          semanticRequired: requiredFieldCount,
+          applicationFields: application.ok ? application.value.requiredFields.length : -1,
+          taxonomyFields: taxonomy.fieldCount,
+          taxonomyRequired: taxonomy.requiredFieldCount,
+        });
+        const matches = !(
+          visibleFields.length === 0 ||
+          !application.ok || application.value.page !== "questionnaire" ||
+          application.value.requiredFields.length !== requiredFieldCount ||
+          taxonomy.fieldCount !== visibleFields.length ||
+          taxonomy.requiredFieldCount !== requiredFieldCount
+        );
+        return { observed, snapshot, application, taxonomy, visibleFields, requiredFieldCount, matches };
+      };
+      let coverage = await observeCoverage();
+      // Conditional controls can mount between independent observations.
+      // Rebind and compare again; never accept permanently missing coverage.
+      for (let settle = 0; !coverage.matches && settle < 10; settle += 1) {
+        this.#assertAuthorized(signal);
+        await page.waitForTimeout(100);
+        await prepareQuestionnaireTargets(
+          page, input.pageId, this.#timeoutMs,
+          () => this.#assertAuthorized(signal), this.#trace, this.#questionnaireCountry(),
+        );
+        coverage = await observeCoverage();
+      }
+      const { observed, snapshot, application, taxonomy, visibleFields, requiredFieldCount } = coverage;
+      if (!coverage.matches) throw new TypeError(`questionnaire field coverage mismatch:${JSON.stringify({
         semanticFields: visibleFields.length,
         semanticRequired: requiredFieldCount,
         applicationFields: application.ok ? application.value.requiredFields.length : -1,

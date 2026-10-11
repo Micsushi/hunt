@@ -97,6 +97,7 @@ const STRING_KEYS = new Set([
 const NUMBER_KEYS = new Set([
   "ordinal", "attempt", "fieldCount", "requiredFieldCount", "completedPages",
   "requiredFields", "verifiedFields", "duplicateRows", "inputCount", "itemCount",
+  "semanticFields", "semanticRequired", "applicationFields", "taxonomyFields", "taxonomyRequired",
   "successCount", "removeCount", "errorCount", "inputFileCount", "buttonCount",
   "progressCount", "groupCount", "checkboxCount", "checkedCount", "optionRowCount",
   "ownerSurfaceCount", "visualSurfaceCount", "candidateCount", "sharedSelectCount",

@@ -1682,7 +1682,11 @@ test("questionnaire batches external proof once while every field keeps independ
               root.replaceWith(replacement);
             });
         }
-        if (taxonomy.fieldCount === 4 && taxonomy.questionTypes.includes("authorization")) {
+        if (await page.locator('html[data-hunt-page-id="page-questionnaire-mount"]').count() === 1) {
+          assert.ok(taxonomy.fieldCount === 0 || taxonomy.fieldCount === 1);
+          assert.equal(taxonomy.requiredFieldCount, taxonomy.fieldCount);
+          if (moment === "after_readback") assert.equal(taxonomy.fieldCount, 1);
+        } else if (taxonomy.fieldCount === 4 && taxonomy.questionTypes.includes("authorization")) {
           assert.deepEqual(taxonomy.questionTypes, ["authorization", "narrative", "unknown"]);
           assert.equal(taxonomy.requiredFieldCount, 4);
         } else if (taxonomy.fieldCount === 5 && taxonomy.questionTypes.includes("authorization")) {
@@ -2093,6 +2097,24 @@ test("questionnaire batches external proof once while every field keeps independ
       },
     ]);
 
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-mount" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-authorization"><label for="mount-authorization">Are you legally authorized to work in this country?</label><span data-automation-id="required">*</span><div role="slider" tabindex="0"></div></div>
+      <script>setTimeout(() => document.querySelector('[role=slider]').outerHTML = '<select id="mount-authorization" required><option>Select One</option><option>Yes</option><option>No</option></select>', 400);</script>
+    </main></body></html>`);
+    const mounting = await runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_mount_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-questionnaire-mount" } as never,
+    }, new AbortController().signal) as { ok: boolean };
+    assert.equal(mounting.ok, true, JSON.stringify(mounting));
+    assert.equal(await page.locator('#mount-authorization').inputValue(), 'Yes');
+
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-gap" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
       <div data-automation-id="formField-unsupported"><label>Required unsupported control</label><span data-automation-id="required">*</span><div role="slider" tabindex="0" data-hunt-field-id="unsupported-required"></div></div>
     </main></body></html>`);
@@ -2107,7 +2129,7 @@ test("questionnaire batches external proof once while every field keeps independ
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
-    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 3);
+    assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 4);
   } finally {
     runtime.dispose();
     disposeResumeArtifact(artifact);
