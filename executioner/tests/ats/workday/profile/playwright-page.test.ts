@@ -2767,7 +2767,7 @@ test(`source discovery exposes a leaf below ${categoryLabel} rather than its cat
         const input = document.querySelector('input'); const popup = document.querySelector('#popup');
         input.onclick = () => {
           popup.hidden = false;
-          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode">${categoryLabel}<svg role="presentation"></svg></div></div>';
+          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">${categoryLabel}</span><svg role="presentation"></svg></div></div>';
           popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
             popup.innerHTML = '';
             setTimeout(() => {

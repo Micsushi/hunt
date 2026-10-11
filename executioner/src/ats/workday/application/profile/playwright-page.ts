@@ -1834,9 +1834,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     for (const [index, option] of initial.entries()) {
       const automationId = await option.getAttribute("data-automation-id");
       if (!acceptedLabels.has(initialLabels[index]!) || automationId === "selectedItem") continue;
-      if (await control.getAttribute("id") === "source--source" &&
-          await option.locator('svg[role="presentation"]').count() > 0 &&
-          await option.locator('input, [role="checkbox"], [role="radio"]').count() === 0) continue;
+      const row = option.locator('xpath=ancestor-or-self::*[@role="option"][1]');
+      if (await control.getAttribute("id") === "source--source" && await row.count() === 1 &&
+          await row.locator('svg[role="presentation"]').count() > 0 &&
+          await row.locator('input, [role="checkbox"], [role="radio"]').count() === 0) continue;
       initialExact.push({
         option,
         rank: await option.getAttribute("role") === "option"
