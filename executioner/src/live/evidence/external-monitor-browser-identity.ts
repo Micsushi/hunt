@@ -18,10 +18,13 @@ export function normalizeObservedAddressHost(address: string): string {
   return url.hostname.toLowerCase();
 }
 
+export const numberedQuestionnaireTitlePattern = "^Application Questions [1-9][0-9]* of [1-9][0-9]*$";
+
 export function observedStructurePageFromIdentityTitle(title: string): string {
   const normalized = normalizeObservedChromeTitle(title);
   if (normalized === "My Information" || normalized === "My Experience") return "profile";
-  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(normalized)) {
+  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(normalized) ||
+      new RegExp(numberedQuestionnaireTitlePattern, "u").test(normalized)) {
     return "questionnaire";
   }
   if (normalized === "Review") return "review";

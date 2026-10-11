@@ -4,6 +4,7 @@ import { canonicalMonitorIdentityTitle } from "./external-monitor-runtime.ts";
 import {
   externalMonitorObserverFailureCode,
   observerFailure,
+  type ExternalMonitorObserverFailureDiagnostic,
 } from "./external-monitor-observer-failure.ts";
 import { compatibleObservedStructure } from "./external-monitor-page-identity.ts";
 
@@ -12,6 +13,7 @@ export interface ObservedMonitorSurface {
   readonly titleCandidateSha256s?: readonly string[];
   readonly page: string;
   readonly submitPresent: boolean;
+  readonly structureDiagnostic?: ExternalMonitorObserverFailureDiagnostic;
 }
 
 export async function waitForReconciledMonitorSurface(
@@ -40,6 +42,7 @@ export async function waitForReconciledMonitorSurface(
           ? request.capturedIdentityDigests.titleSha256
           : undefined;
         observerFailure("structure_classification", {
+          ...observed.structureDiagnostic,
           ...(/^[0-9a-f]{64}$/u.test(expectedTitleSha256 ?? "") ? { expectedTitleSha256 } : {}),
           observedTitleSha256: createHash("sha256")
             .update(canonicalMonitorIdentityTitle(observed.title), "utf8").digest("hex"),

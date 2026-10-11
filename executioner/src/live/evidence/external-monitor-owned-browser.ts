@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   normalizeObservedAddressHost,
+  numberedQuestionnaireTitlePattern,
   observedChromeIdentityTitleSha256s,
   observedStructurePageWithIdentity,
   selectObservedChromeIdentityTitle,
@@ -135,6 +136,9 @@ $address = $null
 foreach ($element in $elements) {
   try {
     $name = [string]$element.Current.Name
+    if ([regex]::Replace($name, '\s+', ' ').Trim() -cmatch '${numberedQuestionnaireTitlePattern}') {
+      $name = 'Application Questions'
+    }
     $visible = -not $element.Current.IsOffscreen
     $controlType = [int]$element.Current.ControlType.Id
     if ($visible -and $allow -contains $name) {
@@ -293,6 +297,10 @@ try {
     titleCandidateSha256s: observedChromeIdentityTitleSha256s(observed.title, identityTitles),
     page,
     submitPresent: observedSubmitPresent(owned),
+    structureDiagnostic: structureFailureDiagnostic(
+      expectedTitleSha256, observed.title, identityTitles, flags, stageCounts,
+      activeStageTitles, owned.applicationFieldCount ?? 0,
+    ),
   });
 }
 

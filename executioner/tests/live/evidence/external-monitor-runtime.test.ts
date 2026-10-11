@@ -66,6 +66,19 @@ test("application monitor page catalog matches the page-walk contract", () => {
   assert.deepEqual(applicationMonitorPages, applicationPages);
 });
 
+test("independent monitor recognizes numbered Workday questionnaire titles", () => {
+  for (const title of ["Application Questions 1 of 2", "Application Questions 2\nof 2"]) {
+    assert.equal(observedStructurePageFromIdentityTitle(title), "questionnaire");
+    assert.equal(observedStructurePageWithIdentity(
+      new Set(["Save and Continue"]), [], title, undefined,
+      { actionFlags: new Set(["Save and Continue"]), editFlags: new Set() },
+    ), "questionnaire");
+  }
+  for (const title of ["Application Questions 0 of 2", "Application Questions about benefits"]) {
+    assert.throws(() => observedStructurePageFromIdentityTitle(title));
+  }
+});
+
 test("external monitor canonicalizes Workday posting URL case", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-posting-case-"));
   try {
@@ -105,6 +118,7 @@ test("external monitor canonicalizes Workday posting URL case", async () => {
 test("external monitor blocks each auth effect until the exact independent ACK", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-external-monitor-"));
   let release: (() => void) | undefined;
+  let monitorReady: (() => void) | undefined;
   const page = fixturePage();
   try {
     const runtime = createStage2ExternalMonitorRuntime({
@@ -113,7 +127,10 @@ test("external monitor blocks each auth effect until the exact independent ACK",
       runtimeRoot: root,
       now: ordinalClock(),
       waitForAcknowledgement: async (request) => {
-        await new Promise<void>((resolve) => { release = resolve; });
+        await new Promise<void>((resolve) => {
+          release = resolve;
+          monitorReady?.();
+        });
         writeStage2ExternalMonitorAcknowledgement({
           runtimeRoot: root,
           evidenceRoot: root,
@@ -128,6 +145,7 @@ test("external monitor blocks each auth effect until the exact independent ACK",
 
     for (const [index, [pageName, moment]] of authMoments.entries()) {
       let effectStarted = false;
+      const ready = new Promise<void>((resolve) => { monitorReady = resolve; });
       const operationId = index < 2
         ? "operation_account_mutation_01"
         : "operation_account_state_0001";
@@ -140,7 +158,7 @@ test("external monitor blocks each auth effect until the exact independent ACK",
         new AbortController().signal,
       )
         .then(() => { effectStarted = true; });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await ready;
       assert.equal(effectStarted, false);
       release?.();
       await gated;
@@ -1944,6 +1962,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
       title: "My Experience",
       page: "resume",
       submitPresent: false,
+      structureDiagnostic: { observedStructureFlags: ["My Experience"] },
     }), { attempts: 1 });
   } catch (error) {
     structureMismatch = error;
@@ -1953,6 +1972,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     expectedTitleSha256: digest(Buffer.from("My Experience", "utf8")),
     observedTitleSha256: digest(Buffer.from("My Experience", "utf8")),
     observedStructurePage: "resume",
+    observedStructureFlags: ["My Experience"],
   });
 });
 
