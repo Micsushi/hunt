@@ -553,11 +553,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           this.#inspectMissingOptions && resolved.uiBehavior === "multi_select" &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
-        // Discover suggestions through the actual UI without Enter, which can
-        // commit a free-entry token. The draft is restored in finally.
+        // Enter is a search only when the input declares it. On free-entry
+        // controls it could commit a token. Restore the draft in finally.
         searchDraft = await control.inputValue();
         await control.fill("", { timeout: this.#timeoutMs });
         await control.pressSequentially("a", { timeout: this.#timeoutMs });
+        if (await control.getAttribute("enterkeyhint") === "search") {
+          await control.press("Enter", { timeout: this.#timeoutMs });
+        }
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
         do {
           owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);

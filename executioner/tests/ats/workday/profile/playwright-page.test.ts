@@ -2378,14 +2378,14 @@ test("unknown questions discover closed choice options before generating an answ
   } finally { await browser.close(); }
 });
 
-test("empty multi-select discovers suggestions without committing its search draft", async () => {
+for (const searchOnEnter of [false, true]) test(`empty multi-select discovers ${searchOnEnter ? "submitted search" : "type-ahead"} suggestions without committing its draft`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
       <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
         <div data-automation-id="multiSelectContainer">
-          <input id="skills--skills" required role="combobox" aria-controls="choices" aria-expanded="false">
+          <input id="skills--skills" required role="combobox" ${searchOnEnter ? 'enterkeyhint="search"' : ''} aria-expanded="false">
           <div id="selected"></div>
         </div>
       </div></main>
@@ -2393,11 +2393,10 @@ test("empty multi-select discovers suggestions without committing its search dra
       <aside role="listbox" data-automation-id="activeListContainer"><div role="option">Unrelated answer</div></aside>
       <script>
         const input = document.getElementById('skills--skills');
-        input.removeAttribute('aria-controls');
         const choices = document.getElementById('choices');
         const selected = document.getElementById('selected');
         input.oninput = () => {
-          choices.hidden = !input.value;
+          choices.hidden = ${searchOnEnter} || !input.value;
           input.setAttribute('aria-expanded', String(!choices.hidden));
         };
         function commit(value) {
@@ -2407,7 +2406,11 @@ test("empty multi-select discovers suggestions without committing its search dra
           input.setAttribute('aria-expanded', 'false');
         }
         input.onkeydown = event => {
-          if (event.key === 'Enter') { event.preventDefault(); commit(input.value); }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            if (${searchOnEnter}) { choices.hidden = false; input.setAttribute('aria-expanded', 'true'); }
+            else commit(input.value);
+          }
           if (event.key === 'Escape') { choices.hidden = true; input.setAttribute('aria-expanded', 'false'); }
         };
         choices.onclick = () => commit('Analysis');
