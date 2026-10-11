@@ -68,9 +68,11 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
 
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
+    "address.region": Object.freeze(["Region"]),
     "social.linkedin": Object.freeze(["If desired, enter the link to your LinkedIn profile"]),
     "social.twitter": Object.freeze(["If desired, enter the link to your Twitter profile"]),
     "employment.previously_worked_for_organization": Object.freeze([
+      "Have you previously worked for NAIT? If yes, please answer the questions below. If no, please continue to the next question. Current NAIT employees: Please apply through Jobs Hub in your internal Workday account to ensure your application is processed correctly.",
       "Have you worked for BDO Canada?",
       "Have you previously been employed or a student at UBC? If yes, please review the questions below.",
       "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
