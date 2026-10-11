@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 export interface IsolatedDesktopAttestationOptions {
   readonly expectedDesktop?: string;
@@ -19,7 +19,7 @@ export async function assertCurrentProcessIsOnIsolatedDesktop(
 }
 
 async function inspectInheritedDesktop(expectedDesktop: string): Promise<boolean> {
-  const result = spawnSync(
+  return new Promise((resolve) => execFile(
     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     [
       "-NoLogo",
@@ -33,21 +33,17 @@ async function inspectInheritedDesktop(expectedDesktop: string): Promise<boolean
     {
       shell: false,
       windowsHide: true,
-      timeout: 5_000,
+      timeout: 20_000,
       maxBuffer: 256,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
       env: {
         SystemRoot: process.env.SystemRoot,
         WINDIR: process.env.WINDIR,
         HUNT_C3_WINDOWS_DESKTOP_NAME: expectedDesktop,
       },
     },
-  );
-  return result.error === undefined &&
-    result.signal === null &&
-    result.status === 0 &&
-    result.stdout.trim() === "ok";
+    (error, stdout) => resolve(error === null && stdout.trim() === "ok"),
+  ));
 }
 
 export function windowsIsolatedDesktopAttestationScript(): string {

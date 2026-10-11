@@ -30,3 +30,18 @@ test("desktop attestation fails closed unless the trusted child confirms exact i
     }),
   );
 });
+
+test("native desktop attestation leaves heartbeat timers responsive", {
+  skip: process.platform !== "win32",
+}, async () => {
+  let heartbeatTicks = 0;
+  const heartbeat = setInterval(() => { heartbeatTicks += 1; }, 10);
+  try {
+    await assert.rejects(assertCurrentProcessIsOnIsolatedDesktop({
+      expectedDesktop: "HuntC3_00000000000000000000000000000000",
+    }), /isolated desktop attestation failed/u);
+    assert.ok(heartbeatTicks > 0, "native inspection must not block heartbeat timers");
+  } finally {
+    clearInterval(heartbeat);
+  }
+});
