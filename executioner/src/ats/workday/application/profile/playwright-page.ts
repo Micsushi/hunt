@@ -122,9 +122,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     this.#controls.clear();
     const controls: ProfileControlSnapshot[] = [];
-    for (const entry of profileScalarControlCatalog) {
+    const scalarSnapshots = new Map<ProfileControlCatalogEntry, ProfileControlSnapshot[]>();
+    const inspectScalar = async (entry: ProfileControlCatalogEntry) => {
       try {
-        controls.push(...await this.#inspectControls(entry, profile.locator(entry.selector)));
+        scalarSnapshots.set(entry, await this.#inspectControls(entry, profile.locator(entry.selector)));
       } catch (error) {
         throw this.#recordInspectionFailure(
           "scalar",
@@ -134,7 +135,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           error,
         );
       }
+    };
+    // Read-only controls can be observed together. Choice discovery may open a
+    // popup, so keep those operations sequential and outside the read batch.
+    const opensChoices = (entry: ProfileControlCatalogEntry) =>
+      this.#inspectMissingOptions && isChoice(entry.uiBehavior);
+    const reads = await Promise.allSettled(profileScalarControlCatalog
+      .filter((entry) => !opensChoices(entry)).map(inspectScalar));
+    for (const result of reads) {
+      if (result.status === "rejected") throw result.reason;
     }
+    for (const entry of profileScalarControlCatalog.filter(opensChoices)) await inspectScalar(entry);
+    for (const entry of profileScalarControlCatalog) controls.push(...scalarSnapshots.get(entry)!);
     const rows: ProfileRowSnapshot[] = [];
     const repeatableSections: ProfileRepeatableSection[] = [];
     for (const entry of profileRepeatableCatalog) {
@@ -881,8 +893,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: entry.uiVariant,
         binderStrategy: "catalog_selector_exact",
       });
-      const [currentReadback, valid] = await Promise.all([
-        this.#readback(match, entry.uiBehavior), validationCleared(match),
+      const [currentReadback, valid, isRequired] = await Promise.all([
+        this.#readback(match, entry.uiBehavior), validationCleared(match), required(match),
       ]);
       const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
@@ -893,7 +905,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
-        required: !valid || await required(match),
+        required: !valid || isRequired,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         readback: valid ? currentReadback : null,
@@ -2873,12 +2885,9 @@ async function validationCleared(locator: Locator): Promise<boolean> {
 }
 
 async function visibleLocators(locator: Locator): Promise<Locator[]> {
-  const matches: Locator[] = [];
-  for (let index = 0; index < await locator.count(); index += 1) {
-    const item = locator.nth(index);
-    if (await item.isVisible()) matches.push(item);
-  }
-  return matches;
+  const matches = await locator.all();
+  const visible = await Promise.all(matches.map((item) => item.isVisible()));
+  return matches.filter((_, index) => visible[index]);
 }
 
 async function exactObservedOptionOwner(
