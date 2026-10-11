@@ -511,9 +511,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       : undefined;
     let labels: string[] = [];
     let searchDraft: string | undefined;
+    let observationStage = "focus";
     try {
       await control.focus({ timeout: this.#timeoutMs });
+      observationStage = "click";
       await control.click({ timeout: this.#timeoutMs });
+      observationStage = "resolve_owner";
       await this.#page.waitForTimeout(25);
       let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
@@ -532,6 +535,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         } while (Date.now() < deadline);
       }
       if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
+        observationStage = "open_source_catalog";
         await this.#captureSelectionDiagnostic("input-source-observation-empty", "search_select");
         const buttons = await visibleLocators(control.locator(
           'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
@@ -560,6 +564,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           }
           const category = await preferredPromptOption(categories, new Set(["career websites"])) ?? categories[0];
           if (category !== undefined) {
+            observationStage = "expand_source_category";
             const categoryLabel = (await category.innerText()).trim();
             await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
             await this.#page.waitForTimeout(100);
@@ -579,6 +584,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           resolved.uiBehavior === "select" || resolved.uiBehavior === "multi_select")) {
         await this.#captureSelectionDiagnostic("observation-empty", resolved.uiBehavior);
       }
+    } catch (error) {
+      this.#trace?.("profile_option_observation_failed", {
+        fieldId: resolved.fieldId,
+        stage: observationStage,
+        timedOut: error instanceof Error && error.name === "TimeoutError",
+        durationMs: Math.round(performance.now() - started),
+      });
+      if (resolved.uiBehavior === "search_select" || resolved.uiBehavior === "select" ||
+          resolved.uiBehavior === "multi_select") {
+        await this.#captureSelectionDiagnostic("observation-failed", resolved.uiBehavior);
+      }
+      throw error;
     } finally {
       await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
       if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
