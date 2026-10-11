@@ -2432,7 +2432,7 @@ test("Review monitor ACK is followed by a fresh semantic field and invariant str
   }
 });
 
-for (const searchMode of ["keyup", "enter", "direct", "nested"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
+for (const searchMode of ["keyup", "enter", "direct", "nested", "non-country"]) test(`hierarchical Workday prompts expose and commit leaves using ${searchMode} search`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2445,7 +2445,9 @@ for (const searchMode of ["keyup", "enter", "direct", "nested"]) test(`hierarchi
       const open=()=>{
         if(popup?.isConnected)return;
         popup=document.createElement('div');popup.setAttribute('role','listbox');
-        popup.innerHTML=branch('Afghanistan')+branch('Åland Islands');
+        popup.innerHTML='${searchMode}'==='non-country'
+          ? branch('First Nations')+branch('Inuit')+branch('Métis')
+          : branch('Afghanistan')+branch('Åland Islands');
         popup.onmousedown=event=>event.preventDefault();
         popup.onclick=event=>{
           const option=event.target.closest('[role="option"]');if(!option)return;
@@ -2469,6 +2471,8 @@ for (const searchMode of ["keyup", "enter", "direct", "nested"]) test(`hierarchi
           popup.replaceWith(replacement); popup=replacement;
           popup.removeAttribute('data-hunt-popup-hydration-owner');popup.removeAttribute('data-hunt-field-popup-owner');
           popup.innerHTML='<div role="option"><div data-automation-id="promptLeafNode">Citizen</div></div><div role="option"><div data-automation-id="promptLeafNode">Permanent resident</div></div>';
+        }else if('${searchMode}'==='non-country'){
+          popup.innerHTML=(input.value?'<div role="option" aria-disabled="true">No matches found</div>':'')+branch('First Nations')+branch('Inuit')+branch('Métis');
         }else popup.innerHTML=input.value==='Canada'?branch('Canada'):branch('Afghanistan');
       }};
       document.onkeydown=event=>{if(event.key==='Escape' && !document.querySelector('[data-automation-id="selectedItem"]')){popup?.remove();input.value='';}};

@@ -2636,9 +2636,16 @@ export async function expandWorkdayPromptCategory(
       await page.waitForTimeout(50);
     } while (Date.now() < searchDeadline);
   }
-  if (branch.count !== 1 || branch.locator === undefined ||
-      await branch.locator.locator('svg[role="presentation"]').count() === 0) return undefined;
-  await branch.locator.click({ timeout: timeoutMs });
+  if (branch.count === 1 && branch.locator !== undefined &&
+      await branch.locator.locator('svg[role="presentation"]').count() > 0) {
+    await branch.locator.click({ timeout: timeoutMs });
+  } else if (branch.count === 0 && await control.getAttribute("data-automation-id") === "searchBox" &&
+      await owner.isVisible() && await page.getByRole("button", { name: /^submit$/iu }).count() === 0) {
+    // Some prompts group answers by a question-specific category, not country.
+    // Clear the unsuccessful country search before inspecting those branches.
+    await control.fill("", { timeout: timeoutMs });
+    await control.press("Enter", { timeout: timeoutMs });
+  } else return undefined;
   const visited = new Set([category]);
   // ponytail: expose the first leaf-bearing subtree, at most eight levels.
   // Enumerating sibling subtrees requires retaining each answer's full path.
