@@ -31,7 +31,7 @@ test("bounds a long Workday question consistently in its radio group metadata", 
     assert.equal(target.name.length, 512);
     assert.equal(target.control.kind, "choice");
     if (target.control.kind === "choice") assert.equal(target.control.group, target.name);
-    assert.deepEqual(target.options, ["Yes", "No"]);
+    assert.deepEqual("options" in target ? target.options : undefined, ["Yes", "No"]);
   } finally {
     await context.close();
     await browser.close();
