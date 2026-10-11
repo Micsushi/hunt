@@ -2885,7 +2885,8 @@ async function validationCleared(locator: Locator): Promise<boolean> {
 }
 
 async function visibleLocators(locator: Locator): Promise<Locator[]> {
-  const matches = await locator.all();
+  const count = await locator.count();
+  const matches = Array.from({ length: count }, (_, index) => locator.nth(index));
   const visible = await Promise.all(matches.map((item) => item.isVisible()));
   return matches.filter((_, index) => visible[index]);
 }

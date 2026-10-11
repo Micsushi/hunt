@@ -384,7 +384,7 @@ test("default MCP production journey retains, expires, and falls back without re
       completedPages: 0,
       errorCode: "page_incomplete",
     });
-    assert.deepEqual(scenario.calls, ["bind", "account", "preserve"]);
+    assert.deepEqual(scenario.calls.slice(0, 3), ["bind", "account", "preserve"]);
     assert.deepEqual(scenario.observedExpiry, [new Date(Math.min(
       Date.parse(approvalExpiryAt),
       Date.parse(leaseExpiryAt),
@@ -393,6 +393,7 @@ test("default MCP production journey retains, expires, and falls back without re
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
     assert.equal(scenario.releaseAt > 0, true);
+    assert.equal(scenario.releaseAt >= Date.parse(approvalExpiryAt), true);
     assert.equal(scenario.closeCalls, 1);
     assert.deepEqual(scenario.calls, ["bind", "account", "preserve", "release", "close:fallback"]);
     assert.equal(scenario.releaseAt < Date.parse(leaseExpiryAt), true);
