@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chromium } from "playwright";
 
 import {
   valueFreeExternalMonitorPage,
@@ -23,7 +24,7 @@ test("external monitor screenshots mask every value-bearing control family", asy
         else Reflect.deleteProperty(globalThis, "window");
       }
     },
-    locator(selector: string) { return { selector }; },
+    locator(selector: string) { return { selector, async count() { return 0; } }; },
     async screenshot(options: Record<string, unknown>) {
       assert.equal(viewportRestored, true);
       screenshotOptions = options;
@@ -43,4 +44,21 @@ test("external monitor screenshots mask every value-bearing control family", asy
       .map(({ selector }) => selector),
     valueFreeMonitorMaskSelectors,
   );
+});
+
+test("monitor restores an application stage inside a nested scrolling panel", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
+  try {
+    await page.setContent(`<div id="panel" style="height:500px;overflow:auto">
+      <div data-automation-id="progressBarActiveStep">Application Questions 2 of 2</div>
+      <h2>Application Questions 2 of 2</h2><div style="height:1500px"></div>
+      <input value="test default"><button>Save and Continue</button></div>`);
+    await page.locator('input').scrollIntoViewIfNeeded();
+    assert.ok(await page.locator('#panel').evaluate((element) => element.scrollTop) > 500);
+    await valueFreeExternalMonitorPage(page as never).screenshot({ type: "png" });
+    const heading = await page.locator('[data-automation-id="progressBarActiveStep"]').boundingBox();
+    assert.ok(heading && heading.y >= 0 && heading.y < 500);
+    assert.equal(await page.locator('input').inputValue(), 'test default');
+  } finally { await browser.close(); }
 });

@@ -30,6 +30,8 @@ export function valueFreeExternalMonitorPage(
       // Native accessibility observes the viewport. Restore the stage heading
       // before capture; the independent observer still establishes page identity.
       await owned.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
+      const activeStage = owned.locator('[data-automation-id="progressBarActiveStep"]:visible');
+      if (await activeStage.count() === 1) await activeStage.scrollIntoViewIfNeeded();
       return owned.screenshot({
         ...options,
         animations: "disabled",

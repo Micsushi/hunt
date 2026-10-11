@@ -368,6 +368,21 @@ cannot be replaced by a disposable per-job value.
 
 ### Same-revision Stage 2 Review acceptance
 
+For company coverage, begin with a complete C3 fill attempt. When it fails,
+retain the failing page and diagnose the question, answer mapping, control,
+or navigation boundary. Use focused checks while repairing the learning job,
+then replay C3 from the beginning with the repaired build through Review.
+Completing an individual field or an assisted learning job is not company
+acceptance. Select a different current posting at that company and require
+an uninterrupted C3 run through verified Review before counting the company.
+Keep both posting identities and their run evidence in the campaign record.
+
+Missing answers in an authorized test run use the existing editable fallback
+policy. Preserve their question and answer types, available options, UI
+behavior, provenance, and committed readback for later correction. Generated
+defaults remain separate from owner facts. Retain learning evidence when a
+later page fails as well as when the run succeeds. Never activate Submit.
+
 Use `live:s2` only for the approved final Stage 2 journey. It accepts the exact
 prepared run layout, and `--stop-after review` is the only checkpoint:
 

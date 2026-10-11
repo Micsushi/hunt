@@ -168,13 +168,13 @@ export function createStage2ApplicationWalkProductionBinding(
         configPath,
       );
       let runtime: Awaited<ReturnType<Stage2ApplicationWalkRuntimeBinding["bind"]>>;
+      const questionLearning = createQuestionAnswerLearningCapture({
+        root: owner.roots.evidence.path,
+        mode: resolvedOwnerSources.profilePlan.mode,
+        executionPolicy: resolvedOwnerSources.executionPolicy,
+        sensitiveValues: resolvedOwnerSources.sensitiveValues,
+      });
       try {
-        const questionLearning = createQuestionAnswerLearningCapture({
-          root: owner.roots.evidence.path,
-          mode: resolvedOwnerSources.profilePlan.mode,
-          executionPolicy: resolvedOwnerSources.executionPolicy,
-          sensitiveValues: resolvedOwnerSources.sensitiveValues,
-        });
         runtime = await dependencies.runtime.bind({
           owner,
           ownerBinding: admission.binding,
@@ -219,6 +219,7 @@ export function createStage2ApplicationWalkProductionBinding(
                   released = await runtime.cleanup.release!(cleanupSignal);
                   return released;
                 } finally {
+                  questionLearning.write();
                   if (released && ownerSources !== undefined) {
                     disposeOwnerResume(ownerSources);
                     ownerSources = undefined;
@@ -239,6 +240,7 @@ export function createStage2ApplicationWalkProductionBinding(
                 cleaned = await runtime.cleanup.close(cleanupSignal, accepted);
                 return cleaned;
               } finally {
+                questionLearning.write();
                 if (ownerSources !== undefined) disposeOwnerResume(ownerSources);
                 ownerSources = undefined;
                 if (

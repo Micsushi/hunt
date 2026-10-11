@@ -28,9 +28,12 @@ import {
 } from "../../src/ats/workday/application/lane-composition.ts";
 import {
   browserPageId,
+  boundedText,
+  browserTargetToken,
   disposeResumeArtifact,
   fieldId,
   journeyId,
+  questionId,
   upstreamResumeId,
   useResumeArtifactUpload,
   type ResolvedResumeArtifact,
@@ -163,7 +166,7 @@ test("production binding resolves opaque owner sources without value leakage", a
   }
 });
 
-test("production binding carries admitted synthetic mode without requiring a Profile lane", async () => {
+test("production binding retains observed question learning when a synthetic slice closes without acceptance", async () => {
   const fixture = liveFixture();
   try {
     const sourcePath = join(dirname(fixture.configPath), "runtime", "application-profile.json");
@@ -182,6 +185,13 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       runtime: {
         async bind(request) {
           admittedMode = request.ownerSources.profilePlan.mode;
+          request.questionLearning?.recordObserved({
+            pageId: "secondary-questions",
+            questionId: questionId("question-insurance-license"),
+            field: { fieldId: fieldId("license"), target: browserTargetToken("license-target"),
+              label: boundedText("Insurance license"), required: true, behavior: "text",
+              options: [], state: "empty" },
+          });
           return {
             walk: {
               observer: { async observe() { throw new Error("offline binding only"); } },
@@ -217,7 +227,10 @@ test("production binding carries admitted synthetic mode without requiring a Pro
       submissionPolicy: "forbidden",
       liveProofEligibility: "eligible",
     });
-    assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([])), true);
+    assert.equal(await resolved.dependencies.cleanup.close(AbortSignal.any([]), false), true);
+    const learned = JSON.parse(readFileSync(join(fixture.evidenceRoot, "question-answer-learning.json"), "utf8"));
+    assert.equal(learned.questions[0].label, "Insurance license");
+    assert.equal(learned.questions[0].answerState, "unset");
   } finally {
     fixture.cleanup();
   }
