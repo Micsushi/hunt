@@ -401,8 +401,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
       const applied = await clickNext(active.page, this.#timeoutMs);
       if (applied !== "applied") return applied;
       await active.page.waitForFunction(
-        (fromPageId) =>
-          document.documentElement.getAttribute("data-hunt-page-id") !== fromPageId,
+        (fromPageId) => {
+          const destination = document.documentElement.getAttribute("data-hunt-page-id");
+          return destination !== null && destination.length > 0 && destination !== fromPageId;
+        },
         snapshot.effect.pageId,
         { timeout: 0 },
       );

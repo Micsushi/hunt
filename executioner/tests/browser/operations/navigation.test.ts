@@ -40,6 +40,38 @@ test("rejects duplicate next controls as ambiguous", async () => {
   }
 });
 
+test("waits through a missing or empty destination coordinate during remount", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  try {
+    for (const transient of [null, ""]) {
+      const provider = new PlaywrightBrowserSession({ context, ids: testIds("edededededededed") });
+      const transition = transient === null
+        ? "document.documentElement.removeAttribute('data-hunt-page-id')"
+        : "document.documentElement.dataset.huntPageId=''";
+      const started = await provider.start({
+        journeyId: testJourneyId,
+        target: dataPage(`<button onclick="${transition};setTimeout(()=>document.documentElement.dataset.huntPageId='page-questionnaire',1000)">Next</button>`, "page-profile"),
+      }, new AbortController().signal);
+      assert.equal(started.ok, true);
+      if (!started.ok) throw new Error("start failed");
+      const request = admittedNavigation(started.value.sessionId, started.value.pageId);
+      assert.deepEqual(await provider.navigate(request, new AbortController().signal), {
+        ok: true,
+        value: {
+          operationId: request.snapshot.effect.operationId,
+          fromPageId: "page-profile",
+          pageId: "page-questionnaire",
+        },
+      });
+      await provider.close({ sessionId: started.value.sessionId }, new AbortController().signal);
+    }
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("waits for a delayed post-click destination before rotating page coordinates", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
