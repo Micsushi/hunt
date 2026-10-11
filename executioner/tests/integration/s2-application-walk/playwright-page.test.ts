@@ -55,6 +55,37 @@ import { walkFixture } from "./fixtures.ts";
 
 const popupPreparationPageId = browserPageId("page-questionnaire-popup-preparation");
 
+test("required date gate accepts month-year widgets without inventing a required day", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const [month, year, day, duplicate, expected] of [
+      ["1", "2000", null, false, "verified"],
+      ["12", "2026", null, false, "verified"],
+      ["13", "2000", null, false, "unverified"],
+      ["1", "", null, false, "unverified"],
+      ["1", "2000", "", false, "unverified"],
+      ["2", "2000", "29", false, "verified"],
+      ["2", "2001", "29", false, "unverified"],
+      ["1", "2000", null, true, "unverified"],
+    ] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+        <div data-automation-id="formField-startDate"><label>From*</label>
+          <div data-automation-id="dateInputWrapper" aria-required="true">
+            <input data-automation-id="dateSectionMonth-input" value="${month}">
+            ${duplicate ? '<input data-automation-id="dateSectionMonth-input" value="1">' : ''}
+            ${day === null ? '' : `<input data-automation-id="dateSectionDay-input" value="${day}">`}
+            <input data-automation-id="dateSectionYear-input" value="${year}">
+          </div></div></main>`);
+      const result = await new PlaywrightWorkdayApplicationPage(page).observe(new AbortController().signal);
+      assert.equal(result.ok, true);
+      if (!result.ok) continue;
+      assert.equal(result.value.requiredFields.length, 1);
+      assert.equal(result.value.requiredFields[0]!.verification, expected, JSON.stringify({ month, year, day, duplicate }));
+    }
+  } finally { await browser.close(); }
+});
+
 test("numbered questionnaire advances into Workday secondary questions and binds its fields", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

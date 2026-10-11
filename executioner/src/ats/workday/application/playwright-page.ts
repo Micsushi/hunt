@@ -1719,6 +1719,11 @@ async function readApplicationSnapshot(
         verified = verified && validDateValue(
           `${values[2]}-${values[0]!.padStart(2, "0")}-${values[1]!.padStart(2, "0")}`,
         );
+      } else if (parts[0]!.length === 1 && parts[1]!.length === 0 && parts[2]!.length === 1) {
+        // Employment and education dates can deliberately omit the day segment.
+        const month = parts[0]![0]!.value.trim();
+        const year = parts[2]![0]!.value.trim();
+        verified = verified && validDateValue(`${year}-${month.padStart(2, "0")}-01`);
       } else {
         verified = verified && formattedInputs.length === 1 &&
           validDateValue(formattedInputs[0]!.value);
