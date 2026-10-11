@@ -2387,11 +2387,13 @@ test("empty multi-select discovers suggestions without committing its search dra
         <div data-automation-id="multiSelectContainer">
           <input id="skills--skills" required role="combobox" aria-controls="choices" aria-expanded="false">
           <div id="selected"></div>
-          <div id="choices" role="listbox" hidden><div role="option">Analysis</div></div>
         </div>
-      </div></main><aside role="listbox"><div role="option">Unrelated answer</div></aside>
+      </div></main>
+      <div id="choices" role="listbox" data-automation-id="activeListContainer" hidden><div role="option">Analysis</div></div>
+      <aside role="listbox" data-automation-id="activeListContainer"><div role="option">Unrelated answer</div></aside>
       <script>
         const input = document.getElementById('skills--skills');
+        input.removeAttribute('aria-controls');
         const choices = document.getElementById('choices');
         const selected = document.getElementById('selected');
         input.oninput = () => {

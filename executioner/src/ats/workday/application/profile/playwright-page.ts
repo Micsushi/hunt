@@ -531,7 +531,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
     const validationBefore = await validationCleared(control);
-    const promptCatalog = ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
+    const promptCatalog = resolved.uiBehavior === "multi_select" ||
+      ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
     const priorCatalogs = promptCatalog
       ? await Promise.all((await visibleLocators(this.#page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
@@ -559,7 +560,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await control.pressSequentially("a", { timeout: this.#timeoutMs });
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
         do {
-          owner = await exactObservedOptionOwner(this.#page, control);
+          owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
           if (owner !== undefined && (await observedOptionLabels(owner)).length > 0) break;
           await this.#page.waitForTimeout(50);
         } while (Date.now() < deadline);
@@ -3158,7 +3159,7 @@ async function exactPromptCatalogOwner(
     ) return focused;
     const observed = await exactObservedOptionOwner(page, control);
     if (observed !== undefined) return observed;
-    if (source || education && priorCatalogs !== undefined) {
+    if (source || priorCatalogs !== undefined) {
       const candidates = await visibleLocators(page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
       ));
