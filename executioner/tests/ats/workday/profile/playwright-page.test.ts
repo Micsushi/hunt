@@ -155,7 +155,9 @@ test("Workday date segments regain focus after the previous segment collapses", 
       <div id="date">
         <input id="workExperience-4--startDate-dateSectionMonth-input" role="spinbutton"
           onblur="this.parentElement.className = 'collapsed'">
-        <input id="workExperience-4--startDate-dateSectionYear-input" role="spinbutton">
+        <input id="workExperience-4--startDate-dateSectionYear-input" role="spinbutton"
+          onkeydown="this.dataset.typed = 'true'"
+          oninput="if (this.dataset.typed !== 'true') this.value = ''">
       </div></main>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const initial = await adapter.inspect(AbortSignal.any([]));

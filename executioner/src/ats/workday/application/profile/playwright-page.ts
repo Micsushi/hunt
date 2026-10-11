@@ -712,8 +712,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       // Workday collapses date segments on blur; focusing opens their editable UI.
       if (request.uiBehavior === "month" || request.uiBehavior === "year") {
         await resolved.locator.focus({ timeout: this.#timeoutMs });
+        await resolved.locator.press("ControlOrMeta+A", { timeout: this.#timeoutMs });
+        await resolved.locator.pressSequentially(request.value, { timeout: this.#timeoutMs });
+      } else {
+        await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       }
-      await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       await resolved.locator.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
       interaction.backingValueCommitted = scalarReadbackMatches(
@@ -738,6 +741,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       throw new TypeError("Workday profile shared UI state did not commit");
     }
     } catch (error) {
+      this.#trace?.("profile_driver_failed", {
+        fieldId: resolved.fieldId,
+        uiBehavior: request.uiBehavior,
+        errorClass: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "commit_failed",
+        backingValueCommitted: interaction.backingValueCommitted,
+        validationCleared: interaction.validationCleared,
+      });
       if (
         request.uiBehavior === "multi_select" ||
         request.uiBehavior === "search_select" || request.uiBehavior === "select"
