@@ -382,6 +382,34 @@ test("tiny segmented dates commit through keyboard handlers before calendar trav
   } finally { await browser.close(); }
 });
 
+test("segmented dates correct a normalized partial year through verified year steps", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const year of [2026, 2019]) {
+      await page.setContent(`<div data-automation-id="formField-date"><div id="date">
+        <input data-automation-id="dateSectionMonth-input"><input data-automation-id="dateSectionDay-input"><input data-automation-id="dateSectionYear-input">
+        </div><button onclick="throw Error('calendar should not open')">Calendar</button></div>
+        <style>input{width:0;height:0;padding:0;border:0}</style><script>
+          const owner = document.querySelector('#date'), inputs = [...owner.querySelectorAll('input')];
+          const state = {value:null, onDatePicked(){}}; owner.__reactProps$test = state;
+          inputs[2].addEventListener('input', () => { if(inputs[2].value.length >= 4) inputs[2].value = '2020'; });
+          inputs[2].addEventListener('keydown', event => {
+            if(event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+              event.preventDefault(); inputs[2].value = String(Number(inputs[2].value) + (event.key === 'ArrowUp' ? 1 : -1));
+            }
+          });
+          owner.addEventListener('keyup', () => {
+            const [m,d,y] = inputs.map(input => input.value);
+            if(m.length === 2 && d.length === 2 && y.length === 4) state.value = {year:Number(y),month:Number(m),day:Number(d)};
+          });
+        </script>`);
+      assert.equal(await applyCompositeDateMutation(page, page.locator('#date'), year + '-10-11', 1000), true);
+      assert.equal(await page.locator('[data-automation-id="dateSectionYear-input"]').inputValue(), String(year));
+    }
+  } finally { await browser.close(); }
+});
+
 test("Workday calendar navigates bounded months and verifies the exact day", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
