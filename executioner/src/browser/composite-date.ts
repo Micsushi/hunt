@@ -105,11 +105,12 @@ export async function applyCompositeDateMutation(
   if (editable.some((value) => !value)) return false;
   const existing = await Promise.all(locators.map(part => part.inputValue()));
   const existingIso = `${existing[2]?.trim()}-${existing[0]?.trim().padStart(2, "0")}-${existing[1]?.trim().padStart(2, "0")}`;
-  if (existingIso === isoDate && await compositeDateBackingCommitted(owner, isoDate)) return true;
-  const visible = await Promise.all(locators.map((part) => part.isVisible()));
+  const boxes = await Promise.all(locators.map(part => part.boundingBox()));
+  const directlyEditable = boxes.every(box => box !== null && box.width >= 1 && box.height >= 1);
+  if (directlyEditable && existingIso === isoDate && await compositeDateBackingCommitted(owner, isoDate)) return true;
   // Some Workday tenants keep zero-sized segments behind a visible date picker.
   // Use that owned UI instead of trying to fill hidden inputs.
-  if (visible.every(Boolean)) {
+  if (directlyEditable) {
     const values = [isoDate.slice(5, 7), isoDate.slice(8, 10), isoDate.slice(0, 4)];
     try {
       for (const [index, part] of locators.entries()) {
@@ -122,6 +123,14 @@ export async function applyCompositeDateMutation(
     if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   }
   if (!await openOwnedCalendar(owner, timeoutMs)) return false;
+  // A tiny-input widget can display a local default that its form has not saved.
+  // Changing the calendar selection first makes its change handler commit again.
+  if (!directlyEditable && existingIso === isoDate) {
+    const alternate = new Date(`${isoDate}T12:00:00.000Z`);
+    alternate.setUTCDate(alternate.getUTCDate() === 1 ? 2 : alternate.getUTCDate() - 1);
+    if (!await chooseCalendarDate(page, alternate.toISOString().slice(0, 10), timeoutMs)) return false;
+    if (!await openOwnedCalendar(owner, timeoutMs)) return false;
+  }
   if (!await chooseCalendarDate(page, isoDate, timeoutMs)) return false;
   return await compositeDateBackingCommitted(owner, isoDate);
 }

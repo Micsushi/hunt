@@ -292,6 +292,36 @@ test(`commits a controlled Workday composite date through its owned calendar (hi
 });
 }
 
+test("tiny Workday date inputs commit a displayed but unsaved default through the calendar", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<style>input { width: 1px; transform: scale(0.01); }</style>
+      <div data-automation-id="formField-dateSignedOn"><div data-automation-id="dateInputWrapper">
+        <input data-automation-id="dateSectionMonth-input" value="10">
+        <input data-automation-id="dateSectionDay-input" value="11">
+        <input data-automation-id="dateSectionYear-input" value="2026">
+        <button aria-label="Open date picker" onclick="document.querySelector('[role=dialog]').hidden=false">Calendar</button>
+      </div><div role="dialog" hidden>
+        <button aria-label="Saturday, October 10, 2026" onclick="pick(10)">10</button>
+        <button aria-label="Sunday, October 11, 2026" onclick="pick(11)">11</button>
+      </div></div><script>
+        const owner = document.querySelector('[data-automation-id=dateInputWrapper]');
+        const props = {value: {yyyy:2026, mm:10, dd:11}, onDatePicked(){}};
+        Object.defineProperty(owner, '__reactProps$date', {enumerable:true, value:props});
+        window.savedDate = null;
+        window.pick = day => {
+          if (props.value.dd !== day) window.savedDate = '2026-10-' + day;
+          props.value = {yyyy:2026, mm:10, dd:day};
+          owner.querySelector('[data-automation-id=dateSectionDay-input]').value = String(day);
+          document.querySelector('[role=dialog]').hidden = true;
+        };
+      </script>`);
+    assert.equal(await applyCompositeDateMutation(page, page.locator('[data-automation-id=dateInputWrapper]'), "2026-10-11", 1000), true);
+    assert.equal(await page.evaluate(() => (window as unknown as {savedDate: string}).savedDate), "2026-10-11");
+  } finally { await browser.close(); }
+});
+
 test("Workday composite date verifies yyyy mm dd backing without accepting incomplete or wrong dates", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
