@@ -562,23 +562,38 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               'input, [role="checkbox"], [role="radio"]',
             ).count() === 0) categories.push(option);
           }
-          const category = await preferredPromptOption(categories, new Set(["career websites"])) ?? categories[0];
-          if (category !== undefined) {
+          const categoryLabels = await Promise.all(categories.map(category => category.innerText()));
+          categoryLabels.sort((a, b) => Number(normalize(b) === "career websites") - Number(normalize(a) === "career websites"));
+          for (const label of categoryLabels) {
+            if (owner === undefined) throw new TypeError("Workday source catalog is unavailable");
+            const category = await preferredPromptOption(
+              await visibleLocators(owner.locator('[role="option"]')), new Set([normalize(label)]),
+            );
+            if (category === undefined) throw new TypeError("Workday source category is unavailable");
             observationStage = "expand_source_category";
             const categoryLabel = (await category.innerText()).trim();
             await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
             await this.#page.waitForTimeout(100);
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
-            if (owner === undefined) throw new TypeError("Workday source category options are unavailable");
-            const leaves = await visibleLocators(owner.locator('[role="option"]'));
+            const leaves = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
             const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())));
             if (leafLabels.some(label => normalize(label) === normalize(categoryLabel))) {
               throw new TypeError("Workday source category did not expand");
             }
             for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), categoryLabel);
+            if (leafLabels.length > 0) break;
+            // Empty categories still expose their exact heading as Back. Return
+            // to the same catalog and inspect the next observed category.
+            const back = await visibleLocators(this.#page.getByText(categoryLabel, { exact: true }));
+            if (back.length !== 1) throw new TypeError("Workday source category back control is ambiguous");
+            await back[0]!.click({ timeout: this.#timeoutMs });
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+          }
+          if (categoryLabels.length > 0 && this.#observedSourceCategories.size === 0) {
+            throw new TypeError("Workday source categories have no selectable options");
           }
         }
-        labels = await observedOptionLabels(owner);
+        if (owner !== undefined) labels = await observedOptionLabels(owner);
       }
       if (labels.length === 0 && (resolved.uiBehavior === "search_select" ||
           resolved.uiBehavior === "select" || resolved.uiBehavior === "multi_select")) {

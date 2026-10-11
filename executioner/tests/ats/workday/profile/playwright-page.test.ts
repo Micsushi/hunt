@@ -2717,6 +2717,41 @@ test("a matching saved source proves controlled backing without clicking its cov
   } finally { await browser.close(); }
 });
 
+test("source discovery skips an empty category without committing its heading", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source"><label for="source--source">How Did You Hear About Us?</label>
+      <input id="source--source" aria-required="true"><div id="selected"></div></div></main>
+      <div id="back"></div><div id="popup" role="listbox" data-automation-id="activeListContainer" hidden></div>
+      <script>
+        const input = document.querySelector('input'), popup = document.querySelector('#popup'), back = document.querySelector('#back');
+        const open = () => {
+          popup.hidden = false; back.innerHTML = '';
+          popup.innerHTML = ['Agency', 'Website'].map(label => '<div role="option"><div data-automation-id="promptLeafNode">' + label + '<svg role="presentation"></svg></div></div>').join('');
+          popup.querySelectorAll('[data-automation-id="promptLeafNode"]').forEach((node, index) => node.onclick = () => {
+            back.innerHTML = '<button>' + node.textContent + '</button>'; back.firstChild.onclick = open;
+            popup.innerHTML = index === 0 ? '' : '<div role="option"><span data-automation-id="promptOption">Example Careers</span></div>';
+            if (index === 1) popup.firstChild.onclick = () => {
+              document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">Example Careers</div>';
+              popup.hidden = true; back.innerHTML = '';
+            };
+          });
+        };
+        input.onclick = open;
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') { popup.hidden = true; back.innerHTML = ''; } });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, ["Example Careers"]);
+    assert.equal(await page.locator('#selected').innerText(), "");
+    assert.equal(await page.locator('#popup').isVisible(), false);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Example Careers");
+  } finally { await browser.close(); }
+});
+
 for (const categoryLabel of ["Career Websites", "Company Careers Page"]) {
 test(`source discovery exposes a leaf below ${categoryLabel} rather than its category`, async () => {
   const browser = await chromium.launch({ headless: true });
