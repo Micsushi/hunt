@@ -37,6 +37,7 @@ import {
 } from "../../ats/workday/application/profile/index.ts";
 import {
   retainedProfileControlGuide,
+  profileRepeatableFieldTemplate,
   retainedProfileLabelSha256Matches,
   retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
@@ -254,6 +255,13 @@ export function createProfileFieldLearningCapture(input: {
         throw error;
       }
       try {
+        if (executionPolicy.answerFallbackPolicy === "deterministic_site_valid_editable") {
+          for (const control of snapshot.rows.flatMap(({ controls }) => controls)) {
+            if (plans.has(control.fieldId)) continue;
+            const template = profileRepeatableFieldTemplate(control);
+            if (template !== undefined) plans.set(control.fieldId, template);
+          }
+        }
         observe(
           snapshot,
           plans,

@@ -4,6 +4,8 @@ import type { ApplicationProfileFactId } from
   "../../../../form/answers/application-types.ts";
 import type {
   ProfileCanonicalAnswerType,
+  ProfileControlSnapshot,
+  ProfileFieldPlan,
   ProfileQuestionType,
   ProfileRepeatableSection,
   ProfileUiBehavior,
@@ -298,6 +300,32 @@ interface RepeatableFieldCatalogEntry {
   readonly uiBehavior: ProfileUiBehavior;
   readonly uiVariant: string;
   readonly indexed?: boolean;
+}
+
+export function profileRepeatableFieldTemplate(
+  control: ProfileControlSnapshot,
+): ProfileFieldPlan | undefined {
+  const catalog = profileRepeatableCatalog.find(({ fields }) => fields.some((field) =>
+    field.fieldId === control.fieldId && field.uiBehavior === control.uiBehavior &&
+    field.uiVariant === control.uiVariant
+  ));
+  if (catalog === undefined) return undefined;
+  const answerTypes: Partial<Record<ProfileUiBehavior, ProfileCanonicalAnswerType>> = {
+    text: "text", textarea: "text", checkbox: "boolean", date: "date",
+    month: "month", year: "year", number: "number", url: "url",
+    search_select: "option", select: "single_select", multi_select: "multi_select",
+  };
+  const answerType = answerTypes[control.uiBehavior];
+  if (answerType === undefined) return undefined;
+  return {
+    fieldId: control.fieldId,
+    questionType: catalog.section === "experience" ? "employment"
+      : catalog.section === "education" ? "education"
+      : catalog.section === "skills" ? "skill" : "website",
+    answerType,
+    allowedOptions: control.allowedOptions ?? [],
+    answer: { kind: "profile_answer_missing" },
+  };
 }
 
 export interface ProfileRepeatableCatalogEntry {

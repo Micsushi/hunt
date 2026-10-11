@@ -656,6 +656,25 @@ test("records a failed driver without changing the delegated failure", async () 
   }
 });
 
+test("catalogued unplanned repeatable controls can be learned before synthetic defaults exist", async () => {
+  const capture = createProfileFieldLearningCapture({
+    page: new FakeProfilePort(repeatableSnapshot(["row-a"])),
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+    sensitiveValues: [],
+    observeControl: observer(),
+  });
+  await assert.doesNotReject(capture.page.inspect(AbortSignal.any([])));
+
+  const ownerOnly = createProfileFieldLearningCaptureWithPolicy({
+    page: new FakeProfilePort(repeatableSnapshot(["row-a"])),
+    plan: { mode: "live", pageType: "profile", fields: [], repeatables: [] },
+    executionPolicy: { ...liveApplicationExecutionPolicy("live"), answerFallbackPolicy: "owner_facts_only" },
+    sensitiveValues: [],
+    observeControl: observer(),
+  });
+  await assert.rejects(ownerOnly.page.inspect(AbortSignal.any([])), /metadata reconciliation failed/u);
+});
+
 test("repeatable learning identity survives DOM row reordering", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-learning-rows-"));
   const port = new FakeProfilePort(repeatableSnapshot(["row-a", "row-b"]));

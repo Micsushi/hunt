@@ -65,6 +65,31 @@ const control = (
   readback,
 });
 
+test("synthetic Profile fills a required unplanned work-history row without adding duplicates", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [{
+    section: "experience", rowId: "existing-row", ownedByC3: false,
+    controls: [
+      control("experience.company", "text"),
+      control("experience.title", "text"),
+      control("experience.start_month", "month"),
+      control("experience.start_year", "year"),
+      control("experience.end_month", "month"),
+      control("experience.end_year", "year"),
+    ],
+  }] });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 6);
+  assert.deepEqual(port.added, []);
+  assert.deepEqual(port.removed, []);
+  if (result.kind === "verified") {
+    assert.ok(result.verifiedFields.every((item) => item.lane === "synthetic_test_default"));
+  }
+});
+
 test("synthetic Profile settles country-dependent and source choices before text fields", async () => {
   const plan: ProfilePagePlan = {
     mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],

@@ -2,6 +2,7 @@ import {
   profileOwnerInputCatalog,
   retainedProfileControlGuide,
   profileRepeatableCatalog,
+  profileRepeatableFieldTemplate,
   profileScalarControlCatalog,
 } from "./catalog.ts";
 import type {
@@ -484,9 +485,26 @@ function withSupportedSyntheticUnknowns(
     return field === undefined ? [] : [field];
   });
   const changed = prepared.some((field, index) => field !== plan.fields[index]);
-  return generated.length === 0 && !changed ? plan : {
+  const repeatables = [...plan.repeatables];
+  for (const catalog of profileRepeatableCatalog) {
+    if (repeatables.some(({ section }) => section === catalog.section)) continue;
+    const rows = snapshot.rows.filter((row) => row.section === catalog.section &&
+      row.controls.some(({ required }) => required)).map((row, index) => ({
+      rowKey: `synthetic-${catalog.section}-${index + 1}`,
+      fields: row.controls.flatMap((control): ProfileFieldPlan[] => {
+        const template = profileRepeatableFieldTemplate(control);
+        const field = template === undefined ? undefined : syntheticProfileField(
+          control, fallbacks, `${row.rowId}\u0000${control.fieldId}`, template,
+        );
+        return field === undefined ? [] : [field];
+      }),
+    }));
+    if (rows.length > 0) repeatables.push({ section: catalog.section, rows });
+  }
+  return generated.length === 0 && !changed && repeatables.length === plan.repeatables.length ? plan : {
     ...plan,
     fields: Object.freeze([...prepared, ...generated]),
+    repeatables: Object.freeze(repeatables),
   };
 }
 
@@ -550,7 +568,10 @@ function registerGeneratedFields(
     ...original.fields,
     ...original.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
   ].filter(({ answer }) => answer.kind === "answered").map(({ fieldId }) => fieldId));
-  for (const field of prepared.fields) {
+  for (const field of [
+    ...prepared.fields,
+    ...prepared.repeatables.flatMap(({ rows }) => rows.flatMap(({ fields }) => fields)),
+  ]) {
     if (!originalAnsweredIds.has(field.fieldId) && field.answer.kind === "answered") {
       page.registerSyntheticField?.(field);
     }
