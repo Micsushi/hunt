@@ -360,6 +360,28 @@ test("preserves an exact committed composite date without refilling segments", a
   } finally { await browser.close(); }
 });
 
+test("tiny segmented dates commit through keyboard handlers before calendar traversal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="formField-date"><div id="date">
+      <input data-automation-id="dateSectionMonth-input"><input data-automation-id="dateSectionDay-input"><input data-automation-id="dateSectionYear-input">
+      </div><button onclick="throw Error('calendar should not open')">Calendar</button></div>
+      <style>input{width:0;height:0;padding:0;border:0}</style>
+      <script>
+        const owner = document.querySelector('#date');
+        const state = {value:null, onDatePicked(){}};
+        owner.__reactProps$test = state;
+        owner.addEventListener('keyup', () => {
+          const [m,d,y] = [...owner.querySelectorAll('input')].map(input => input.value);
+          if(m.length === 2 && d.length === 2 && y.length === 4) state.value = {year:Number(y),month:Number(m),day:Number(d)};
+        });
+      </script>`);
+    assert.equal(await applyCompositeDateMutation(page, page.locator('#date'), '1996-01-01', 1000), true);
+    assert.equal(await page.locator('[data-automation-id="dateSectionYear-input"]').inputValue(), '1996');
+  } finally { await browser.close(); }
+});
+
 test("Workday calendar navigates bounded months and verifies the exact day", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

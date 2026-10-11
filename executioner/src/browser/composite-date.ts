@@ -126,6 +126,23 @@ export async function applyCompositeDateMutation(
     }
     if (await compositeDateBackingCommitted(owner, isoDate)) return true;
   }
+  // Workday's segmented widget also exposes focusable, zero-sized inputs.
+  // Its keyboard handlers can commit those segments even when fill does not.
+  if (existingIso !== isoDate) {
+    try {
+      const values = [isoDate.slice(5, 7), isoDate.slice(8, 10), isoDate.slice(0, 4)];
+      for (const [index, part] of locators.entries()) {
+        await part.focus({ timeout: timeoutMs });
+        if (!await part.evaluate(element => document.activeElement === element)) break;
+        await part.press(process.platform === "darwin" ? "Meta+A" : "Control+A", { timeout: timeoutMs });
+        await part.pressSequentially(values[index]!, { delay: 20, timeout: timeoutMs });
+      }
+      await page.keyboard.press("Tab");
+      if (await compositeDateBackingCommitted(owner, isoDate)) return true;
+    } catch {
+      // Fall back to the owned calendar and its independent backing check.
+    }
+  }
   if (!await openOwnedCalendar(owner, timeoutMs)) return false;
   // A tiny-input widget can display a local default that its form has not saved.
   // Changing the calendar selection first makes its change handler commit again.
