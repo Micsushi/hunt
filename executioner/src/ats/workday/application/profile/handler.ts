@@ -448,12 +448,17 @@ function withSupportedSyntheticUnknowns(
   const country = countryField?.answer.kind === "answered"
     ? countryField.optionMapping?.visibleOption ?? countryField.answer.value
     : controls.get("address.country")?.readback ?? undefined;
+  const regionField = plan.fields.find(({ fieldId }) => fieldId === "address.region");
+  const regionControl = controls.get("address.region");
+  const region = regionField?.answer.kind === "answered"
+    ? regionField.optionMapping?.visibleOption ?? regionField.answer.value
+    : regionControl?.readback ?? syntheticProfileOption("address.region", regionControl?.allowedOptions ?? []);
   const prepared = plan.fields.map((field): ProfileFieldPlan => {
     if (field.answer.kind !== "profile_answer_missing") return field;
     const control = controls.get(field.fieldId);
     return control === undefined
       ? field
-      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field, country) ?? field;
+      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field, country, region) ?? field;
   });
   const planned = new Set(prepared.map(({ fieldId }) => fieldId));
   const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
@@ -474,6 +479,7 @@ function withSupportedSyntheticUnknowns(
       `scalar\u0000${control.fieldId}`,
       template,
       country,
+      region,
     );
     return field === undefined ? [] : [field];
   });
@@ -490,6 +496,7 @@ function syntheticProfileField(
   slot = control.fieldId,
   template?: ProfileFieldPlan,
   country?: string,
+  region?: string,
 ): ProfileFieldPlan | undefined {
   const unknownRequired = control.required && control.fieldId.startsWith("unknown.required.");
   if (!unknownRequired && (template === undefined ||
@@ -509,7 +516,7 @@ function syntheticProfileField(
     );
   const choice = committed ?? syntheticProfileOption(control.fieldId, options);
   const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
-  const answer = syntheticProfileValue(control, choice, answerType, country);
+  const answer = syntheticProfileValue(control, choice, answerType, country, region);
   if (answer === undefined || answerType === undefined) return undefined;
   const field = Object.freeze({
     fieldId: control.fieldId,
@@ -721,6 +728,7 @@ function syntheticProfileValue(
   choice: string | undefined,
   answerType = syntheticProfileAnswerType(control.uiBehavior),
   country?: string,
+  region?: string,
 ): string | undefined {
   if (control.uiBehavior === "checkbox") {
     return control.fieldId === "identity.has_preferred_name" ? "false" : "true";
@@ -737,15 +745,31 @@ function syntheticProfileValue(
   if (["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior)) {
     return choice;
   }
-  if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
   if (control.fieldId === "address.postal_code" && /^(canada|ca)$/iu.test(country?.trim() ?? "")) {
+    // Canada Post FSA prefixes: generated defaults must agree with the province.
+    // https://www.canadapost-postescanada.ca/cpc/en/support/articles/addressing-guidelines/postal-codes.page
+    const prefixes: Readonly<Record<string, string>> = {
+      alberta: "T", ab: "T", "british columbia": "V", bc: "V",
+      manitoba: "R", mb: "R", "new brunswick": "E", nb: "E",
+      "newfoundland and labrador": "A", nl: "A", "nova scotia": "B", ns: "B",
+      ontario: "[KLMNP]", on: "[KLMNP]", "prince edward island": "C", pe: "C",
+      quebec: "[GHJ]", "québec": "[GHJ]", qc: "[GHJ]", saskatchewan: "S", sk: "S",
+      "northwest territories": "X", nt: "X", nunavut: "X", nu: "X", yukon: "Y", yt: "Y",
+    };
+    const prefix = prefixes[normalize(region ?? "").toLocaleLowerCase("en-US")] ?? "[ABCEGHJ-NPRSTVXY]";
+    const pattern = `${prefix}[0-9][ABCEGHJ-NPRSTVWXYZ] [0-9][ABCEGHJ-NPRSTVWXYZ][0-9]`;
+    if (control.readback !== null && new RegExp(`^(?:${pattern})$`, "iu").test(control.readback)) {
+      return control.readback;
+    }
     const generated = generateSyntheticTextValue({
       inputType: "text", min: null, max: null, maxLength: null,
       ...control.constraints,
-      pattern: control.constraints?.pattern ?? "[ABCEGHJ-NPRSTVXY][0-9][ABCEGHJ-NPRSTVWXYZ] [0-9][ABCEGHJ-NPRSTVWXYZ][0-9]",
+      pattern: control.constraints?.pattern ?? pattern,
     });
-    return generated.kind === "generated" ? generated.value : undefined;
+    return generated.kind === "generated" && new RegExp(`^${prefix}`, "iu").test(generated.value)
+      ? generated.value : undefined;
   }
+  if (control.readback !== null && normalize(control.readback) !== "") return control.readback;
   if (control.uiBehavior === "phone") return "4035550100";
   if (control.fieldId === "phone.extension") {
     const generated = generateSyntheticTextValue({

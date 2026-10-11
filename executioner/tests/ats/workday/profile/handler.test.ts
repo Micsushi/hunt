@@ -1846,6 +1846,28 @@ test("synthetic postal fallback uses the planned or observed Canadian country wi
   }
 });
 
+test("synthetic Canadian postal defaults follow the planned, observed, or generated province", async () => {
+  for (const source of ["planned", "observed", "generated", "previous_default"] as const) {
+    const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+      { ...control("address.country", "search_select", "Canada"), allowedOptions: ["Canada"] },
+      { ...control("address.region", "search_select", source === "generated" ? null : "Alberta"),
+        allowedOptions: ["Alberta", "British Columbia"] },
+      control("address.postal_code", "text", source === "previous_default" ? "A0A 0A0" : null),
+    ] });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+      fields: source === "planned"
+        ? [field("address.region", "address", "option", "BC", "owner_provided", "British Columbia")]
+        : [],
+    }, port, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const postal = port.commits.find(({ controlId }) => controlId === "control-address.postal_code");
+    assert.equal(postal?.value[0], source === "planned" ? "V" : "T");
+    if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) =>
+      fieldId === "address.postal_code")?.lane, "synthetic_test_default");
+  }
+});
+
 test("fills recognized unplanned optional controls with explicit test fallbacks", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
