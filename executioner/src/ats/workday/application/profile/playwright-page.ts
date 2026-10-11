@@ -435,12 +435,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         // not a read-only observation and can wait forever on a non-editable field.
         inspectInteractiveOptions &&
           resolved.fieldId !== "phone.country_code" &&
-          // An empty Workday skills prompt has no stable option catalog until
-          // the applicant enters a query. Opening it is not read-only.
-          resolved.fieldId !== "skills.values" &&
+          (resolved.fieldId !== "skills.values" || this.#inspectMissingOptions) &&
           // Dynamic choices have no fixed catalog to reconcile after selection.
           // Re-read backing and validation without reopening a committed popup.
-          (before === null || !["education.school", "education.field_of_study"].includes(resolved.fieldId) && !retainedProfileControlGuide.some(guide =>
+          (before === null || resolved.uiBehavior !== "multi_select" && !["education.school", "education.field_of_study"].includes(resolved.fieldId) && !retainedProfileControlGuide.some(guide =>
             guide.identity === resolved.fieldId && guide.behavior === "search_select" &&
             guide.allowedOptions.length === 0)),
       );
@@ -551,6 +549,21 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
+      if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
+          this.#inspectMissingOptions && resolved.uiBehavior === "multi_select" &&
+          await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
+        // Discover suggestions through the actual UI without Enter, which can
+        // commit a free-entry token. The draft is restored in finally.
+        searchDraft = await control.inputValue();
+        await control.fill("", { timeout: this.#timeoutMs });
+        await control.pressSequentially("a", { timeout: this.#timeoutMs });
+        const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+        do {
+          owner = await exactObservedOptionOwner(this.#page, control);
+          if (owner !== undefined && (await observedOptionLabels(owner)).length > 0) break;
+          await this.#page.waitForTimeout(50);
+        } while (Date.now() < deadline);
+      }
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           ["education.school", "education.field_of_study"].includes(resolved.fieldId) &&
           await control.evaluate((element) => element instanceof HTMLInputElement)) {
@@ -1037,7 +1050,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const allowedOptions = this.#inspectMissingOptions && inspectInteractiveOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
           ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
-            entry.fieldId !== "phone.country_code" && entry.fieldId !== "skills.values")
+            entry.fieldId !== "phone.country_code")
           : [currentReadback]
         : [];
       snapshots.push({

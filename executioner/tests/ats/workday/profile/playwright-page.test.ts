@@ -2378,6 +2378,56 @@ test("unknown questions discover closed choice options before generating an answ
   } finally { await browser.close(); }
 });
 
+test("empty multi-select discovers suggestions without committing its search draft", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" required role="combobox" aria-controls="choices" aria-expanded="false">
+          <div id="selected"></div>
+          <div id="choices" role="listbox" hidden><div role="option">Analysis</div></div>
+        </div>
+      </div></main><aside role="listbox"><div role="option">Unrelated answer</div></aside>
+      <script>
+        const input = document.getElementById('skills--skills');
+        const choices = document.getElementById('choices');
+        const selected = document.getElementById('selected');
+        input.oninput = () => {
+          choices.hidden = !input.value;
+          input.setAttribute('aria-expanded', String(!choices.hidden));
+        };
+        function commit(value) {
+          const token = document.createElement('div');
+          token.dataset.automationId = 'selectedItem'; token.textContent = value;
+          selected.append(token); input.value = ''; choices.hidden = true;
+          input.setAttribute('aria-expanded', 'false');
+        }
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); commit(input.value); }
+          if (event.key === 'Escape') { choices.hidden = true; input.setAttribute('aria-expanded', 'false'); }
+        };
+        choices.onclick = () => commit('Analysis');
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+    });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Analysis"]);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('#choices').isVisible(), false);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Analysis"]);
+    if (result.kind === "verified") assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  } finally { await browser.close(); }
+});
+
 test("unknown UI inventory preserves textarea constraints and excludes disabled choices", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
