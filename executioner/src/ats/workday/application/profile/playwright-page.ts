@@ -577,8 +577,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#page.waitForTimeout(100);
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
             const leaves = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
-            const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())))
-              .filter(label => normalize(label) !== normalize(categoryLabel));
+            const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(async option => {
+              const label = await option.innerText();
+              const selectable = await option.locator('input, [role="checkbox"], [role="radio"]').count() > 0;
+              return selectable || normalize(label) !== normalize(categoryLabel) ? label : "";
+            })));
             for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), categoryLabel);
             if (leafLabels.length > 0) { labels = leafLabels; break; }
             // Empty categories still expose their exact heading as Back. Return
@@ -1831,6 +1834,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     for (const [index, option] of initial.entries()) {
       const automationId = await option.getAttribute("data-automation-id");
       if (!acceptedLabels.has(initialLabels[index]!) || automationId === "selectedItem") continue;
+      if (await control.getAttribute("id") === "source--source" &&
+          await option.locator('svg[role="presentation"]').count() > 0 &&
+          await option.locator('input, [role="checkbox"], [role="radio"]').count() === 0) continue;
       initialExact.push({
         option,
         rank: await option.getAttribute("role") === "option"

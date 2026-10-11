@@ -2753,8 +2753,9 @@ test("source discovery skips an empty category without committing its heading", 
   } finally { await browser.close(); }
 });
 
-for (const categoryLabel of ["Career Websites", "Company Careers Page"]) {
+for (const categoryLabel of ["Career Websites", "Company Careers Page", "Agency"]) {
 test(`source discovery exposes a leaf below ${categoryLabel} rather than its category`, async () => {
+  const answerLabel = categoryLabel === "Agency" ? "Agency" : "Example Careers";
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2770,9 +2771,9 @@ test(`source discovery exposes a leaf below ${categoryLabel} rather than its cat
           popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
             popup.innerHTML = '';
             setTimeout(() => {
-              popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Example Careers</span></div></div>';
+              popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><input type="radio"><span data-automation-id="promptOption">${answerLabel}</span></div></div>';
               popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
-                document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">Example Careers</div>';
+                document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">${answerLabel}</div>';
                 input.value = ''; popup.hidden = true;
               };
             }, 200);
@@ -2782,11 +2783,11 @@ test(`source discovery exposes a leaf below ${categoryLabel} rather than its cat
       </script>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
     const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
-    assert.deepEqual(control.allowedOptions, ["Example Careers"]);
+    assert.deepEqual(control.allowedOptions, [answerLabel]);
     assert.equal(await page.locator('#selected').innerText(), "");
     assert.equal(await page.locator('#popup').isVisible(), false);
-    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
-    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Example Careers");
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: answerLabel }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, answerLabel);
   } finally { await browser.close(); }
 });
 }
