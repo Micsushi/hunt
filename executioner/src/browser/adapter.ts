@@ -97,7 +97,7 @@ export async function inspectPage(
   for (const item of raw) {
     if (item.declaredToken.length === 0) continue;
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
-    const control = normalizeControl(item.control);
+    const control = normalizeControl(item.control, item.declaredToken);
     const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token);
@@ -3073,8 +3073,11 @@ async function checkboxOwnerStructure(group: Locator) {
   });
 }
 
-function normalizeControl(control: BrowserControl): BrowserControl {
-  if (control.kind === "choice") return { ...control, group: bounded(control.group) };
+function normalizeControl(control: BrowserControl, declaredToken: string): BrowserControl {
+  if (control.kind === "choice") return {
+    ...control,
+    group: boundedControlName(control.group, declaredToken),
+  };
   if (control.kind === "select") {
     return { ...control, options: control.options.map((option) => bounded(option)) };
   }

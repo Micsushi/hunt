@@ -10,6 +10,34 @@ import { dataPage, testIds, testJourneyId } from "../playwright-fixture.ts";
 const exactBound = "x".repeat(512);
 const overBound = "y".repeat(513);
 
+test("bounds a long Workday question consistently in its radio group metadata", async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const provider = new PlaywrightBrowserSession({ context, ids: testIds("abababababababab") });
+  try {
+    const started = await provider.start({ journeyId: testJourneyId, target: dataPage(`
+      <fieldset data-hunt-target-token="target-workday-long-question">
+        <legend>${overBound}</legend>
+        <label><input type="radio" name="answer" required>Yes</label>
+        <label><input type="radio" name="answer" required>No</label>
+      </fieldset>
+    `) }, new AbortController().signal);
+    assert.equal(started.ok, true);
+    if (!started.ok) return;
+    const observed = await provider.observe(started.value, new AbortController().signal);
+    assert.equal(observed.ok, true);
+    if (!observed.ok) return;
+    const target = observed.value.targets[0]!;
+    assert.equal(target.name.length, 512);
+    assert.equal(target.control.kind, "choice");
+    if (target.control.kind === "choice") assert.equal(target.control.group, target.name);
+    assert.deepEqual(target.options, ["Yes", "No"]);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
+
 test("observes bounded structural controls without exposing selectors or handles", async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext();
