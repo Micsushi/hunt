@@ -112,6 +112,15 @@ export async function applyCompositeDateMutation(
   const boxes = await Promise.all(locators.map(part => part.boundingBox()));
   const directlyEditable = boxes.every(box => box !== null && box.width >= 1 && box.height >= 1);
   if (directlyEditable && existingIso === isoDate && await compositeDateBackingCommitted(owner, isoDate)) return true;
+  const today = new Date();
+  const targetMonth = Number(isoDate.slice(0, 4)) * 12 + Number(isoDate.slice(5, 7)) - 1;
+  const currentMonth = today.getFullYear() * 12 + today.getMonth();
+  if (!directlyEditable && existingIso !== isoDate && Math.abs(targetMonth - currentMonth) <= 12 &&
+      await openOwnedCalendar(owner, timeoutMs)) {
+    if (await chooseCalendarDate(page, isoDate, timeoutMs) &&
+        await compositeDateBackingCommitted(owner, isoDate)) return true;
+    await page.keyboard.press("Escape");
+  }
   // Some Workday tenants keep zero-sized segments behind a visible date picker.
   // Use that owned UI instead of trying to fill hidden inputs.
   if (directlyEditable) {
@@ -139,24 +148,6 @@ export async function applyCompositeDateMutation(
       }
       await page.keyboard.press("Tab");
       if (await compositeDateBackingCommitted(owner, isoDate)) return true;
-      // Some segmented widgets accept month/day typing but normalize a partial
-      // year before all four digits arrive. Their year spinbutton still exposes
-      // single-year keyboard steps; verify every step before using the calendar.
-      const targetYear = Number(isoDate.slice(0, 4));
-      for (let step = 0; step < maximumCalendarMonthSteps / 12; step += 1) {
-        const current = await Promise.all(locators.map(part => part.inputValue()));
-        const year = Number(current[2]);
-        if (Number(current[0]) !== Number(isoDate.slice(5, 7)) ||
-            Number(current[1]) !== Number(isoDate.slice(8, 10)) ||
-            !Number.isSafeInteger(year) || year < 1 || year === targetYear ||
-            Math.abs(targetYear - year) > maximumCalendarMonthSteps / 12) break;
-        const delta = targetYear > year ? 1 : -1;
-        await locators[2]!.focus({ timeout: timeoutMs });
-        await locators[2]!.press(delta > 0 ? "ArrowUp" : "ArrowDown", { timeout: timeoutMs });
-        await page.keyboard.press("Tab");
-        if (Number(await locators[2]!.inputValue()) !== year + delta) break;
-        if (await compositeDateBackingCommitted(owner, isoDate, 0)) return true;
-      }
     } catch {
       // Fall back to the owned calendar and its independent backing check.
     }

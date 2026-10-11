@@ -382,31 +382,29 @@ test("tiny segmented dates commit through keyboard handlers before calendar trav
   } finally { await browser.close(); }
 });
 
-test("segmented dates correct a normalized partial year through verified year steps", async () => {
+test("nearby dates use the owned calendar before typing into tiny segments", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    for (const year of [2026, 2019]) {
-      await page.setContent(`<div data-automation-id="formField-date"><div id="date">
-        <input data-automation-id="dateSectionMonth-input"><input data-automation-id="dateSectionDay-input"><input data-automation-id="dateSectionYear-input">
-        </div><button onclick="throw Error('calendar should not open')">Calendar</button></div>
-        <style>input{width:0;height:0;padding:0;border:0}</style><script>
-          const owner = document.querySelector('#date'), inputs = [...owner.querySelectorAll('input')];
-          const state = {value:null, onDatePicked(){}}; owner.__reactProps$test = state;
-          inputs[2].addEventListener('input', () => { if(inputs[2].value.length >= 4) inputs[2].value = '2020'; });
-          inputs[2].addEventListener('keydown', event => {
-            if(event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-              event.preventDefault(); inputs[2].value = String(Number(inputs[2].value) + (event.key === 'ArrowUp' ? 1 : -1));
-            }
-          });
-          owner.addEventListener('keyup', () => {
-            const [m,d,y] = inputs.map(input => input.value);
-            if(m.length === 2 && d.length === 2 && y.length === 4) state.value = {year:Number(y),month:Number(m),day:Number(d)};
-          });
-        </script>`);
-      assert.equal(await applyCompositeDateMutation(page, page.locator('#date'), year + '-10-11', 1000), true);
-      assert.equal(await page.locator('[data-automation-id="dateSectionYear-input"]').inputValue(), String(year));
-    }
+    const now = new Date();
+    const iso = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-11`;
+    const label = new Intl.DateTimeFormat("en-US", {year:"numeric", month:"long", day:"numeric"}).format(new Date(iso + 'T12:00:00'));
+    await page.setContent(`<div data-automation-id="formField-date"><div id="date">
+      <input data-automation-id="dateSectionMonth-input"><input data-automation-id="dateSectionDay-input"><input data-automation-id="dateSectionYear-input">
+      </div><button aria-label="Open date picker">Calendar</button><div role="dialog" hidden><button aria-label="${label}">11</button></div></div>
+      <style>input{width:0;height:0;padding:0;border:0}</style><script>
+        const owner = document.querySelector('#date'), state = {value:null, onDatePicked(){}};
+        owner.__reactProps$test = state; globalThis.segmentKeys = 0;
+        owner.addEventListener('keydown', () => globalThis.segmentKeys++);
+        document.querySelector('[aria-label="Open date picker"]').onclick = () => document.querySelector('[role="dialog"]').hidden = false;
+        document.querySelector('[role="dialog"] button').onclick = () => {
+          state.value = '${iso}'; const values = ['${iso.slice(5,7)}','11','${iso.slice(0,4)}'];
+          [...owner.querySelectorAll('input')].forEach((input,index) => input.value = values[index]);
+          document.querySelector('[role="dialog"]').hidden = true;
+        };
+      </script>`);
+    assert.equal(await applyCompositeDateMutation(page, page.locator('#date'), iso, 1000), true);
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & {segmentKeys:number}).segmentKeys), 0);
   } finally { await browser.close(); }
 });
 
