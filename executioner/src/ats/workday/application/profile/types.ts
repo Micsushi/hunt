@@ -198,6 +198,11 @@ export interface ProfileCommitRequest {
   readonly controlId: string;
   readonly uiBehavior: ProfileUiBehavior;
   readonly value: string;
+  readonly pairedDate?: {
+    readonly controlId: string;
+    readonly uiBehavior: "month" | "year";
+    readonly value: string;
+  };
   readonly syntheticFile?: {
     readonly name: string;
     readonly mimeType: string;

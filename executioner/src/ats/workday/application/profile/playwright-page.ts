@@ -709,31 +709,52 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday checkbox value did not commit");
       }
     } else {
+      const entries = [{ control: resolved, value: request.value }];
+      if (request.pairedDate !== undefined) {
+        const paired = this.#controls.get(request.pairedDate.controlId);
+        if (paired === undefined || paired.uiBehavior !== request.pairedDate.uiBehavior ||
+            !["month", "year"].includes(request.uiBehavior) ||
+            paired.uiBehavior === request.uiBehavior) throw new TypeError("profile date pair is invalid");
+        const owner = resolved.locator.locator("xpath=ancestor::*[@data-automation-id='dateInputWrapper'][1]");
+        if (await owner.count() === 1) {
+          const handle = await paired.locator.elementHandle();
+          try {
+            if (handle === null || !await owner.evaluate((element, other) => element.contains(other), handle)) {
+              throw new TypeError("profile date pair owner differs");
+            }
+          } finally { await handle?.dispose(); }
+          entries.push({ control: paired, value: request.pairedDate.value });
+          entries.sort((a, b) => a.control.uiBehavior === b.control.uiBehavior ? 0 :
+            a.control.uiBehavior === "month" ? -1 : 1);
+        }
+      }
       // The visible segment selects the widget's active field. Focusing its tiny
       // backing input alone can redirect typing into the previously selected field.
-      if (request.uiBehavior === "month" || request.uiBehavior === "year") {
-        const inputId = await resolved.locator.getAttribute("id");
-        const segment = resolved.locator.locator("xpath=..");
-        if (inputId?.endsWith("-input") &&
-            await segment.getAttribute("id") === inputId.slice(0, -6)) {
-          await segment.click({ timeout: this.#timeoutMs });
-          await resolved.locator.press("ControlOrMeta+A", { timeout: this.#timeoutMs });
-          await resolved.locator.pressSequentially(request.value, { timeout: this.#timeoutMs });
+      for (const { control, value } of entries) {
+        if (control.uiBehavior === "month" || control.uiBehavior === "year") {
+          const inputId = await control.locator.getAttribute("id");
+          const segment = control.locator.locator("xpath=..");
+          if (inputId?.endsWith("-input") &&
+              await segment.getAttribute("id") === inputId.slice(0, -6)) {
+            await segment.click({ timeout: this.#timeoutMs });
+            await control.locator.press("ControlOrMeta+A", { timeout: this.#timeoutMs });
+            await control.locator.pressSequentially(value, { timeout: this.#timeoutMs });
+          } else {
+            await control.locator.focus({ timeout: this.#timeoutMs });
+            await control.locator.fill(value, { timeout: this.#timeoutMs });
+          }
         } else {
-          await resolved.locator.focus({ timeout: this.#timeoutMs });
-          await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
+          await control.locator.fill(value, { timeout: this.#timeoutMs });
         }
-      } else {
-        await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       }
-      await resolved.locator.blur({ timeout: this.#timeoutMs });
+      // Leave the combined widget only after both planned date parts are present.
+      await entries.at(-1)!.control.locator.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);
-      interaction.backingValueCommitted = scalarReadbackMatches(
-        request.uiBehavior,
-        await this.#readback(resolved.locator, request.uiBehavior),
-        request.value,
-      );
-      interaction.validationCleared = await validationCleared(resolved.locator);
+      interaction.backingValueCommitted = (await Promise.all(entries.map(async ({ control, value }) =>
+        scalarReadbackMatches(control.uiBehavior, await this.#readback(control.locator, control.uiBehavior), value)
+      ))).every(Boolean);
+      interaction.validationCleared = (await Promise.all(entries.map(({ control }) =>
+        validationCleared(control.locator)))).every(Boolean);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
         throw new TypeError("Workday profile value did not commit");
       }

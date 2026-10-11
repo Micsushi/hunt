@@ -152,7 +152,7 @@ test("Workday date entry selects each visible segment before typing into its tin
     await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
       <style>.segment { display: inline-block; position: relative; width: 60px; height: 24px; }
         input { position: absolute; width: 1px; transform: scale(0.01); z-index: -1000; }</style>
-      ${["Month", "Year"].map(part => `<div class="segment"
+      ${["Month", "Year"].map(part => `<div class="segment" tabindex="-1"
           id="workExperience-4--startDate-dateSection${part}"
           onclick="window.selected = this.querySelector('input'); window.selected.focus()">
           ${part}<input id="workExperience-4--startDate-dateSection${part}-input"
@@ -171,6 +171,37 @@ test("Workday date entry selects each visible segment before typing into its tin
   } finally {
     await browser.close();
   }
+});
+
+test("repeatable month-year dates commit both planned parts before blur validation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <style>.segment { display: inline-block; position: relative; width: 60px; height: 24px; }
+        .segment input { position: absolute; width: 1px; transform: scale(0.01); z-index: -1000; }</style>
+      <input id="workExperience-4--companyName" required>
+      <input id="workExperience-4--jobTitle" required>
+      <div data-automation-id="dateInputWrapper" onfocusout="if (!this.contains(event.relatedTarget)) {
+        const inputs = [...this.querySelectorAll('input')];
+        if (inputs.some(input => !input.value)) { window.invalidExits++; inputs.forEach(input => input.value = ''); }
+      }">
+      ${["Month", "Year"].map(part => `<div class="segment" tabindex="-1"
+          id="workExperience-4--startDate-dateSection${part}"
+          onclick="window.selected = this.querySelector('input'); window.selected.focus()">
+          ${part}<input id="workExperience-4--startDate-dateSection${part}-input" required
+            role="spinbutton" onfocus="if (window.selected && window.selected !== this) window.selected.focus()">
+        </div>`).join("")}</div>
+      <script>window.invalidExits = 0; window.selected = document.querySelector('.segment input');</script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() => (window as unknown as { invalidExits: number }).invalidExits), 0);
+    assert.equal(await page.locator('[id$="Month-input"]').inputValue(), "1");
+    assert.equal(await page.locator('[id$="Year-input"]').inputValue(), "2000");
+  } finally { await browser.close(); }
 });
 
 test("Workday month commit accepts the spinbutton's unpadded numeric readback", async () => {

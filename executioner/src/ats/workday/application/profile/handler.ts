@@ -1183,6 +1183,10 @@ async function reconcileSection(
       // A tenant may omit an optional subfield (for example Location), and a
       // current-role checkbox may remove the end-date controls after commit.
       if (!current.controls.some(({ fieldId }) => fieldId === item.fieldId)) continue;
+      const pairedDateField = /_(?:month|year)$/u.test(item.fieldId)
+        ? desired.fields.find(({ fieldId }) => fieldId === item.fieldId.replace(
+          /_(month|year)$/u, (_, part: string) => part === "month" ? "_year" : "_month",
+        )) : undefined;
       const result = await reconcileField(
         item,
         async () => {
@@ -1191,6 +1195,8 @@ async function reconcileSection(
         },
         page,
         signal,
+        undefined,
+        pairedDateField,
       );
       if (result.kind === "blocked") {
         const control = current.controls.find(({ fieldId }) => fieldId === item.fieldId);
@@ -1251,6 +1257,7 @@ async function reconcileField(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
   replanSynthetic?: (control: ProfileControlSnapshot) => ProfileFieldPlan | undefined,
+  pairedDateField?: ProfileFieldPlan,
 ): Promise<
   | { readonly kind: "verified"; readonly field: VerifiedProfileField }
   | Extract<ProfilePageCompletionResult, { readonly kind: "blocked" }>
@@ -1310,10 +1317,19 @@ async function reconcileField(
     if (control.uiBehavior === "file" && syntheticFile === undefined) {
       return blocked("profile_constraint_unsupported", { fieldId: field.fieldId });
     }
+    const pairedControl = pairedDateField?.answer.kind === "answered"
+      ? reboundControls.filter(({ fieldId }) => fieldId === pairedDateField.fieldId)
+      : [];
+    const pairedDate = pairedDateField !== undefined && pairedControl.length === 1 &&
+        (pairedControl[0]!.uiBehavior === "month" || pairedControl[0]!.uiBehavior === "year")
+      ? { controlId: pairedControl[0]!.controlId, uiBehavior: pairedControl[0]!.uiBehavior,
+          value: visibleValue(pairedDateField) }
+      : undefined;
     const request: ProfileCommitRequest = {
       controlId: control.controlId,
       uiBehavior: control.uiBehavior,
       value: expected,
+      ...(pairedDate === undefined ? {} : { pairedDate }),
       ...(syntheticFile === undefined ? {} : { syntheticFile }),
     };
     try {
