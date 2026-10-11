@@ -2189,6 +2189,45 @@ test("inventories unknown active form controls by structural UI type without ret
   }
 });
 
+test("social question aliases share existing answer formats after UI label punctuation is removed", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <label for="socialNetworkAccounts--linkedInAccount">Linkedin:</label>
+      <input id="socialNetworkAccounts--linkedInAccount">
+      <label for="socialNetworkAccounts--twitterAccount">X:</label>
+      <input id="socialNetworkAccounts--twitterAccount">
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [], repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(capture.page.metadataReconciliationFailure?.(), undefined);
+    if (result.kind === "verified") {
+      assert.deepEqual(result.effectivePlan.fields.map(({ fieldId, questionType, answerType }) =>
+        [fieldId, questionType, answerType]), [
+        ["social.linkedin", "social_network", "url"], ["social.twitter", "social_network", "text"],
+      ]);
+    }
+    assert.equal(await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').inputValue(),
+      "https://www.linkedin.com/in/hunt-test-owner-review");
+    assert.equal(await page.locator('[id="socialNetworkAccounts--twitterAccount"]').inputValue(),
+      "https://twitter.com/hunt_test_26");
+  } finally { await browser.close(); }
+});
+
 test("unfamiliar scalar labels use observed UI and editable defaults without claiming known meaning", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

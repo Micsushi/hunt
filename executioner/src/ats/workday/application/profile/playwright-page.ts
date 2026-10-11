@@ -2812,7 +2812,8 @@ async function observedControlLabel(
   const value = await locator.evaluate((element, radioGroup) => {
     const normalized = (text: string | null | undefined) => (text ?? "")
       .normalize("NFC").replace(/\s+/gu, " ").trim()
-      .replace(/\s+(?:Not )?Required$/iu, "").replace(/\s*\*\s*$/u, "").trim();
+      .replace(/\s+(?:Not )?Required$/iu, "").replace(/\s*\*\s*$/u, "")
+      .replace(/\s*:\s*$/u, "").trim();
     const labelText = (label: Element | null | undefined): string => {
       if (label == null) return "";
       const copy = label.cloneNode(true) as Element;
