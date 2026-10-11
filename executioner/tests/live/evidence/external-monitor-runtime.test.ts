@@ -22,6 +22,7 @@ import {
   writeStage2ExternalMonitorAcknowledgement as writeExternalMonitorAcknowledgement,
 } from "../../../src/live/evidence/external-monitor-runtime.ts";
 import { applicationMonitorPages } from "../../../src/live/evidence/review-monitor-chain.ts";
+import { observerStage } from "../../../src/live/evidence/external-monitor-observer-failure.ts";
 import { createStage2ExternalMonitorObserverAuthority } from
   "../../../src/live/evidence/external-monitor-authority.ts";
 import {
@@ -62,6 +63,19 @@ const authMoments = [
   ["application_ready", "after_readback"],
   ["application_ready", "state_observed"],
 ] as const;
+
+test("acknowledgement diagnostics retain only reviewed value-free failure stages", () => {
+  for (const stage of ["owner_process", "signing", "private unexpected text"]) {
+    assert.throws(() => observerStage("acknowledgement_admission", () => {
+      throw new Error("external monitor acknowledgement denied", { cause: { acknowledgementStage: stage } });
+    }), error => {
+      assert.equal(externalMonitorObserverFailureCode(error), "acknowledgement_admission");
+      assert.deepEqual(externalMonitorObserverFailureDiagnostic(error),
+        stage === "private unexpected text" ? undefined : { acknowledgementStage: stage });
+      return true;
+    });
+  }
+});
 
 test("application monitor page catalog matches the page-walk contract", () => {
   assert.deepEqual(applicationMonitorPages, applicationPages);

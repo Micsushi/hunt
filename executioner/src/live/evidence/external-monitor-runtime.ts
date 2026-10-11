@@ -546,6 +546,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
   readonly observedSubmitPresent?: boolean;
   readonly privacyScan?: "separate_evidence_required";
 }): void {
+  let acknowledgementStage = "files";
   try {
     const evidenceRoot = directory(request.evidenceRoot, "external monitor acknowledgement denied");
     const runtimeRoot = directory(request.runtimeRoot, "external monitor acknowledgement denied");
@@ -557,11 +558,14 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
     ) ackDenied();
     const requestBytes = readStable(requestPath, 16 * 1024, 2);
     const monitorRequest = JSON.parse(requestBytes.toString("utf8")) as Record<string, unknown>;
+    acknowledgementStage = "live_binding";
     validateLiveFile(join(runtimeRoot, LIVE_FILE), monitorRequest);
     const live = JSON.parse(readStable(join(runtimeRoot, LIVE_FILE), 16 * 1024, 2).toString("utf8")) as Record<string, unknown>;
+    acknowledgementStage = "owner_process";
     if (!processInstanceAlive(live.processOwnerPid as number, live.processOwnerStartedAt as string)) {
       ackDenied();
     }
+    acknowledgementStage = "identity";
     const classification = request.classification;
     const expectedClassification = monitorRequest.page === "review" &&
         monitorRequest.moment === "review_readback" ? "review_verified"
@@ -578,6 +582,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
     const page = monitorRequest.page as string;
     const moment = monitorRequest.moment as string;
     const prefix = `${String(ordinal).padStart(4, "0")}-${page}-${moment}`;
+    acknowledgementStage = "screenshot";
     const screenshotBytes = readStable(join(parent, `${prefix}.png`), 12 * 1024 * 1024, 8);
     validateStage2MonitorPng(screenshotBytes);
     const observedScreenshotSha256 = exactSha256(request.observedScreenshotSha256);
@@ -586,6 +591,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       monitorRequest.screenshotSha256 !== digest(screenshotBytes) ||
       observedScreenshotSha256 !== monitorRequest.screenshotSha256
     ) ackDenied();
+    acknowledgementStage = "structure";
     const unsignedAck = {
       schemaVersion: 4,
       evidenceRevision: "s2-external-monitor-ack-v4",
@@ -615,6 +621,7 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
       observedAt: canonicalTimestamp(request.observedAt ?? new Date().toISOString()),
     } as const;
     if (Date.parse(unsignedAck.observedAt) < Date.parse(monitorRequest.issuedAt as string)) ackDenied();
+    acknowledgementStage = "submit_state";
     const observerBound = observerBoundRequest(monitorRequest);
     const observedStructurePage = request.observedStructurePage;
     if (observerBound && (
@@ -630,12 +637,14 @@ export function writeStage2ExternalMonitorAcknowledgement(request: {
           observedStructurePage,
         })
       : unsignedAck;
+    acknowledgementStage = "signing";
     const ack = observerBound
       ? signedAcknowledgement(boundUnsignedAck, monitorRequest, request.observer)
       : unsignedAck;
+    acknowledgementStage = "write";
     writeJson(join(parent, `${prefix}.ack.json`), ack);
   } catch {
-    ackDenied();
+    throw new Error("external monitor acknowledgement denied", { cause: { acknowledgementStage } });
   }
 }
 

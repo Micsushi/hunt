@@ -23,6 +23,7 @@ const observerFailureCodes = [
 export type ObserverFailureCode = (typeof observerFailureCodes)[number];
 
 export interface ExternalMonitorObserverFailureDiagnostic {
+  readonly acknowledgementStage?: string;
   readonly nativeCommandStatus?: number | null;
   readonly nativeCommandTimedOut?: boolean;
   readonly nativeCommandErrorId?: string;
@@ -43,6 +44,13 @@ export function observerStage<T>(code: ObserverFailureCode, run: () => T): T {
     return run();
   } catch (error) {
     if (externalMonitorObserverFailureCode(error) !== undefined) throw error;
+    const cause = error instanceof Error ? error.cause : undefined;
+    if (code === "acknowledgement_admission" && typeof cause === "object" && cause !== null &&
+        "acknowledgementStage" in cause && typeof cause.acknowledgementStage === "string" &&
+        ["files", "live_binding", "owner_process", "identity", "screenshot", "structure",
+          "submit_state", "signing", "write"].includes(cause.acknowledgementStage)) {
+      observerFailure(code, { acknowledgementStage: cause.acknowledgementStage });
+    }
     throw new Error(`external monitor observer failed: ${code}`);
   }
 }
