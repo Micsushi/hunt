@@ -145,20 +145,20 @@ test("indexed Workday dates bind month and year inputs instead of legacy date co
   }
 });
 
-test("Workday date segments regain focus after the previous segment collapses", async () => {
+test("Workday date entry selects each visible segment before typing into its tiny input", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
-      <style>.collapsed input { width: 0; height: 0; padding: 0; border: 0; }
-        .collapsed input:focus { width: 60px; height: 20px; }</style>
-      <div id="date">
-        <input id="workExperience-4--startDate-dateSectionMonth-input" role="spinbutton"
-          onblur="this.parentElement.className = 'collapsed'">
-        <input id="workExperience-4--startDate-dateSectionYear-input" role="spinbutton"
-          onkeydown="this.dataset.typed = 'true'"
-          oninput="if (this.dataset.typed !== 'true') this.value = ''">
-      </div></main>`);
+      <style>.segment { display: inline-block; position: relative; width: 60px; height: 24px; }
+        input { position: absolute; width: 1px; transform: scale(0.01); z-index: -1000; }</style>
+      ${["Month", "Year"].map(part => `<div class="segment"
+          id="workExperience-4--startDate-dateSection${part}"
+          onclick="window.selected = this.querySelector('input'); window.selected.focus()">
+          ${part}<input id="workExperience-4--startDate-dateSection${part}-input"
+            role="spinbutton" onfocus="if (window.selected && window.selected !== this) window.selected.focus()">
+        </div>`).join("")}
+      <script>window.selected = document.querySelector('input');</script></main>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
     const initial = await adapter.inspect(AbortSignal.any([]));
     for (const control of initial.rows[0]!.controls) {
@@ -166,6 +166,7 @@ test("Workday date segments regain focus after the previous segment collapses", 
         value: control.uiBehavior === "month" ? "1" : "2000" }, AbortSignal.any([]));
       assert.equal(adapter.interaction(control.controlId)?.backingValueCommitted, true);
     }
+    assert.equal(await page.locator('[id$="Month-input"]').inputValue(), "1");
     assert.equal(await page.locator('[id$="Year-input"]').inputValue(), "2000");
   } finally {
     await browser.close();

@@ -709,11 +709,20 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday checkbox value did not commit");
       }
     } else {
-      // Workday collapses date segments on blur; focusing opens their editable UI.
+      // The visible segment selects the widget's active field. Focusing its tiny
+      // backing input alone can redirect typing into the previously selected field.
       if (request.uiBehavior === "month" || request.uiBehavior === "year") {
-        await resolved.locator.focus({ timeout: this.#timeoutMs });
-        await resolved.locator.press("ControlOrMeta+A", { timeout: this.#timeoutMs });
-        await resolved.locator.pressSequentially(request.value, { timeout: this.#timeoutMs });
+        const inputId = await resolved.locator.getAttribute("id");
+        const segment = resolved.locator.locator("xpath=..");
+        if (inputId?.endsWith("-input") &&
+            await segment.getAttribute("id") === inputId.slice(0, -6)) {
+          await segment.click({ timeout: this.#timeoutMs });
+          await resolved.locator.press("ControlOrMeta+A", { timeout: this.#timeoutMs });
+          await resolved.locator.pressSequentially(request.value, { timeout: this.#timeoutMs });
+        } else {
+          await resolved.locator.focus({ timeout: this.#timeoutMs });
+          await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
+        }
       } else {
         await resolved.locator.fill(request.value, { timeout: this.#timeoutMs });
       }
