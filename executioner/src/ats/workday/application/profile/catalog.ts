@@ -74,6 +74,7 @@ const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly str
     "employment.previously_worked_for_organization": Object.freeze([
       "Have you previously worked for NAIT? If yes, please answer the questions below. If no, please continue to the next question. Current NAIT employees: Please apply through Jobs Hub in your internal Workday account to ensure your application is processed correctly.",
       "Have you worked for BDO Canada?",
+      "Have you previously worked for SNDL or any of its affiliates, including, but not limited to: Liquor Depot, Solo Liquor, Ace Liquor, Deep Discount Liquor, Wine & Beyond, Liquor Barn, Nova Cannabis, Deep Discount Cannabis, Value Buds, YSS, Sweet Tree, Spiritleaf, Superette, Valens, Liquor Stores North America, Sundial Growers or Alcanna?",
       "Have you previously been employed or a student at UBC? If yes, please review the questions below.",
       "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
       "Have you previously worked for our company (this does not apply to contingent/contract work)?",
