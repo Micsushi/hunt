@@ -55,6 +55,42 @@ import { walkFixture } from "./fixtures.ts";
 
 const popupPreparationPageId = browserPageId("page-questionnaire-popup-preparation");
 
+test("numbered questionnaire advances into Workday secondary questions and binds its fields", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<div data-automation-id="applyFlowPage">
+      <main data-automation-id="applyFlowPrimaryQuestionsPage">
+        <h2>Application Questions 1 of 2</h2>
+        <div data-automation-id="formField"><label for="first">Available date*</label>
+          <input id="first" required value="Tomorrow"></div>
+      </main><button id="next">Save and Continue</button></div>
+      <script>document.querySelector('#next').onclick = () => {
+        document.querySelector('main').outerHTML = '<main data-automation-id="applyFlowSecondaryQuestionsPage"><h2>Application Questions 2 of 2</h2><div data-automation-id="formField"><label for="license">Insurance license*</label><select id="license" required><option value="">Select One</option><option>No</option></select></div></main>';
+      };</script>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 100, navigationSettleTimeoutMs: 600,
+    });
+    const before = await application.observe(new AbortController().signal);
+    assert.equal(before.ok, true, JSON.stringify(before));
+    if (!before.ok) return;
+    assert.deepEqual(await application.next({
+      journeyId: walkFixture.journeyId, from: "questionnaire",
+      fromPageId: before.value.pageId, allowed: ["questionnaire"],
+    }, new AbortController().signal), { ok: true, value: { advanced: true } });
+    await bindQuestionnaireTargets(page, popupPreparationPageId);
+    const after = await application.observe(new AbortController().signal);
+    assert.equal(after.ok, true, JSON.stringify(after));
+    if (after.ok) {
+      assert.equal(after.value.page, "questionnaire");
+      assert.equal(after.value.requiredFields.length, 1);
+      assert.equal(after.value.requiredFields[0]?.verification, "unverified");
+      assert.notEqual(after.value.pageId, before.value.pageId);
+    }
+    assert.ok(await page.locator('#license').getAttribute('data-hunt-target-token'));
+  } finally { await browser.close(); }
+});
+
 function popupPreparedApplication(
   page: Page,
   navigationSettleTimeoutMs: number,

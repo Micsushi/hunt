@@ -20,6 +20,7 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="candidateHomePage"]',
   '[data-automation-id="applyFlowMyInfoPage"]',
   '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
   '[data-automation-id="applyFlowReviewPage"]',
 ].join(", ");
 
@@ -32,6 +33,7 @@ const EMAIL_SIGN_IN_DESTINATION = [
   '[data-automation-id="candidateHomePage"]',
   '[data-automation-id="applyFlowMyInfoPage"]',
   '[data-automation-id="applyFlowApplicationQuestionsPage"]',
+  '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
   '[data-automation-id="applyFlowReviewPage"]',
 ].join(", ");
 

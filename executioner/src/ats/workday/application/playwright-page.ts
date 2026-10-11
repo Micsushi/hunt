@@ -951,6 +951,7 @@ async function readApplicationSnapshot(
     ["profile", selectors.myInformation],
     ["experience", selectors.experience],
     ["questionnaire", selectors.primaryQuestions],
+    ["questionnaire", selectors.secondaryQuestions],
     ["questionnaire", selectors.primaryQuestionnaire],
     ["questionnaire", selectors.applicationQuestions],
     ["questionnaire", selectors.voluntaryDisclosuresAndSelfIdentify],
