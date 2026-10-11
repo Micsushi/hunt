@@ -576,12 +576,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#page.waitForTimeout(100);
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
             const leaves = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
-            const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())));
-            if (leafLabels.some(label => normalize(label) === normalize(categoryLabel))) {
-              throw new TypeError("Workday source category did not expand");
-            }
+            const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())))
+              .filter(label => normalize(label) !== normalize(categoryLabel));
             for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), categoryLabel);
-            if (leafLabels.length > 0) break;
+            if (leafLabels.length > 0) { labels = leafLabels; break; }
             // Empty categories still expose their exact heading as Back. Return
             // to the same catalog and inspect the next observed category.
             const back = await visibleLocators(this.#page.getByText(categoryLabel, { exact: true }));
@@ -593,7 +591,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             throw new TypeError("Workday source categories have no selectable options");
           }
         }
-        if (owner !== undefined) labels = await observedOptionLabels(owner);
+        if (labels.length === 0 && owner !== undefined) labels = await observedOptionLabels(owner);
       }
       if (labels.length === 0 && (resolved.uiBehavior === "search_select" ||
           resolved.uiBehavior === "select" || resolved.uiBehavior === "multi_select")) {
@@ -604,6 +602,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         fieldId: resolved.fieldId,
         failureStage: observationStage,
         errorType: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "other",
+        underlyingError: error instanceof Error && error.message === "Workday source category back control is ambiguous"
+          ? "source_back_ambiguous" : "unclassified",
         durationMs: Math.round(performance.now() - started),
       });
       if (resolved.uiBehavior === "search_select" || resolved.uiBehavior === "select" ||

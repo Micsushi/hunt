@@ -2731,9 +2731,10 @@ test("source discovery skips an empty category without committing its heading", 
           popup.hidden = false; back.innerHTML = '';
           popup.innerHTML = ['Agency', 'Website'].map(label => '<div role="option"><div data-automation-id="promptLeafNode">' + label + '<svg role="presentation"></svg></div></div>').join('');
           popup.querySelectorAll('[data-automation-id="promptLeafNode"]').forEach((node, index) => node.onclick = () => {
-            back.innerHTML = '<button>' + node.textContent + '</button>'; back.firstChild.onclick = open;
-            popup.innerHTML = index === 0 ? '' : '<div role="option"><span data-automation-id="promptOption">Example Careers</span></div>';
-            if (index === 1) popup.firstChild.onclick = () => {
+            popup.innerHTML = '<div role="option" id="category-back">' + node.textContent + '</div>' +
+              (index === 0 ? '' : '<div role="option"><span data-automation-id="promptOption">Example Careers</span></div>');
+            popup.firstChild.onclick = open;
+            if (index === 1) popup.lastChild.onclick = () => {
               document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">Example Careers</div>';
               popup.hidden = true; back.innerHTML = '';
             };
