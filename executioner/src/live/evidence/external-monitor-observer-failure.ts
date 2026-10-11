@@ -23,6 +23,8 @@ const observerFailureCodes = [
 export type ObserverFailureCode = (typeof observerFailureCodes)[number];
 
 export interface ExternalMonitorObserverFailureDiagnostic {
+  readonly nativeCommandStatus?: number | null;
+  readonly nativeCommandTimedOut?: boolean;
   readonly expectedTitleSha256?: string;
   readonly observedTitleSha256?: string;
   readonly observedTitleCandidateSha256s?: readonly string[];

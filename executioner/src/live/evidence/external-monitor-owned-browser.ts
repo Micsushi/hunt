@@ -140,7 +140,7 @@ foreach ($element in $elements) {
     $name = [string]$element.Current.Name
     $visible = -not $element.Current.IsOffscreen
     $controlType = [int]$element.Current.ControlType.Id
-    $normalizedName = [regex]::Replace($name, '\s+', ' ').Trim()
+    $normalizedName = [regex]::Replace($name, '\\s+', ' ').Trim()
     if ($visible -and $normalizedName -cmatch '${numberedQuestionnaireTitlePattern}') {
       [void]$seen.Add('Application Questions')
       $numberedStageCounts[$normalizedName] = 1 + [int]$numberedStageCounts[$normalizedName]
@@ -220,7 +220,11 @@ try {
     if (status === 42 || status === 43 || status === 44) observerFailure("accessibility_tree");
     if (status === 45) observerFailure("browser_process_binding");
     if (status === 46) observerFailure("accessibility_payload");
-    observerFailure("browser_observation_command");
+    observerFailure("browser_observation_command", {
+      nativeCommandStatus: typeof status === "number" && Number.isSafeInteger(status) ? status : null,
+      nativeCommandTimedOut: typeof error === "object" && error !== null &&
+        "code" in error && error.code === "ETIMEDOUT",
+    });
   }
   let observed: {
     readonly title?: unknown;
