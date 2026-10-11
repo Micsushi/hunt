@@ -25,6 +25,7 @@ export const WORKDAY_APPLICATION_PAGE_SELECTORS = Object.freeze({
     '[data-automation-id="applyFlowMyExperiencePage"], [data-automation-id="applyFlowMyExpPage"]',
   primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
   secondaryQuestions: '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
+  supplementaryQuestions: '[data-automation-id="applyFlowSupplementaryQuestionsPage"]',
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
   voluntaryDisclosuresAndSelfIdentify:

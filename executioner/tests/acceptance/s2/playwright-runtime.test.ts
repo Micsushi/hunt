@@ -740,6 +740,7 @@ test("questionnaire binding owns every admitted visible Workday question root", 
   try {
     for (const root of [
       "applyFlowPrimaryQuestionsPage",
+      "applyFlowSupplementaryQuestionsPage",
       "applyFlowPrimaryQuestionnairePage",
       "applyFlowApplicationQuestionsPage",
       "applyFlowVoluntaryDisclosuresPage",

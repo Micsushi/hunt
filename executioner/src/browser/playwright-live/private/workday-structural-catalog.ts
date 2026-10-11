@@ -52,6 +52,7 @@ const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   experienceV2: '[data-automation-id="applyFlowMyExpPage"]',
   primaryQuestions: '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
   secondaryQuestions: '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
+  supplementaryQuestions: '[data-automation-id="applyFlowSupplementaryQuestionsPage"]',
   primaryQuestionnaire: '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
   voluntaryDisclosures: '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
@@ -88,6 +89,7 @@ const pageRules = Object.freeze([
   ...[
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.secondaryQuestions,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.supplementaryQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.primaryQuestionnaire,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.applicationQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.voluntaryDisclosures,

@@ -158,6 +158,7 @@ const applicationReadyRoots = [
   ['[data-automation-id="applyFlowMyExpPage"]:visible', "My Experience"],
   ['[data-automation-id="applyFlowApplicationQuestionsPage"]:visible', "Application Questions"],
   ['[data-automation-id="applyFlowSecondaryQuestionsPage"]:visible', "Application Questions"],
+  ['[data-automation-id="applyFlowSupplementaryQuestionsPage"]:visible', "Application Questions"],
   ['[data-automation-id="applyFlowVoluntaryDisclosuresPage"]:visible', "Voluntary Disclosures"],
   ['[data-automation-id="applyFlowSelfIdentifyPage"]:visible', "Self Identify"],
   ['[data-automation-id="applyFlowReviewPage"]:visible', "Review"],
@@ -174,6 +175,8 @@ const applicationReadyHeadingSelectors = [
   '[data-automation-id="applyFlowApplicationQuestionsPage"] h2:visible',
   '[data-automation-id="applyFlowSecondaryQuestionsPage"] h1:visible',
   '[data-automation-id="applyFlowSecondaryQuestionsPage"] h2:visible',
+  '[data-automation-id="applyFlowSupplementaryQuestionsPage"] h1:visible',
+  '[data-automation-id="applyFlowSupplementaryQuestionsPage"] h2:visible',
   '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h1:visible',
   '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h2:visible',
   '[data-automation-id="applyFlowSelfIdentifyPage"] h1:visible',
@@ -2137,6 +2140,7 @@ function applicationMonitorPage(
             : [
                 '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
                 '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
+                '[data-automation-id="applyFlowSupplementaryQuestionsPage"]',
                 '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
                 '[data-automation-id="applyFlowApplicationQuestionsPage"]',
                 '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
@@ -2182,6 +2186,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
     const roots = [
       '[data-automation-id="applyFlowPrimaryQuestionsPage"]',
       '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
+      '[data-automation-id="applyFlowSupplementaryQuestionsPage"]',
       '[data-automation-id="applyFlowPrimaryQuestionnairePage"]',
       '[data-automation-id="applyFlowApplicationQuestionsPage"]',
       '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
@@ -3085,6 +3090,7 @@ export async function bindQuestionnaireTargets(
     const candidateRoots = [
       selectors.primaryQuestions,
       selectors.secondaryQuestions,
+      selectors.supplementaryQuestions,
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
@@ -3173,6 +3179,7 @@ export async function bindQuestionnaireTargets(
       const isConditionalApplicationDate = dateOwner === control && questionnaireRoot.matches([
         selectors.primaryQuestions,
         selectors.secondaryQuestions,
+        selectors.supplementaryQuestions,
         selectors.primaryQuestionnaire,
         selectors.applicationQuestions,
       ].join(", "));
@@ -3382,6 +3389,7 @@ export async function questionnairePopupHydrationTargets(
     const roots = [
       selectors.primaryQuestions,
       selectors.secondaryQuestions,
+      selectors.supplementaryQuestions,
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
@@ -3453,6 +3461,7 @@ async function prepareNavigationQuestionnaireSnapshot(
     return [
       selectors.primaryQuestions,
       selectors.secondaryQuestions,
+      selectors.supplementaryQuestions,
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,

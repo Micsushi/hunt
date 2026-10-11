@@ -119,6 +119,7 @@ const POST_SUBMIT_DESTINATIONS = [
   '[data-automation-id="applyFlowMyInfoPage"]',
   '[data-automation-id="applyFlowApplicationQuestionsPage"]',
   '[data-automation-id="applyFlowSecondaryQuestionsPage"]',
+  '[data-automation-id="applyFlowSupplementaryQuestionsPage"]',
   '[data-automation-id="applyFlowReviewPage"]',
   '[data-automation-id="captchaChallenge"]',
   'iframe[title="reCAPTCHA"]',
