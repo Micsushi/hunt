@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { readProcessStartTime } from "./process-start-time.ts";
 import {
   existsSync,
   lstatSync,
@@ -1086,17 +1086,7 @@ function processInstanceAlive(pid: number, startedAt: string): boolean {
 }
 
 function processStartTime(pid: number): string {
-  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("process identity denied");
-  if (process.platform !== "win32") {
-    if (pid !== process.pid) throw new Error("process identity denied");
-    return new Date(Date.now() - process.uptime() * 1_000).toISOString();
-  }
-  const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")`;
-  const output = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-    encoding: "utf8", windowsHide: true, timeout: 5_000,
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
-  return canonicalTimestamp(output);
+  return canonicalTimestamp(readProcessStartTime(pid));
 }
 
 function exactStructuralIds(value: readonly string[], page?: string): readonly string[] {

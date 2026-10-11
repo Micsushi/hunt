@@ -7,7 +7,7 @@ import {
   type KeyObject,
   verify,
 } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { readProcessStartTime } from "./process-start-time.ts";
 import {
   existsSync,
   lstatSync,
@@ -186,15 +186,7 @@ function exactBinding(value: Stage2ExternalMonitorObserverBinding): Stage2Extern
 }
 
 function processStartedAt(pid: number): string {
-  if (!Number.isSafeInteger(pid) || pid < 1) denied();
-  if (process.platform !== "win32") {
-    if (pid !== process.pid) denied();
-    return new Date(Date.now() - process.uptime() * 1_000).toISOString();
-  }
-  const script = `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")`;
-  return timestamp(execFileSync("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
-  ], { encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim());
+  return timestamp(readProcessStartTime(pid));
 }
 
 function instanceDigest(pid: number, startedAt: string): string {
