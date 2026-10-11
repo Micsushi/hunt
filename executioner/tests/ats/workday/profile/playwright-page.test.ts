@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { chromium } from "playwright";
+import { chromium, type Locator } from "playwright";
 
 import {
   PlaywrightWorkdayProfilePage,
@@ -2514,7 +2514,7 @@ test("education school ignores empty catalog status and searches before committi
   } finally { await browser.close(); }
 });
 
-test("education prompt closes before verifying a selection saved on dismissal", async () => {
+test("education prompt reconciles an interrupted click after closing a selection saved on dismissal", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2536,11 +2536,36 @@ test("education prompt closes before verifying a selection saved on dismissal", 
         popup.hidden = true; input.value = '';
       });
     </script>`);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    let interruptedClicks = 0;
+    const wrap = (locator: Locator): Locator => new Proxy(locator, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === "click") return async (options?: Parameters<Locator["click"]>[0]) => {
+          await target.click(options);
+          if (await target.getAttribute("data-automation-id") === "promptLeafNode") {
+            interruptedClicks += 1;
+            throw new Error("selection target remounted after activation");
+          }
+        };
+        if (["locator", "nth", "first", "last"].includes(String(property))) {
+          return (...args: unknown[]) => wrap(Reflect.apply(value, target, args) as Locator);
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const interruptedPage = new Proxy(page, {
+      get(target, property) {
+        if (property === "locator") return (...args: Parameters<typeof page.locator>) => wrap(target.locator(...args));
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const adapter = new PlaywrightWorkdayProfilePage(interruptedPage, { pageType: "profile" });
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const study = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study")!;
     await adapter.commit({ controlId: study.controlId, uiBehavior: "multi_select", value: '["Accounting"]' }, AbortSignal.any([]));
     assert.equal(adapter.interaction(study.controlId)?.backingValueCommitted, true);
+    assert.equal(interruptedClicks, 1);
     assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
   } finally { await browser.close(); }
 });

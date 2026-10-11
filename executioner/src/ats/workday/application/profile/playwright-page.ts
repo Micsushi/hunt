@@ -799,6 +799,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         request.uiBehavior === "multi_select" ||
         request.uiBehavior === "search_select" || request.uiBehavior === "select"
       ) {
+        selectionDiagnostic("driver-failed", request.uiBehavior, {
+          timeout: error instanceof Error && error.name === "TimeoutError",
+          activationAmbiguous: error instanceof Error && error.message === "Workday prompt catalog activation is ambiguous",
+          optionAmbiguous: error instanceof Error && error.message === "Workday prompt typeahead option is ambiguous",
+          backingValueCommitted: interaction.backingValueCommitted,
+          validationCleared: interaction.validationCleared,
+        });
         await this.#resetFailedSelection(resolved.locator);
       }
       throw error;
@@ -1915,12 +1922,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
     const activation = await promptOptionActivation(option);
     try {
-      await activation.click({
-        timeout: behavior === "multi_select"
-          ? Math.min(this.#timeoutMs, 5_000)
-          : this.#timeoutMs,
-      });
-      interaction.optionActivated = true;
+      try {
+        await activation.click({
+          timeout: behavior === "multi_select"
+            ? Math.min(this.#timeoutMs, 5_000)
+            : this.#timeoutMs,
+        });
+        interaction.optionActivated = true;
+      } finally {
+        await this.#page.keyboard.press("Escape");
+        await control.blur({ timeout: this.#timeoutMs });
+        await this.#page.waitForTimeout(100);
+      }
     } catch (error) {
       // A Workday prompt row can commit and remount while Playwright is still
       // waiting for its stale activation target. Reconcile exact field-owned
@@ -1936,9 +1949,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw error;
       }
     }
-    await this.#page.keyboard.press("Escape");
-    await control.blur({ timeout: this.#timeoutMs });
-    await this.#page.waitForTimeout(100);
     interaction.popupClosed = (await visibleLocators(options)).length === 0;
     interaction.backingValueCommitted = await selectionReadbackIncludes(
       control,
