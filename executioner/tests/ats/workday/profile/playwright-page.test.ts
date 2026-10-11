@@ -2235,12 +2235,12 @@ test("unfamiliar radio questions remain one group with observed options and veri
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test("social question aliases share existing answer formats after UI label punctuation is removed", async () => {
+for (const linkedInLabel of ["Linkedin:", "Please provide the URL to your LinkedIn profile."]) test(`social question alias ${linkedInLabel} shares the existing URL answer format`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
-      <label for="socialNetworkAccounts--linkedInAccount">Linkedin:</label>
+      <label for="socialNetworkAccounts--linkedInAccount">${linkedInLabel}</label>
       <input id="socialNetworkAccounts--linkedInAccount">
       <label for="socialNetworkAccounts--twitterAccount">X:</label>
       <input id="socialNetworkAccounts--twitterAccount">
