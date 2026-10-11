@@ -1815,11 +1815,21 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
   ): Promise<boolean> {
     const acceptedLabels = equivalentOptionLabels(value);
-    const visibleOptions = await visibleLocators(this.#page.locator('[role="option"]'));
-    const exact: Locator[] = [];
-    for (const option of visibleOptions.slice(0, 128)) {
-      if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
-    }
+    // A submitted search can still be loading after the initial animation.
+    // Do not fall through to clearing/retyping and cancel its pending request.
+    const deadline = Date.now() + (await control.getAttribute("enterkeyhint") === "search"
+      ? Math.min(this.#timeoutMs, 5_000) : 0);
+    let visibleOptions: Locator[] = [];
+    let exact: Locator[] = [];
+    do {
+      visibleOptions = await visibleLocators(this.#page.locator('[role="option"]'));
+      exact = [];
+      for (const option of visibleOptions.slice(0, 128)) {
+        if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
+      }
+      if (exact.length > 0 || Date.now() >= deadline) break;
+      await this.#page.waitForTimeout(50);
+    } while (Date.now() < deadline);
     if (exact.length === 0) return false;
     if (exact.length > 1) {
       throw new TypeError("Workday submitted multi-select option is ambiguous");

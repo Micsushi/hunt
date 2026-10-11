@@ -4104,7 +4104,7 @@ test("My Experience field of study opens its prompt and commits an exact option 
   }
 });
 
-test("My Experience submits a multi-select search before choosing the exact result", async () => {
+test("My Experience waits for submitted multi-select results without cancelling the pending search", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -4113,7 +4113,7 @@ test("My Experience submits a multi-select search before choosing the exact resu
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" placeholder="Search">
+              <input id="skills--skills" placeholder="Search" enterkeyhint="search">
               <div id="selected"></div>
             </div>
           </div>
@@ -4122,11 +4122,15 @@ test("My Experience submits a multi-select search before choosing the exact resu
         <script>
           const input = document.querySelector('#skills--skills');
           const results = document.querySelector('#results');
+          let searchTimer;
+          input.addEventListener('input', () => { clearTimeout(searchTimer); results.hidden = true; });
           input.addEventListener('keydown', event => {
             if (event.key !== 'Enter') return;
             event.preventDefault();
-            results.hidden = false;
-            results.innerHTML = '<div role="option"><input type="checkbox" role="checkbox">JavaScript</div>';
+            searchTimer = setTimeout(() => {
+              results.hidden = false;
+              results.innerHTML = '<div role="option"><input type="checkbox" role="checkbox">JavaScript</div>';
+            }, 1200);
           });
           results.addEventListener('click', event => {
             const checkbox = event.target.closest('[role="checkbox"]');
