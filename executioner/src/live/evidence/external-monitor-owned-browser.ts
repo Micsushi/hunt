@@ -39,6 +39,7 @@ export function ownedBrowserObservation(
 ): ObservedMonitorSurface {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
+try {
 $root = $env:HUNT_C3_OBSERVER_RUNTIME_ROOT
 $binding = Get-Content -LiteralPath ([IO.Path]::Combine($root, 'isolated-desktop.json')) -Raw | ConvertFrom-Json
 $owner = Get-Content -LiteralPath ([IO.Path]::Combine($root, 'external-monitor-live.json')) -Raw | ConvertFrom-Json
@@ -197,6 +198,12 @@ $payload = [ordered]@{
 try {
   [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress)))
 } catch { exit 46 }
+} catch {
+  $failureId = ([string]$_.FullyQualifiedErrorId).Split(',')[0]
+  if ($failureId -notmatch '^[A-Za-z][A-Za-z0-9_.]{0,127}$') { $failureId = 'Unknown' }
+  [Console]::Error.WriteLine('HUNT_C3_NATIVE_ERROR_ID=' + $failureId)
+  exit 50
+}
 `.trim();
   let output: string;
   try {
@@ -208,7 +215,7 @@ try {
       // Includes PowerShell startup and native accessibility traversal under host load.
       timeout: 60_000,
       env: { ...process.env, HUNT_C3_OBSERVER_RUNTIME_ROOT: runtimeRoot },
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   } catch (error) {
     const status = typeof error === "object" && error !== null && "status" in error
@@ -221,10 +228,14 @@ try {
     if (status === 42 || status === 43 || status === 44) observerFailure("accessibility_tree");
     if (status === 45) observerFailure("browser_process_binding");
     if (status === 46) observerFailure("accessibility_payload");
+    const stderr = typeof error === "object" && error !== null && "stderr" in error
+      ? String(error.stderr) : "";
+    const errorId = /HUNT_C3_NATIVE_ERROR_ID=([A-Za-z][A-Za-z0-9_.]{0,127})(?:\r?\n|$)/u.exec(stderr)?.[1];
     observerFailure("browser_observation_command", {
       nativeCommandStatus: typeof status === "number" && Number.isSafeInteger(status) ? status : null,
       nativeCommandTimedOut: typeof error === "object" && error !== null &&
         "code" in error && error.code === "ETIMEDOUT",
+      ...(errorId === undefined ? {} : { nativeCommandErrorId: errorId }),
     });
   }
   let observed: {

@@ -25,6 +25,7 @@ export type ObserverFailureCode = (typeof observerFailureCodes)[number];
 export interface ExternalMonitorObserverFailureDiagnostic {
   readonly nativeCommandStatus?: number | null;
   readonly nativeCommandTimedOut?: boolean;
+  readonly nativeCommandErrorId?: string;
   readonly expectedTitleSha256?: string;
   readonly observedTitleSha256?: string;
   readonly observedTitleCandidateSha256s?: readonly string[];
