@@ -340,7 +340,15 @@ async function applyMutationUnchecked(
     if (target.control.kind !== "text") return "invalid";
     for (let index = 0; index < locatorCount; index += 1) {
       const member = locator.nth(index);
-      await member.fill(mutation.text, { timeout: timeoutMs });
+      if (target.control.element === "textarea") {
+        // Some textareas commit their application value on keyboard events;
+        // a filled DOM value alone does not prove that backing value was saved.
+        await member.press("ControlOrMeta+A", { timeout: timeoutMs });
+        await member.press("Backspace", { timeout: timeoutMs });
+        await member.pressSequentially(mutation.text, { timeout: timeoutMs });
+      } else {
+        await member.fill(mutation.text, { timeout: timeoutMs });
+      }
       await member.blur({ timeout: timeoutMs });
     }
     return "applied";

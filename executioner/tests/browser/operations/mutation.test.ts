@@ -49,6 +49,37 @@ async function loopbackPage(body: string): Promise<{
   };
 }
 
+test("textarea typing commits keyboard-driven backing for multiline and empty answers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<label>Details<textarea data-hunt-target-token="target-details"></textarea></label>
+      <button type="button">Continue</button><script>
+        const field = document.querySelector('textarea');
+        let saved = '';
+        field.addEventListener('keyup', () => { saved = field.value; });
+        document.querySelector('button').onclick = () => {
+          document.body.dataset.saved = saved;
+          document.body.dataset.accepted = String(saved === field.value);
+        };
+      </script>`);
+    const target = {
+      index: 0, declaredToken: "target-details", name: "Details", required: false,
+      control: { kind: "text", element: "textarea" },
+      state: { visibility: "visible", enabled: true, actionable: true },
+      readback: { kind: "empty" }, token: browserTargetToken("target-details"),
+    } as const satisfies ResolvedBrowserTarget;
+    for (const text of ["First line\nSecond line", "Résumé 😀\n", ""]) {
+      assert.equal(await applyMutation(page, target,
+        { kind: "set_text", target: target.token, text }, undefined, 5_000), "applied");
+      assert.equal(await page.locator('textarea').inputValue(), text);
+      await page.getByRole('button', { name: "Continue" }).click();
+      assert.equal(await page.locator('body').getAttribute('data-saved'), text);
+      assert.equal(await page.locator('body').getAttribute('data-accepted'), "true");
+    }
+  } finally { await browser.close(); }
+});
+
 test("applies admitted desired-state mutations and independently reads them back", async () => {
   const fixture = await loopbackPage(`
     <label>Name <input data-hunt-target-token="target-name"></label><label>Bio <textarea data-hunt-target-token="target-bio"></textarea></label>
