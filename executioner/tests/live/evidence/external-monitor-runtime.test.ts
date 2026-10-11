@@ -1674,7 +1674,7 @@ test("authenticated Workday Chrome title normalization preserves the identity ti
     "src/live/evidence/external-monitor-observer.ts",
     "src/live/evidence/external-monitor-owned-browser.ts",
   ].map((path) => readFileSync(path, "utf8")).join("\n");
-  assert.match(observerSource, /\$visible = -not \$element\.Current\.IsOffscreen/u);
+  assert.match(observerSource, /\$visible = -not \$element\.Cached\.IsOffscreen/u);
   assert.match(observerSource, /if \(\$visible -and \$allow -contains \$name\)/u);
   assert.doesNotMatch(observerSource, /if \(\$visible\) \{\s*switch \(\$name\)/u);
   assert.match(observerSource, /\[void\]\$selectedTabTitles\.Add\(\$name\)/u);

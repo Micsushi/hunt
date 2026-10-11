@@ -40,6 +40,8 @@ export async function writeAccountVerifiedEvidence(
     root: request.root,
     value: admitAccountVerifiedEvidence(request.acceptance),
     sensitiveValues: request.sensitiveValues,
+    // These provider labels are fixed by the admitted proof tuple, not account data.
+    reviewedStructuralValues: ["gmail-api-v1", "workday-auth", "workday-state"],
     label: "account-verified",
   });
 }

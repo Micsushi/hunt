@@ -47,6 +47,8 @@ test("account-verified evidence rejects widened, unverified, and sensitive packe
     { ...packet(), verificationProof: "credential_sign_in", provider: "gmail-api-v1", consumedCandidateCount: 0 },
     { ...packet(), submitActivated: true },
     { ...packet(), rawUrl: "https://private.invalid/token" },
+    { ...packet(), journeyId: "journey_private_account_1234" },
+    { ...packet(), provider: "workday-private-account" },
   ];
   for (const value of cases) {
     const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-denied-"));
@@ -55,7 +57,7 @@ test("account-verified evidence rejects widened, unverified, and sensitive packe
         writeAccountVerifiedEvidence({
           root,
           acceptance: value as never,
-          sensitiveValues: ["https://private.invalid/token"],
+          sensitiveValues: ["https://private.invalid/token", "private_account", "workday"],
         }),
       );
       assert.deepEqual(readdirSync(root), []);
@@ -74,7 +76,7 @@ test("account-verified evidence admits the exact credential sign-in proof tuple"
       provider: "workday-auth" as const,
       consumedCandidateCount: 0 as const,
     };
-    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: [] });
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: ["workday"] });
     assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -90,7 +92,7 @@ test("account-verified evidence admits the exact observed application-state proo
       provider: "workday-state" as const,
       consumedCandidateCount: 0 as const,
     };
-    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: [] });
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: ["workday"] });
     assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
   } finally {
     rmSync(root, { recursive: true, force: true });
