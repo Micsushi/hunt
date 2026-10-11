@@ -2423,6 +2423,37 @@ test("known choice snapshots supply observed options for protected fallback trav
   }
 });
 
+test("education option discovery searches owned catalogs without committing a selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden><div role="option">Other University</div></div>
+      </div>
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" aria-controls="study-options" required>
+        <div id="study-options" role="listbox" hidden><div role="option">Other Studies</div></div>
+      </div>
+    </main><script>
+      document.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
+        const popup = document.getElementById(input.getAttribute('aria-controls'));
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => { popup.hidden = false; }, 100);
+        if (event.key === 'Escape') popup.hidden = true;
+      }));
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const controls = snapshot.rows.flatMap(({ controls }) => controls);
+    assert.deepEqual(controls.find(({ fieldId }) => fieldId === "education.school")?.allowedOptions, ["Other University"]);
+    assert.deepEqual(controls.find(({ fieldId }) => fieldId === "education.field_of_study")?.allowedOptions, ["Other Studies"]);
+    assert.deepEqual(await page.locator('input').evaluateAll(inputs =>
+      inputs.map(input => input instanceof HTMLInputElement ? input.value : null)), ["", ""]);
+    assert.equal(await page.locator('[role="listbox"]:visible').count(), 0);
+  } finally { await browser.close(); }
+});
+
 test("source option observation waits for its delayed owned catalog without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

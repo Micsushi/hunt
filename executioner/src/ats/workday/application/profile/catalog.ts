@@ -396,6 +396,7 @@ export const profileRepeatableCatalog: readonly ProfileRepeatableCatalogEntry[] 
       addSelector: '[data-automation-id="addEducation"]',
       fields: [
         repeatableText("education.school", "schoolName"),
+        repeatable("education.school", "school", "search_select", "workday_search_select_v2"),
         legacyRepeatable("education.school", "school", "text", "workday_text_v1"),
         repeatable("education.degree", "degree", "select", "workday_select_v1"),
         repeatable("education.field_of_study", "fieldOfStudy", "multi_select", "workday_multi_select_v1"),

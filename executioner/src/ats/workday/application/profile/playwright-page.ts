@@ -509,6 +509,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ))).map(locator => locator.elementHandle()))
       : undefined;
     let labels: string[] = [];
+    let searchDraft: string | undefined;
     try {
       await control.focus({ timeout: this.#timeoutMs });
       await control.click({ timeout: this.#timeoutMs });
@@ -516,6 +517,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       let owner = resolved.fieldId === "source.how_did_you_hear"
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
+      if (owner === undefined &&
+          ["education.school", "education.field_of_study"].includes(resolved.fieldId) &&
+          await control.evaluate((element) => element instanceof HTMLInputElement)) {
+        searchDraft = await control.inputValue();
+        await control.fill("Other", { timeout: this.#timeoutMs });
+        await control.press("Enter", { timeout: this.#timeoutMs });
+        const deadline = Date.now() + this.#timeoutMs;
+        do {
+          owner = await exactObservedOptionOwner(this.#page, control);
+          if (owner !== undefined) break;
+          await this.#page.waitForTimeout(50);
+        } while (Date.now() < deadline);
+      }
       if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
         await this.#captureSelectionDiagnostic("input-source-observation-empty", "search_select");
         const buttons = await visibleLocators(control.locator(
@@ -573,6 +587,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     } finally {
       await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
+      if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
       await this.#page.keyboard.press("Escape");
       await control.blur({ timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(25);

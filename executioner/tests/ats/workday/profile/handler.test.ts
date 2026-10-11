@@ -90,6 +90,20 @@ test("synthetic Profile fills a required unplanned work-history row without addi
   }
 });
 
+test("synthetic education generates a numeric GPA without explicit input constraints", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [{
+    section: "education", rowId: "education-row", ownedByC3: false,
+    controls: [control("education.school", "text"), control("education.gpa", "number")],
+  }] });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 2);
+  assert.equal(port.commits.find(({ controlId }) => controlId === "control-education.gpa")!.value, "0");
+});
+
 test("synthetic Profile settles country-dependent and source choices before text fields", async () => {
   const plan: ProfilePagePlan = {
     mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],

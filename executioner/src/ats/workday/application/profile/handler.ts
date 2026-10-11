@@ -811,17 +811,15 @@ function syntheticProfileValue(
   if (answerType === "url") return "https://example.invalid/owner-review";
   if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
       control.uiBehavior !== "number" && control.uiBehavior !== "url") return undefined;
-  const generated = generateSyntheticTextValue(control.constraints === undefined
-    ? undefined
-    : {
-        inputType: control.constraints.inputType,
-        min: control.constraints.min,
-        max: control.constraints.max,
-        step: control.constraints.step,
-        minLength: control.constraints.minLength,
-        maxLength: control.constraints.maxLength,
-        pattern: control.constraints.pattern,
-      });
+  const generated = generateSyntheticTextValue({
+    inputType: control.uiBehavior === "number" ? "number" : control.constraints?.inputType ?? "text",
+    min: control.constraints?.min ?? null,
+    max: control.constraints?.max ?? null,
+    step: control.constraints?.step,
+    minLength: control.constraints?.minLength,
+    maxLength: control.constraints?.maxLength ?? null,
+    pattern: control.constraints?.pattern ?? null,
+  });
   return generated.kind === "generated" ? generated.value : undefined;
 }
 
