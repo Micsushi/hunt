@@ -71,6 +71,7 @@ const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly str
     "social.linkedin": Object.freeze(["If desired, enter the link to your LinkedIn profile"]),
     "social.twitter": Object.freeze(["If desired, enter the link to your Twitter profile"]),
     "employment.previously_worked_for_organization": Object.freeze([
+      "Have you worked for BDO Canada?",
       "Have you previously been employed or a student at UBC? If yes, please review the questions below.",
       "Have you previously worked for AMA or Bridgewater Bank? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",
       "Have you previously worked for our company (this does not apply to contingent/contract work)?",
