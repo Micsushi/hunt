@@ -70,6 +70,7 @@ export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEn
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
     "address.country": Object.freeze(["Country / Territory"]),
+    "phone.country_code": Object.freeze(["Country / Territory Phone Code"]),
     "address.region": Object.freeze(["Region"]),
     "social.linkedin": Object.freeze(["If desired, enter the link to your LinkedIn profile"]),
     "social.twitter": Object.freeze(["If desired, enter the link to your Twitter profile"]),

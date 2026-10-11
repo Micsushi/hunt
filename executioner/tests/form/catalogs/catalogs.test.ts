@@ -409,6 +409,9 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
     "identity.prefix", retainedProfileTextSha256("Prefix"),
   ), true);
   assert.equal(retainedProfileLabelSha256Matches(
+    "phone.country_code", "9f7f25cdd3fad1c99f6f2f528e7e1948076516e88fc00dfd3b44ad97fb82f1ad",
+  ), true);
+  assert.equal(retainedProfileLabelSha256Matches(
     "employment.previously_worked_for_organization",
     retainedProfileTextSha256("Have you previously worked for an unrelated company?"),
   ), false);
