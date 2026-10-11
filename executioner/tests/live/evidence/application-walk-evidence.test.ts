@@ -66,6 +66,32 @@ test("admits evidence in the exact observed route instead of a tenant-global ord
   }
 });
 
+test("Workday tenant privacy distinguishes fixed UI names and generated field identities from private IDs", async () => {
+  for (const identity of ["field-workday-0b95a707-1", "field-workday-private-account"]) {
+    const baseline = packet();
+    const questionnaire = baseline.laneAcceptances[2]!;
+    if (questionnaire.checkpoint !== "questionnaire_verified") throw new Error("questionnaire fixture unavailable");
+    const acceptance = {
+      ...baseline,
+      laneAcceptances: [...baseline.laneAcceptances.slice(0, 2), {
+        ...questionnaire,
+        answers: questionnaire.answers.map((answer) => ({ ...answer, fieldId: fieldId(identity) })),
+      }],
+    };
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-workday-structural-"));
+    try {
+      const write = writeApplicationWalkEvidence({ root, acceptance, sensitiveValues: ["workday"] });
+      if (identity.endsWith("private-account")) {
+        await assert.rejects(write, /sensitive/u);
+        assert.deepEqual(readdirSync(root), []);
+      } else {
+        await write;
+        assert.deepEqual(JSON.parse(readFileSync(join(root, "application-walk-acceptance.json"), "utf8")), acceptance);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("admits one cumulative lane proof for consecutive revealed questionnaire pages", async () => {
   const baseline = packet();
   const questionnaire = baseline.pageChecks[2]!;

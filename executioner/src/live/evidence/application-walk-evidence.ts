@@ -14,7 +14,18 @@ import {
 } from "../../contracts/application-execution-policy.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
 
-const reviewedStructuralValues = ["social.linkedin"] as const;
+const profileUiVariants = new Set([
+  "workday_text_v1", "workday_text_v2", "workday_phone_v1", "workday_phone_v2",
+  "workday_date_v1", "workday_checkbox_v2", "workday_search_select_v1",
+  "workday_month_v1", "workday_year_v1", "workday_number_v1",
+  "workday_textarea_v1", "workday_select_v1", "workday_multi_select_v1",
+  "workday_search_select_v2",
+  "workday_source_select_v1", "workday_previous_worker_radio_v1",
+  "workday_unknown_required_v1",
+]);
+const reviewedStructuralValues = [
+  "social.linkedin", "workday_resume_file_upload_v1", ...profileUiVariants,
+] as const;
 const reviewedSha256Keys = [
   "profileFieldLearningSha256",
   "occurrenceId",
@@ -55,11 +66,20 @@ export interface WriteApplicationWalkEvidenceRequest {
 export async function writeApplicationWalkEvidence(
   request: WriteApplicationWalkEvidenceRequest,
 ): Promise<void> {
+  const acceptance = admitApplicationWalkAcceptance(request.acceptance);
   writeAtomicJsonEvidence({
     root: request.root,
-    value: admitApplicationWalkAcceptance(request.acceptance),
+    value: acceptance,
     sensitiveValues: request.sensitiveValues,
-    reviewedStructuralValues,
+    reviewedStructuralValues: [
+      ...reviewedStructuralValues,
+      // The browser generates these from a label hash and occurrence ordinal.
+      // Arbitrary field IDs still pass through the sensitive-value check.
+      ...acceptance.laneAcceptances.flatMap((lane) => lane.checkpoint === "questionnaire_verified"
+        ? lane.answers.map(({ fieldId }) => fieldId)
+          .filter((id) => /^field-workday-[0-9a-f]{8}-[1-9][0-9]*$/u.test(id))
+        : []),
+    ],
     reviewedSha256Keys,
     label: "application-walk",
     fileName: "application-walk-acceptance.json",
@@ -243,15 +263,7 @@ function validProfile(
           "checkbox", "file", "select", "multi_select", "search_select", "radio_group",
         ])
           .has(field.uiBehavior) &&
-        new Set([
-          "workday_text_v1", "workday_text_v2", "workday_phone_v1", "workday_phone_v2",
-          "workday_date_v1", "workday_checkbox_v2", "workday_search_select_v1",
-          "workday_month_v1", "workday_year_v1", "workday_number_v1",
-          "workday_textarea_v1", "workday_select_v1", "workday_multi_select_v1",
-          "workday_search_select_v2",
-          "workday_source_select_v1", "workday_previous_worker_radio_v1",
-          "workday_unknown_required_v1",
-        ]).has(field.uiVariant) &&
+        profileUiVariants.has(field.uiVariant) &&
         new Set([
           "owner_provided", "resume_verified", "configured_template", "journey_derived",
           "generated_default",
