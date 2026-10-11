@@ -2475,6 +2475,45 @@ test("education school reconciles canonical saved tokens with presentation mirro
   } finally { await browser.close(); }
 });
 
+test("education school ignores empty catalog status and searches before committing", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden></div>
+        <div id="selection"></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('school-options');
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => {
+          popup.hidden = false; popup.innerHTML = '<div role="option">Other</div>';
+        }, 100);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Other') throw new Error('status is not selectable');
+        document.getElementById('selection').innerHTML = '<span data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span></span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Other"]);
+    assert.equal(school.readback, null);
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    const observed = await adapter.observeControl(school.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(await page.locator('#school-options').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
 test("education discovers a newly opened portal catalog and dismisses it without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

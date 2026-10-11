@@ -405,7 +405,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           resolved.fieldId !== "skills.values" &&
           // Dynamic choices have no fixed catalog to reconcile after selection.
           // Re-read backing and validation without reopening a committed popup.
-          (before === null || !retainedProfileControlGuide.some(guide =>
+          (before === null || !["education.school", "education.field_of_study"].includes(resolved.fieldId) && !retainedProfileControlGuide.some(guide =>
             guide.identity === resolved.fieldId && guide.behavior === "search_select" &&
             guide.allowedOptions.length === 0)),
       );
@@ -518,7 +518,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
-      if (owner === undefined &&
+      if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           ["education.school", "education.field_of_study"].includes(resolved.fieldId) &&
           await control.evaluate((element) => element instanceof HTMLInputElement)) {
         searchDraft = await control.inputValue();
@@ -527,7 +527,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
         do {
           owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
-          if (owner !== undefined) break;
+          if (owner !== undefined && (await observedOptionLabels(owner)).length > 0) break;
           await this.#page.waitForTimeout(50);
         } while (Date.now() < deadline);
       }
@@ -573,14 +573,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             for (const label of leafLabels) this.#observedSourceCategories.set(normalize(label), categoryLabel);
           }
         }
-        const options = await visibleLocators(owner.locator([
-          '[role="option"]',
-          '[data-automation-id="promptOption"]:not([role="option"] *)',
-          '[data-automation-id="promptLeafNode"]:not([role="option"] *)',
-        ].join(", ")));
-        labels = uniqueObservedOptions(await Promise.all(options.slice(0, 64).map((option) =>
-          option.innerText()
-        )));
+        labels = await observedOptionLabels(owner);
       }
       if (labels.length === 0 && (resolved.uiBehavior === "search_select" ||
           resolved.uiBehavior === "select" || resolved.uiBehavior === "multi_select")) {
@@ -1268,7 +1261,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await control.fill(value, { timeout: this.#timeoutMs });
     }
     await this.#captureSelectionDiagnostic("typed", behavior);
-    if (editable && behavior === "multi_select") {
+    if (editable && (behavior === "multi_select" ||
+        /^education-[^\s]+--school$/u.test(await control.getAttribute("id") ?? ""))) {
       await control.press("Enter", { timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(250);
       await this.#captureSelectionDiagnostic("search-submitted", behavior);
@@ -1286,7 +1280,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         }
         return;
       }
-      if (await this.#selectSubmittedMultiSelectOption(control, value, interaction)) return;
+      if (behavior === "multi_select" &&
+          await this.#selectSubmittedMultiSelectOption(control, value, interaction)) return;
     }
     const relationship = await control.getAttribute("aria-controls") ??
       await control.getAttribute("aria-owns");
@@ -2759,6 +2754,17 @@ function uniqueObservedOptions(values: readonly string[]): string[] {
     throw new TypeError("profile option observation is ambiguous");
   }
   return normalized;
+}
+
+async function observedOptionLabels(owner: Locator): Promise<string[]> {
+  const options = await visibleLocators(owner.locator([
+    '[role="option"]:not([aria-disabled="true"])',
+    '[data-automation-id="promptOption"]:not([role="option"] *)',
+    '[data-automation-id="promptLeafNode"]:not([role="option"] *)',
+  ].join(", ")));
+  const labels = await Promise.all(options.slice(0, 64).map(option => option.innerText()));
+  return uniqueObservedOptions(labels.filter(label =>
+    !/^(?:no items|no matches found|no results found)\.?$/iu.test(label.trim())));
 }
 
 function optionId(value: string): string {
