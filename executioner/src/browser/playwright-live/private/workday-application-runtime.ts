@@ -102,6 +102,7 @@ import { createQuestionnaireSemanticAuthority } from
 import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
 import type { PersistentPage } from "./types.ts";
 import { completeProfilePostVerification } from "./profile-post-verification.ts";
+import { isExactWorkdayRuntimeErrorPage } from "./workday-structural-catalog.ts";
 
 const runtimeRevision = guardRevision("s2-playwright-runtime-v1");
 
@@ -190,6 +191,7 @@ const applicationReadyTitles = new Set<string>(applicationReadyRoots.map(([, tit
 
 async function waitForApplicationReadyPage(
   page: PersistentPage,
+  signal: AbortSignal,
 ): Promise<ProfilePageSnapshot> {
   const owned = page as unknown as Page;
   const profile = new PlaywrightWorkdayProfilePage(owned, { pageType: "profile" });
@@ -197,10 +199,19 @@ async function waitForApplicationReadyPage(
   const deadline = Date.now() + 30_000;
   let previousCount = -1;
   let stableSamples = 0;
+  let recoveredRuntimeError = false;
   let lastDiagnostic: Record<string, unknown> = {};
   while (Date.now() < deadline) {
+    if (signal.aborted) throw signal.reason;
+    if (!recoveredRuntimeError && await isExactWorkdayRuntimeErrorPage(owned) &&
+        await owned.locator('[data-automation-id="applyFlowPage"]:visible').count() === 1) {
+      recoveredRuntimeError = true;
+      await waitForApplicationObservation(owned, Math.max(1, deadline - Date.now()), signal, 0);
+      stableSamples = 0;
+      previousCount = -1;
+    }
     try {
-      const observed = await profile.inspect(AbortSignal.any([]));
+      const observed = await profile.inspect(signal);
       const fieldCount = observed.controls.length +
         observed.rows.reduce((count, row) => count + row.controls.length, 0);
       const profileRoot = owned.locator('[data-automation-id="applyFlowMyInfoPage"]:visible');
@@ -245,8 +256,9 @@ async function waitForApplicationReadyPage(
 
 export async function applicationReadyMonitorTaxonomy(
   page: PersistentPage,
+  signal: AbortSignal = AbortSignal.any([]),
 ): Promise<import("./external-monitor-port.ts").ExternalMonitorTaxonomy> {
-  const observed = await waitForApplicationReadyPage(page);
+  const observed = await waitForApplicationReadyPage(page, signal);
   return profileMonitorTaxonomyFromSnapshot(page as unknown as Page, observed);
 }
 
@@ -960,7 +972,9 @@ export class OwnedWorkdayApplicationRuntime {
           applicationMonitorPage(page, monitorPage(observed.value.page)),
           "application_ready",
           "state_observed",
-          await monitorTaxonomy(page, monitorPage(observed.value.page)),
+          observed.value.page === "profile" && !(observed.value.lanes ?? []).includes("resume")
+            ? await applicationReadyMonitorTaxonomy(page as unknown as PersistentPage, signal)
+            : await monitorTaxonomy(page, monitorPage(observed.value.page)),
           { operationId: ownedRequest.operationId, attempt: 1 },
           signal,
         );

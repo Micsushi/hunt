@@ -78,7 +78,7 @@ test("production probe admits controlled Workday routes and emits only closed va
       'selector:[data-automation-id="password"]': 1,
       'selector:[data-automation-id="verifyPassword"]': 1,
       'selector:[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]': 1,
-      'selector:[data-automation-id="signInLink"]': 1,
+      'selector:[data-automation-id="signInLink"], [data-automation-id="SignInWithEmailButton"]': 1,
     },
   );
 
