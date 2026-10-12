@@ -60,7 +60,7 @@ try:
             fail(3)
         since = datetime.fromtimestamp(start.timestamp() - 86400, timezone.utc).strftime('%d-%b-%Y')
         before = datetime.fromtimestamp(end.timestamp() + 86400, timezone.utc).strftime('%d-%b-%Y')
-        status, data = client.search(None, 'SINCE', since, 'BEFORE', before, 'TO', '"' + request['recipientAddress'] + '"')
+        status, data = client.search(None, 'SINCE', since, 'BEFORE', before, 'TO', '"' + request['recipientAddress'] + '"', 'TEXT', '"' + request['verificationHost'] + '"')
         if status != 'OK' or len(data) != 1:
             fail(3)
         ids = data[0].split() if data[0] else []

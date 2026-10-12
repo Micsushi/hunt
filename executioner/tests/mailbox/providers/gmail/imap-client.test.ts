@@ -88,3 +88,39 @@ imaplib.IMAP4_SSL = FakeImap
     assert.equal(JSON.parse(result.stdout).messages.length, fixture.count, fixture.name);
   }
 });
+
+
+test("IMAP scopes a busy inbox to the verification host before applying its message bound", async () => {
+  const source = await readFile("src/mailbox/providers/gmail/private/imap-client.ts", "utf8");
+  const script = source.split("const imapQueryScript = String.raw`")[1]!.split("`;", 1)[0]!;
+  const setup = `
+import imaplib
+from email.message import EmailMessage
+message = EmailMessage()
+message['To'] = 'applicant@example.invalid'
+message['Date'] = 'Sat, 15 Aug 2026 12:02:00 +0000'
+message['Subject'] = 'Account recovery'
+message.set_content('https://example.wd5.myworkdayjobs.com/resetPassword?token=synthetic')
+class FakeImap:
+    def __init__(self, *args, **kwargs): pass
+    def login(self, *args): return ('OK', [])
+    def select(self, *args, **kwargs): return ('OK', [])
+    def search(self, *args):
+        scoped = 'TEXT' in args and args[args.index('TEXT') + 1] == '"example.wd5.myworkdayjobs.com"'
+        return ('OK', [b'17' if scoped else b'1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17'])
+    def fetch(self, message_id, *args):
+        assert message_id == b'17'
+        return ('OK', [(b'17', message.as_bytes())])
+    def logout(self): pass
+imaplib.IMAP4_SSL = FakeImap
+`;
+  const result = spawnSync(process.platform === "win32" ? "python.exe" : "python3", ["-c", setup + script], {
+    input: encodeGmailImapQueryRequest({
+      accountPassword: "synthetic-password", companyName: "Example",
+      recipientAddress: "applicant@example.invalid", verificationHost: "example.wd5.myworkdayjobs.com",
+    }, { notBefore: "2026-08-15T12:00:00.000Z", notAfter: "2026-08-15T12:05:00.000Z" }),
+    encoding: "utf8", windowsHide: true, timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).messages.length, 1);
+});
