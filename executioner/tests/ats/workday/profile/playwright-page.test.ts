@@ -2594,7 +2594,7 @@ test("unknown questions discover closed choice options before generating an answ
   } finally { await browser.close(); }
 });
 
-for (const searchOnEnter of [false, true]) test(`empty multi-select discovers ${searchOnEnter ? "submitted search" : "type-ahead"} suggestions without committing its draft`, async () => {
+for (const searchOnEnter of [false, true]) test(`empty multi-select ${searchOnEnter ? "defers submitted search until an answer is chosen" : "discovers type-ahead suggestions"} without committing its draft`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2636,16 +2636,58 @@ for (const searchOnEnter of [false, true]) test(`empty multi-select discovers ${
     });
     const signal = AbortSignal.any([]);
     const snapshot = await adapter.inspect(signal);
-    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Analysis"]);
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, searchOnEnter ? undefined : ["Analysis"]);
     assert.equal(await page.locator('#skills--skills').inputValue(), "");
     assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
     assert.equal(await page.locator('#choices').isVisible(), false);
     const result = await completeWorkdayProfilePage({
-      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+      mode: "synthetic_test_non_submittable", pageType: "profile",
+      fields: searchOnEnter ? [field("skills.values", "skill", "multi_select", '["Analysis"]', '["Analysis"]')] : [],
+      repeatables: [],
     }, adapter, signal);
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Analysis"]);
-    if (result.kind === "verified") assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+    if (result.kind === "verified" && !searchOnEnter) assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  } finally { await browser.close(); }
+});
+
+test("multi-select inspection does not commit free-entry tags despite a search keyboard hint", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Skills</h4><div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" enterkeyhint="search" aria-controls="choices">
+          <ul role="listbox" data-automation-id="selectedItemList"></ul>
+        </div>
+        <div id="choices" role="listbox" data-automation-id="activeListContainer" hidden><div role="option">No Items.</div></div>
+      </div></main><script>
+        const input = document.querySelector('input');
+        const choices = document.querySelector('#choices');
+        input.onclick = () => { choices.hidden = false; };
+        input.onkeydown = event => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const token = document.createElement('li');
+            token.setAttribute('role', 'option'); token.dataset.automationId = 'selectedItem';
+            token.textContent = input.value; document.querySelector('ul').append(token);
+            input.value = ''; choices.hidden = true;
+          }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true, timeoutMs: 500 });
+    const signal = AbortSignal.any([]);
+    const skill = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    assert.equal(skill.readback, null);
+    assert.equal(skill.allowedOptions, undefined);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('input').inputValue(), "");
+    await adapter.commit({ controlId: skill.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback, "Python");
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Python"]);
   } finally { await browser.close(); }
 });
 

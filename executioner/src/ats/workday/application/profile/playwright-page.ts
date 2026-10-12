@@ -563,12 +563,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           this.#inspectMissingOptions && (resolved.uiBehavior === "multi_select" ||
             resolved.uiBehavior === "search_select" && await control.getAttribute("enterkeyhint") === "search") &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
-        // Enter is a search only when the input declares it. On free-entry
-        // controls it could commit a token. Restore the draft in finally.
+        // A keyboard hint is not a behavior contract: free-entry tag inputs
+        // also advertise search. Submit multi-select text only during commit,
+        // after choosing an actual answer. Restore the discovery draft here.
         searchDraft ??= await control.inputValue();
         await control.fill("", { timeout: this.#timeoutMs });
         await control.pressSequentially("a", { timeout: this.#timeoutMs });
-        if (await control.getAttribute("enterkeyhint") === "search") {
+        if (resolved.uiBehavior !== "multi_select" && await control.getAttribute("enterkeyhint") === "search") {
           await control.press("Enter", { timeout: this.#timeoutMs });
         }
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
@@ -3220,14 +3221,15 @@ async function exactObservedOptionOwner(
     const unique = [...new Set(ids)];
     if (unique.length !== 1) return undefined;
     const owner = page.locator(`[id="${unique[0]}"]`);
-    return await owner.count() === 1 && await owner.isVisible() ? owner : undefined;
+    return await owner.count() === 1 && await owner.isVisible() &&
+      await owner.getAttribute("data-automation-id") !== "selectedItemList" ? owner : undefined;
   }
   const field = control.locator(
     'xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]',
   );
   if (await field.count() !== 1) return undefined;
   const owners = await visibleLocators(field.locator([
-    '[role="listbox"]',
+    '[role="listbox"]:not([data-automation-id="selectedItemList"])',
     '[data-automation-id="responsiveMonikerPrompt"]',
   ].join(", ")));
   const optionOwners: Locator[] = [];
@@ -3253,13 +3255,14 @@ async function exactPromptCatalogOwner(
     const focused = page.locator(":focus");
     if (
       await focused.count() === 1 && await focused.isVisible() &&
-      await focused.getAttribute("role") === "listbox"
+      await focused.getAttribute("role") === "listbox" &&
+      await focused.getAttribute("data-automation-id") !== "selectedItemList"
     ) return focused;
     const observed = await exactObservedOptionOwner(page, control);
     if (observed !== undefined) return observed;
     if (source || priorCatalogs !== undefined) {
       const candidates = await visibleLocators(page.locator(
-        priorCatalogs !== undefined ? '[role="listbox"]' : '[data-automation-id="activeListContainer"][role="listbox"]',
+        priorCatalogs !== undefined ? '[role="listbox"]:not([data-automation-id="selectedItemList"])' : '[data-automation-id="activeListContainer"][role="listbox"]',
       ));
       const sourceOwners: Locator[] = [];
       for (const candidate of candidates) {
