@@ -2781,6 +2781,16 @@ async function unknownAllowedOptions(locator: Locator): Promise<readonly string[
 
 async function unknownMachineKey(locator: Locator): Promise<string | null> {
   return await locator.evaluate((element) => {
+    const type = element instanceof HTMLInputElement ? element.type : "element";
+    const automationId = element.getAttribute("data-automation-id");
+    // A unique automation identity survives React replacing generated DOM IDs.
+    // Repeated automation identities still need the full disambiguating key.
+    if (automationId !== null && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(automationId) &&
+        element.ownerDocument.querySelectorAll(
+          `[data-automation-id="${automationId}"]`,
+        ).length === 1) {
+      return [element.tagName.toLowerCase(), type, "automation", automationId].join("\u0000");
+    }
     const attributes = [
       element.getAttribute("data-automation-id"),
       element.id,
@@ -2791,7 +2801,6 @@ async function unknownMachineKey(locator: Locator): Promise<string | null> {
       attributes.length === 0 ||
       attributes.some((value) => !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(value))
     ) return null;
-    const type = element instanceof HTMLInputElement ? element.type : "element";
     return [element.tagName.toLowerCase(), type, ...attributes].join("\u0000");
   });
 }

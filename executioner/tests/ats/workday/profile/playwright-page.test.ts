@@ -2061,6 +2061,43 @@ fields: [field("identity.given_name", "identity", "text", "Ada")],
   }
 });
 
+test("unknown checkbox identity survives generated ID replacement", async () => {
+  const browser = await chromium.launch({headless: true});
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<body data-hunt-profile-page-type="profile">
+      <main data-automation-id="applyFlowMyInfoPage">
+        <label><input id="generated-before" type="checkbox" data-automation-id="stable-opt-in">Contact preference</label>
+        <script>
+          document.querySelector('input').addEventListener('change', event => {
+            const replacement = event.target.cloneNode(true);
+            replacement.id = 'generated-after';
+            replacement.checked = event.target.checked;
+            event.target.replaceWith(replacement);
+          });
+        </script>
+      </main></body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {pageType: "profile"});
+    const before = await adapter.inspect(AbortSignal.any([]));
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const after = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(after.controls[0]!.fieldId, before.controls[0]!.fieldId);
+    assert.equal(after.controls[0]!.readback, "true");
+    assert.equal(await page.locator('#generated-after').count(), 1);
+    await page.locator('main').evaluate(main => {
+      const other = main.querySelector('input')!.cloneNode(true) as HTMLInputElement;
+      other.id = 'another-field';
+      main.append(other);
+    });
+    const repeated = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(repeated.controls.length, 2);
+    assert.equal(new Set(repeated.controls.map(c => c.fieldId)).size, 2);
+  } finally { await browser.close(); }
+});
+
 for (const known of [false, true]) test(`button listbox discovery excludes its empty placeholder (${known ? "identity suffix" : "unknown question"})`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
