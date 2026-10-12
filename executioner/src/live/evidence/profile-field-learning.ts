@@ -788,11 +788,13 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
       field.questionCategory === "unknown" &&
       answerCategories.has(field.answerCategory) &&
       field.prefillDisposition === "needs_owner_input" &&
-      field.driverAttempt === field.uiType &&
-      (field.terminalDisposition === "verified" ||
-        field.terminalDisposition === "verified_without_mutation" ||
-        field.terminalDisposition === "driver_failed") &&
-      validMechanicsRelations(field);
+      ((field.driverAttempt === field.uiType &&
+        (field.terminalDisposition === "verified" ||
+          field.terminalDisposition === "verified_without_mutation" ||
+          field.terminalDisposition === "driver_failed") &&
+        validMechanicsRelations(field)) ||
+       (field.driverAttempt === "none" && field.terminalDisposition === "pending" &&
+        sameMechanics(field.mechanics, expectedMechanics)));
     const unresolved = field.questionCategory === "unknown" &&
       field.answerCategory === "unknown" &&
       field.optionMapping === "unresolved" &&

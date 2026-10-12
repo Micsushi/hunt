@@ -1401,6 +1401,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "select" | "multi_select",
   ): Promise<void> {
+    const resolved = [...this.#controls.values()].find(candidate => candidate.locator === control);
+    if (resolved?.fieldId === "source.how_did_you_hear" &&
+        !this.#observedSourceCategories.has(normalize(value)) &&
+        await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
+      // A stored answer can reach this path without an interactive inspection.
+      // Discover its category before attempting to select the leaf.
+      await this.#observeOptionLabels(resolved, [control], true);
+    }
     const priorCatalogs = behavior === "multi_select" || /^(?:source--source|education-[^\s]+--(?:school|fieldOfStudy))$/u.test(await control.getAttribute("id") ?? "")
       ? await Promise.all((await visibleLocators(this.#page.locator(
         '[role="listbox"]',

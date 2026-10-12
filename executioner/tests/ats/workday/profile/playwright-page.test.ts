@@ -3645,8 +3645,9 @@ test("source discovery skips an empty category without committing its heading", 
   } finally { await browser.close(); }
 });
 
-for (const categoryLabel of ["Career Websites", "Company Careers Page", "Agency"]) {
-test(`source discovery exposes a leaf below ${categoryLabel} rather than its category`, async () => {
+for (const discoverFirst of [true, false]) {
+for (const categoryLabel of ["Career Websites", "Company Careers Page", "Agency", "Advertisements"]) {
+test(`source discovery ${discoverFirst} exposes a leaf below ${categoryLabel} rather than its category`, async () => {
   const answerLabel = categoryLabel === "Agency" ? "Agency" : "Example Careers";
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -3674,14 +3675,16 @@ test(`source discovery exposes a leaf below ${categoryLabel} rather than its cat
         document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
       </script>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
-    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
-    assert.deepEqual(control.allowedOptions, [answerLabel]);
+    const control = (await adapter.inspect(AbortSignal.any([]), discoverFirst)).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, discoverFirst ? [answerLabel] : undefined);
     assert.equal(await page.locator('#selected').innerText(), "");
     assert.equal(await page.locator('#popup').isVisible(), false);
     await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: answerLabel }, AbortSignal.any([]));
     assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, answerLabel);
   } finally { await browser.close(); }
 });
+}
+
 }
 
 test("source observation binds only its newly visible unfocused portal catalog", async () => {
