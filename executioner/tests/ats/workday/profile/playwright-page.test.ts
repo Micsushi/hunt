@@ -2720,14 +2720,15 @@ test("skill catalog qualifiers survive selection, handler verification, and lear
     const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
       fields: [field("skills.values", "skill", "multi_select", '["Python"]', '["Python"]')], repeatables: [] };
     let observation = 0;
-    const capture = createProfileFieldLearningCapture({
+    const captureOptions = {
       page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
       observeControl: async (control, signal) => ({
         observation: await adapter.observeControl(control.controlId, signal),
         binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
           attempt: 1, stateObservedAck: true },
       }),
-    });
+    } satisfies Parameters<typeof createProfileFieldLearningCapture>[0];
+    const capture = createProfileFieldLearningCapture(captureOptions);
     const result = await completeWorkdayProfilePage(plan, capture.page, AbortSignal.any([]));
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Python (Programming Language)"]);
@@ -2736,6 +2737,18 @@ test("skill catalog qualifiers survive selection, handler verification, and lear
     const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
     assert.equal(evidence.fields[0].terminalDisposition, "verified");
     assert.equal(evidence.fields[0].mechanics.persistentReadback, "verified_after_rescan");
+    const skills = JSON.stringify(["Python", "Java", "R", "SQL", "C", "C++", "Go", "Rust", "Ruby"]);
+    const savedPlan = { ...plan, fields: [field("skills.values", "skill", "multi_select", skills, skills)] };
+    const savedCapture = createProfileFieldLearningCapture({
+      ...captureOptions, plan: savedPlan, fileName: "profile-field-learning-02.json",
+    });
+    const replay = await completeWorkdayProfilePage(savedPlan, savedCapture.page, AbortSignal.any([]));
+    assert.equal(replay.kind, "verified", JSON.stringify(replay));
+    assert.match(savedCapture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const savedEvidence = JSON.parse(await readFile(join(root, "profile-field-learning-02.json"), "utf8"));
+    assert.equal(savedEvidence.fields[0].prefillDisposition, "already_correct");
+    assert.equal(savedEvidence.fields[0].terminalDisposition, "verified_without_mutation");
+    assert.equal(savedEvidence.fields[0].driverAttempt, "none");
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 

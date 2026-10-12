@@ -44,6 +44,8 @@ import {
   retainedProfileTextSha256,
 } from "../../ats/workday/application/profile/catalog.ts";
 import { writeAtomicJsonEvidence } from "./private/atomic-json-evidence.ts";
+import { boundedOptionalSkillFacts } from
+  "../../ats/workday/application/profile/site-answer-routing.ts";
 import { advanceProfileFieldTerminalState } from
   "./private/profile-field-terminal-state.ts";
 import {
@@ -256,17 +258,23 @@ export function createProfileFieldLearningCapture(input: {
           profileInspectionFailureFromError(error);
         throw error;
       }
+      const observedPlans = new Map([...plans].map(([fieldId, field]) =>
+        [fieldId, boundedOptionalSkillFacts(field, snapshot)]
+      ));
       try {
         if (executionPolicy.answerFallbackPolicy === "deterministic_site_valid_editable") {
           for (const control of snapshot.rows.flatMap(({ controls }) => controls)) {
-            if (plans.has(control.fieldId)) continue;
+            if (observedPlans.has(control.fieldId)) continue;
             const template = profileRepeatableFieldTemplate(control);
-            if (template !== undefined) plans.set(control.fieldId, template);
+            if (template !== undefined) {
+              plans.set(control.fieldId, template);
+              observedPlans.set(control.fieldId, template);
+            }
           }
         }
         observe(
           snapshot,
-          plans,
+          observedPlans,
           records,
           controlBindings,
           pending,
@@ -292,14 +300,14 @@ export function createProfileFieldLearningCapture(input: {
         }
         try {
           const observed = await input.observeControl(control, signal);
-          applyControlObservation(record, control, plans.get(control.fieldId), observed);
+          applyControlObservation(record, control, observedPlans.get(control.fieldId), observed);
         } catch (error) {
           record.metadataReconciliation = "mismatch";
           record.terminalDisposition = "verification_failed";
           throw error;
         }
       }
-      metadataFailure = createMetadataReconciliationFailure(records, plans);
+      metadataFailure = createMetadataReconciliationFailure(records, observedPlans);
       if (metadataFailure !== undefined) {
         throw new TypeError("profile metadata reconciliation failed");
       }
