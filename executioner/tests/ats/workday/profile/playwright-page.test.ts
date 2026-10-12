@@ -4192,7 +4192,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-test("My Experience traverses its owned Workday field-of-study catalog and commits its radio", async () => {
+for (const discover of [false, true]) test(`My Experience traverses its owned field-of-study scope before ${discover ? "discovering answers" : "committing its radio"}`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -4254,6 +4254,11 @@ test("My Experience traverses its owned Workday field-of-study catalog and commi
             renderCatalog();
           });
           input.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+              scopeSelected = false;
+              catalog.innerHTML = '';
+              return;
+            }
             if (!scopeSelected || event.key !== 'ArrowDown') return;
             event.preventDefault();
             activeIndex = Math.min(activeIndex + 1, labels.length - 1);
@@ -4262,22 +4267,28 @@ test("My Experience traverses its owned Workday field-of-study catalog and commi
         </script>
       </body>
     `);
-    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: discover });
     const control = (await adapter.inspect(AbortSignal.any([]))).rows
       .flatMap(({ controls }) => controls)
       .find(({ fieldId }) => fieldId === "education.field_of_study")!;
 
+    if (discover) {
+      assert.deepEqual(control.allowedOptions, ["Accounting"]);
+      assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+      assert.equal(await page.locator('#education-1--fieldOfStudy').inputValue(), "");
+    }
+
     await adapter.commit({
       controlId: control.controlId,
       uiBehavior: "multi_select",
-      value: '["Computer Science"]',
+      value: JSON.stringify([discover ? control.allowedOptions![0] : "Computer Science"]),
     }, AbortSignal.any([]));
 
     assert.equal(
       (await adapter.inspect(AbortSignal.any([]))).rows
         .flatMap(({ controls }) => controls)
         .find(({ fieldId }) => fieldId === "education.field_of_study")?.readback,
-      "Computer and Information Science",
+      discover ? "Accounting" : "Computer and Information Science",
     );
   } finally {
     await browser.close();

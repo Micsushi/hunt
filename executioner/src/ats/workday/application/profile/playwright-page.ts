@@ -554,12 +554,36 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
+      if (promptCatalog && owner !== undefined) {
+        const scopes = await visibleLocators(owner.locator('[role="option"]'));
+        const scopeLabels = await Promise.all(scopes.map(option => option.innerText()));
+        // These two Workday navigation entries choose a catalog scope, not an
+        // answer. Discover its leaves without activating a radio/checkbox.
+        if (scopeLabels.length === 2 && scopeLabels.every(promptScopeLabel) &&
+            scopeLabels.some(label => normalize(label) === "all") &&
+            scopeLabels.some(label => normalize(label) !== "all") &&
+            (await Promise.all(scopes.map(option => option.locator(
+              'input, [role="checkbox"], [role="radio"]',
+            ).count()))).every(count => count === 0)) {
+          observationStage = "expand_catalog_scope";
+          await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
+          await control.click({ timeout: this.#timeoutMs });
+          const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+          do {
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+            labels = owner === undefined ? [] : (await observedOptionLabels(owner)).filter(label => !promptScopeLabel(label));
+            if (labels.length > 0) break;
+            await this.#page.waitForTimeout(50);
+          } while (Date.now() < deadline);
+          if (labels.length === 0) throw new TypeError("Workday catalog scope has no selectable options");
+        }
+      }
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           this.#inspectMissingOptions && resolved.uiBehavior === "multi_select" &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
         // Enter is a search only when the input declares it. On free-entry
         // controls it could commit a token. Restore the draft in finally.
-        searchDraft = await control.inputValue();
+        searchDraft ??= await control.inputValue();
         await control.fill("", { timeout: this.#timeoutMs });
         await control.pressSequentially("a", { timeout: this.#timeoutMs });
         if (await control.getAttribute("enterkeyhint") === "search") {
@@ -575,7 +599,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           ["education.school", "education.field_of_study"].includes(resolved.fieldId) &&
           await control.evaluate((element) => element instanceof HTMLInputElement)) {
-        searchDraft = await control.inputValue();
+        searchDraft ??= await control.inputValue();
         await control.fill("Other", { timeout: this.#timeoutMs });
         await control.press("Enter", { timeout: this.#timeoutMs });
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
@@ -1986,7 +2010,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     const scopes: Locator[] = [];
     for (const option of initial) {
-      if (/^(?:partial list \(first 500 entries\)|all)$/u.test(normalize(await option.innerText()))) {
+      if (promptScopeLabel(await option.innerText())) {
         scopes.push(option);
       }
     }
@@ -2002,7 +2026,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const candidateLabels: string[] = [];
     for (const option of await visibleLocators(options)) {
       const label = normalize(await option.innerText());
-      if (!/^(?:partial list \(first 500 entries\)|all)$/u.test(label)) {
+      if (!promptScopeLabel(label)) {
         candidates.push(option);
         candidateLabels.push(label);
       }
@@ -2926,6 +2950,10 @@ function uniqueObservedOptions(values: readonly string[]): string[] {
     throw new TypeError("profile option observation is ambiguous");
   }
   return normalized;
+}
+
+function promptScopeLabel(value: string): boolean {
+  return /^(?:partial list \(first 500 entries\)|all)$/u.test(normalize(value));
 }
 
 async function observedOptionLabels(owner: Locator): Promise<string[]> {
