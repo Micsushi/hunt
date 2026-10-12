@@ -899,13 +899,24 @@ function observedIdentity(
       .exec(host)?.[1];
     const rawSegments = parsed.pathname.split("/").filter(Boolean);
     const jobBoundary = rawSegments.lastIndexOf("job");
-    const postings = (jobBoundary < 0 ? [] : rawSegments.slice(jobBoundary + 1))
-      .flatMap((rawSegment) => {
-        const segment = decodeURIComponent(rawSegment);
-        if (/[\\/]/u.test(segment)) denied();
-        const match = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
-        return match === null ? [] : [match[1]!.toUpperCase()];
-      });
+    const jobRoute = jobBoundary < 0 ? [] : rawSegments.slice(jobBoundary + 1);
+    const postings = jobRoute.flatMap((rawSegment, index) => {
+      const segment = decodeURIComponent(rawSegment);
+      if (/[\\/]/u.test(segment)) {
+        // Workday may encode a slash inside its location display label.
+        // Only that leading label may contain it; posting and route identity
+        // still come from a separate, exact, unambiguous posting segment.
+        const next = decodeURIComponent(jobRoute[index + 1] ?? "");
+        const locationParts = segment.split("/");
+        if (index !== 0 || /\\/u.test(segment) || /[\\/]/u.test(next) ||
+            /_([A-Za-z0-9-]{2,64})$/u.exec(next)?.[1]?.toUpperCase() !== expected.posting ||
+            locationParts.some(part => part === "" || part === "." || part === ".." ||
+              part === "job" || /_[A-Za-z0-9-]{2,64}$/u.test(part))) denied();
+        return [];
+      }
+      const match = /_([A-Za-z0-9-]{2,64})$/u.exec(segment);
+      return match === null ? [] : [match[1]!.toUpperCase()];
+    });
     if (
       parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
       parsed.port !== "" || tenant === undefined || postings.length > 1 ||

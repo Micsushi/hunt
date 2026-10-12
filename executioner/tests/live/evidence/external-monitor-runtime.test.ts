@@ -644,6 +644,29 @@ test("external monitor rejects incomplete or malformed taxonomy arrays before ev
   }
 });
 
+test("external monitor accepts encoded slashes in location labels while retaining exact posting identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-location-"));
+  try {
+    const runtime = createStage2ExternalMonitorRuntime({
+      ...binding, evidenceRoot: root, runtimeRoot: root,
+      now: () => "2026-08-10T12:00:00.000Z",
+      waitForAcknowledgement: async (request) => writeStage2ExternalMonitorAcknowledgement({
+        runtimeRoot: root, evidenceRoot: root, requestPath: request.path,
+        classification: "account_verified", observedIdentity: observedIdentity(),
+        structuralDescriptionIds: [structuralIdFor(request.page)],
+        observedAt: "2026-08-10T12:00:00.010Z",
+      }),
+    });
+    await runtime.auth(
+      fixturePage(`https://${binding.host}/en-US/Careers/job/College-of-Medicine%2FOffice-of-Health-Sciences/Business-Manager_${binding.posting}/apply/applyManually`),
+      "application_ready", "state_observed", taxonomy(),
+      { operationId: "operation_encoded_location_01", attempt: 1 }, new AbortController().signal,
+    );
+    runtime.close();
+    assert.ok(readdirSync(join(root, "auth-monitor")).some(name => name.endsWith(".ack.json")));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("external monitor rejects fabricated, missing, duplicate, and unsafe job routes", async () => {
   const validPath = `/Careers/job/Location/Business-Manager_${binding.posting}`;
   const cases = [
@@ -654,6 +677,12 @@ test("external monitor rejects fabricated, missing, duplicate, and unsafe job ro
     `https://user@${binding.host}${validPath}`,
     `https://${binding.host}:444${validPath}`,
     `https://${binding.host}/Careers%2Fjob%2FBusiness-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location%2FPart/Business-Manager_99999999`,
+    `https://${binding.host}/Careers/job/Location%2FCopy_99999999/Business-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location%2Fjob/Business-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location%2F..%2FOther/Business-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location%5CPart/Business-Manager_${binding.posting}`,
+    `https://${binding.host}/Careers/job/Location/Business-Manager_${binding.posting}%2Fapply`,
   ] as const;
   for (const [index, url] of cases.entries()) {
     const root = mkdtempSync(join(tmpdir(), `hunt-s2-external-monitor-route-${index}-`));
