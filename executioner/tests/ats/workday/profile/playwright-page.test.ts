@@ -2587,6 +2587,52 @@ test("unfamiliar scalar labels use observed UI and editable defaults without cla
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("unrelated text fields do not increase phone type popup discovery", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const popupCounts: number[] = [];
+    for (const includeText of [false, true]) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        ${includeText ? `<label>First Name<input id="name--legalName--firstName"></label>
+          <label>Last Name<input id="name--legalName--lastName"></label>
+          <label>City<input id="address--city"></label>` : ""}
+        <label for="phoneNumber--phoneType">Phone Device Type</label>
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-options" aria-expanded="false" aria-required="true">Select One</button>
+        <div id="phone-options" role="listbox" hidden><div role="option">Mobile</div></div>
+        <script>
+          (() => {
+          const control = document.getElementById('phoneNumber--phoneType');
+          const options = document.getElementById('phone-options');
+          window.opens = 0;
+          control.onclick = () => { window.opens++; options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+          const close = () => { options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+          document.onkeydown = event => { if (event.key === 'Escape') close(); };
+          options.firstElementChild.onclick = () => { control.textContent = 'Mobile'; close(); };
+          })();
+        </script></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, {
+        pageType: "profile", inspectMissingOptions: true, timeoutMs: 500,
+      });
+      const result = await completeWorkdayProfilePage({
+        mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+        fields: [
+          ...(includeText ? [field("identity.given_name", "identity", "text", "Ada"),
+            field("identity.family_name", "identity", "text", "Lovelace"),
+            field("address.city", "address", "text", "London")] : []),
+          field("phone.device_type", "phone", "option", "Mobile", "Mobile"),
+        ],
+      }, adapter, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      assert.equal(await page.locator('[id="phoneNumber--phoneType"]').textContent(), "Mobile");
+      if (includeText) assert.equal(await page.locator('[id="address--city"]').inputValue(), "London");
+      popupCounts.push(await page.evaluate(() => Reflect.get(window, "opens") as number));
+    }
+    assert.equal(popupCounts[1], popupCounts[0]);
+  } finally { await browser.close(); }
+});
+
 test("large choice menus reselect the exact saved option without keyboard fallback", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
