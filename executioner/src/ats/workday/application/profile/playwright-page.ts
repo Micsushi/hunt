@@ -2969,7 +2969,7 @@ async function observedOptionLabels(owner: Locator): Promise<string[]> {
   ].join(", ")));
   const labels = await Promise.all(options.slice(0, 64).map(option => option.innerText()));
   return uniqueObservedOptions(labels.filter(label =>
-    !/^(?:no items|no matches found|no results found)\.?$/iu.test(label.trim())));
+    !/^(?:select|select one|choose|choose one|no items|no matches found|no results found)\.?$/iu.test(label.trim())));
 }
 
 function optionId(value: string): string {

@@ -41,6 +41,7 @@ export interface RetainedProfileControlGuideEntry {
 export const retainedProfileControlGuide: readonly RetainedProfileControlGuideEntry[] =
   Object.freeze([
     retained("identity.prefix", "Prefix", "identity", "search_select", "single_select", false, "workday_search_select_v2"),
+    retained("identity.suffix", "Suffix", "identity", "search_select", "single_select", false, "workday_search_select_v2"),
     retained("identity.given_name", "First Name", "identity", "text", "text", true, "workday_text_v2"),
     retained("identity.middle_name", "Middle Name", "identity", "text", "text", false, "workday_text_v2"),
     retained("identity.family_name", "Last Name", "identity", "text", "text", true, "workday_text_v2"),
@@ -252,6 +253,7 @@ export const profileScalarControlCatalog: readonly ProfileControlCatalogEntry[] 
       uiVariant: "workday_previous_worker_radio_v1",
     },
     v2Search("identity.prefix", "name--legalName--title"),
+    v2Search("identity.suffix", "name--legalName--social"),
     v2Text("identity.given_name", "name--legalName--firstName"),
     v2Text("identity.middle_name", "name--legalName--middleName"),
     v2Text("identity.family_name", "name--legalName--lastName"),

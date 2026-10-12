@@ -2061,6 +2061,50 @@ fields: [field("identity.given_name", "identity", "text", "Ada")],
   }
 });
 
+for (const known of [false, true]) test(`button listbox discovery excludes its empty placeholder (${known ? "identity suffix" : "unknown question"})`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const id = known ? "name--legalName--social" : "custom-select";
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-legalName--social">
+          <label for="${id}">Suffix</label>
+          <button id="${id}" aria-haspopup="listbox" aria-controls="choices" type="button">Select One</button>
+          <ul id="choices" role="listbox" hidden>
+            <li role="option" data-value="" aria-selected="true">Select One</li>
+            <li role="option" data-value="senior">Sr.</li>
+          </ul>
+        </div>
+        <script>
+          const button = document.querySelector('button');
+          const choices = document.querySelector('ul');
+          button.onclick = () => { choices.hidden = false; button.setAttribute('aria-expanded','true'); };
+          document.addEventListener('keydown', event => {
+            if(event.key === 'Escape') { choices.hidden = true; button.setAttribute('aria-expanded','false'); }
+          });
+          for(const option of choices.children) option.onclick = () => {
+            button.textContent = option.textContent;
+            button.value = option.dataset.value;
+            choices.hidden = true;
+            button.setAttribute('aria-expanded','false');
+          };
+        </script>
+      </main></body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {pageType: "profile", inspectMissingOptions: true});
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]!.fieldId, known ? "identity.suffix" : "unknown.optional.1");
+    assert.deepEqual(snapshot.controls[0]!.allowedOptions, ["Sr."]);
+    assert.equal(await page.locator('button').innerText(), "Select One");
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('button').innerText(), "Sr.");
+  } finally { await browser.close(); }
+});
+
 test("indexed website controls share URL semantics and distinct row identities", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
