@@ -2423,6 +2423,73 @@ for (const [linkedInLabel, native] of [
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("native country controls retain search semantics across regional label variants", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-native-country-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-country">
+        <button id="country--country" name="country" aria-haspopup="listbox"
+          aria-label="Country/Region Canada Required" aria-valuetext="Canada"
+          aria-controls="countries">Canada</button>
+        <div id="countries" role="listbox" hidden><div role="option">Canada</div></div>
+      </div>
+      <div data-automation-id="formField-countryPhoneCode">
+        <label for="phoneNumber--countryPhoneCode">Country/Region Phone Code*</label>
+        <div data-automation-id="multiSelectContainer">
+          <span data-automation-id="selectedItem">Canada (+1)</span>
+          <input id="phoneNumber--countryPhoneCode" aria-required="true" aria-controls="codes">
+        </div>
+        <div id="codes" role="listbox" hidden><div role="option">Canada (+1)</div></div>
+      </div>
+      <script>
+        for (const control of document.querySelectorAll('[aria-controls]')) {
+          control.addEventListener('click', () => {
+            document.getElementById(control.getAttribute('aria-controls')).hidden = false;
+          });
+          control.addEventListener('keydown', event => {
+            if (event.key === 'Escape') document.getElementById(control.getAttribute('aria-controls')).hidden = true;
+          });
+        }
+      </script>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("address.country", "address", "option", "Canada", "Canada"),
+        field("phone.country_code", "phone", "option", "Canada (+1)", "Canada (+1)")],
+      repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior }) => [fieldId, uiBehavior]), [
+      ["address.country", "search_select"], ["phone.country_code", "search_select"],
+    ]);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.ok(capture.write());
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.doesNotThrow(() => admitProfileFieldLearningEvidence(evidence));
+    assert.ok(evidence.fields.every((record: { binderStrategy: string; metadataReconciliation: string }) =>
+      record.binderStrategy === "native_country_control" && record.metadataReconciliation === "matched"));
+    const phone = snapshot.controls.find(control => control.fieldId === "phone.country_code")!;
+    await page.locator('[data-automation-id="formField-countryPhoneCode"]').evaluate(element =>
+      element.setAttribute("data-automation-id", "formField-unrelated"));
+    await assert.rejects(() => adapter.observeControl(phone.controlId, signal));
+    evidence.fields[0].fieldIdentity = "profile.identity.given_name";
+    assert.throws(() => admitProfileFieldLearningEvidence(evidence));
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("unfamiliar scalar labels use observed UI and editable defaults without claiming known meaning", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

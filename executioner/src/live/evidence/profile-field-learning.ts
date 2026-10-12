@@ -38,6 +38,7 @@ import {
 import {
   retainedProfileControlGuide,
   nativeSocialAccountNames,
+  nativeCountryControlIds,
   profileRepeatableFieldTemplate,
   retainedProfileLabelSha256Matches,
   retainedProfileTextSha256,
@@ -78,7 +79,7 @@ const persistentReadbacks = new Set([
   "not_attempted", "pending_rescan", "verified_after_rescan",
   "unverified_after_rescan", "driver_failed",
 ]);
-const binderStrategies = new Set(["catalog_selector_exact", "native_social_account", "opaque_machine_key"]);
+const binderStrategies = new Set(["catalog_selector_exact", "native_social_account", "native_country_control", "opaque_machine_key"]);
 const metadataReconciliations = new Set(["pending", "matched", "unresolved", "mismatch"]);
 const backingStates = new Set(["unknown", "set", "unset"]);
 const validationStates = new Set(["unknown", "clear", "invalid"]);
@@ -838,8 +839,10 @@ function nativeGuideBinding(
   field: Pick<ProfileFieldLearningRecordV2, "binderStrategy" | "sanitizedLabelSha256">,
   identity: string,
 ): boolean {
-  return field.binderStrategy === "native_social_account" &&
-    Object.hasOwn(nativeSocialAccountNames, identity) && field.sanitizedLabelSha256 !== null;
+  return field.sanitizedLabelSha256 !== null && (
+    field.binderStrategy === "native_social_account" && Object.hasOwn(nativeSocialAccountNames, identity) ||
+    field.binderStrategy === "native_country_control" && Object.hasOwn(nativeCountryControlIds, identity)
+  );
 }
 
 function guideMetadataMatches(

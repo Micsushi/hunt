@@ -77,6 +77,11 @@ export const nativeSocialAccountNames: Readonly<Record<string, readonly string[]
   "social.github": Object.freeze(["githubAccount", "github"]),
 });
 
+export const nativeCountryControlIds: Readonly<Record<string, string>> = Object.freeze({
+  "address.country": "country--country",
+  "phone.country_code": "phoneNumber--countryPhoneCode",
+});
+
 const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
     "address.country": Object.freeze(["Country / Territory"]),

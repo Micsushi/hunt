@@ -11,7 +11,7 @@ import {
   type ProfileControlCatalogEntry,
   type ProfileRepeatableCatalogEntry,
 } from "./catalog.ts";
-import { nativeSocialAccountNames, retainedProfileLabelSha256Matches, retainedProfileTextSha256 } from "./catalog.ts";
+import { nativeCountryControlIds, nativeSocialAccountNames, retainedProfileLabelSha256Matches, retainedProfileTextSha256 } from "./catalog.ts";
 import type {
   ProfileCommitRequest,
   ProfileControlSnapshot,
@@ -131,11 +131,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if ((matches.length === 1 || entry.uiBehavior === "radio_group" && matches.length > 0) && retainedProfileControlGuide.some((guide) =>
           guide.identity === entry.fieldId && guide.uiVariant === entry.uiVariant)) {
           const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
-          // Generic selectors do not establish question meaning. Native account
-          // fields additionally bind their input name and owning form field.
+          // Generic selectors do not establish question meaning. Native bindings
+          // additionally verify the control structure and owning form field.
           if (label !== null && !retainedProfileLabelSha256Matches(
             entry.fieldId, retainedProfileTextSha256(label),
-          ) && !await nativeSocialAccountBinding(matches[0]!, entry.fieldId)) {
+          ) && !await nativeSocialAccountBinding(matches[0]!, entry.fieldId) &&
+              !await nativeCountryControlBinding(matches[0]!, entry.fieldId)) {
             if (entry.uiBehavior === "radio_group") {
               if (!(await Promise.all(matches.map(unknownUiBehavior))).every((type) => type === "radio_group")) {
                 throw new TypeError("profile radio group UI binding unavailable");
@@ -428,6 +429,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (resolved.binderStrategy === "native_social_account" &&
           !await nativeSocialAccountBinding(controls[0]!, resolved.fieldId)) {
         throw new TypeError("profile native account binding changed");
+      }
+      if (resolved.binderStrategy === "native_country_control" &&
+          !await nativeCountryControlBinding(controls[0]!, resolved.fieldId)) {
+        throw new TypeError("profile native country binding changed");
       }
       const before = await this.#resolvedReadback(resolved);
       const validationBefore = (await Promise.all(controls.map(validationCleared))).every(Boolean);
@@ -1083,7 +1088,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         binderStrategy: await nativeSocialAccountBinding(match, entry.fieldId)
-          ? "native_social_account" : "catalog_selector_exact",
+          ? "native_social_account" : await nativeCountryControlBinding(match, entry.fieldId)
+          ? "native_country_control" : "catalog_selector_exact",
       });
       const [currentReadback, valid, isRequired] = await Promise.all([
         this.#readback(match, entry.uiBehavior), validationCleared(match), required(match),
@@ -2893,6 +2899,22 @@ async function resolvedReadback(
     return radioReadback(await visibleLocators(control.locator));
   }
   return readback(control.locator, control.uiBehavior, trace);
+}
+
+async function nativeCountryControlBinding(locator: Locator, fieldId: string): Promise<boolean> {
+  const id = nativeCountryControlIds[fieldId];
+  if (id === undefined) return false;
+  return locator.evaluate((element, expectedId) => {
+    if (element.id !== expectedId) return false;
+    const key = expectedId.split("--")[1];
+    const owner = element.closest('[data-automation-id^="formField-"]');
+    if (owner?.getAttribute("data-automation-id") !== `formField-${key}`) return false;
+    return key === "country"
+      ? element instanceof HTMLButtonElement && element.name === "country" &&
+        element.getAttribute("aria-haspopup") === "listbox"
+      : element instanceof HTMLInputElement && element.type === "text" &&
+        element.closest('[data-automation-id="multiSelectContainer"]') !== null;
+  }, id);
 }
 
 async function nativeSocialAccountBinding(locator: Locator, fieldId: string): Promise<boolean> {
