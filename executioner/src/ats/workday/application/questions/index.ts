@@ -441,96 +441,108 @@ export function createQuestionnairePageHandler(
           continue;
         }
 
-        const operationId = dependencies.nextOperationId();
+        let operationId = dependencies.nextOperationId();
         const generatedDefault = question.kind !== "resolved" ||
           answer.value.intent.provenance === "reviewed_catalog" ||
           answer.value.intent.provenance === "visible_option";
-        dependencies.recordAttempt?.({
-          operationId,
-          questionId: resolvedQuestionId,
-          field,
-          intent: answer.value.intent,
-          lane: answer.value.lane,
-          protectedCategory: category,
-          generatedDefault,
-          conditionalReveal: request.conditionalReveal ?? false,
-          semanticQuestionType: testingQuestionSemanticType(field.label),
-          ...(answer.value.syntheticReplacementReason === undefined
-            ? {}
-            : { syntheticReplacementReason: answer.value.syntheticReplacementReason }),
-        });
-        const driven = await dependencies.driver.drive({
-          journeyId: request.journeyId,
-          sessionId: request.sessionId,
-          pageId: request.pageId,
-          guardRevision: request.guardRevision,
-          operationId,
-          intent: answer.value.intent,
-        }, signal);
-        const uncertainDrive = !driven.ok &&
-          driven.error.code === "browser_effect_uncertain";
-        if (!driven.ok && !uncertainDrive) {
-          dependencies.recordFailure?.({
+        for (let textAttempt = 0; textAttempt < 2; textAttempt += 1) {
+          if (textAttempt > 0) operationId = dependencies.nextOperationId();
+          dependencies.recordAttempt?.({
             operationId,
-            code: driven.error.code,
-            retryable: driven.error.retryable,
-            stage: "driver",
+            questionId: resolvedQuestionId,
+            field,
+            intent: answer.value.intent,
+            lane: answer.value.lane,
+            protectedCategory: category,
+            generatedDefault,
+            conditionalReveal: request.conditionalReveal ?? false,
+            semanticQuestionType: testingQuestionSemanticType(field.label),
+            ...(answer.value.syntheticReplacementReason === undefined
+              ? {}
+              : { syntheticReplacementReason: answer.value.syntheticReplacementReason }),
           });
-          return driven;
-        }
-        const receipt = driven.ok ? driven.value : {
-          operationId,
-          fieldId: answer.value.intent.fieldId,
-          behavior: answer.value.intent.behavior,
-          attempted: true as const,
-        };
+          const driven = await dependencies.driver.drive({
+            journeyId: request.journeyId,
+            sessionId: request.sessionId,
+            pageId: request.pageId,
+            guardRevision: request.guardRevision,
+            operationId,
+            intent: answer.value.intent,
+          }, signal);
+          const uncertainDrive = !driven.ok &&
+            driven.error.code === "browser_effect_uncertain";
+          if (!driven.ok && !uncertainDrive) {
+            dependencies.recordFailure?.({
+              operationId,
+              code: driven.error.code,
+              retryable: driven.error.retryable,
+              stage: "driver",
+            });
+            return driven;
+          }
+          const receipt = driven.ok ? driven.value : {
+            operationId,
+            fieldId: answer.value.intent.fieldId,
+            behavior: answer.value.intent.behavior,
+            attempted: true as const,
+          };
 
-        const verified = await dependencies.verifier.verify({
-          sessionId: request.sessionId,
-          pageId: request.pageId,
-          intent: answer.value.intent,
-          receipt,
-        }, signal);
-        if (!verified.ok) {
-          if (!driven.ok) {
+          const verified = await dependencies.verifier.verify({
+            sessionId: request.sessionId,
+            pageId: request.pageId,
+            intent: answer.value.intent,
+            receipt,
+          }, signal);
+          if (!verified.ok) {
+            if (!driven.ok) {
+              dependencies.recordFailure?.({
+                operationId,
+                code: driven.error.code,
+                retryable: driven.error.retryable,
+                stage: "driver",
+              });
+              return driven;
+            }
             dependencies.recordFailure?.({
               operationId,
-              code: driven.error.code,
-              retryable: driven.error.retryable,
-              stage: "driver",
+              code: verified.error.code,
+              retryable: verified.error.retryable,
+              stage: "verification",
             });
-            return driven;
+            return verified;
           }
-          dependencies.recordFailure?.({
-            operationId,
-            code: verified.error.code,
-            retryable: verified.error.retryable,
-            stage: "verification",
-          });
-          return verified;
-        }
-        if (verified.value.kind !== "verified") {
-          if (!driven.ok) {
+          if (verified.value.kind !== "verified") {
+            if (!driven.ok) {
+              dependencies.recordFailure?.({
+                operationId,
+                code: driven.error.code,
+                retryable: driven.error.retryable,
+                stage: "driver",
+              });
+              return driven;
+            }
+            const code = verified.value.kind === "rejected"
+              ? "verification_rejected"
+              : verified.value.kind === "ambiguous"
+                ? "verification_ambiguous"
+                : "verification_unavailable";
+            // A remount can discard text between the driver's readback and the
+            // independent verifier. Reapply the same intent once to a fresh,
+            // exact field; never replace its answer or accept a failed readback.
+            const retryText = textAttempt === 0 && !signal.aborted &&
+              answer.value.intent.kind === "text" &&
+              verified.value.kind === "rejected" && verified.value.reason === "mismatch" &&
+              await dependencies.fieldPresent?.(field, signal) === true;
             dependencies.recordFailure?.({
               operationId,
-              code: driven.error.code,
-              retryable: driven.error.retryable,
-              stage: "driver",
+              code,
+              retryable: retryText,
+              stage: "verification",
             });
-            return driven;
+            if (retryText) continue;
+            return blocked(code, field.fieldId, category);
           }
-          const code = verified.value.kind === "rejected"
-            ? "verification_rejected"
-            : verified.value.kind === "ambiguous"
-              ? "verification_ambiguous"
-              : "verification_unavailable";
-          dependencies.recordFailure?.({
-            operationId,
-            code,
-            retryable: false,
-            stage: "verification",
-          });
-          return blocked(code, field.fieldId, category);
+          break;
         }
 
         dependencies.recordAnswer?.({

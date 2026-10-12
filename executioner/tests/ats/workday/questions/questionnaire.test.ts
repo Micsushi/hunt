@@ -1087,7 +1087,28 @@ test("driver and verifier must be independently owned ports", () => {
   );
 });
 
-test("a verifier rejection blocks completion and the handler never self-verifies", async () => {
+test("a lost text answer is retried once with the same intent and a fresh operation", async () => {
+  const attempts: Parameters<NonNullable<QuestionnairePageHandlerDependencies["recordAttempt"]>>[0][] = [];
+  let verifications = 0;
+  const { handler, calls } = dependencies({
+    recordAttempt: (attempt) => { attempts.push(attempt); },
+    fieldPresent: async () => true,
+    verifier: { async verify(input) {
+      verifications += 1;
+      return { ok: true, value: verifications === 1
+        ? { kind: "rejected", fieldId: input.intent.fieldId, reason: "mismatch" }
+        : { kind: "verified", fieldId: input.intent.fieldId } };
+    } },
+  });
+  const result = await handler.complete(request([narrativeField]), new AbortController().signal);
+  assert.equal(result.ok && result.value.kind, "verified");
+  assert.equal(calls.driven, 2);
+  assert.equal(attempts.length, 2);
+  assert.notEqual(attempts[0]!.operationId, attempts[1]!.operationId);
+  assert.deepEqual(attempts[0]!.intent, attempts[1]!.intent);
+});
+
+test("a repeated verifier mismatch blocks completion and the handler never self-verifies", async () => {
   const verifier: FieldVerifier = {
     async verify(input) {
       return {
@@ -1100,7 +1121,7 @@ test("a verifier rejection blocks completion and the handler never self-verifies
       };
     },
   };
-  const { handler, calls } = dependencies({ verifier });
+  const { handler, calls } = dependencies({ verifier, fieldPresent: async () => true });
   const result = await handler.complete(
     request([narrativeField]),
     new AbortController().signal,
@@ -1115,7 +1136,27 @@ test("a verifier rejection blocks completion and the handler never self-verifies
       protectedCategory: null,
     },
   });
-  assert.equal(calls.driven, 1);
+  assert.equal(calls.driven, 2);
+});
+
+test("text recovery requires fresh presence and never retries stale or ambiguous verification", async () => {
+  for (const scenario of ["absent", "unchecked", "stale", "ambiguous", "unavailable", "choice"] as const) {
+    let presenceChecks = 0;
+    const { handler, calls } = dependencies({
+      fieldPresent: scenario === "unchecked" ? undefined : async () =>
+        scenario !== "absent" || ++presenceChecks === 1,
+      verifier: { async verify(input) {
+        return { ok: true, value: scenario === "ambiguous" || scenario === "unavailable"
+          ? { kind: scenario, fieldId: input.intent.fieldId }
+          : { kind: "rejected", fieldId: input.intent.fieldId, reason: scenario === "stale" ? "stale" : "mismatch" } };
+      } },
+    });
+    const result = await handler.complete(
+      request([scenario === "choice" ? countryField : narrativeField]), new AbortController().signal,
+    );
+    assert.equal(result.ok && result.value.kind, "blocked", scenario);
+    assert.equal(calls.driven, 1, scenario);
+  }
 });
 
 test("active listbox resolution follows the expanded control relation only", () => {
