@@ -1869,6 +1869,21 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     let visibleOptions: Locator[] = [];
     let exact: Locator[] = [];
     do {
+      // Enter may commit a free-entry tag asynchronously while its search UI
+      // is still visible. Observe that result before attempting another effect.
+      if (await this.#selectionReadbackIncludes(control, "multi_select", value)) {
+        interaction.popupBound = false;
+        interaction.optionFocused = false;
+        interaction.optionActivated = true;
+        interaction.visibleOptionCount = 0;
+        interaction.selectedOptionOrdinal = 0;
+        await this.#page.keyboard.press("Escape");
+        interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
+        interaction.backingValueCommitted = true;
+        interaction.validationCleared = await validationCleared(control);
+        if (!interaction.validationCleared) throw new TypeError("Workday submitted multi-select validation did not clear");
+        return true;
+      }
       const owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
       visibleOptions = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
       exact = [];
@@ -1896,7 +1911,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
     await (inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
     interaction.optionActivated = true;
-    await this.#page.waitForTimeout(100);
+    const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+    do {
+      interaction.backingValueCommitted = await this.#selectionReadbackIncludes(control, "multi_select", value);
+      if (interaction.backingValueCommitted) break;
+      await this.#page.waitForTimeout(50);
+    } while (Date.now() < commitDeadline);
     await this.#page.keyboard.press("Escape");
     await this.#page.waitForTimeout(25);
     interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";

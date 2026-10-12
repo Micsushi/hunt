@@ -3275,6 +3275,43 @@ test("multi-select selection binds its delayed portal without selecting an unrel
   } finally { await browser.close(); }
 });
 
+for (const freeEntry of [true, false]) test(`multi-select waits for delayed ${freeEntry ? "free-entry" : "catalog"} commitment before retrying`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search"><div id="selected"></div></div>
+      </div></main><div id="choices" role="listbox" hidden><div role="option">Python</div></div>
+      <script>
+        const input = document.querySelector('input');
+        const choices = document.querySelector('#choices');
+        globalThis.commitAttempts = 0;
+        function commit() {
+          globalThis.commitAttempts++;
+          setTimeout(() => {
+            document.querySelector('#selected').innerHTML = '<ul role="listbox" data-automation-id="selectedItemList"><li role="option" data-automation-id="selectedItem">Python</li></ul>';
+            input.value = ''; choices.hidden = true;
+          }, 600);
+        }
+        input.onkeydown = event => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          if (${freeEntry}) commit(); else choices.hidden = false;
+        };
+        choices.onclick = commit;
+        document.querySelector('#selected').onclick = () => { throw new Error('committed tags are not choices'); };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1500 });
+    const signal = AbortSignal.any([]);
+    const skill = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    await adapter.commit({ controlId: skill.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback, "Python");
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, "commitAttempts")), 1);
+  } finally { await browser.close(); }
+});
+
 test("source selection binds its newly opened portal without selecting an unrelated option", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
