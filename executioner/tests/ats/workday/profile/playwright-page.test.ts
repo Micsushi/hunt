@@ -3125,26 +3125,29 @@ test("empty education portal closes before discovering the next control", async 
   } finally { await browser.close(); }
 });
 
-test("single-choice search discovers real catalog answers without an Other entry", async () => {
+test("single-choice search discovers real answers and waits for submitted results without cancelling them", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
       <div data-automation-id="formField-school"><label>School*</label>
-        <input id="education-1--school" enterkeyhint="search" aria-controls="schools" required>
-        <div id="schools" role="listbox" hidden></div><div id="selected"></div>
+        <input id="education-1--school" enterkeyhint="search" required>
+        <div id="selected"></div>
       </div>
-    </main><script>
+    </main><div id="schools" role="listbox" hidden></div><script>
       const input = document.querySelector('input');
       const popup = document.getElementById('schools');
+      let searchTimer;
+      input.oninput = () => { clearTimeout(searchTimer); popup.hidden = true; };
       input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No Items.</div>'; };
       input.onkeydown = event => {
         if (event.key === 'Escape') popup.hidden = true;
-        if (event.key === 'Enter') setTimeout(() => {
+        if (event.key === 'Enter') searchTimer = setTimeout(() => {
           popup.hidden = false;
           popup.innerHTML = input.value === 'a' || input.value === 'Alpha University'
-            ? '<div role="option">Alpha University</div>' : '<div role="option">No Items.</div>';
-        }, 100);
+            ? '<div role="option"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Alpha University</span></div></div>'
+            : '<div role="option">No Items.</div>';
+        }, 2500);
       };
       popup.onclick = event => {
         if (event.target.textContent !== 'Alpha University') throw Error('Status is not an answer');

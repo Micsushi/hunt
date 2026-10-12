@@ -1447,8 +1447,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         }
         return;
       }
-      if (behavior === "multi_select" &&
-          await this.#selectSubmittedMultiSelectOption(control, value, interaction, priorCatalogs)) return;
+      if (behavior !== "select" &&
+          await this.#selectSubmittedPromptOption(control, value, interaction, behavior, priorCatalogs)) return;
     }
     const relationship = await control.getAttribute("aria-controls") ??
       await control.getAttribute("aria-owns");
@@ -1865,10 +1865,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
   }
 
-  async #selectSubmittedMultiSelectOption(
+  async #selectSubmittedPromptOption(
     control: Locator,
     value: string,
     interaction: MutableInteraction,
+    behavior: "search_select" | "multi_select",
     priorCatalogs: readonly (ElementHandle | null)[] | undefined,
   ): Promise<boolean> {
     const acceptedLabels = this.#selectionOptionLabels(control, value);
@@ -1881,7 +1882,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     do {
       // Enter may commit a free-entry tag asynchronously while its search UI
       // is still visible. Observe that result before attempting another effect.
-      if (await this.#selectionReadbackIncludes(control, "multi_select", value)) {
+      if (await this.#selectionReadbackIncludes(control, behavior, value)) {
         interaction.popupBound = false;
         interaction.optionFocused = false;
         interaction.optionActivated = true;
@@ -1923,7 +1924,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.optionActivated = true;
     const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
     do {
-      interaction.backingValueCommitted = await this.#selectionReadbackIncludes(control, "multi_select", value);
+      interaction.backingValueCommitted = await this.#selectionReadbackIncludes(control, behavior, value);
       if (interaction.backingValueCommitted) break;
       await this.#page.waitForTimeout(50);
     } while (Date.now() < commitDeadline);
@@ -1932,7 +1933,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
     interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
       control,
-      "multi_select",
+      behavior,
       value,
     );
     interaction.validationCleared = await validationCleared(control);
