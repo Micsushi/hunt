@@ -14,73 +14,86 @@ import {
 } from "../../../src/contracts/index.ts";
 import { createResumeArtifactFixture } from "../../../src/testing/contracts/index.ts";
 import { testIds } from "../playwright-fixture.ts";
+import { createQuestionnaireSemanticAuthority } from "../../../src/browser/playwright-live/private/questionnaire-semantic-authority.ts";
 
 test("real questionnaire text remount recovers once and repeated loss remains blocked", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     for (const behavior of ["text", "textarea"] as const) {
-      for (const losses of [1, 2]) {
-        const page = await browser.newPage();
-        const tag = behavior === "text" ? "input" : "textarea";
-        await page.setContent(`<html data-hunt-page-id="page-recovery"><body>
-          <label>Expected weekly hours<${tag} data-hunt-target-token="target-hours"></${tag}></label>
-          <button>Continue</button></body></html>`);
-        const sessionId = "browser_session_questionnaire_recovery" as BrowserSessionId;
-        const pageId = browserPageId("page-recovery");
-        const makeSession = () => new PlaywrightBrowserSession({
-          attached: { page, sessionId, pageId }, ids: testIds(), timeoutMs: 5_000,
-        });
-        const driverBrowser = makeSession();
-        const verifierBrowser = makeSession();
-        const driver = createFieldDriver(driverBrowser, createSafetyGuard());
-        const verifier = createFieldVerifier(verifierBrowser);
-        let attempts = 0;
-        let remainingLosses = losses;
-        const failures: boolean[] = [];
-        const handler = createQuestionnairePageHandler({
-          profileQuery: { async query() { return { ok: true as const, value: { kind: "profile_answer_missing" as const } }; } },
-          narrative: createConfiguredNarrativeProvider({ revision: "recovery-v1", template: undefined }),
-          nextOperationId: () => `operation_recovery_${String(++attempts).padStart(16, "0")}` as OperationId,
-          allocateCandidateId: () => "unknown_candidate_recovery" as UnknownCandidateId,
-          observationFor: () => undefined,
-          fieldPresent: async () => await page.locator('[data-hunt-target-token="target-hours"]').count() === 1,
-          recordFailure: ({ retryable }) => { failures.push(retryable); },
-          driver: { async drive(input, signal) {
-            await driverBrowser.observe({ sessionId, pageId }, signal);
-            return driver.drive(input, signal);
-          } },
-          verifier: { async verify(input, signal) {
-            if (remainingLosses-- > 0) {
-              // Replace the field after mutation completed, before the independent readback.
-              await page.locator('[data-hunt-target-token="target-hours"]').evaluate(element => {
-                const replacement = element.cloneNode(true) as HTMLInputElement | HTMLTextAreaElement;
-                replacement.value = "";
-                element.replaceWith(replacement);
+      for (const timing of ["after-driver", "during-driver"] as const) {
+        for (const losses of [1, 2]) {
+          const page = await browser.newPage();
+          const tag = behavior === "text" ? "input" : "textarea";
+          await page.setContent(`<html data-hunt-page-id="page-recovery"><body>
+            <label>Expected weekly hours<${tag} data-hunt-target-token="target-hours"></${tag}></label>
+            <button>Continue</button></body></html>`);
+          if (timing === "during-driver") {
+            await page.locator(tag).evaluate((element, count) => {
+              let remaining = count;
+              element.addEventListener("blur", () => {
+                if (remaining-- > 0) (element as HTMLInputElement).value = "4";
               });
-            }
-            return verifier.verify(input, signal);
-          } },
-        });
-        const resume = createResumeArtifactFixture();
-        const result = await handler.complete({
-          mode: "synthetic_test_non_submittable", answerFallbackPolicy: "deterministic_site_valid_editable",
-          journeyId: journeyId("journey_questionnaire_recovery_1"),
-          sessionId, pageId, guardRevision: guardRevision("policy-s1"),
-          profileId: upstreamProfileId("profile-recovery"), profileRevision: 1,
-          resume: { resumeId: resume.resumeId, sha256: resume.sha256 }, resumeArtifact: resume,
-          page: { pageIdentity: { kind: "workday", page: "questionnaire" }, fields: [{
-            fieldId: fieldId("field-hours"), target: browserTargetToken("target-hours"),
-            label: boundedText("Expected weekly hours"), required: false, behavior,
-            options: [], state: "empty",
-          }] },
-        }, new AbortController().signal);
-        assert.equal(result.ok && result.value.kind, losses === 1 ? "verified" : "blocked", JSON.stringify(result));
-        assert.equal(attempts, 2);
-        assert.deepEqual(failures, losses === 1 ? [true] : [true, false]);
-        assert.equal(await page.locator(tag).inputValue(), losses === 1 ? "40" : "");
-        await driverBrowser.close({ sessionId }, new AbortController().signal);
-        await verifierBrowser.close({ sessionId }, new AbortController().signal);
-        await page.close();
+            }, losses);
+          }
+          const sessionId = "browser_session_questionnaire_recovery" as BrowserSessionId;
+          const pageId = browserPageId("page-recovery");
+          const makeSession = () => new PlaywrightBrowserSession({
+            attached: { page, sessionId, pageId }, ids: testIds(), timeoutMs: 5_000,
+          });
+          const verifierBrowser = makeSession();
+          const authority = createQuestionnaireSemanticAuthority({
+            sessionId, pageId, createDriverBrowser: makeSession, verifierBrowser,
+            createDriver: browser => createFieldDriver(browser, createSafetyGuard()),
+            createVerifier: createFieldVerifier, prepare: async () => {},
+          });
+          let attempts = 0;
+          let remainingLosses = losses;
+          const failures: boolean[] = [];
+          const handler = createQuestionnairePageHandler({
+            profileQuery: { async query() { return { ok: true as const, value: { kind: "profile_answer_missing" as const } }; } },
+            narrative: createConfiguredNarrativeProvider({ revision: "recovery-v1", template: undefined }),
+            nextOperationId: () => `operation_recovery_${String(++attempts).padStart(16, "0")}` as OperationId,
+            allocateCandidateId: () => "unknown_candidate_recovery" as UnknownCandidateId,
+            observationFor: () => undefined,
+            fieldPresent: async () => await page.locator('[data-hunt-target-token="target-hours"]').count() === 1,
+            recordFailure: ({ retryable }) => { failures.push(retryable); },
+            driver: authority.driver,
+            verifier: { async verify(input, signal) {
+              if (timing === "after-driver" && remainingLosses-- > 0) {
+                // Replace the field after mutation completed, before the independent readback.
+                await page.locator('[data-hunt-target-token="target-hours"]').evaluate(element => {
+                  const replacement = element.cloneNode(true) as HTMLInputElement | HTMLTextAreaElement;
+                  replacement.value = "";
+                  element.replaceWith(replacement);
+                });
+              }
+              return authority.verifier.verify(input, signal);
+            } },
+          });
+          const resume = createResumeArtifactFixture();
+          const result = await handler.complete({
+            mode: "synthetic_test_non_submittable", answerFallbackPolicy: "deterministic_site_valid_editable",
+            journeyId: journeyId("journey_questionnaire_recovery_1"),
+            sessionId, pageId, guardRevision: guardRevision("policy-s1"),
+            profileId: upstreamProfileId("profile-recovery"), profileRevision: 1,
+            resume: { resumeId: resume.resumeId, sha256: resume.sha256 }, resumeArtifact: resume,
+            page: { pageIdentity: { kind: "workday", page: "questionnaire" }, fields: [{
+              fieldId: fieldId("field-hours"), target: browserTargetToken("target-hours"),
+              label: boundedText("Expected weekly hours"), required: false, behavior,
+              options: [], state: "empty",
+            }] },
+          }, new AbortController().signal);
+          if (losses === 2 && timing === "during-driver") {
+            assert.equal(!result.ok && result.error.code, "browser_effect_uncertain", JSON.stringify(result));
+          } else {
+            assert.equal(result.ok && result.value.kind, losses === 1 ? "verified" : "blocked", `${timing}: ${JSON.stringify(result)}`);
+          }
+          assert.equal(attempts, 2);
+          assert.deepEqual(failures, losses === 1 ? [true] : [true, false]);
+          assert.equal(await page.locator(tag).inputValue(), losses === 1 ? "40" : timing === "during-driver" ? "4" : "");
+          await authority.close(new AbortController().signal);
+          await page.close();
+        }
       }
     }
   } finally { await browser.close(); }

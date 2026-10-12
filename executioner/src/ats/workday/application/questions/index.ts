@@ -512,13 +512,20 @@ export function createQuestionnairePageHandler(
             return verified;
           }
           if (verified.value.kind !== "verified") {
+            // Retry text once only when an independent readback establishes a
+            // mismatch and the same field is still present, even if typing was uncertain.
+            const retryText = textAttempt === 0 && !signal.aborted &&
+              answer.value.intent.kind === "text" &&
+              verified.value.kind === "rejected" && verified.value.reason === "mismatch" &&
+              await dependencies.fieldPresent?.(field, signal) === true;
             if (!driven.ok) {
               dependencies.recordFailure?.({
                 operationId,
                 code: driven.error.code,
-                retryable: driven.error.retryable,
+                retryable: retryText,
                 stage: "driver",
               });
+              if (retryText) continue;
               return driven;
             }
             const code = verified.value.kind === "rejected"
@@ -526,13 +533,6 @@ export function createQuestionnairePageHandler(
               : verified.value.kind === "ambiguous"
                 ? "verification_ambiguous"
                 : "verification_unavailable";
-            // A remount can discard text between the driver's readback and the
-            // independent verifier. Reapply the same intent once to a fresh,
-            // exact field; never replace its answer or accept a failed readback.
-            const retryText = textAttempt === 0 && !signal.aborted &&
-              answer.value.intent.kind === "text" &&
-              verified.value.kind === "rejected" && verified.value.reason === "mismatch" &&
-              await dependencies.fieldPresent?.(field, signal) === true;
             dependencies.recordFailure?.({
               operationId,
               code,

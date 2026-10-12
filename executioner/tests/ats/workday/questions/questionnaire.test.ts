@@ -1159,6 +1159,31 @@ test("text recovery requires fresh presence and never retries stale or ambiguous
   }
 });
 
+test("uncertain effects do not retry without an independently established text mismatch", async () => {
+  for (const scenario of ["absent", "unchecked", "stale", "ambiguous", "unavailable", "choice"] as const) {
+    let attempts = 0;
+    let presenceChecks = 0;
+    const { handler } = dependencies({
+      driver: { async drive() {
+        attempts += 1;
+        return { ok: false, error: { code: "browser_effect_uncertain", retryable: false } };
+      } },
+      fieldPresent: scenario === "unchecked" ? undefined : async () =>
+        scenario !== "absent" || ++presenceChecks === 1,
+      verifier: { async verify(input) {
+        return { ok: true, value: scenario === "ambiguous" || scenario === "unavailable"
+          ? { kind: scenario, fieldId: input.intent.fieldId }
+          : { kind: "rejected", fieldId: input.intent.fieldId, reason: scenario === "stale" ? "stale" : "mismatch" } };
+      } },
+    });
+    const result = await handler.complete(
+      request([scenario === "choice" ? countryField : narrativeField]), new AbortController().signal,
+    );
+    assert.equal(!result.ok && result.error.code, "browser_effect_uncertain", scenario);
+    assert.equal(attempts, 1, scenario);
+  }
+});
+
 test("active listbox resolution follows the expanded control relation only", () => {
   assert.deepEqual(resolveActiveListbox(fixture.activeListbox), {
     kind: "resolved",

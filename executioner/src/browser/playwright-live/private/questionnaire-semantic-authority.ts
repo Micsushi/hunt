@@ -64,7 +64,9 @@ export function createQuestionnaireSemanticAuthority(
         await options.prepare(signal);
         const result = await verifier.verify(request, signal);
         if (
-          result.ok && result.value.kind === "verified" &&
+          result.ok && (result.value.kind === "verified" ||
+            (request.intent.kind === "text" && result.value.kind === "rejected" &&
+              result.value.reason === "mismatch")) &&
           uncertainOperationId === request.receipt.operationId
         ) {
           driverBrowser = options.createDriverBrowser();
