@@ -544,7 +544,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
     const priorCatalogs = promptCatalog
       ? await Promise.all((await visibleLocators(this.#page.locator(
-        '[data-automation-id="activeListContainer"][role="listbox"]',
+        '[role="listbox"]',
       ))).map(locator => locator.elementHandle()))
       : undefined;
     let labels: string[] = [];
@@ -1380,9 +1380,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "select" | "multi_select",
   ): Promise<void> {
-    const priorCatalogs = /^(?:source--source|education-[^\s]+--(?:school|fieldOfStudy))$/u.test(await control.getAttribute("id") ?? "")
+    const priorCatalogs = behavior === "multi_select" || /^(?:source--source|education-[^\s]+--(?:school|fieldOfStudy))$/u.test(await control.getAttribute("id") ?? "")
       ? await Promise.all((await visibleLocators(this.#page.locator(
-        '[data-automation-id="activeListContainer"][role="listbox"]',
+        '[role="listbox"]',
       ))).map(catalog => catalog.elementHandle()))
       : undefined;
     try {
@@ -1433,7 +1433,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         return;
       }
       if (behavior === "multi_select" &&
-          await this.#selectSubmittedMultiSelectOption(control, value, interaction)) return;
+          await this.#selectSubmittedMultiSelectOption(control, value, interaction, priorCatalogs)) return;
     }
     const relationship = await control.getAttribute("aria-controls") ??
       await control.getAttribute("aria-owns");
@@ -1854,6 +1854,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     control: Locator,
     value: string,
     interaction: MutableInteraction,
+    priorCatalogs: readonly (ElementHandle | null)[] | undefined,
   ): Promise<boolean> {
     const acceptedLabels = equivalentOptionLabels(value);
     // A submitted search can still be loading after the initial animation.
@@ -1863,7 +1864,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     let visibleOptions: Locator[] = [];
     let exact: Locator[] = [];
     do {
-      visibleOptions = await visibleLocators(this.#page.locator('[role="option"]'));
+      const owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+      visibleOptions = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
       exact = [];
       for (const option of visibleOptions.slice(0, 128)) {
         if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
@@ -1887,7 +1889,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.visibleOptionCount = visibleOptions.length;
     interaction.selectedOptionOrdinal = visibleOptions.indexOf(option) + 1;
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
-    await (inputs[0] ?? option).click({ timeout: this.#timeoutMs });
+    await (inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
     interaction.optionActivated = true;
     await this.#page.waitForTimeout(100);
     await this.#page.keyboard.press("Escape");
@@ -3257,7 +3259,7 @@ async function exactPromptCatalogOwner(
     if (observed !== undefined) return observed;
     if (source || priorCatalogs !== undefined) {
       const candidates = await visibleLocators(page.locator(
-        '[data-automation-id="activeListContainer"][role="listbox"]',
+        priorCatalogs !== undefined ? '[role="listbox"]' : '[data-automation-id="activeListContainer"][role="listbox"]',
       ));
       const sourceOwners: Locator[] = [];
       for (const candidate of candidates) {

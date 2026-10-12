@@ -3197,6 +3197,42 @@ test("source option observation waits for its delayed owned catalog without sele
   } finally { await browser.close(); }
 });
 
+test("multi-select selection binds its delayed portal without selecting an unrelated option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Skills</h4><div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" enterkeyhint="search"><div id="selected-skills"></div>
+        </div>
+      </div></main>
+      <div id="unrelated" role="listbox" data-automation-id="activeListContainer"><div role="option">Python</div></div>
+      <div id="skills-options" role="listbox" data-automation-id="activeListContainer" hidden>
+        <div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Python</span></div></div>
+      </div><script>
+        const input = document.querySelector('input');
+        const popup = document.querySelector('#skills-options');
+        input.onclick = () => { setTimeout(() => { popup.hidden = false; }, 500); };
+        popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+          document.querySelector('#selected-skills').innerHTML = '<div data-automation-id="selectedItem">Python</div>';
+          input.value = ''; popup.hidden = true;
+        };
+        document.querySelector('#unrelated').onclick = () => { globalThis.unrelatedClicked = true; };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 2000 });
+    const signal = new AbortController().signal;
+    const control = (await adapter.inspect(signal)).controls.find(({ fieldId }) => fieldId === "skills.values")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    const filled = (await adapter.inspect(signal)).controls.find(({ fieldId }) => fieldId === "skills.values")!;
+    assert.equal(filled.readback, "Python");
+    assert.equal(await page.locator('#unrelated').isVisible(), true);
+    assert.notEqual(await page.evaluate(() => (globalThis as typeof globalThis & { unrelatedClicked?: boolean }).unrelatedClicked), true);
+  } finally { await browser.close(); }
+});
+
 test("source selection binds its newly opened portal without selecting an unrelated option", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
