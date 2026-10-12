@@ -338,7 +338,7 @@ export function profileRepeatableFieldTemplate(
     month: "month", year: "year", number: "number", url: "url",
     search_select: "option", select: "single_select", multi_select: "multi_select",
   };
-  const answerType = answerTypes[control.uiBehavior];
+  const answerType = control.fieldId === "website.url" ? "url" : answerTypes[control.uiBehavior];
   if (answerType === undefined) return undefined;
   return {
     fieldId: control.fieldId,

@@ -814,7 +814,9 @@ function syntheticProfileValue(
   if (control.fieldId === "social.twitter") {
     return "https://twitter.com/hunt_test_26";
   }
-  if (answerType === "url") return "https://example.invalid/owner-review";
+  if (answerType === "url") return control.fieldId === "website.url"
+    ? `https://example.invalid/owner-review/${encodeURIComponent(control.controlId)}`
+    : "https://example.invalid/owner-review";
   if (control.uiBehavior !== "text" && control.uiBehavior !== "textarea" &&
       control.uiBehavior !== "number" && control.uiBehavior !== "url") return undefined;
   const generated = generateSyntheticTextValue({

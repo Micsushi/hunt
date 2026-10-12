@@ -1146,8 +1146,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     profile: Locator,
     inspectInteractiveOptions: boolean,
   ): Promise<ProfileRowSnapshot[]> {
-    if (entry.section !== "experience" && entry.section !== "education") return [];
-    const prefix = entry.section === "experience" ? "workExperience-" : "education-";
+    if (indexedRepeatablePrefixes(entry.section).length === 0) return [];
     const rowIds = await this.#indexedRowIds(entry);
     const rows: ProfileRowSnapshot[] = [];
     for (const identifier of rowIds) {
@@ -1168,13 +1167,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         controls,
       });
     }
-    return rows.filter(({ rowId }) => rowId.startsWith(prefix));
+    return rows;
   }
 
   async #indexedRowIds(entry: ProfileRepeatableCatalogEntry): Promise<string[]> {
-    if (entry.section !== "experience" && entry.section !== "education") return [];
-    const prefix = entry.section === "experience" ? "workExperience-" : "education-";
-    const ids = await this.#page.locator(`[id^="${prefix}"][id*="--"]`).evaluateAll((elements) =>
+    const prefixes = indexedRepeatablePrefixes(entry.section);
+    if (prefixes.length === 0) return [];
+    const ids = await this.#page.locator(prefixes.map(prefix =>
+      `[id^="${prefix}"][id*="--"]`).join(", ")).evaluateAll((elements) =>
       elements.flatMap((element) => {
         const split = element.id.indexOf("--");
         return split > 0 ? [element.id.slice(0, split)] : [];
@@ -1203,9 +1203,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       repeatables: profileRepeatableCatalog.map((entry) => ({
         sectionSelector: entry.sectionSelector,
         rowSelector: entry.rowSelector,
-        idPrefix: entry.section === "experience" ? "workExperience-" :
-          entry.section === "education" ? "education-" :
-          entry.section === "skills" ? "skills-" : "website-",
+        idPrefixes: entry.section === "skills" ? ["skills-"] : indexedRepeatablePrefixes(entry.section),
         suffixes: entry.fields.map(({ suffix }) => suffix),
       })),
     };
@@ -1247,7 +1245,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           )
         ) return true;
         return reviewed.repeatables.some((entry) => {
-          if (element.id.startsWith(entry.idPrefix) && entry.suffixes.some((suffix) =>
+          if (entry.idPrefixes.some(prefix => element.id.startsWith(prefix)) && entry.suffixes.some((suffix) =>
             element.id.endsWith(`--${suffix}`)
           )) return true;
           const section = element.closest(entry.sectionSelector);
@@ -3350,6 +3348,13 @@ async function rowId(row: Locator): Promise<string> {
     throw new TypeError("Workday row identifier is unavailable");
   }
   return value;
+}
+
+function indexedRepeatablePrefixes(section: ProfileRepeatableSection): readonly string[] {
+  if (section === "experience") return ["workExperience-"];
+  if (section === "education") return ["education-"];
+  if (section === "websites") return ["webAddress-", "website-", "websites-"];
+  return [];
 }
 
 function repeatableEntry(section: ProfileRepeatableSection): ProfileRepeatableCatalogEntry {

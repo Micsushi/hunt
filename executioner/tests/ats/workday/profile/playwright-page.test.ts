@@ -2061,6 +2061,46 @@ fields: [field("identity.given_name", "identity", "text", "Ada")],
   }
 });
 
+test("indexed website controls share URL semantics and distinct row identities", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          ${["webAddress-4", "webAddress-5", "website-6", "websites-7"].map(id => `
+            <div data-automation-id="formField-url"><label for="${id}--url">URL*</label>
+              <input id="${id}--url" name="url" type="text" ${id === "webAddress-4" ? 'value="https://example.com/portfolio"' : ''} required>
+            </div>`).join("")}
+          <label for="unmapped">Another required answer</label><input id="unmapped" required>
+        </main>
+      </body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(initial.rows.length, 4);
+    assert.deepEqual(initial.controls.map(c => c.fieldId), ["unknown.required.1"]);
+    assert.ok(initial.rows.every(r => r.section === "websites" && r.controls.length === 1 &&
+      r.controls[0]!.fieldId === "website.url"));
+    assert.equal(new Set(initial.rows.map(r => r.rowId)).size, 4);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    if (result.kind !== "verified") return;
+    const websites = result.effectivePlan.repeatables.find(r => r.section === "websites")!;
+    assert.equal(websites.rows.length, 4);
+    assert.ok(websites.rows.every(r => r.fields.every(f =>
+      f.questionType === "website" && f.answerType === "url")));
+    for (const input of await page.locator('input[name="url"]').all()) {
+      assert.ok(/^https?:\/\//u.test(await input.inputValue()));
+    }
+    const urls = await page.locator('input[name="url"]').evaluateAll(inputs =>
+      inputs.map(input => (input as HTMLInputElement).value));
+    assert.equal(urls[0], "https://example.com/portfolio");
+    assert.equal(new Set(urls).size, 4);
+  } finally { await browser.close(); }
+});
+
 test("learns and fills a generic Workday Website repeatable row", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
