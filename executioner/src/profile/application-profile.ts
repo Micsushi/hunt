@@ -90,14 +90,16 @@ export function parseApplicationProfile(value: unknown): ApplicationProfile {
         answered.has(factId) || unset.has(factId)) denied(`$.unsetFactIds[${index}]`);
     unset.add(factId);
   }
-  if (answered.size + unset.size !== applicationProfileFactIds.length) {
-    denied("$.unsetFactIds");
-  }
+  // Catalog growth must not invalidate saved profiles. Omitted known facts
+  // remain explicitly unset; this never invents an owner answer.
+  const missing = applicationProfileFactIds.filter(id => !answered.has(id) && !unset.has(id));
   const discoveredIds = new Set<string>();
   for (const [index, candidate] of profile.discoveredFields.entries()) {
     validateDiscoveredField(candidate, `$.discoveredFields[${index}]`, discoveredIds);
   }
-  return deepFreeze(structuredClone(profile)) as unknown as ApplicationProfile;
+  return deepFreeze(structuredClone({
+    ...profile, unsetFactIds: [...profile.unsetFactIds, ...missing],
+  })) as unknown as ApplicationProfile;
 }
 
 export function createApplicationProfileQuery(value: unknown): ApplicationProfileQuery {

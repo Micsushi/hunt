@@ -61,6 +61,21 @@ test("ApplicantProfile has a closed credential-free fact catalog", () => {
   assert.equal(credentialFact, "password");
 });
 
+test("growing the answer catalog preserves older profiles and exposes missing facts as unset", () => {
+  const older = {
+    profileId: upstreamProfileId("profile-older"), revision: 1,
+    facts: [{ factId: "given_name", value: "Ada", provenance: "owner_provided", lane: "live_owner_fact" }],
+    unsetFactIds: ["family_name"], discoveredFields: [],
+  };
+  const admitted = parseApplicationProfile(older);
+  assert.deepEqual(admitted.facts, older.facts);
+  assert.deepEqual(admitted.unsetFactIds, applicationProfileFactIds.filter(id => id !== "given_name"));
+  assert.deepEqual(older.unsetFactIds, ["family_name"]);
+  assert.deepEqual(parseApplicationProfile(admitted), admitted);
+  assert.throws(() => parseApplicationProfile({ ...older, unsetFactIds: ["given_name"] }), TypeError);
+  assert.throws(() => parseApplicationProfile({ ...older, unsetFactIds: ["unrecognized_fact"] }), TypeError);
+});
+
 test("credential aliases receive one stable denial code", () => {
   for (const factId of [
     "password",
