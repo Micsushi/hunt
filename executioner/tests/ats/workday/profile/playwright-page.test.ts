@@ -4192,7 +4192,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-for (const discover of [false, true]) test(`My Experience traverses its owned field-of-study scope before ${discover ? "discovering answers" : "committing its radio"}`, async () => {
+for (const initialDelay of [0, 150]) for (const discover of [false, true]) test(`My Experience traverses its owned field-of-study scope before ${discover ? "discovering answers" : "committing its radio"} (initial delay ${initialDelay})`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -4204,7 +4204,7 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
               <input id="education-1--fieldOfStudy" placeholder="Search">
               <div id="selected"></div>
             </div>
-            <div id="catalog" role="listbox"></div>
+            <div id="catalog" data-automation-id="activeListContainer" role="listbox"></div>
           </div>
         </main>
         <script>
@@ -4252,7 +4252,8 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
           input.addEventListener('click', () => {
             catalogOpen = !catalogOpen;
             if (!catalogOpen) { catalog.innerHTML = ''; return; }
-            scopeSelected ? renderCatalog() : renderScope();
+            if (scopeSelected) renderCatalog();
+            else setTimeout(() => { if (catalogOpen) renderScope(); }, ${initialDelay});
           });
           input.addEventListener('input', () => {
             if (!scopeSelected) return;
@@ -4261,6 +4262,7 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
           });
           document.addEventListener('keydown', event => {
             if (event.key === 'Escape') {
+              if (${initialDelay} > 0 && scopeSelected) return;
               scopeSelected = false;
               catalogOpen = false;
               catalog.innerHTML = '';
@@ -4283,6 +4285,7 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
       assert.deepEqual(control.allowedOptions, ["Accounting"]);
       assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
       assert.equal(await page.locator('#education-1--fieldOfStudy').inputValue(), "");
+      assert.equal(await page.locator('#catalog [role="option"]').count(), 0);
     }
 
     await adapter.commit({

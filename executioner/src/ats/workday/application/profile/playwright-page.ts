@@ -554,31 +554,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       let owner = promptCatalog
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
-      if (promptCatalog && owner !== undefined) {
-        const scopes = await visibleLocators(owner.locator('[role="option"]'));
-        const scopeLabels = await Promise.all(scopes.map(option => option.innerText()));
-        // These two Workday navigation entries choose a catalog scope, not an
-        // answer. Discover its leaves without activating a radio/checkbox.
-        if (scopeLabels.length === 2 && scopeLabels.every(promptScopeLabel) &&
-            scopeLabels.some(label => normalize(label) === "all") &&
-            scopeLabels.some(label => normalize(label) !== "all") &&
-            (await Promise.all(scopes.map(option => option.locator(
-              'input, [role="checkbox"], [role="radio"]',
-            ).count()))).every(count => count === 0)) {
-          observationStage = "expand_catalog_scope";
-          await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
-          // Scope navigation opens its leaves asynchronously. Clicking the
-          // input again toggles that pending catalog closed.
-          const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
-          do {
-            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
-            labels = owner === undefined ? [] : (await observedOptionLabels(owner)).filter(label => !promptScopeLabel(label));
-            if (labels.length > 0) break;
-            await this.#page.waitForTimeout(50);
-          } while (Date.now() < deadline);
-          if (labels.length === 0) throw new TypeError("Workday catalog scope has no selectable options");
-        }
-      }
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           this.#inspectMissingOptions && resolved.uiBehavior === "multi_select" &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
@@ -625,6 +600,31 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#openPromptSearch(buttons[0]!, control, true);
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
           }
+        }
+      }
+      if (promptCatalog && owner !== undefined) {
+        const scopes = await visibleLocators(owner.locator('[role="option"]'));
+        const scopeLabels = await Promise.all(scopes.map(option => option.innerText()));
+        // These two Workday navigation entries choose a catalog scope, not an
+        // answer. Discover its leaves without activating a radio/checkbox.
+        if (scopeLabels.length === 2 && scopeLabels.every(promptScopeLabel) &&
+            scopeLabels.some(label => normalize(label) === "all") &&
+            scopeLabels.some(label => normalize(label) !== "all") &&
+            (await Promise.all(scopes.map(option => option.locator(
+              'input, [role="checkbox"], [role="radio"]',
+            ).count()))).every(count => count === 0)) {
+          observationStage = "expand_catalog_scope";
+          await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
+          // Scope navigation opens its leaves asynchronously. Clicking the
+          // input again toggles that pending catalog closed.
+          const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+          do {
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+            labels = owner === undefined ? [] : (await observedOptionLabels(owner)).filter(label => !promptScopeLabel(label));
+            if (labels.length > 0) break;
+            await this.#page.waitForTimeout(50);
+          } while (Date.now() < deadline);
+          if (labels.length === 0) throw new TypeError("Workday catalog scope has no selectable options");
         }
       }
       if (owner !== undefined) {
@@ -700,6 +700,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       ))).length > 0) {
         const heading = (await this.#assertPageType()).locator('h1, h2, h3, [role="heading"]').first();
         if (await heading.count() === 1) await heading.click({ timeout: this.#timeoutMs });
+        // Workday scope popups can ignore Escape and outside clicks. Toggle
+        // only this control's still-open catalog, never a neighboring popup.
+        if (await exactPromptCatalogOwner(this.#page, control) !== undefined) {
+          await control.click({ timeout: this.#timeoutMs });
+          await control.blur({ timeout: this.#timeoutMs });
+        }
       }
       await this.#page.waitForTimeout(25);
       if (before !== await this.#resolvedReadback(resolved) ||
