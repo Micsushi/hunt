@@ -567,7 +567,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             ).count()))).every(count => count === 0)) {
           observationStage = "expand_catalog_scope";
           await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
-          await control.click({ timeout: this.#timeoutMs });
+          // Scope navigation opens its leaves asynchronously. Clicking the
+          // input again toggles that pending catalog closed.
           const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
           do {
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);

@@ -4212,6 +4212,7 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
           const catalog = document.querySelector('#catalog');
           const labels = ['Accounting', 'Business', 'Computer and Information Science'];
           let scopeSelected = false;
+          let catalogOpen = false;
           let activeIndex = 0;
           const renderScope = () => {
             catalog.innerHTML = '';
@@ -4222,6 +4223,7 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
               option.addEventListener('click', () => {
                 scopeSelected = true;
                 catalog.innerHTML = '';
+                setTimeout(() => { if (catalogOpen) renderCatalog(); }, 150);
               });
               catalog.append(option);
             }
@@ -4247,15 +4249,20 @@ for (const discover of [false, true]) test(`My Experience traverses its owned fi
             option.append(radio, label);
             catalog.append(option);
           };
-          input.addEventListener('click', () => scopeSelected ? renderCatalog() : renderScope());
+          input.addEventListener('click', () => {
+            catalogOpen = !catalogOpen;
+            if (!catalogOpen) { catalog.innerHTML = ''; return; }
+            scopeSelected ? renderCatalog() : renderScope();
+          });
           input.addEventListener('input', () => {
             if (!scopeSelected) return;
             activeIndex = input.value === 'Computer Science' ? 2 : 0;
             renderCatalog();
           });
-          input.addEventListener('keydown', event => {
+          document.addEventListener('keydown', event => {
             if (event.key === 'Escape') {
               scopeSelected = false;
+              catalogOpen = false;
               catalog.innerHTML = '';
               return;
             }
