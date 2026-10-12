@@ -2485,9 +2485,6 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         leaves.push(option);
         leafLabels.push(candidate.labels);
       }
-      if (leaves.length > 64) {
-        throw new TypeError("Workday selectable leaf is missing or ambiguous");
-      }
       const exact: { readonly option: Locator; readonly ordinal: number }[] = [];
       for (const [index, labels] of leafLabels.entries()) {
         if (labels.some((label) => equivalentOption(label, value))) {

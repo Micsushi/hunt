@@ -2587,6 +2587,42 @@ test("unfamiliar scalar labels use observed UI and editable defaults without cla
   } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("large choice menus reselect the exact saved option without keyboard fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <label for="tenant-choice">Language</label>
+      <button id="tenant-choice" type="button" role="combobox" aria-required="true"
+        aria-controls="tenant-options" aria-expanded="false">Choice 0</button>
+      <div id="tenant-options" role="listbox" hidden>
+        ${Array.from({ length: 267 }, (_, index) => `<div role="option">Choice ${index}</div>`).join('')}
+      </div><script>
+      const control = document.getElementById('tenant-choice');
+      const options = document.getElementById('tenant-options');
+      window.keyboardSelections = 0;
+      control.onclick = () => { options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+      const select = value => { control.textContent = value; options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+      options.querySelectorAll('[role="option"]').forEach(option => option.onclick = () => select(option.textContent));
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { options.hidden = true; control.setAttribute('aria-expanded', 'false'); }
+        if (event.key === 'Enter' && !options.hidden) { window.keyboardSelections++; select('Choice 1'); }
+      });
+      </script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true, timeoutMs: 500,
+    });
+    const signal = AbortSignal.any([]);
+    const selected = (await adapter.inspect(signal)).controls[0]!;
+    for (const value of ["Choice 0", "Choice 266"]) {
+      await adapter.commit({ controlId: selected.controlId, uiBehavior: selected.uiBehavior, value }, signal);
+      assert.equal((await adapter.inspect(signal)).controls[0]?.readback, value);
+      assert.equal(adapter.interaction(selected.controlId)?.visibleOptionCount, 267);
+    }
+    assert.equal(await page.evaluate(() => Reflect.get(window, "keyboardSelections")), 0);
+  } finally { await browser.close(); }
+});
+
 test("unknown questions discover closed choice options before generating an answer", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

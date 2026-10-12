@@ -368,7 +368,13 @@ test("admits dynamic search catalogs when selection reveals more options", async
     }],
     rows: [],
   });
-  const port = new FakeProfilePort(sourceControl(null));
+  const port = new class extends FakeProfilePort {
+    override interaction(controlId: string) {
+      const observed = super.interaction(controlId);
+      return observed === undefined || observed.visibleOptionCount === null
+        ? observed : { ...observed, visibleOptionCount: 267 };
+    }
+  }(sourceControl(null));
   const baseObserver = observer();
   const capture = createProfileFieldLearningCapture({
     page: port,
