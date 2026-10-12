@@ -34,6 +34,12 @@ test("ApplicantProfile has a closed credential-free fact catalog", () => {
         lane: "live_owner_fact",
       },
       {
+        factId: "weekly_hours",
+        value: 24,
+        provenance: "owner_provided",
+        lane: "live_owner_fact",
+      },
+      {
         factId: "email_address",
         value: "applicant@example.invalid",
         provenance: "owner_provided",
@@ -41,7 +47,7 @@ test("ApplicantProfile has a closed credential-free fact catalog", () => {
       },
     ],
     unsetFactIds: applicationProfileFactIds.filter((factId) =>
-      !new Set(["work_authorization", "years_experience", "email_address"])
+      !new Set(["work_authorization", "years_experience", "weekly_hours", "email_address"])
         .has(factId)
     ),
     discoveredFields: [],

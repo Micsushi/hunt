@@ -70,7 +70,7 @@ export const applicationBooleanProfileFactIds = [
   "terms_consent",
 ] as const;
 
-export const applicationNumberProfileFactIds = [...numberProfileFactIds] as const;
+export const applicationNumberProfileFactIds = [...numberProfileFactIds, "weekly_hours"] as const;
 
 export const applicationProfileFactIds = [
   ...applicationTextProfileFactIds,

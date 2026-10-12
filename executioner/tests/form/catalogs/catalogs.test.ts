@@ -83,6 +83,19 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
   });
 });
 
+test("weekly hours use one reusable numeric profile fact without matching unrelated hours", () => {
+  const definition = questionForField("How many hours per week are you available to work?", "text");
+  assert.equal(definition?.id, "workday-question-weekly-hours");
+  assert.deepEqual(definition?.source, {
+    kind: "profile", factId: "weekly_hours", ownerProvidedOnly: true,
+  });
+  assert.deepEqual(questionAnswerGuide.find(({ id }) => id === "workday-question-weekly-hours")?.defaultPolicy, {
+    kind: "generated_learning_default", value: 40, replaceWithOwnerAnswer: true,
+  });
+  assert.deepEqual(resolveQuestion("Describe your preferred working hours"), { kind: "unknown" });
+  assert.deepEqual(resolveQuestion("Have you worked night hours before?"), { kind: "unknown" });
+});
+
 test("prior-employment and employee-referral semantics stay tenant-scoped", () => {
   for (const label of [
     "Have you previously worked for this organization?",
@@ -356,9 +369,15 @@ test("the runtime Profile guide adapts retained intake metadata to driver semant
       uiVariant,
       allowedOptions,
     }));
-  assert.deepEqual(retainedProfileControlGuide.filter(({ identity }) => identity !== "identity.prefix"), retainedProfile);
+  assert.deepEqual(retainedProfileControlGuide.filter(({ identity }) =>
+    identity !== "identity.prefix" && identity !== "identity.suffix"), retainedProfile);
   assert.deepEqual(retainedProfileControlGuide.find(({ identity }) => identity === "identity.prefix"), {
     identity: "identity.prefix", sanitizedLabel: "Prefix", normalizedQuestionType: "identity",
+    behavior: "search_select", answerType: "single_select", required: false,
+    uiVariant: "workday_search_select_v2", allowedOptions: [],
+  });
+  assert.deepEqual(retainedProfileControlGuide.find(({ identity }) => identity === "identity.suffix"), {
+    identity: "identity.suffix", sanitizedLabel: "Suffix", normalizedQuestionType: "identity",
     behavior: "search_select", answerType: "single_select", required: false,
     uiVariant: "workday_search_select_v2", allowedOptions: [],
   });

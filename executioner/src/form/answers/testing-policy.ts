@@ -1,3 +1,5 @@
+import { resolveQuestion } from "../questions/catalog.ts";
+
 const normalized = (value: string): string => value.normalize("NFKC")
   .toLocaleLowerCase("en-US")
   .replace(/[^\p{L}\p{N}]+/gu, " ")
@@ -20,6 +22,10 @@ export type TestingQuestionSemanticType =
   | "unknown";
 
 export function testingQuestionSemanticType(label: string): TestingQuestionSemanticType {
+  const question = resolveQuestion(label);
+  if (question.kind === "resolved" && question.id === "workday-question-weekly-hours") {
+    return "availability";
+  }
   const value = normalized(label);
   if (birthDateQuestion.test(value)) return "identity";
   if (/\b(?:referred|referral)\b.*\b(?:associate|employee)\b/u.test(value)) {

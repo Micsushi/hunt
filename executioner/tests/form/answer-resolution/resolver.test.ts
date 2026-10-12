@@ -98,6 +98,31 @@ test("salary test fallback is positive without replacing owner salary or authori
     }
 });
 
+test("weekly hours share numeric defaults and preserve an owner answer across labels", async () => {
+  const signal = new AbortController().signal;
+  for (const label of [
+    "Please indicate your expected number of weekly hours:",
+    "How many hours per week are you available to work?",
+    "Desired weekly hours",
+  ]) {
+    const observed = field(label);
+    assert.equal(testingQuestionSemanticType(label), "availability");
+    const missing = resolverWith({ kind: "profile_answer_missing" }).resolver;
+    const generated = await missing.resolve(syntheticRequest(observed), signal);
+    assert.equal(generated.ok && generated.value.kind === "resolved" &&
+      generated.value.intent.kind === "text" && generated.value.intent.value, "40");
+    assert.equal(generated.ok && generated.value.kind === "resolved" &&
+      generated.value.lane, "synthetic_test_default");
+    const live = await missing.resolve(request(observed), signal);
+    assert.equal(live.ok && live.value.kind, "profile_answer_missing");
+    const owner = resolverWith({ kind: "answered", value: 24,
+      provenance: "owner_provided", lane: "live_owner_fact" }).resolver;
+    const preserved = await owner.resolve(syntheticRequest(observed), signal);
+    assert.equal(preserved.ok && preserved.value.kind === "resolved" &&
+      preserved.value.intent.kind === "text" && preserved.value.intent.value, "24");
+  }
+});
+
 test("profile answers produce exact immutable intents with provenance", async () => {
   const cases = [
     ["Given name", "text", "Ada", "text", { value: "Ada" }],
