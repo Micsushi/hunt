@@ -2629,6 +2629,28 @@ test("unknown questions discover closed choice options before generating an answ
     }, adapter, signal);
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.ok(["Alpha", "Beta"].includes(await page.locator('#tenant-choice').innerText()));
+    const committedOpens = await page.evaluate(() => Reflect.get(window, "opens"));
+    const committed = await adapter.inspect(signal);
+    await adapter.inspect(signal);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "opens")), committedOpens);
+    assert.deepEqual(committed.controls[0]?.allowedOptions, [committed.controls[0]?.readback]);
+    // A dependency can invalidate a retained value before clearing its label.
+    await page.locator('#tenant-choice').evaluate(element => element.setAttribute('aria-invalid', 'true'));
+    const invalid = await adapter.inspect(signal);
+    assert.deepEqual(invalid.controls[0]?.allowedOptions, ["Alpha", "Beta"]);
+    assert.ok(await page.evaluate(() => Reflect.get(window, "opens")) > committedOpens);
+    // Cleared dependent choices must discover the new catalog, not reuse one.
+    await page.evaluate(() => {
+      const control = document.getElementById('tenant-choice')!;
+      control.removeAttribute('aria-invalid');
+      control.textContent = 'Select One';
+      document.querySelectorAll('#tenant-options [role="option"]').forEach((option, index) => {
+        option.textContent = index === 0 ? 'Gamma' : 'Delta';
+      });
+    });
+    const changed = await adapter.inspect(signal);
+    assert.equal(changed.controls[0]?.readback, null);
+    assert.deepEqual(changed.controls[0]?.allowedOptions, ["Gamma", "Delta"]);
   } finally { await browser.close(); }
 });
 

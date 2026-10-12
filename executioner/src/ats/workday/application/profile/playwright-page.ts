@@ -1365,13 +1365,19 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         uiVariant: "workday_unknown_required_v1",
         binderStrategy: "opaque_machine_key",
       };
+      const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
       let allowedOptions = await unknownAllowedOptions(candidate);
       if (allowedOptions.length === 0 && isChoice(uiBehavior) &&
           uiBehavior !== "radio_group" && this.#inspectMissingOptions && inspectInteractiveOptions) {
-        allowedOptions = await this.#observeOptionLabels(resolved, [candidate], true);
+        // Match known scalar choices: read a valid committed value without
+        // reopening its popup. Cleared or invalid dependencies discover afresh.
+        allowedOptions = currentReadback !== null &&
+            (uiBehavior === "search_select" || uiBehavior === "select") &&
+            await validationCleared(candidate)
+          ? [currentReadback]
+          : await this.#observeOptionLabels(resolved, [candidate], true);
       }
       const constraints = await unknownConstraints(candidate);
-      const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
       const label = await observedControlLabel(candidate, uiBehavior) ?? stableKey;
       unknown.push({
         controlId: `unknown-required:${ordinal}`,
