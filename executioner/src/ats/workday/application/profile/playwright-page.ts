@@ -555,7 +555,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
-          this.#inspectMissingOptions && resolved.uiBehavior === "multi_select" &&
+          this.#inspectMissingOptions && (resolved.uiBehavior === "multi_select" ||
+            resolved.uiBehavior === "search_select" && await control.getAttribute("enterkeyhint") === "search") &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
         // Enter is a search only when the input declares it. On free-entry
         // controls it could commit a token. Restore the draft in finally.
@@ -698,7 +699,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (promptCatalog && (await visibleLocators(this.#page.locator(
         '[data-automation-id="activeListContainer"][role="listbox"]',
       ))).length > 0) {
-        const heading = (await this.#assertPageType()).locator('h1, h2, h3, [role="heading"]').first();
+        const heading = (await this.#assertPageType()).locator('h1, h2, h3, h4, h5, h6, [role="heading"]').first();
         if (await heading.count() === 1) await heading.click({ timeout: this.#timeoutMs });
         // Workday scope popups can ignore Escape and outside clicks. Toggle
         // only this control's still-open catalog, never a neighboring popup.

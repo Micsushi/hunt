@@ -2876,6 +2876,83 @@ test("education option discovery searches owned catalogs without committing a se
   } finally { await browser.close(); }
 });
 
+test("empty education portal closes before discovering the next control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Education</h4>
+      <div data-automation-id="formField-school"><label>School*</label>
+        <input id="education-1--school" enterkeyhint="search" required>
+      </div>
+      <div data-automation-id="formField-degree"><label>Degree</label>
+        <button id="education-1--degree" aria-controls="degrees">Select One</button>
+        <div id="degrees" role="listbox" hidden><div role="option">Bachelors</div></div>
+      </div>
+    </main>
+    <div id="portal" data-automation-id="activeListContainer" role="listbox" hidden
+      style="position:fixed;inset:100px 0 0;z-index:10"><div role="option">No Items.</div></div>
+    <script>
+      const school = document.getElementById('education-1--school');
+      const portal = document.getElementById('portal');
+      school.onclick = () => { portal.hidden = false; };
+      document.querySelector('h4').onclick = () => { portal.hidden = true; };
+      document.getElementById('education-1--degree').onclick = () => {
+        document.getElementById('degrees').hidden = false;
+      };
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') document.getElementById('degrees').hidden = true;
+      });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true, timeoutMs: 700,
+    });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.rows.flatMap(row => row.controls)
+      .find(control => control.fieldId === "education.degree")?.allowedOptions, ["Bachelors"]);
+    assert.equal(await page.locator('#portal').isVisible(), false);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
+test("single-choice search discovers real catalog answers without an Other entry", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School*</label>
+        <input id="education-1--school" enterkeyhint="search" aria-controls="schools" required>
+        <div id="schools" role="listbox" hidden></div><div id="selected"></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('schools');
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No Items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter') setTimeout(() => {
+          popup.hidden = false;
+          popup.innerHTML = input.value === 'a' || input.value === 'Alpha University'
+            ? '<div role="option">Alpha University</div>' : '<div role="option">No Items.</div>';
+        }, 100);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Alpha University') throw Error('Status is not an answer');
+        document.getElementById('selected').innerHTML = '<span data-automation-id="selectedItem">Alpha University</span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Alpha University"]);
+    assert.equal(school.readback, null);
+    assert.equal(await page.locator('input').inputValue(), "");
+    await adapter.commit({ controlId: school.controlId, uiBehavior: school.uiBehavior, value: "Alpha University" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+  } finally { await browser.close(); }
+});
+
 test("education school reconciles canonical saved tokens with presentation mirrors", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
