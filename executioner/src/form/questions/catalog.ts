@@ -295,7 +295,10 @@ const questionSemanticCatalog = Object.freeze([
   ] },
   { id: "workday-question-gender-disclosure", keywordGroups: [["gender"], ["sex"]] },
   { id: "workday-question-ethnicity-disclosure", keywordGroups: [["ethnicity"], ["ethnicities"], ["race"], ["hispanic"], ["latino"]] },
-  { id: "workday-question-veteran-disclosure", keywordGroups: [["veteran"], ["military"], ["armed", "forces"]] },
+  { id: "workday-question-veteran-disclosure", keywordGroups: [
+    ["veteran"], ["military", "served"], ["military", "service"], ["military", "status"],
+    ["armed", "forces", "served"], ["armed", "forces", "member"],
+  ] },
   { id: "workday-question-disability-disclosure", keywordGroups: [["disability"], ["disabled"]] },
   { id: "workday-placeholder-terms-consent", keywordGroups: [["consent", "terms"], ["agree", "terms"], ["acknowledge", "terms"]] },
   { id: "workday-placeholder-prior-employment", keywordGroups: [

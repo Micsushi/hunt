@@ -96,6 +96,20 @@ test("weekly hours use one reusable numeric profile fact without matching unrela
   assert.deepEqual(resolveQuestion("Have you worked night hours before?"), { kind: "unknown" });
 });
 
+test("military service questions do not absorb political-exposure definitions", () => {
+  for (const label of [
+    "Veteran Status", "Were you ever in the military?", "Have you served in the military?",
+    "Please specify your military service status", "Are you a member of the armed forces?",
+  ]) {
+    assert.equal(questionForField(label, "listbox")?.id, "workday-question-veteran-disclosure");
+  }
+  for (const label of [
+    "Do you or a close associate meet this definition? A politically exposed person is a senior official in the executive, legislative, administrative, military or judicial branches of government.",
+    "Do you have experience supplying equipment to the military?",
+    "Have you worked with armed forces customers?",
+  ]) assert.deepEqual(resolveQuestion(label), { kind: "unknown" });
+});
+
 test("prior-employment and employee-referral semantics stay tenant-scoped", () => {
   for (const label of [
     "Have you previously worked for this organization?",

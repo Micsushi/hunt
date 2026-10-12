@@ -98,6 +98,25 @@ test("salary test fallback is positive without replacing owner salary or authori
     }
 });
 
+test("political exposure uses its visible options without consulting veteran facts", async () => {
+  const { resolver, profile } = resolverWith({ kind: "answered", value: "Protected veteran", provenance: "owner_provided", lane: "live_owner_fact" });
+  const observed = field(
+    "Do you or a close associate meet this definition? A politically exposed person is a senior official in the executive, legislative, administrative, military or judicial branches of government.",
+    "listbox",
+    ["Yes, politically exposed", "No, not politically exposed"].map((label, index) => ({
+      id: optionId(`political-option-${index}`), label: boundedText(label),
+    })),
+  );
+  const result = await resolver.resolve(syntheticRequest(observed), new AbortController().signal);
+  assert.equal(profile.calls.length, 0);
+  assert.ok(result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice");
+  if (result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice") {
+    assert.equal(result.value.lane, "synthetic_test_default");
+    const expectedOption = result.value.intent.expectedOption;
+    assert.ok(observed.options.some(({ label }) => label === expectedOption));
+  }
+});
+
 test("weekly hours share numeric defaults and preserve an owner answer across labels", async () => {
   const signal = new AbortController().signal;
   for (const label of [
