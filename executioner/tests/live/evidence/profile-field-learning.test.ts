@@ -277,6 +277,49 @@ test("retains a generated pending-owner answer for a supported unknown control",
   }
 });
 
+test("retains observed radio options before an unknown question has an answer", async () => {
+  for (const readback of [null, "No"]) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-unknown-radio-learning-"));
+    const control: ProfileControlSnapshot = {
+      controlId: "unknown-required:1", fieldId: "unknown.required.1",
+      label: "Unrecognized question", required: true, uiBehavior: "radio_group",
+      uiVariant: "workday_unknown_required_v1", allowedOptions: ["Yes", "No"], readback,
+    };
+    const capture = createProfileFieldLearningCapture({
+      page: new FakeProfilePort({ pageType: "profile", controls: [control], rows: [] }),
+      plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+      root, sensitiveValues: ["Unrecognized question"],
+      observeControl: async () => ({
+        observation: {
+          controlId: control.controlId, binderStrategy: "opaque_machine_key",
+          sanitizedLabelSha256: null, backingState: readback === null ? "unset" : "set",
+          validationState: "clear", optionCatalogState: "observed",
+          visibleOptionIds: optionIds(["Yes", "No"]),
+          selectedOptionId: readback === null ? null : optionIds(["No"])[0]!,
+        },
+        binding: observationBinding(1),
+      }),
+    });
+    try {
+      await capture.page.inspect(AbortSignal.any([]));
+      assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+      const evidence = admitProfileFieldLearningEvidence(JSON.parse(
+        readFileSync(join(root, "profile-field-learning.json"), "utf8"),
+      ));
+      const field = evidence.fields[0]!;
+      assert.deepEqual(field.visibleOptionIds, optionIds(["Yes", "No"]));
+      assert.equal(field.selectedOptionId, readback === null ? null : optionIds(["No"])[0]);
+      assert.equal(field.questionCategory, "unknown");
+      assert.equal(field.answerState, "unset");
+      assert.equal(field.driverAttempt, "none");
+      assert.equal(field.terminalDisposition, "required_unset");
+      assert.equal(field.optionMapping, "unresolved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("admits dynamic search catalogs when selection reveals more options", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-profile-dynamic-options-"));
   const sourceControl = (readback: string | null): ProfilePageSnapshot => ({

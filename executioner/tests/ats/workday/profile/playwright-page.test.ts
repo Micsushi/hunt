@@ -633,6 +633,44 @@ fields: [
   }
 });
 
+test("source selection binds valid HTML ids outside CSS identifier syntax", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const popupId of ["9source-options", ":source.options:", 'source"options']) {
+      await page.setContent(`
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" data-automation-id="sourcePrompt"
+            aria-haspopup="listbox" aria-expanded="false">Select One</button>
+          <div role="listbox" hidden><div role="option">Company Website</div></div>
+        </main>
+      `);
+      await page.evaluate((id) => {
+        const control = document.querySelector("button")!;
+        const popup = document.querySelector<HTMLElement>('[role="listbox"]')!;
+        popup.id = id;
+        control.setAttribute("aria-controls", id);
+        control.addEventListener("click", () => {
+          popup.hidden = false;
+          control.setAttribute("aria-expanded", "true");
+        });
+        popup.firstElementChild!.addEventListener("click", () => {
+          control.setAttribute("data-selected-label", "Company Website");
+          control.setAttribute("aria-expanded", "false");
+          popup.hidden = true;
+        });
+      }, popupId);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+      const control = (await adapter.inspect(AbortSignal.any([]))).controls[0]!;
+      await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Company Website" }, AbortSignal.any([]));
+      assert.equal((await adapter.inspect(AbortSignal.any([]))).controls[0]!.readback, "Company Website");
+      assert.equal(adapter.interaction(control.controlId)?.backingValueCommitted, true);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Integer source select maps LinkedIn to its unique corporate-page leaf", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -1273,7 +1311,7 @@ test("Integer flat source list maps recruiter to its retained Recruiter Outreach
   }
 });
 
-test("search select activates the option-row ancestor of an exact active descendant", async () => {
+test("search select activates the option-row ancestor of a numeric active descendant id", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -1287,9 +1325,9 @@ test("search select activates the option-row ancestor of an exact active descend
         const popup = document.querySelector('#phone-types');
         control.addEventListener('click', () => { control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true'); });
         control.addEventListener('keydown', ({ key }) => {
-          if (key !== 'M' || document.querySelector('#active-mobile')) return;
+          if (key !== 'M' || document.getElementById('6be1eff3a16c105407814908815d70fd')) return;
           const row = document.createElement('div'); row.setAttribute('role', 'option');
-          const label = document.createElement('span'); label.id = 'active-mobile'; label.textContent = 'Mobile';
+          const label = document.createElement('span'); label.id = '6be1eff3a16c105407814908815d70fd'; label.textContent = 'Mobile';
           row.append(label); row.addEventListener('click', ({ target }) => {
             if (target !== row) return;
             control.textContent = 'Mobile'; control.setAttribute('aria-valuetext', 'Mobile');

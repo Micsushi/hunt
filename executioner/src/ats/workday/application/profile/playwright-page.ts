@@ -1704,7 +1704,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const selectionDeadline = Date.now() + selectionTimeoutMs;
     const remainingSelectionTime = () => Math.max(1, selectionDeadline - Date.now());
     const listbox = await this.#waitForExactVisible(
-      this.#page.locator(`#${cssIdentifier(relationshipIds[0]!)}`),
+      await exactIdLocator(this.#page, relationshipIds[0]!),
       selectionTimeoutMs,
     );
     if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
@@ -2691,7 +2691,7 @@ async function exactActiveOption(
   identifier: string,
   value: string,
 ): Promise<Locator | undefined> {
-  const option = page.locator(`#${cssIdentifier(identifier)}`);
+  const option = await exactIdLocator(page, identifier);
   if (await option.count() !== 1 || !await option.isVisible()) return undefined;
   const labels = [
     await option.getAttribute("aria-label") ?? "",
@@ -3424,11 +3424,12 @@ function repeatableEntry(section: ProfileRepeatableSection): ProfileRepeatableCa
   return entry;
 }
 
-function cssIdentifier(value: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_-]{0,127}$/u.test(value)) {
+async function exactIdLocator(page: Page, value: string): Promise<Locator> {
+  if (value.length === 0 || value.length > 128 || /[\u0000-\u0020\u007f]/u.test(value)) {
     throw new TypeError("invalid Workday listbox identifier");
   }
-  return value;
+  const escaped = await page.evaluate((id) => CSS.escape(id), value);
+  return page.locator(`#${escaped}`);
 }
 
 function normalize(value: string): string {

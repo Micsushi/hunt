@@ -786,7 +786,6 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
       validMechanicsRelations(field);
     const unresolved = field.questionCategory === "unknown" &&
       field.answerCategory === "unknown" &&
-      field.visibleOptionIds.length === 0 && field.selectedOptionId === null &&
       field.optionMapping === "unresolved" &&
       field.prefillDisposition === "needs_owner_input" &&
       field.answerState === "unset" && field.lane === null &&
