@@ -816,6 +816,10 @@ async function readApplicationSnapshot(
   };
   const text = (value: string | null | undefined): string =>
     (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
+  const successfulUploadAnnouncement = (element: Element): boolean =>
+    element.getAttribute("data-automation-id") === "ariaLiveMessage" &&
+    element.getAttribute("aria-invalid") !== "true" &&
+    /\bsuccessfully uploaded\.?$/iu.test(text(element.textContent));
   const referencedText = (element: Element): string => text(
     (element.getAttribute("aria-labelledby") ?? "").split(/\s+/u)
       .filter(Boolean)
@@ -1566,7 +1570,8 @@ async function readApplicationSnapshot(
       .flatMap((ids) => ids.split(/\s+/u))
       .map((id) => document.getElementById(id));
     const referencedValidation = referencedMessages.some((element) =>
-      element !== null && visible(element) && text(element.textContent) !== "" &&
+      element !== null && visible(element) && !successfulUploadAnnouncement(element) &&
+      text(element.textContent) !== "" &&
       element.matches(
         '[role="alert"], [data-automation-id="inputAlert"], ' +
         '[data-automation-id*="error" i], [id*="error" i]',
@@ -1574,12 +1579,14 @@ async function readApplicationSnapshot(
     );
     const ownedValidation = fieldOwner !== null && [...fieldOwner.querySelectorAll<HTMLElement>(
       '[role="alert"], [data-automation-id="inputAlert"], [data-automation-id*="error" i]',
-    )].some((element) => visible(element) && text(element.textContent) !== "");
+    )].some((element) => visible(element) && !successfulUploadAnnouncement(element) &&
+      text(element.textContent) !== "");
     const unownedValidation = fieldOwner === null &&
       control.getAttribute("aria-invalid") === "true" &&
       [...root.querySelectorAll<HTMLElement>(
         '[role="alert"], [data-automation-id="inputAlert"], [data-automation-id*="error" i]',
-      )].some((element) => visible(element) && text(element.textContent) !== "");
+      )].some((element) => visible(element) && !successfulUploadAnnouncement(element) &&
+        text(element.textContent) !== "");
     // Workday can leave aria-invalid="true" on a conditionally revealed
     // textarea after a successful fill and blur. Treat the flag as stale only
     // when native validity passes and no owned, referenced, or unowned visible
@@ -2119,7 +2126,7 @@ async function readApplicationSnapshot(
   const validationElements = [...root.querySelectorAll<HTMLElement>(
     '[aria-invalid="true"], [role="alert"], [data-automation-id="inputAlert"], ' +
       '[data-automation-id*="error" i]',
-  )].filter(visible);
+  )].filter((element) => visible(element) && !successfulUploadAnnouncement(element));
   const validationKeys = validationElements.map((item) => [
     item.getAttribute("data-automation-id") ?? "",
     item.id,

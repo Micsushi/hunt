@@ -681,6 +681,34 @@ test("Self Identify reports value-free formatted-date React handler structure", 
   });
 });
 
+test("upload success alerts neither invalidate fields nor prove navigation failure", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-upload">
+          <input required value="ready" aria-describedby="upload-status">
+          <div id="upload-status" role="alert" data-automation-id="ariaLiveMessage"></div>
+        </div>
+        <button id="next">Next</button>
+      </main>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.querySelector('#upload-status').textContent = 'resume.pdf successfully uploaded';
+        });
+      </script>
+    `);
+    const adapter = application(page, 150);
+    const result = await adapter.next(request("profile", ["questionnaire"]), signal());
+    assert.equal(result.ok, false);
+    assert.equal(!result.ok && result.error.code, "browser_effect_uncertain");
+    const observed = await adapter.observe(signal());
+    assert.equal(observed.ok, true);
+    assert.equal(observed.ok && observed.value.requiredFields.every(
+      (field) => field.verification === "verified",
+    ), true);
+  });
+});
+
 test("navigation reports a validation downgrade instead of claiming a transition", async () => {
   await withPage(async (page) => {
     await page.setContent(`
