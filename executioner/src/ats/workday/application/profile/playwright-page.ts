@@ -1912,9 +1912,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
       visibleOptions = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
       exact = [];
+      const literal: Locator[] = [];
       for (const option of visibleOptions.slice(0, 128)) {
-        if (acceptedLabels.has(normalize(await option.innerText()))) exact.push(option);
+        const label = normalize(await option.innerText());
+        if (label === normalize(value)) literal.push(option);
+        if (acceptedLabels.has(label)) exact.push(option);
       }
+      // Equivalent labels are fallbacks, not competing answers when the
+      // catalog also offers the requested label verbatim.
+      if (literal.length > 0) exact = literal;
       if (exact.length > 0 || Date.now() >= deadline) break;
       await this.#page.waitForTimeout(50);
     } while (Date.now() < deadline);

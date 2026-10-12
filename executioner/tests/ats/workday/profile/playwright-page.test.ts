@@ -2793,6 +2793,47 @@ for (const searchOnEnter of [false, true]) test(`empty multi-select ${searchOnEn
   } finally { await browser.close(); }
 });
 
+for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} exact matches before qualified aliases`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" hidden>
+        <div role="option">Python IDLE</div><div role="option">Python (Programming Language)</div>
+        ${'<div role="option">Python</div>'.repeat(exactCopies)}
+      </div><script>
+        const input = document.querySelector('input');
+        const choices = document.getElementById('choices');
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+        choices.querySelectorAll('[role="option"]').forEach(option => {
+          option.onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = option.textContent; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1000 });
+    const signal = AbortSignal.any([]);
+    const control = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    const commit = adapter.commit({ controlId: control.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    if (exactCopies === 2) {
+      await assert.rejects(commit, /ambiguous/u);
+      assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    } else {
+      await commit;
+      assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback,
+        exactCopies === 1 ? "Python" : "Python (Programming Language)");
+    }
+  } finally { await browser.close(); }
+});
+
 test("skill catalog qualifiers survive selection, handler verification, and learning readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
