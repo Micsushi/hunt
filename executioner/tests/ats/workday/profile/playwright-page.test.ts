@@ -2689,6 +2689,56 @@ for (const searchOnEnter of [false, true]) test(`empty multi-select ${searchOnEn
   } finally { await browser.close(); }
 });
 
+test("skill catalog qualifiers survive selection, handler verification, and learning readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-qualified-skill-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" hidden>
+        <div role="option">Python IDLE</div><div role="option">Python (Programming Language)</div>
+      </div><script>
+        const input = document.querySelector('input');
+        const choices = document.getElementById('choices');
+        input.oninput = () => { choices.hidden = !input.value; };
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+        choices.querySelectorAll('[role="option"]').forEach(option => {
+          option.onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = option.textContent; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500, inspectMissingOptions: true });
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("skills.values", "skill", "multi_select", '["Python"]', '["Python"]')], repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const result = await completeWorkdayProfilePage(plan, capture.page, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Python (Programming Language)"]);
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields[0].terminalDisposition, "verified");
+    assert.equal(evidence.fields[0].mechanics.persistentReadback, "verified_after_rescan");
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("multi-select inspection does not commit free-entry tags despite a search keyboard hint", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

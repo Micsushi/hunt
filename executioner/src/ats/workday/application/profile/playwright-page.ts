@@ -32,6 +32,8 @@ import { committedMultiSelectReadback } from "./multi-select-readback.ts";
 import type { ProfileInspectionFailure } from "./types.ts";
 import {
   evaluateSharedUiState,
+  sharedSkillOptionLabels,
+  sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBehavior,
 } from "../../../../deterministic/ui-state-model.ts";
 
@@ -101,7 +103,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     behavior: "search_select" | "select" | "multi_select",
     value: string,
   ): Promise<boolean> {
-    return selectionReadbackIncludes(locator, behavior, value, this.#trace);
+    return selectionReadbackIncludes(locator, behavior, value, this.#trace, this.#selectionOptionLabels(locator, value));
+  }
+
+  #selectionOptionLabels(locator: Locator, value: string): ReadonlySet<string> {
+    const fieldId = [...this.#controls.values()].find((control) => control.locator === locator)?.fieldId;
+    return fieldId === "skills.values" ? sharedSkillOptionLabels(value) : equivalentOptionLabels(value);
   }
 
   async inspect(signal: AbortSignal, inspectInteractiveOptions = true): Promise<ProfilePageSnapshot> {
@@ -772,6 +779,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.backingValueCommitted = exactOptionListReadback(
         await this.#readback(resolved.locator, "multi_select"),
         options,
+        resolved.fieldId,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
@@ -797,6 +805,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.backingValueCommitted = exactOptionListReadback(
         await this.#readback(resolved.locator, "multi_select"),
         options,
+        resolved.fieldId,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
@@ -811,6 +820,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.backingValueCommitted = exactOptionListReadback(
         await this.#readback(resolved.locator, "multi_select"),
         options,
+        resolved.fieldId,
       );
       interaction.validationCleared = await validationCleared(resolved.locator);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
@@ -1423,7 +1433,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await control.press("Enter", { timeout: this.#timeoutMs });
       await this.#page.waitForTimeout(250);
       await this.#captureSelectionDiagnostic("search-submitted", behavior);
-      if (await selectionReadbackIncludes(control, behavior, value)) {
+      if (await this.#selectionReadbackIncludes(control, behavior, value)) {
         interaction.popupBound = false;
         interaction.optionFocused = false;
         interaction.optionActivated = true;
@@ -1492,7 +1502,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await control.blur({ timeout: this.#timeoutMs });
         await this.#page.waitForTimeout(25);
         interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
-        interaction.backingValueCommitted = await selectionReadbackIncludes(
+        interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
           control,
           behavior,
           value,
@@ -1632,7 +1642,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
                 `prompt-delimiter-${delimiter.toLocaleLowerCase("en-US")}`,
                 behavior,
               );
-              if (await selectionReadbackIncludes(control, behavior, value)) {
+              if (await this.#selectionReadbackIncludes(control, behavior, value)) {
                 interaction.popupBound = false;
                 interaction.visibleOptionCount = 0;
                 interaction.selectedOptionOrdinal = 0;
@@ -1659,7 +1669,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           interaction.optionActivated = true;
           await this.#page.waitForTimeout(100);
           interaction.popupClosed = true;
-          interaction.backingValueCommitted = await selectionReadbackIncludes(
+          interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
             control,
             behavior,
             value,
@@ -1685,7 +1695,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.popupClosed = true;
       interaction.visibleOptionCount = 0;
       interaction.selectedOptionOrdinal = 0;
-      interaction.backingValueCommitted = await selectionReadbackIncludes(
+      interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
         control,
         behavior,
         value,
@@ -1797,7 +1807,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.optionActivated = true;
       await this.#page.waitForTimeout(100);
       if (
-        !await selectionReadbackIncludes(control, behavior, selectionValue) &&
+        !await this.#selectionReadbackIncludes(control, behavior, selectionValue) &&
         await selectionPopupVisible(listbox, fallbackScope)
       ) {
         const nested = await this.#waitForSelectableLeaf(
@@ -1815,7 +1825,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           await this.#page.waitForTimeout(100);
         }
       }
-      if (!await selectionReadbackIncludes(control, behavior, selectionValue)) {
+      if (!await this.#selectionReadbackIncludes(control, behavior, selectionValue)) {
         selectionDiagnostic("selection_uncommitted", behavior, {
           listboxVisible: await selectionPopupVisible(listbox, fallbackScope),
           activeDescendantPresent: activeId !== null,
@@ -1838,7 +1848,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     }
     interaction.popupClosed = !await selectionPopupVisible(listbox, fallbackScope) &&
       await control.getAttribute("aria-expanded") !== "true";
-    interaction.backingValueCommitted = await selectionReadbackIncludes(
+    interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
       control,
       behavior,
       selectionValue,
@@ -1861,7 +1871,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     priorCatalogs: readonly (ElementHandle | null)[] | undefined,
   ): Promise<boolean> {
-    const acceptedLabels = equivalentOptionLabels(value);
+    const acceptedLabels = this.#selectionOptionLabels(control, value);
     // A submitted search can still be loading after the initial animation.
     // Do not fall through to clearing/retyping and cancel its pending request.
     const deadline = Date.now() + (await control.getAttribute("enterkeyhint") === "search"
@@ -1920,7 +1930,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     await this.#page.keyboard.press("Escape");
     await this.#page.waitForTimeout(25);
     interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
-    interaction.backingValueCommitted = await selectionReadbackIncludes(
+    interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
       control,
       "multi_select",
       value,
@@ -1947,7 +1957,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       '[data-automation-id="promptLeafNode"]:visible',
     ].join(", "));
     const initial = await visibleLocators(options);
-    const acceptedLabels = equivalentOptionLabels(value);
+    const acceptedLabels = this.#selectionOptionLabels(control, value);
     const initialLabels = await Promise.all(initial.map(async (option) =>
       normalize(await option.innerText())
     ));
@@ -2125,7 +2135,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       // waiting for its stale activation target. Reconcile exact field-owned
       // backing truth promptly instead of spending the full page budget or
       // repeating an effect whose outcome is already committed.
-      interaction.backingValueCommitted = await selectionReadbackIncludes(
+      interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
         control,
         behavior,
         value,
@@ -2136,7 +2146,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     }
     interaction.popupClosed = (await visibleLocators(options)).length === 0;
-    interaction.backingValueCommitted = await selectionReadbackIncludes(
+    interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
       control,
       behavior,
       value,
@@ -2186,7 +2196,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.popupClosed = true;
     interaction.visibleOptionCount = options.filter(({ disabled }) => !disabled).length;
     interaction.selectedOptionOrdinal = matches[0]!.index + 1;
-    interaction.backingValueCommitted = await selectionReadbackIncludes(control, "select", value);
+    interaction.backingValueCommitted = await this.#selectionReadbackIncludes(control, "select", value);
     interaction.validationCleared = await validationCleared(control);
     if (!interaction.backingValueCommitted || !interaction.validationCleared) {
       throw new TypeError("Workday native select value did not commit");
@@ -3086,17 +3096,23 @@ async function selectionReadbackIncludes(
   behavior: "search_select" | "select" | "multi_select",
   value: string,
   trace?: (event: string, details?: object) => void,
+  acceptedLabels = equivalentOptionLabels(value),
 ): Promise<boolean> {
   const observed = await readback(locator, behavior, trace);
   return behavior === "multi_select"
-    ? optionReadbackList(observed).some((option) => equivalentOption(option, value))
-    : equivalentOption(observed ?? "", value);
+    ? optionReadbackList(observed).some((option) => acceptedLabels.has(normalize(option)))
+    : acceptedLabels.has(normalize(observed ?? ""));
 }
 
 function exactOptionListReadback(
   readbackValue: string | null,
   expected: readonly string[],
+  fieldId?: string,
 ): boolean {
+  if (fieldId !== undefined && readbackValue !== null) {
+    const aliasMatch = sharedUiKnownSemanticAliasMatches(fieldId, readbackValue, JSON.stringify(expected));
+    if (aliasMatch !== undefined) return aliasMatch;
+  }
   const actual = optionReadbackList(readbackValue);
   if (actual.length !== expected.length) return false;
   const remaining = [...expected];

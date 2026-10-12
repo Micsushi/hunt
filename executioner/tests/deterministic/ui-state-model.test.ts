@@ -7,6 +7,7 @@ import {
   evaluateSharedUiState,
   sharedUiContract,
   sharedUiIntentMatchesReadback,
+  sharedUiKnownSemanticAliasMatches,
   sharedUiTypeForBrowserControl,
   sharedUiTypes,
   sharedUiUsesDerivedBacking,
@@ -22,6 +23,14 @@ const committed = (type: (typeof sharedUiTypes)[number]): SharedUiStateInput => 
   stabilizationState: "stable",
   readbackState: "matches",
   validationState: "clear",
+});
+
+test("skill aliases share catalog qualifiers without merging distinct skills or other questions", () => {
+  assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", '["Python (Programming Language)","R"]', '["R (Programming Language)","Python"]'), true);
+  assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", "Python IDLE", '["Python"]'), false);
+  assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", "JavaScript (Programming Language)", '["Java"]'), false);
+  assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", '["Python","Python (Programming Language)"]', '["Python","Python"]'), false);
+  assert.equal(sharedUiKnownSemanticAliasMatches("unknown.required.1", "Python (Programming Language)", "Python"), undefined);
 });
 
 test("the shared model owns every supported UI family", () => {

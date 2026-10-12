@@ -327,6 +327,13 @@ export function sharedUiKnownSemanticAliasMatches(
   actual: string,
   expected: string,
 ): boolean | undefined {
+  if (fieldId === "skills.values") {
+    const canonical = (value: string) => [...sharedSkillOptionLabels(value)][0]!;
+    const observed = (optionList(actual) ?? [actual]).map(canonical);
+    const requested = (optionList(expected) ?? [expected]).map(canonical);
+    return new Set(observed).size === observed.length &&
+      new Set(requested).size === requested.length && sameOptions(observed, requested);
+  }
   const pair = new Set([normalizeOption(actual), normalizeOption(expected)]);
   if (fieldId === "phone.device_type") {
     if (pair.size === 1) return true;
@@ -340,6 +347,14 @@ export function sharedUiKnownSemanticAliasMatches(
       : undefined;
   }
   return undefined;
+}
+
+export function sharedSkillOptionLabels(value: string): ReadonlySet<string> {
+  // A catalog type qualifier does not change the programming-language skill.
+  // Other qualifiers and related products remain distinct answers.
+  const normalized = normalizeOption(value);
+  const canonical = /^(.+) \(programming language\)$/u.exec(normalized)?.[1] ?? normalized;
+  return new Set([canonical, `${canonical} (programming language)`]);
 }
 
 function contract(
