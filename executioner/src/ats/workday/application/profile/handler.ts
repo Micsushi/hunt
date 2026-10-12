@@ -525,7 +525,10 @@ function syntheticProfileField(
   const unknown = /^unknown\.(?:required|optional)\./u.test(control.fieldId);
   if (!unknown && (template === undefined ||
       template.answer.kind !== "profile_answer_missing")) return undefined;
-  const options = [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "");
+  const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
+  const options = ["option", "single_select", "multi_select"].includes(answerType ?? "")
+    ? [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "")
+    : [];
   const prior = fallbacks.get(slot);
   if (prior?.answer.kind === "answered") {
     const selected = syntheticProfileSelectedValues(prior.answer.value);
@@ -539,7 +542,6 @@ function syntheticProfileField(
       options.some((option) => normalize(option) === normalize(value))
     );
   const choice = committed ?? syntheticProfileOption(control.fieldId, options);
-  const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
   const answer = syntheticProfileValue(control, choice, answerType, country, region);
   if (answer === undefined || answerType === undefined) return undefined;
   const field = Object.freeze({

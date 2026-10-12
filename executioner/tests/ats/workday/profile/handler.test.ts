@@ -1001,7 +1001,10 @@ test("synthetic mode fills supported unknown profile controls without owner inpu
         ...control("unknown.required.2", "select", null, "workday_unknown_required_v1"),
         allowedOptions: ["Option A", "Option B"],
       },
-      control("unknown.required.3", "checkbox", "false", "workday_unknown_required_v1"),
+      {
+        ...control("unknown.required.3", "checkbox", "false", "workday_unknown_required_v1"),
+        allowedOptions: ["I am fluent in this language."],
+      },
     ],
     rows: [],
   });

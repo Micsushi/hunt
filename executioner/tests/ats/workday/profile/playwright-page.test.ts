@@ -2858,6 +2858,8 @@ test("synthetic traversal commits required ARIA, contenteditable, plural, and co
         <main data-automation-id="applyFlowMyInfoPage">
           <div role="checkbox" aria-required="true" aria-checked="false"
             data-automation-id="tenantConsent">Agree</div>
+          <label for="tenant-fluent">I am fluent in this language.</label>
+          <input id="tenant-fluent" type="checkbox" data-automation-id="tenantFluent">
           <div role="radiogroup" aria-required="true" aria-label="Status"
             data-automation-id="tenantStatus">
             <div role="radio" aria-label="Alpha" aria-checked="false">Alpha</div>
@@ -2912,6 +2914,7 @@ test("synthetic traversal commits required ARIA, contenteditable, plural, and co
 
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.equal(await page.locator('[role="checkbox"]').getAttribute("aria-checked"), "true");
+    assert.equal(await page.locator('#tenant-fluent').isChecked(), true);
     assert.equal(await page.locator('[role="radio"][aria-checked="true"]').count(), 1);
     assert.notEqual((await page.locator('[contenteditable="true"]').textContent())?.trim(), "");
     assert.equal(await page.locator("select option:checked").count(), 1);

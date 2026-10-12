@@ -277,6 +277,40 @@ test("retains a generated pending-owner answer for a supported unknown control",
   }
 });
 
+test("retains failed synthetic unknown-control evidence without promoting it to success", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-unknown-failure-"));
+  const port = new FakeProfilePort(snapshot(null));
+  port.commit = async () => { throw new TypeError("control rejected mutation"); };
+  const capture = createProfileFieldLearningCapture({
+    page: port, root, sensitiveValues: [], observeControl: observer(),
+    plan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+  });
+  try {
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.page.registerSyntheticField?.({
+      fieldId: "unknown.required.1", questionType: "unknown", answerType: "text", allowedOptions: [],
+      answer: { kind: "answered", value: "Test response", provenance: "generated_default", lane: "synthetic_test_default" },
+    });
+    await assert.rejects(capture.page.commit({
+      controlId: "unknown-required:1", uiBehavior: "text", value: "Test response",
+    }, AbortSignal.any([])), /control rejected mutation/u);
+    await capture.page.inspect(AbortSignal.any([]));
+    capture.bindMutationBatch({ operationId: operation(77), attempt: 77 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitProfileFieldLearningEvidence(JSON.parse(
+      readFileSync(join(root, "profile-field-learning.json"), "utf8"),
+    ));
+    const failed = evidence.fields.find(({ fieldIdentity }) => fieldIdentity === "profile.unknown.required.1")!;
+    assert.equal(failed.terminalDisposition, "driver_failed");
+    assert.equal(failed.mechanics.persistentReadback, "driver_failed");
+    assert.throws(() => admitProfileFieldLearningEvidence({ ...evidence, fields: evidence.fields.map(
+      (field) => field === failed ? { ...field, terminalDisposition: "verified" } : field,
+    ) }), /identity_binding|mechanics_relation/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("retains observed radio options before an unknown question has an answer", async () => {
   for (const readback of [null, "No"]) {
     const root = mkdtempSync(join(tmpdir(), "hunt-s2-unknown-radio-learning-"));

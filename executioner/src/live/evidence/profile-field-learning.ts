@@ -790,7 +790,8 @@ function validIdentityBinding(field: ProfileFieldLearningRecordV2): boolean {
       field.prefillDisposition === "needs_owner_input" &&
       field.driverAttempt === field.uiType &&
       (field.terminalDisposition === "verified" ||
-        field.terminalDisposition === "verified_without_mutation") &&
+        field.terminalDisposition === "verified_without_mutation" ||
+        field.terminalDisposition === "driver_failed") &&
       validMechanicsRelations(field);
     const unresolved = field.questionCategory === "unknown" &&
       field.answerCategory === "unknown" &&
