@@ -2380,6 +2380,55 @@ test("synthetic phone and extension survive regional length checks and Review ex
   }
 });
 
+test("unknown profile controls retain separate Review identities across application pages", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: { ownerSources: {
+      executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable"),
+      profilePlan: { mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] },
+      sensitiveValues: [],
+    } } as never,
+    acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_scoped_profile_01"),
+    timeoutMs: 1_000, initialReviewExpected: [],
+    externalMonitor: { async auth() {}, async application() {} },
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
+    now: () => "2026-08-05T12:00:00.000Z",
+  });
+  const sessionId = "live_session_scoped_profile_01" as LiveSessionId;
+  const journey = journeyId("journey_scoped_profile_01");
+  runtime.bindSession({ schemaVersion: 1, journeyId: journey, sessionId,
+    profileLeaseId: "profile_lease_scoped_01" as ProfileLeaseId,
+    target: {} as never, leaseExpiresAt: "2026-08-05T13:00:00.000Z" });
+  const request = { schemaVersion: 1 as const, journeyId: journey,
+    operationId: generatedOperationId("operation_scoped_runtime_run_01"), sessionId,
+    target: {} as never, now: "2026-08-05T12:00:00.000Z" };
+  try {
+    for (const [lane, root, value] of [
+      ["profile", "applyFlowMyInfoPage", "Alpha"],
+      ["resume", "applyFlowMyExpPage", "Beta"],
+    ]) {
+      await page.setContent(`<html data-hunt-page-id="page-${lane}" data-hunt-submit-activated="false"><body data-hunt-application-page="${lane}"><main data-automation-id="${root}"><h2>Languages</h2><label>Custom response<select required id="tenant-${lane}"><option value="">Select One</option><option>${value}</option></select></label>${lane === "resume" ? '<input type="file" data-automation-id="file-upload-input-ref">' : ""}</main></body></html>`);
+      const result = await runtime.run(page as never, request, {
+        kind: "reconcile_profile", input: { attempt: 1, pageId: `page-${lane}` } as never,
+      }, new AbortController().signal);
+      assert.equal((result as { ok: boolean }).ok, true);
+    }
+    const expected = await runtime.run(page as never, request,
+      { kind: "review_expectations" }, new AbortController().signal) as readonly { fieldId: string; valueSha256: string }[];
+    assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["profile", "resume"].map(
+      (lane) => `page.${createHash("sha256").update(`page-${lane}`).digest("hex").slice(0, 16)}.unknown.required.1`,
+    ));
+    assert.deepEqual(expected.map(({ valueSha256 }) => valueSha256), ["Alpha", "Beta"].map(
+      (value) => createHash("sha256").update(value).digest("hex"),
+    ));
+  } finally {
+    runtime.dispose();
+    await browser.close();
+  }
+});
+
 test("profile cancellation before mutation remains operation_cancelled", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();

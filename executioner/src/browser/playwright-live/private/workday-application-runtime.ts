@@ -889,7 +889,7 @@ export class OwnedWorkdayApplicationRuntime {
             }
           },
           recordReviewExpectations: () =>
-            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields),
+            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields, input.pageId),
           verifyStablePage: async () =>
             await this.#monitorPageForLane(page, "profile") === monitorPageName,
           assertAuthorized: () => this.#assertAuthorized(signal),
@@ -1699,6 +1699,7 @@ export class OwnedWorkdayApplicationRuntime {
       readonly provenance: string;
       readonly rowKey?: string;
     }[],
+    pageId: string,
   ): void {
     const scalarPlans = plan.fields;
     const repeatablePlans = plan.repeatables.flatMap(({ rows }) =>
@@ -1719,7 +1720,9 @@ export class OwnedWorkdayApplicationRuntime {
       if (plan.answer.kind !== "answered") throw new TypeError("profile review truth unavailable");
       this.#recordReviewExpectation(
         verifiedField.rowKey === undefined
-          ? verifiedField.fieldId
+          ? verifiedField.fieldId.startsWith("unknown.")
+            ? `page.${createHash("sha256").update(pageId).digest("hex").slice(0, 16)}.${verifiedField.fieldId}`
+            : verifiedField.fieldId
           : repeatableReviewFieldId(verifiedField.rowKey, verifiedField.fieldId),
         verifiedField.provenance,
         plan.optionMapping?.visibleOption ?? plan.answer.value,
