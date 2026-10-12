@@ -927,6 +927,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           timeout: error instanceof Error && error.name === "TimeoutError",
           activationAmbiguous: error instanceof Error && error.message === "Workday prompt catalog activation is ambiguous",
           optionAmbiguous: error instanceof Error && error.message === "Workday prompt typeahead option is ambiguous",
+          submittedOptionAmbiguous: error instanceof Error && error.message === "Workday submitted multi-select option is ambiguous",
+          submittedControlAmbiguous: error instanceof Error && error.message === "Workday submitted multi-select option control is ambiguous",
+          submittedNotCommitted: error instanceof Error && error.message === "Workday submitted multi-select option did not commit",
+          promptOwnerAmbiguous: error instanceof Error && error.message === "Workday source prompt owner is ambiguous",
           backingValueCommitted: interaction.backingValueCommitted,
           validationCleared: interaction.validationCleared,
         });
