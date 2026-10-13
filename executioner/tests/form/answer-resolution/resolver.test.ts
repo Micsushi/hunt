@@ -80,12 +80,14 @@ function resolverWith(answer: ApplicationProfileAnswerResult) {
   };
 }
 
-test("text-only identity fragments use the requested format only in editable fallback mode", async () => {
+test("text-only identity and compensation fields use formatted editable defaults", async () => {
   const resolver = resolverWith({ kind: "profile_answer_missing" }).resolver;
   for (const [label, expected] of [
     ["What are the last 4 digits of your Social Security Number (SSN)?", "1111"],
     ["Enter the last four digits of your identifier", "1111"],
     ["What is the month and day of your date of birth? Enter in MMDD format.", "0101"],
+    ["Salary Per Annum", "1"],
+    ["Annual pay", "1"],
   ]) {
     const observed = field(label!);
     const signal = new AbortController().signal;

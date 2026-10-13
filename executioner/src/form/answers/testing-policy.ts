@@ -64,6 +64,7 @@ export function semanticSyntheticTestDefault(label: string): boolean | string | 
     if (count >= 1 && count <= 12) return "1".repeat(count);
   }
   const type = testingQuestionSemanticType(label);
+  if (type === "compensation") return "1";
   if (type === "qualification_requirement") return true;
   if (type === "employee_referral" || type === "prior_employment") return false;
   if (type === "identity" && normalized(label) === "language") return "English";
