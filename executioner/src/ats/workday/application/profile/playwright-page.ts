@@ -1799,7 +1799,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       );
       await selected.option.click({ timeout: this.#timeoutMs });
       interaction.optionActivated = true;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
       // `fill` has already entered the query for editable Workday comboboxes.
       // Re-typing appended the same query (for example `PythonPython`) and made
       // an otherwise valid typeahead result impossible to match exactly.
@@ -1817,7 +1818,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         !fallbackScope,
         remainingSelectionTime(),
       )
-        .catch(() => undefined);
+        .catch(error => {
+          if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
+          return undefined;
+        });
       const active = activeId === null
         ? undefined
         : await exactActiveOption(this.#page, activeId, selectionValue);
@@ -1843,7 +1847,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           !fallbackScope,
           remainingSelectionTime(),
         )
-          .catch(() => undefined);
+          .catch(error => {
+            if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
+            return undefined;
+          });
         if (nested !== undefined) {
           interaction.visibleOptionCount = nested.visibleOptionCount;
           interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
@@ -2523,7 +2530,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         selectedOptionOrdinal: exact[0]!.ordinal,
       };
       if (exact.length > 1) {
-        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+        throw new TypeError("Workday selectable leaf is ambiguous");
       }
       const textLeaves = allowTextLeaves
         ? await exactVisibleTextLeaves(listbox, value)
@@ -2534,7 +2541,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         selectedOptionOrdinal: 1,
       };
       if (textLeaves.length > 1) {
-        throw new TypeError("Workday selectable leaf is missing or ambiguous");
+        throw new TypeError("Workday selectable leaf is ambiguous");
       }
       const category = await expandableCategory(categories, value, expandedCategories);
       if (category !== undefined) {
@@ -3067,7 +3074,11 @@ async function observedOptionLabels(owner: Locator): Promise<string[]> {
     '[data-automation-id="promptLeafNode"]:not([role="option"] *)',
   ].join(", ")));
   const labels = await Promise.all(options.slice(0, 64).map(option => option.innerText()));
-  return uniqueObservedOptions(labels.filter(label =>
+  // Discovery records possible answer labels, not a commitment to an option.
+  // Duplicate labels elsewhere must not block selecting a unique answer; the
+  // commit path still requires one matching option in this owner.
+  const distinct = new Map(labels.map(label => [retainedProfileTextSha256(label), label]));
+  return uniqueObservedOptions([...distinct.values()].filter(label =>
     !/^(?:select|select one|choose|choose one|no items|no matches found|no results found)\.?$/iu.test(label.trim())));
 }
 

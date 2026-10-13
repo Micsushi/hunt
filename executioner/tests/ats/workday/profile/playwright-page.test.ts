@@ -3922,7 +3922,40 @@ test("source observation binds only its newly visible unfocused portal catalog",
         popup.hidden = false;
       };
     });
-    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    const duplicateLabels = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(duplicateLabels.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+  } finally { await browser.close(); }
+});
+
+test("flat source discovery tolerates duplicate labels but never selects an ambiguous answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <button type="button" id="source--source" aria-haspopup="listbox" aria-controls="sources">Select One</button>
+      </div></main>
+      <ul id="sources" role="listbox" tabindex="-1" hidden>
+        <li role="option" data-value="one">Facebook</li>
+        <li role="option" data-value="two">Facebook</li>
+        <li role="option" data-value="three">LinkedIn</li>
+      </ul><script>
+        const button = document.querySelector('button'), popup = document.querySelector('ul');
+        button.onclick = () => { popup.hidden = false; popup.focus(); };
+        const select = option => { button.textContent = option.textContent; popup.hidden = true; };
+        popup.querySelectorAll('li').forEach(option => option.onclick = () => select(option));
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') popup.hidden = true;
+          if (event.key === 'Enter' && !popup.hidden) select(popup.querySelector('li'));
+        });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, ["Facebook", "LinkedIn"]);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior, value: "LinkedIn" }, AbortSignal.any([]));
+    await assert.rejects(adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior, value: "Facebook" }, AbortSignal.any([])), /selectable leaf is ambiguous/u);
+    assert.equal(await page.locator('button').innerText(), "LinkedIn");
   } finally { await browser.close(); }
 });
 
