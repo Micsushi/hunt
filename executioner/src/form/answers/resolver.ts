@@ -1,5 +1,3 @@
-import { randomInt } from "node:crypto";
-
 import {
   boundedText,
   optionId,
@@ -318,7 +316,7 @@ export function createApplicationAnswerResolver(
   profileQuery: ProfileQuery | ApplicationProfileQuery,
   narrativeTemplate: string | undefined,
   generatedDate = localIsoDate(new Date()),
-  selectRandomIndex: (length: number) => number = randomInt,
+  selectRandomIndex: (length: number) => number = () => 0,
 ): ApplicationAnswerResolver {
   if (narrativeTemplate !== undefined && narrativeTemplate.trim() === "") {
     throw new TypeError("narrative template must not be empty");

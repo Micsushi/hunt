@@ -646,7 +646,24 @@ test("unknown and invalid fields generate only in synthetic mode while other sta
   assert.equal(profile.calls.length, callsBeforeAbort);
 });
 
-test("unknown choices randomly select a visible non-placeholder option only in synthetic mode", async () => {
+test("missing choice defaults repeat the first available option across resolver instances", async () => {
+  const profile = createProfileQueryFake({ query: { ok: true, value: { kind: "profile_answer_missing" } } });
+  for (const behavior of ["select", "radio", "listbox"] as const) {
+    for (let run = 0; run < 2; run += 1) {
+      const resolver = createAnswerResolver(profile.port, "I am interested in this role.", "2026-08-20");
+      const result = await resolver.resolve(syntheticRequest(field("Unreviewed eligibility question", behavior, [
+        { id: optionId("placeholder"), label: boundedText("Select One") },
+        { id: optionId("affirmative"), label: boundedText("Yes") },
+        { id: optionId("negative"), label: boundedText("No") },
+      ])), new AbortController().signal);
+      assert.ok(result.ok && result.value.kind === "resolved" && result.value.intent.kind === "choice");
+      assert.equal(result.value.intent.expectedOption, "Yes");
+      assert.equal(result.value.lane, "synthetic_test_default");
+    }
+  }
+});
+
+test("unknown choices use the supplied selection strategy on visible non-placeholder options", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   });
