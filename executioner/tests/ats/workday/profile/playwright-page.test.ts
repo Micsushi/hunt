@@ -3894,7 +3894,8 @@ test(`source discovery ${discoverFirst} exposes a leaf below ${categoryLabel} ra
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
       <div data-automation-id="formField-source"><label for="source--source">How Did You Hear About Us?</label>
-      <input id="source--source" aria-required="true"><div id="selected"></div></div></main>
+      <input id="source--source" aria-required="true" data-uxi-multiselect-id="source-widget"><div id="selected"></div></div></main>
+      <div id="busy" data-automation-id="responsiveMonikerPrompt" data-associated-widget="source-widget" aria-busy="false"></div>
       <div id="popup" role="listbox" data-automation-id="activeListContainer" hidden></div>
       <script>
         const input = document.querySelector('input'); const popup = document.querySelector('#popup');
@@ -3903,13 +3904,15 @@ test(`source discovery ${discoverFirst} exposes a leaf below ${categoryLabel} ra
           popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">${categoryLabel}</span><svg role="presentation"></svg></div></div>';
           popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
             popup.innerHTML = '';
+            document.querySelector('#busy').setAttribute('aria-busy', 'true');
             setTimeout(() => {
+              document.querySelector('#busy').setAttribute('aria-busy', 'false');
               popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><input type="radio"><span data-automation-id="promptOption">${answerLabel}</span></div></div>';
               popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
                 document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">${answerLabel}</div>';
                 input.value = ''; popup.hidden = true;
               };
-            }, 200);
+            }, 700);
           };
         };
         document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });

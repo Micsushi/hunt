@@ -670,6 +670,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             const categoryLabel = (await category.innerText()).trim();
             await (await promptOptionActivation(category)).click({ timeout: this.#timeoutMs });
             await this.#page.waitForTimeout(100);
+            const widget = await control.getAttribute("data-uxi-multiselect-id");
+            if (widget !== null) {
+              await this.#page.locator(
+                `[data-automation-id="responsiveMonikerPrompt"][data-associated-widget=${JSON.stringify(widget)}][aria-busy="true"]`,
+              ).waitFor({ state: "hidden", timeout: 30_000 });
+            }
             owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
             const leaves = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
             const leafLabels = uniqueObservedOptions(await Promise.all(leaves.map(async option => {
