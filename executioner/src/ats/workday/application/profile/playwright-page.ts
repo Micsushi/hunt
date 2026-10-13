@@ -550,9 +550,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const promptCatalog = resolved.uiBehavior === "multi_select" ||
       ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
     const priorCatalogs = promptCatalog
-      ? await Promise.all((await visibleLocators(this.#page.locator(
-        '[role="listbox"]',
-      ))).map(locator => locator.elementHandle()))
+      ? await this.#page.locator('[role="listbox"]:visible').elementHandles()
       : undefined;
     let labels: string[] = [];
     let searchDraft: string | undefined;
@@ -1426,9 +1424,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       await this.#observeOptionLabels(resolved, [control], true);
     }
     const priorCatalogs = behavior === "multi_select" || /^(?:source--source|education-[^\s]+--(?:school|fieldOfStudy))$/u.test(await control.getAttribute("id") ?? "")
-      ? await Promise.all((await visibleLocators(this.#page.locator(
-        '[role="listbox"]',
-      ))).map(catalog => catalog.elementHandle()))
+      ? await this.#page.locator('[role="listbox"]:visible').elementHandles()
       : undefined;
     try {
       await this.#selectSearchOptionWithOwner(control, value, interaction, behavior, priorCatalogs);

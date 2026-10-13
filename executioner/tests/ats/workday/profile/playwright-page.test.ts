@@ -52,6 +52,80 @@ const field = (
       }),
 });
 
+test("disappearing prior popups do not block education discovery or selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(700);
+  try {
+    for (const discover of [true, false]) {
+      await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+        <div data-automation-id="formField-fieldOfStudy"><label>Field of Study</label>
+          <input id="education-1--fieldOfStudy"><div id="selected"></div>
+        </div></main><div id="previous" role="listbox"><div role="option">Old popup</div></div>
+        <script>
+          document.querySelector('input').onclick = () => {
+            if (document.querySelector('#studies')) return;
+            document.body.insertAdjacentHTML('beforeend', '<div id="studies" role="listbox"><div role="option">Computer Science</div></div>');
+            document.querySelector('#studies').onclick = () => {
+              document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">Computer Science</span>';
+              document.querySelector('#studies').remove();
+            };
+          };
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') document.querySelector('#studies')?.remove();
+          });
+        </script>`);
+      let removed = false;
+      const removePrior = async () => {
+        if (removed) return;
+        removed = true;
+        await page.locator('#previous').evaluate(element => element.remove());
+      };
+      const wrap = (locator: Locator): Locator => new Proxy(locator, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (property === "nth") return (index: number) => wrap(target.nth(index));
+          if (property === "isVisible") return async () => {
+            const visible = await target.isVisible();
+            if (visible) await removePrior();
+            return visible;
+          };
+          if (property === "elementHandles") return async () => {
+            const handles = await target.elementHandles();
+            await removePrior();
+            return handles;
+          };
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const observedPage = new Proxy(page, {
+        get(target, property) {
+          if (property === "locator") return (...args: Parameters<typeof page.locator>) => {
+            const locator = target.locator(...args);
+            return ['[role="listbox"]', '[role="listbox"]:visible'].includes(args[0]) ? wrap(locator) : locator;
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const adapter = new PlaywrightWorkdayProfilePage(observedPage, {
+        pageType: "profile", timeoutMs: 500, inspectMissingOptions: discover,
+      });
+      const snapshot = await adapter.inspect(AbortSignal.any([]));
+      const study = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study")!;
+      assert.ok(study);
+      if (discover) {
+        assert.deepEqual(study.allowedOptions, ["Computer Science"]);
+        assert.equal(study.readback, null);
+      } else {
+        await adapter.commit({ controlId: study.controlId, uiBehavior: study.uiBehavior, value: JSON.stringify(["Computer Science"]) }, AbortSignal.any([]));
+        assert.equal(adapter.interaction(study.controlId)?.backingValueCommitted, true);
+      }
+      assert.equal(removed, true);
+    }
+  } finally { await browser.close(); }
+});
+
 test("choice-first scheduling reduces empty catalog discovery without dropping field verification", async (t) => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
