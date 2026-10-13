@@ -21,6 +21,7 @@ import { liveApplicationExecutionPolicy } from
   "../../../src/contracts/application-execution-policy.ts";
 import type { ApplicationFieldObservation } from
   "../../../src/form/answers/application-types.ts";
+import { createResumeArtifactFixture } from "../../../src/testing/contracts/index.ts";
 
 function createQuestionAnswerLearningCapture(
   input: Omit<Parameters<typeof createQuestionAnswerLearningCaptureWithPolicy>[0], "executionPolicy">,
@@ -30,6 +31,43 @@ function createQuestionAnswerLearningCapture(
     executionPolicy: liveApplicationExecutionPolicy(input.mode),
   });
 }
+
+test("synthetic attachment learning retains verification and an editable owner replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-upload-learning-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const field = {
+      fieldId: fieldId("field-transcript"), target: browserTargetToken("target-transcript"),
+      label: boundedText("Upload your transcript"), required: true,
+      behavior: "file_upload" as const, options: [], state: "empty" as const,
+    };
+    recordVerified(capture, {
+      questionId: questionId("question-transcript"), field,
+      intent: { kind: "resume_upload", behavior: "file_upload", fieldId: field.fieldId,
+        target: field.target, artifact: createResumeArtifactFixture(), provenance: "resume_verified" },
+      lane: "synthetic_test_default", protectedCategory: null, generatedDefault: false,
+      conditionalReveal: true,
+    }, 1);
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8")));
+    const record = evidence.questions[0]!;
+    assert.equal(record.answerType, "file");
+    assert.equal(record.verificationResult, "verified");
+    assert.equal(record.lane, "synthetic_test_default");
+    const pending = JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8"));
+    assert.equal(pending.pendingProfileQuestions.length, 1);
+    assert.equal(pending.pendingProfileQuestions[0].needsUserValue, true);
+    assert.equal(pending.pendingProfileQuestions[0].testDefault, "resume_artifact_applied");
+    for (const change of [{ answerType: "text" }, { uiType: "textarea" },
+      { replaceWithOwnerAnswer: false }, { chosenAnswer: "unverified attachment" }]) {
+      assert.throws(() => admitQuestionAnswerLearningEvidence({ ...evidence,
+        questions: [{ ...record, ...change }] }));
+    }
+    assert.throws(() => admitQuestionAnswerLearningEvidence({ ...evidence,
+      answerFallbackPolicy: "owner_facts_only" }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("question learning stores observed choices, fallback, provenance, and replacement intent", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-"));

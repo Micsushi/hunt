@@ -602,7 +602,10 @@ export function admitQuestionAnswerLearningEvidence(
         record.provenance !== "configured_template") ||
       (record.lane === "synthetic_test_default" &&
         record.provenance !== "reviewed_catalog" &&
-        record.provenance !== "visible_option") ||
+        record.provenance !== "visible_option" &&
+        !(record.provenance === "resume_verified" && record.answerType === "file" &&
+          record.uiType === "file_upload" && record.strategy === "resume" &&
+          record.chosenAnswer === "resume_artifact_applied" && record.replaceWithOwnerAnswer)) ||
       (typeof record.chosenAnswer !== "string" && record.chosenAnswer !== null) ||
       (typeof record.chosenAnswer === "string" && !bounded(record.chosenAnswer, 512)) ||
       !strategies.has(record.strategy) ||
@@ -778,7 +781,8 @@ function answerRecord(value: {
 }
 
 function needsPendingProfileQuestion(record: MutableQuestionRecord): boolean {
-  return record.replaceWithOwnerAnswer && record.provenance !== "resume_verified";
+  return record.replaceWithOwnerAnswer &&
+    (record.provenance !== "resume_verified" || record.lane === "synthetic_test_default");
 }
 
 function pendingProfileQuestion(record: MutableQuestionRecord): PendingProfileQuestionV1 {
