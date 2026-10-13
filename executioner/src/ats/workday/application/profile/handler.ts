@@ -187,13 +187,19 @@ export async function completeWorkdayProfilePage(
   // repeatable rows from being learned and verified first.
   // Settle expensive choice catalogs before text commits trigger independent
   // page rescans. Source is independent of address; Country stays ahead of its
-  // dependent region. Live owner-only plans keep their original order.
+  // dependent region. Other observed single-choice UIs also precede text so
+  // those rescans do not repeatedly discover their still-empty catalogs.
+  // Unmapped controls and live owner-only plans keep their original order.
   const earlyChoices = ["source.how_did_you_hear", "address.country", "address.region", "phone.device_type"];
   const fields = effectivePlan.mode === "synthetic_test_non_submittable"
     ? [...effectivePlan.fields].sort((left, right) => {
         const rank = (item: ProfileFieldPlan) => {
           const index = earlyChoices.indexOf(item.fieldId);
-          return index < 0 ? earlyChoices.length : index;
+          if (index >= 0) return index;
+          const control = snapshot.controls.find(({ fieldId }) => fieldId === item.fieldId);
+          const choice = control !== undefined && !item.fieldId.startsWith("unknown.") &&
+            ["select", "search_select", "radio_group"].includes(control.uiBehavior);
+          return earlyChoices.length + (choice ? 0 : 1);
         };
         return rank(left) - rank(right);
       })

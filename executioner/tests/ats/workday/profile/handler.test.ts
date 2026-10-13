@@ -110,11 +110,12 @@ test("synthetic education retains its partly completed source row and generates 
   assert.equal(port.commits.find(({ controlId }) => controlId === "control-education.gpa")!.value, "0");
 });
 
-test("synthetic Profile settles country-dependent, source and phone choices before text fields", async () => {
+test("synthetic Profile settles observed single-choice UI before text while preserving country dependencies", async () => {
   const plan: ProfilePagePlan = {
     mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
     fields: [
       field("identity.given_name", "identity", "text", "Ada"),
+      field("identity.prefix", "identity", "option", "Ms.", "owner_provided", "Ms."),
       field("source.how_did_you_hear", "application_source", "option", "Website", "owner_provided", "Website"),
       field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile"),
       field("address.region", "address", "option", "Alberta", "owner_provided", "Alberta"),
@@ -123,12 +124,13 @@ test("synthetic Profile settles country-dependent, source and phone choices befo
   };
   const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
     control("identity.given_name", "text"), control("source.how_did_you_hear", "search_select"),
+    control("identity.prefix", "search_select"),
     control("phone.device_type", "search_select"),
     control("address.region", "search_select"), control("address.country", "search_select"),
   ] });
   assert.equal((await completeWorkdayProfilePage(plan, port, AbortSignal.any([]))).kind, "verified");
   assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
-    "control-source.how_did_you_hear", "control-address.country", "control-address.region", "control-phone.device_type", "control-identity.given_name",
+    "control-source.how_did_you_hear", "control-address.country", "control-address.region", "control-phone.device_type", "control-identity.prefix", "control-identity.given_name",
   ]);
 });
 

@@ -52,6 +52,53 @@ const field = (
       }),
 });
 
+test("choice-first scheduling reduces empty catalog discovery without dropping field verification", async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const probes: number[] = [];
+  try {
+    for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-prefix"><label for="name--legalName--title">Prefix</label>
+          <button type="button" id="name--legalName--title" aria-controls="titles" aria-haspopup="listbox" aria-expanded="false">Select One</button>
+          <div id="titles" role="listbox" hidden><div role="option">Mr.</div><div role="option">Ms.</div></div>
+        </div>
+        <div data-automation-id="formField-firstName"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName"></div>
+        <div data-automation-id="formField-middleName"><label for="name--legalName--middleName">Middle Name</label><input id="name--legalName--middleName"></div>
+        <div data-automation-id="formField-lastName"><label for="name--legalName--lastName">Last Name</label><input id="name--legalName--lastName"></div>
+      </main><script>(() => {
+        globalThis.emptyOpens = 0;
+        const button = document.querySelector('button'), popup = document.querySelector('#titles');
+        button.onclick = () => {
+          if (button.textContent === 'Select One') globalThis.emptyOpens++;
+          popup.hidden = false; button.setAttribute('aria-expanded', 'true');
+        };
+        popup.querySelectorAll('[role="option"]').forEach(option => option.onclick = () => {
+          button.textContent = option.textContent; popup.hidden = true; button.setAttribute('aria-expanded', 'false');
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') { popup.hidden = true; button.setAttribute('aria-expanded', 'false'); }
+        });
+      })();</script>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+      const result = await completeWorkdayProfilePage({ mode, pageType: "profile", repeatables: [], fields: [
+        field("identity.given_name", "identity", "text", "Ada"),
+        field("identity.middle_name", "identity", "text", "Test"),
+        field("identity.family_name", "identity", "text", "Lovelace"),
+        field("identity.prefix", "identity", "option", "Ms.", "Ms."),
+      ] }, adapter, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      if (result.kind === "verified") assert.equal(result.verifiedFields.length, 4);
+      assert.deepEqual(await page.locator('input').evaluateAll(elements => elements.map(element =>
+        element instanceof HTMLInputElement ? element.value : null)), ["Ada", "Test", "Lovelace"]);
+      assert.equal(await page.locator('button').innerText(), "Ms.");
+      probes.push(await page.evaluate(() => Reflect.get(globalThis, "emptyOpens")));
+    }
+    t.diagnostic(`Empty menu openings: original order ${probes[0]}, choice-first order ${probes[1]}`);
+    assert.ok(probes[1]! < probes[0]!, JSON.stringify(probes));
+  } finally { await browser.close(); }
+});
+
 test("required-field reads preserve disabled, read-only and marker semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
