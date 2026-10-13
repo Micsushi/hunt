@@ -55,6 +55,7 @@ import {
   createGeneratedIdAllocator,
   fieldId,
   guardRevision,
+  sha256Digest,
   type BrowserPageId,
   type BrowserSessionId,
   type FieldId,
@@ -1209,7 +1210,11 @@ export class OwnedWorkdayApplicationRuntime {
       const uploadedArtifacts = this.#questionnaireUploads.get(input.pageId) ?? new Map<string, UploadedArtifactReadback>();
       this.#questionnaireUploads.set(input.pageId, uploadedArtifacts);
       const createSemanticBrowser = () => new PlaywrightBrowserSession({
-        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId, uploadedArtifacts },
+        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId, uploadedArtifacts,
+          expectedArtifact: {
+            resumeId: request.ownerSources.resumeIntent.artifact.resumeId,
+            sha256: sha256Digest(request.ownerSources.resumeIntent.artifact.sha256),
+          } },
         ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
         timeoutMs: this.#timeoutMs,
       });

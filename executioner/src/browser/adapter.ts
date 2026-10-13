@@ -89,6 +89,7 @@ export async function inspectPage(
   sessionId: BrowserSessionId,
   pageId: BrowserPageId,
   uploads: ReadonlyMap<string, UploadedArtifactReadback>,
+  expectedArtifact?: UploadedArtifactReadback,
 ): Promise<PageInspection> {
   await annotateCheckboxGroups(page);
   const raw = await inspectControls(page);
@@ -101,7 +102,7 @@ export async function inspectPage(
     const control = normalizeControl(item.control, item.declaredToken);
     const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
-    const uploaded = uploads.get(token);
+    const uploaded = uploads.get(token) ?? expectedArtifact;
     let readback = item.control.kind === "file"
       ? await inspectUploadReadback(page, item.index, uploaded)
       : normalizeReadback(item.readback);

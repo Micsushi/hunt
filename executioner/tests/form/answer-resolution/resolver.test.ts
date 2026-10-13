@@ -80,6 +80,25 @@ function resolverWith(answer: ApplicationProfileAnswerResult) {
   };
 }
 
+test("text-only identity fragments use the requested format only in editable fallback mode", async () => {
+  const resolver = resolverWith({ kind: "profile_answer_missing" }).resolver;
+  for (const [label, expected] of [
+    ["What are the last 4 digits of your Social Security Number (SSN)?", "0000"],
+    ["Enter the last four digits of your identifier", "0000"],
+    ["What is the month and day of your date of birth? Enter in MMDD format.", "0101"],
+  ]) {
+    const observed = field(label!);
+    const signal = new AbortController().signal;
+    const generated = await resolver.resolve(syntheticRequest(observed), signal);
+    assert.equal(generated.ok && generated.value.kind === "resolved" &&
+      generated.value.intent.kind === "text" && generated.value.intent.value, expected);
+    assert.equal(generated.ok && generated.value.kind === "resolved" && generated.value.lane,
+      "synthetic_test_default");
+    const live = await resolver.resolve(request(observed), signal);
+    assert.equal(live.ok && live.value.kind === "resolved", false);
+  }
+});
+
 test("salary test fallback is positive without replacing owner salary or authorizing a live fallback", async () => {
   const missing = resolverWith({kind: "profile_answer_missing"}).resolver;
   for (const label of [

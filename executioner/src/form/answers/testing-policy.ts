@@ -56,6 +56,13 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
 }
 
 export function semanticSyntheticTestDefault(label: string): boolean | string | undefined {
+  const value = normalized(label);
+  if (birthDateQuestion.test(value) && /\bmmdd\b/u.test(value)) return "0101";
+  const trailingDigits = /\blast (\d{1,2}|four) digits?\b/u.exec(value);
+  if (trailingDigits !== null && /\b(?:ssn|social security|identification|identifier)\b/u.test(value)) {
+    const count = trailingDigits[1] === "four" ? 4 : Number(trailingDigits[1]);
+    if (count >= 1 && count <= 12) return "0".repeat(count);
+  }
   const type = testingQuestionSemanticType(label);
   if (type === "qualification_requirement") return true;
   if (type === "employee_referral" || type === "prior_employment") return false;

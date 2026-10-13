@@ -13,7 +13,7 @@ import {
   createConfiguredNarrativeProvider, createQuestionnairePageHandler,
 } from "../../../src/ats/workday/application/questions/index.ts";
 import {
-  useResumeArtifactUpload, boundedText, browserPageId, browserTargetToken, fieldId, guardRevision, journeyId,
+  useResumeArtifactUpload, boundedText, browserPageId, browserTargetToken, fieldId, guardRevision, journeyId, sha256Digest,
   upstreamProfileId, type BrowserSessionId, type OperationId, type UnknownCandidateId,
 } from "../../../src/contracts/index.ts";
 import { createResumeArtifactFixture } from "../../../src/testing/contracts/index.ts";
@@ -104,7 +104,13 @@ test("questionnaire upload verifies through a separate browser authority after n
     const pending = JSON.parse(await readFile(join(evidenceRoot, "pending-profile-questions.json"), "utf8"));
     assert.equal(pending.pendingProfileQuestions[0].needsUserValue, true);
     await authority.close(new AbortController().signal);
-    const fresh = makeSession();
+    // A new run has no in-memory upload history, but does have its admitted artifact.
+    uploadedArtifacts.clear();
+    const fresh = new PlaywrightBrowserSession({
+      attached: { page, sessionId, pageId,
+        expectedArtifact: { resumeId: resume.resumeId, sha256: sha256Digest(resume.sha256) } },
+      ids: testIds(), timeoutMs: 5000,
+    });
     const observed = await fresh.observe({ sessionId, pageId }, new AbortController().signal);
     assert.ok(observed.ok);
     assert.deepEqual(observed.value.targets[0]?.readback, { kind: "upload", resumeId: resume.resumeId, sha256: resume.sha256 });

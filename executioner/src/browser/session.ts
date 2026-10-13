@@ -54,6 +54,7 @@ export interface PlaywrightBrowserSessionOptions {
     readonly pageId: BrowserSessionResult["pageId"];
     // Metadata only; each observer still verifies the current upload UI independently.
     readonly uploadedArtifacts?: Map<string, UploadedArtifactReadback>;
+    readonly expectedArtifact?: UploadedArtifactReadback;
   };
   readonly ids: GeneratedIdAllocator;
   readonly timeoutMs?: number;
@@ -76,6 +77,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   readonly #seenTargets = new Set<string>();
   readonly #uploads: Map<string, UploadedArtifactReadback>;
   readonly #sharedUploads: boolean;
+  readonly #expectedArtifact: UploadedArtifactReadback | undefined;
   readonly #mutationOperations = new Set<string>();
   readonly #navigationOperations = new Set<string>();
 
@@ -85,6 +87,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     }
     this.#uploads = options.attached?.uploadedArtifacts ?? new Map();
     this.#sharedUploads = options.attached?.uploadedArtifacts !== undefined;
+    this.#expectedArtifact = options.attached?.expectedArtifact;
     this.#externalContext = options.context;
     this.#ids = options.ids;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
@@ -198,7 +201,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const active = this.#activePage(request);
     if (!active.ok) return active;
     const result = await bounded(
-      inspectPage(active.page, request.sessionId, request.pageId, this.#uploads),
+      inspectPage(active.page, request.sessionId, request.pageId, this.#uploads, this.#expectedArtifact),
       signal,
       this.#timeoutMs,
     );
@@ -230,7 +233,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     }
     if (observed.length !== 1) return failure("browser_target_ambiguous");
 
-    const fresh = await inspectPage(active.page, snapshot.effect.sessionId, snapshot.effect.pageId, this.#uploads)
+    const fresh = await inspectPage(active.page, snapshot.effect.sessionId, snapshot.effect.pageId, this.#uploads, this.#expectedArtifact)
       .catch(() => undefined);
     if (fresh === undefined) return failure("browser_target_stale");
     const matches = fresh.targets.get(mutation.target);
@@ -257,7 +260,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
         let internallyRebound = false;
         try {
           const rebound = await inspectPage(
-            active.page, snapshot.effect.sessionId, snapshot.effect.pageId, this.#uploads,
+            active.page, snapshot.effect.sessionId, snapshot.effect.pageId, this.#uploads, this.#expectedArtifact,
           );
           const current = rebound.targets.get(mutation.target);
           const mayRebindInsideAdapter = (current === undefined || current.length === 0) &&
