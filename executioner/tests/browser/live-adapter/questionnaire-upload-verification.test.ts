@@ -10,7 +10,7 @@ import {
   createConfiguredNarrativeProvider, createQuestionnairePageHandler,
 } from "../../../src/ats/workday/application/questions/index.ts";
 import {
-  boundedText, browserPageId, browserTargetToken, fieldId, guardRevision, journeyId,
+  useResumeArtifactUpload, boundedText, browserPageId, browserTargetToken, fieldId, guardRevision, journeyId,
   upstreamProfileId, type BrowserSessionId, type OperationId, type UnknownCandidateId,
 } from "../../../src/contracts/index.ts";
 import { createResumeArtifactFixture } from "../../../src/testing/contracts/index.ts";
@@ -48,6 +48,7 @@ test("questionnaire upload verifies through a separate browser authority after n
     });
     const authority = createQuestionnaireSemanticAuthority({
       sessionId, pageId, createDriverBrowser: makeSession, verifierBrowser: makeSession(),
+      captureUploadArtifact: createResumeArtifactFixture,
       createDriver: browser => createFieldDriver(browser, createSafetyGuard()),
       createVerifier: createFieldVerifier, prepare: async () => {},
     });
@@ -62,6 +63,7 @@ test("questionnaire upload verifies through a separate browser authority after n
       driver: authority.driver, verifier: authority.verifier,
     });
     const resume = createResumeArtifactFixture();
+    assert.ok((await useResumeArtifactUpload(resume, () => ({ ok: true as const, value: undefined }))).ok);
     const result = await handler.complete({
       mode: "synthetic_test_non_submittable", answerFallbackPolicy: "deterministic_site_valid_editable",
       journeyId: journeyId("journey_questionnaire_upload_1"),

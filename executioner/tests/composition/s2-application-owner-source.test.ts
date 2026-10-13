@@ -83,6 +83,29 @@ test("resolves one immutable resume snapshot and authoritative profile/question 
   }
 });
 
+test("additional uploads get fresh single-use artifacts and reject changed source bytes", async () => {
+  const fixture = ownerFixture();
+  try {
+    const bytes = Buffer.from("%PDF-1.7\nrepeatable approved attachment\n");
+    writeSources(fixture.runtimeRoot, bytes);
+    const resolved = await new FileBackedStage2ApplicationOwnerSourceResolver({
+      forbiddenRoots: [resolve("..")],
+    }).resolve(request(fixture.runtimeRoot), AbortSignal.any([]));
+    const consume = (artifact: typeof resolved.resumeIntent.artifact) => useResumeArtifactUpload(
+      artifact, captured => ({ ok: true as const, value: Buffer.from(captured).toString("utf8") }),
+    );
+    assert.ok((await consume(resolved.resumeIntent.artifact)).ok);
+    for (let index = 0; index < 2; index++) {
+      const fresh = resolved.captureUploadArtifact!();
+      assert.notEqual(fresh, resolved.resumeIntent.artifact);
+      assert.deepEqual(await consume(fresh), { ok: true, value: bytes.toString("utf8") });
+      assert.deepEqual(await consume(fresh), { ok: false, error: { code: "artifact_already_consumed", retryable: false } });
+    }
+    writeFileSync(join(fixture.runtimeRoot, "application-resume.pdf"), Buffer.from(bytes.toString().replace("approved", "replaced")));
+    assert.throws(() => resolved.captureUploadArtifact!());
+  } finally { fixture.cleanup(); }
+});
+
 test("admits an omitted narrative fact as unresolved owner input", async () => {
   const fixture = ownerFixture();
   try {

@@ -1218,6 +1218,7 @@ export class OwnedWorkdayApplicationRuntime {
         sessionId: activeSemanticSessionId,
         pageId: input.pageId,
         createDriverBrowser: createSemanticBrowser,
+        captureUploadArtifact: request.ownerSources.captureUploadArtifact,
         verifierBrowser: createSemanticBrowser(),
         createDriver: (browser) => createFieldDriver(browser, createSafetyGuard()),
         createVerifier: createFieldVerifier,

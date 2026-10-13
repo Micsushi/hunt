@@ -80,6 +80,7 @@ export interface Stage2ApplicationOwnerSourceRequest {
 
 export interface Stage2ApplicationOwnerSources {
   readonly resumeIntent: WorkdayResumeFileIntent;
+  readonly captureUploadArtifact?: () => ResolvedResumeArtifact;
   readonly profilePlan: ProfilePagePlan;
   readonly executionPolicy: ApplicationExecutionPolicy;
   readonly profileId: ProfileId;
@@ -131,25 +132,28 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
         profileBytes.fill(0);
       }
       const manifest = parseManifest(value, request, runtimeRoot, profileSha256);
-      const resumeBytes = readStablePrivateFile(
-        join(runtimeRoot, RESUME_FILE),
-        MAX_RESUME_BYTES,
-        { notModifiedAfterMs: approvalTime },
-      ).bytes;
-      try {
-        if (
-          resumeBytes.byteLength !== manifest.resume.sizeBytes ||
-          resumeBytes.subarray(0, 5).toString("ascii") !== "%PDF-"
-        ) denied();
-        const captured = captureResumeArtifact({
-          resumeId: upstreamResumeId(manifest.resume.resumeId),
-          sha256: manifest.resume.sha256,
-        }, resumeBytes);
-        if (!captured.ok) denied();
-        artifact = captured.value;
-      } finally {
-        resumeBytes.fill(0);
-      }
+      const captureUploadArtifact = (): ResolvedResumeArtifact => {
+        const resumeBytes = readStablePrivateFile(
+          join(runtimeRoot, RESUME_FILE),
+          MAX_RESUME_BYTES,
+          { notModifiedAfterMs: approvalTime },
+        ).bytes;
+        try {
+          if (
+            resumeBytes.byteLength !== manifest.resume.sizeBytes ||
+            resumeBytes.subarray(0, 5).toString("ascii") !== "%PDF-"
+          ) denied();
+          const captured = captureResumeArtifact({
+            resumeId: upstreamResumeId(manifest.resume.resumeId),
+            sha256: manifest.resume.sha256,
+          }, resumeBytes);
+          if (!captured.ok) denied();
+          return captured.value;
+        } finally {
+          resumeBytes.fill(0);
+        }
+      };
+      artifact = captureUploadArtifact();
       const intent = createWorkdayResumeFileIntent({
         artifactId: artifact.resumeId,
         artifact,
@@ -180,6 +184,7 @@ export class FileBackedStage2ApplicationOwnerSourceResolver
       }
       return Object.freeze({
         resumeIntent: intent.value,
+        captureUploadArtifact,
         profilePlan,
         executionPolicy,
         profileId: profile.profileId,

@@ -1,3 +1,4 @@
+import { disposeResumeArtifact, type ResolvedResumeArtifact } from "../../../contracts/index.ts";
 import type {
   BrowserPageId,
   BrowserSession,
@@ -11,6 +12,7 @@ export interface QuestionnaireSemanticAuthorityOptions {
   readonly sessionId: BrowserSessionId;
   readonly pageId: BrowserPageId;
   readonly createDriverBrowser: () => BrowserSession;
+  readonly captureUploadArtifact?: () => ResolvedResumeArtifact;
   readonly verifierBrowser: BrowserSession;
   readonly createDriver: (browser: BrowserSession) => FieldDriver;
   readonly createVerifier: (browser: BrowserSession) => FieldVerifier;
@@ -52,11 +54,23 @@ export function createQuestionnaireSemanticAuthority(
             error: { code: "driver_target_invalid" as const, retryable: false as const },
           };
         }
-        const result = await driver.drive(request, signal);
-        uncertainOperationId = !result.ok && result.error.code === "browser_effect_uncertain"
-          ? request.operationId
-          : undefined;
-        return result;
+        const artifact = request.intent.kind === "resume_upload"
+          ? options.captureUploadArtifact?.() : undefined;
+        try {
+          if (artifact !== undefined && request.intent.kind === "resume_upload" &&
+              (artifact.resumeId !== request.intent.artifact.resumeId || artifact.sha256 !== request.intent.artifact.sha256)) {
+            throw new TypeError("questionnaire upload artifact identity changed");
+          }
+          const current = artifact !== undefined && request.intent.kind === "resume_upload"
+            ? { ...request, intent: { ...request.intent, artifact } } : request;
+          const result = await driver.drive(current, signal);
+          uncertainOperationId = !result.ok && result.error.code === "browser_effect_uncertain"
+            ? request.operationId
+            : undefined;
+          return result;
+        } finally {
+          if (artifact !== undefined) disposeResumeArtifact(artifact);
+        }
       },
     }),
     verifier: Object.freeze<FieldVerifier>({
