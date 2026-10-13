@@ -1940,11 +1940,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         return true;
       }
       const owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
-      visibleOptions = owner === undefined ? [] : await visibleLocators(owner.locator('[role="option"]'));
+      const options = owner?.locator('[role="option"]:visible');
+      // Read one result window together. Virtualized rows can disappear between
+      // separate innerText calls as scrolling or an Enter commit updates it.
+      const labels = options === undefined ? [] : await options.allInnerTexts();
+      visibleOptions = labels.map((_, index) => options!.nth(index));
       exact = [];
       const literal: Locator[] = [];
-      for (const option of visibleOptions.slice(0, 128)) {
-        const label = normalize(await option.innerText());
+      for (const [index, text] of labels.slice(0, 128).entries()) {
+        const option = visibleOptions[index]!;
+        const label = normalize(text);
         if (label === normalize(value)) literal.push(option);
         if (acceptedLabels.has(label)) exact.push(option);
       }
@@ -1991,7 +1996,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     // The Workday row owns selection; its nested checkbox can toggle without
     // committing a token to the form.
     const leaves = await visibleLocators(option.locator('[data-automation-id="promptLeafNode"]'));
-    await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
+    // Enter may commit after the earlier observation. Do not toggle that
+    // already-saved answer off when its result remains visible.
+    if (!await this.#selectionReadbackIncludes(control, behavior, value)) {
+      await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
+    }
     interaction.optionActivated = true;
     const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
     do {
