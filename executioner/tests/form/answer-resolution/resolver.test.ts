@@ -117,19 +117,21 @@ test("political exposure uses its visible options without consulting veteran fac
   }
 });
 
-test("weekly hours share numeric defaults and preserve an owner answer across labels", async () => {
+test("numeric questions share defaults and preserve an owner answer across labels", async () => {
   const signal = new AbortController().signal;
-  for (const label of [
-    "Please indicate your expected number of weekly hours:",
-    "How many hours per week are you available to work?",
-    "Desired weekly hours",
-  ]) {
+  for (const [label, expected] of [
+    ["Please indicate your expected number of weekly hours:", "40"],
+    ["How many hours per week are you available to work?", "40"],
+    ["Desired weekly hours", "40"],
+    ["5. How many years of related work experience have you obtained?", "0"],
+    ["Years of Relevant Experience", "0"],
+  ] as const) {
     const observed = field(label);
-    assert.equal(testingQuestionSemanticType(label), "availability");
+    if (expected === "40") assert.equal(testingQuestionSemanticType(label), "availability");
     const missing = resolverWith({ kind: "profile_answer_missing" }).resolver;
     const generated = await missing.resolve(syntheticRequest(observed), signal);
     assert.equal(generated.ok && generated.value.kind === "resolved" &&
-      generated.value.intent.kind === "text" && generated.value.intent.value, "40");
+      generated.value.intent.kind === "text" && generated.value.intent.value, expected);
     assert.equal(generated.ok && generated.value.kind === "resolved" &&
       generated.value.lane, "synthetic_test_default");
     const live = await missing.resolve(request(observed), signal);
