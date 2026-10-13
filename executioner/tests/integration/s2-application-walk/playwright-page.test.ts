@@ -139,7 +139,7 @@ import { walkFixture } from "./fixtures.ts";
 
 const popupPreparationPageId = browserPageId("page-questionnaire-popup-preparation");
 
-test("required date gate accepts month-year widgets without inventing a required day", async () => {
+test("required date gate accepts year and month-year widgets without inventing missing segments", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -152,11 +152,16 @@ test("required date gate accepts month-year widgets without inventing a required
       ["2", "2000", "29", false, "verified"],
       ["2", "2001", "29", false, "unverified"],
       ["1", "2000", null, true, "unverified"],
+      [null, "2000", null, false, "verified"],
+      [null, "2026", null, false, "verified"],
+      [null, "", null, false, "unverified"],
+      [null, "0000", null, false, "unverified"],
+      [null, "20", null, false, "unverified"],
     ] as const) {
       await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
         <div data-automation-id="formField-startDate"><label>From*</label>
           <div data-automation-id="dateInputWrapper" aria-required="true">
-            <input data-automation-id="dateSectionMonth-input" value="${month}">
+            ${month === null ? '' : `<input data-automation-id="dateSectionMonth-input" value="${month}">`}
             ${duplicate ? '<input data-automation-id="dateSectionMonth-input" value="1">' : ''}
             ${day === null ? '' : `<input data-automation-id="dateSectionDay-input" value="${day}">`}
             <input data-automation-id="dateSectionYear-input" value="${year}">

@@ -1741,6 +1741,10 @@ async function readApplicationSnapshot(
         const month = parts[0]![0]!.value.trim();
         const year = parts[2]![0]!.value.trim();
         verified = verified && validDateValue(`${year}-${month.padStart(2, "0")}-01`);
+      } else if (parts[0]!.length === 0 && parts[1]!.length === 0 && parts[2]!.length === 1) {
+        // Education widgets may collect only a year, with no month or day.
+        const year = parts[2]![0]!.value.trim();
+        verified = verified && /^\d{4}$/u.test(year) && Number(year) > 0;
       } else {
         verified = verified && formattedInputs.length === 1 &&
           validDateValue(formattedInputs[0]!.value);
