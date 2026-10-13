@@ -21,9 +21,11 @@ test("conditional questionnaire uploads retain visible ownership and required fi
     const pageId = browserPageId("page-conditional-attachment");
     await bindQuestionnaireTargets(page, pageId);
     assert.equal(await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"), null);
+    assert.deepEqual(await monitorQuestionnaireCoverage(page), { fieldCount: 0, requiredFieldCount: 0, typeCounts: {} });
     await page.locator("#attachment").evaluate((element) => { element.removeAttribute("hidden"); });
     await bindQuestionnaireTargets(page, pageId);
     assert.ok(await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"));
+    assert.deepEqual(await monitorQuestionnaireCoverage(page), { fieldCount: 1, requiredFieldCount: 1, typeCounts: { file_upload: 1 } });
     const semantic = await inspectPage(page, "live_session_attachment_01" as never, pageId, new Map());
     assert.equal(semantic.observation.targets.length, 1);
     assert.equal(semantic.observation.targets[0]?.control.kind, "file");
@@ -107,6 +109,7 @@ import {
 } from "../../../src/ats/workday/application/resume/index.ts";
 import {
   bindQuestionnaireTargets,
+  monitorQuestionnaireCoverage,
   hydrateQuestionnairePopupOptions,
   questionnairePopupHydrationTargets,
 } from "../../../src/browser/playwright-live/private/workday-application-runtime.ts";

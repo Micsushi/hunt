@@ -2238,7 +2238,9 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
         '[data-automation-id="formField"], [data-automation-id^="formField-"], ' +
         `fieldset, ${supportedControls}`,
     ))].filter((control) => {
-      if (!visible(control) || control.hasAttribute("disabled") ||
+      const uploadOwner = control instanceof HTMLInputElement && control.type === "file"
+        ? control.closest<HTMLElement>('[data-automation-id$="-FileUpload"]') : null;
+      if ((!visible(control) && !(uploadOwner !== null && visible(uploadOwner))) || control.hasAttribute("disabled") ||
           control.getAttribute("aria-disabled") === "true") return false;
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
@@ -2275,7 +2277,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
     });
     const typeCounts: Record<string, number> = {};
     const requiredMarker =
-      '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]';
+      '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required"]';
     const accessibleRequired = (control: HTMLElement): boolean => {
       const labels = control instanceof HTMLInputElement ||
           control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
