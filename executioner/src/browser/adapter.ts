@@ -171,12 +171,31 @@ async function inspectUploadReadback(
   let live: unknown;
   try {
     live = await page.locator(controlSelector).nth(index).evaluate(
-      async (element, maximumBytes) => {
+      async (element, { maximumBytes, expectedName }) => {
         if (
           !(element instanceof HTMLInputElement) ||
           element.type !== "file" ||
           element.files === null
         ) return { kind: "unavailable" };
+        const owner = element.closest('[data-automation-id$="-FileUpload"]');
+        if (owner !== null) {
+          const items = owner.querySelectorAll('[data-automation-id="file-upload-item"]');
+          if (items.length === 0 && element.files.length === 0) return { kind: "empty" };
+          if (items.length !== 1 || expectedName === null ||
+              owner.querySelectorAll('input[type="file"]').length !== 1) return { kind: "unavailable" };
+          const item = items[0]!;
+          const name = item.querySelector('[data-automation-id="file-upload-item-name"]')?.textContent?.trim();
+          const success = item.querySelector(
+            '[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"]',
+          );
+          const pending = owner.querySelector(
+            '[aria-busy="true"], [role="progressbar"], [data-automation-id="file-upload-error"], [aria-invalid="true"]',
+          );
+          const shown = (node: Element) => node.getClientRects().length > 0 &&
+            getComputedStyle(node).visibility !== "hidden";
+          return name === expectedName && success !== null && shown(item) && shown(success) && pending === null
+            ? { kind: "completed" } : { kind: "unavailable" };
+        }
         if (element.files.length === 0) return { kind: "empty" };
         if (element.files.length !== 1) return { kind: "unavailable" };
         const file = element.files[0];
@@ -210,7 +229,8 @@ async function inspectUploadReadback(
           bytes?.fill(0);
         }
       },
-      MAX_RESUME_ARTIFACT_BYTES,
+      { maximumBytes: MAX_RESUME_ARTIFACT_BYTES,
+        expectedName: uploaded === undefined ? null : `c3-attachment-${uploaded.sha256}.pdf` },
     );
   } catch {
     return { kind: "unavailable" };
@@ -225,6 +245,7 @@ async function inspectUploadReadback(
   if (live.kind === "empty") {
     return { kind: "upload", resumeId: null, sha256: null };
   }
+  if (live.kind === "completed" && uploaded !== undefined) return { kind: "upload", ...uploaded };
   if (
     live.kind !== "digest" ||
     uploaded === undefined ||
@@ -1858,12 +1879,17 @@ async function applyMutationUnchecked(
   if (target.control.kind !== "file" || upload === undefined) return "invalid";
   await locator.setInputFiles(
     {
-      name: "resume.pdf",
+      name: `c3-attachment-${mutation.artifact.sha256}.pdf`,
       mimeType: "application/pdf",
       buffer: Buffer.from(upload.buffer, upload.byteOffset, upload.byteLength),
     },
     { timeout: timeoutMs },
   );
+  if (await locator.evaluate((element) => element.closest('[data-automation-id$="-FileUpload"]') !== null)) {
+    await locator.locator('xpath=ancestor::*[contains(@data-automation-id, "-FileUpload")][1]')
+      .locator('[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"]')
+      .waitFor({ state: "visible", timeout: timeoutMs });
+  }
   return "applied";
 }
 
@@ -2528,7 +2554,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       if (element.getAttribute("aria-invalid") === "true" && readback.kind !== "upload") {
         readback = { kind: "empty" };
       }
-      const html = element as HTMLElement;
+      const html = element instanceof HTMLInputElement && element.type === "file"
+        ? element.closest<HTMLElement>('[data-automation-id$="-FileUpload"]') ?? element
+        : element as HTMLElement;
       const style = getComputedStyle(html);
       const visible = style.display !== "none" && style.visibility !== "hidden" && html.getClientRects().length > 0;
       const disabled = "disabled" in element && Boolean((element as HTMLInputElement).disabled) || element.getAttribute("aria-disabled") === "true";
@@ -2555,7 +2583,7 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
             [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
               .some((radio) => radio.required)) ||
           (requiredOwner !== null && requiredOwner.querySelector(
-            '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+            '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required"]',
           ) !== null) ||
           (["dateSection", "dateInputWrapper"].includes(
             element.getAttribute("data-automation-id") ?? "",

@@ -993,7 +993,11 @@ async function readApplicationSnapshot(
   const { page: rootPage, root, selector: rootSelector } = physicalRoots[0]!;
   const resumeInputs = [...root.querySelectorAll<HTMLInputElement>(
     'input[type="file"][data-automation-id="file-upload-input-ref"]',
-  )].filter((input) => !input.disabled && input.getAttribute("aria-disabled") !== "true");
+  )].filter((input) => {
+    const owner = input.closest('[data-automation-id$="-FileUpload"]');
+    return !input.disabled && input.getAttribute("aria-disabled") !== "true" &&
+      (owner === null || visible(owner));
+  });
   const profileControls = [...root.querySelectorAll<HTMLElement>(
     'input, textarea, select, [contenteditable="true"], [role="combobox"], ' +
       'button[data-automation-id="sourcePrompt"]',
@@ -1138,7 +1142,7 @@ async function readApplicationSnapshot(
       !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(fieldLabel);
     if (requiredWorkdayDate) return true;
     return field !== null && field.querySelector(
-      '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+      '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required"]',
     ) !== null;
   });
   const requiredFields: BrowserApplicationSnapshot["requiredFields"][number][] = [];
@@ -1927,11 +1931,14 @@ async function readApplicationSnapshot(
         '[data-automation-id="file-upload-item"]',
       )].filter(visible);
       const successes = uploadOwner === null ? [] : [...uploadOwner.querySelectorAll<HTMLElement>(
-        '[data-automation-id="file-upload-success"], ' +
+        '[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"], ' +
           '[data-automation-id="file-upload-item"][data-upload-state="success"]',
       )].filter(visible);
-      verified = verified && input.files?.length === 1 &&
-        items.length === 1 && successes.length === 1;
+      const pending = uploadOwner?.querySelector(
+        '[aria-busy="true"], [role="progressbar"], [data-automation-id="file-upload-error"]',
+      );
+      verified = verified && items.length === 1 && successes.length === 1 &&
+        items[0]!.contains(successes[0]!) && !pending;
     } else if (radioMembershipOwner !== undefined) {
       // Browser radio ownership is form-or-tree-root plus native name. Reuse
       // that exact admitted member set for completion instead of requerying a
@@ -1999,7 +2006,7 @@ async function readApplicationSnapshot(
     }
     const semanticCommitted = verified;
     verified = validationClear && semanticCommitted;
-    const resumeOwnedFile = input?.type === "file" &&
+    const resumeOwnedFile = profileRoot && input?.type === "file" &&
       input.getAttribute("data-automation-id") === "file-upload-input-ref";
     const fieldPage: ApplicationHandlerPage | undefined = resumeOwnedFile
       ? "resume"

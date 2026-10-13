@@ -3161,7 +3161,13 @@ export async function bindQuestionnaireTargets(
     };
     let index = 0;
     for (const control of controls) {
-      if (!visible(control)) continue;
+      const uploadOwner = control instanceof HTMLInputElement && control.type === "file"
+        ? control.closest<HTMLElement>('[data-automation-id$="-FileUpload"]') : null;
+      if (!visible(control) && !(uploadOwner !== null && visible(uploadOwner))) continue;
+      if (uploadOwner !== null) {
+        const labelledBy = uploadOwner.getAttribute("aria-labelledby");
+        if (labelledBy !== null) control.setAttribute("aria-labelledby", labelledBy);
+      }
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
@@ -3228,6 +3234,10 @@ export async function bindQuestionnaireTargets(
         ? normalize(field?.querySelector("label, legend")?.textContent)
         : "";
       if (label === "") label = normalize(control.getAttribute("aria-label"));
+      if (label === "" && uploadOwner !== null) {
+        label = normalize((uploadOwner.getAttribute("aria-labelledby") ?? "").split(/\s+/u)
+          .filter(Boolean).map(id => document.getElementById(id)?.textContent ?? "").join(" "));
+      }
       if (label === "" && control instanceof HTMLFieldSetElement) {
         label = normalize(control.querySelector(":scope > legend")?.textContent);
       }

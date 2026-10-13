@@ -1673,6 +1673,7 @@ test("passes upload bytes to Playwright through a zero-copy buffer view", async 
     setInputFiles: async (file: { readonly buffer: Buffer }) => {
       captured = file.buffer;
     },
+    evaluate: async () => false,
   };
   const page = {
     locator: () => locator,

@@ -4,6 +4,82 @@ import { createServer } from "node:http";
 import test from "node:test";
 
 import { chromium, type Page } from "playwright";
+import { applyMutation, inspectPage } from "../../../src/browser/adapter.ts";
+
+test("conditional questionnaire uploads retain visible ownership and required file semantics", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
+      <div data-automation-id="formField-" hidden id="attachment">
+        <div id="attachment-label"><div data-automation-id="richText"><b>Please upload your transcript.</b><abbr title="required">*</abbr></div></div>
+        <div data-automation-id="question-FileUpload" aria-labelledby="attachment-label">
+          <button type="button" data-automation-id="select-files">Select files</button>
+          <input data-automation-id="file-upload-input-ref" type="file" multiple style="display:none">
+        </div>
+      </div></main>`);
+    const pageId = browserPageId("page-conditional-attachment");
+    await bindQuestionnaireTargets(page, pageId);
+    assert.equal(await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"), null);
+    await page.locator("#attachment").evaluate((element) => { element.removeAttribute("hidden"); });
+    await bindQuestionnaireTargets(page, pageId);
+    assert.ok(await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"));
+    const semantic = await inspectPage(page, "live_session_attachment_01" as never, pageId, new Map());
+    assert.equal(semantic.observation.targets.length, 1);
+    assert.equal(semantic.observation.targets[0]?.control.kind, "file");
+    assert.equal(semantic.observation.targets[0]?.state.actionable, true);
+    const truth = await new PlaywrightWorkdayApplicationPage(page).observe(new AbortController().signal);
+    assert.equal(truth.ok, true);
+    if (truth.ok) {
+      assert.equal(truth.value.page, "questionnaire");
+      assert.equal(truth.value.requiredFields.length, 1);
+      assert.equal(truth.value.requiredFields[0]?.page, "questionnaire");
+      assert.equal(truth.value.requiredFields[0]?.verification, "unverified");
+    }
+    const token = (await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"))!;
+    const uploaded = { resumeId: upstreamResumeId("resume-upload-fixture"), sha256: "a".repeat(64) as never };
+    const uploads = new Map([[token, uploaded]]);
+    for (const [name, status, copies, expected] of [
+      [`c3-attachment-${"a".repeat(64)}.pdf`, 'role="progressbar"', 1, false],
+      ["different.pdf", 'data-automation-id="file-upload-successful"', 1, false],
+      [`c3-attachment-${"a".repeat(64)}.pdf`, 'data-automation-id="file-upload-error"', 1, false],
+      [`c3-attachment-${"a".repeat(64)}.pdf`, 'data-automation-id="file-upload-successful"', 2, false],
+      [`c3-attachment-${"a".repeat(64)}.pdf`, 'data-automation-id="file-upload-successful"', 1, true],
+    ] as const) {
+      await page.locator('[data-automation-id$="-FileUpload"]').evaluate((owner, value) => {
+        owner.querySelectorAll('[data-automation-id="file-upload-item"]').forEach(item => item.remove());
+        owner.insertAdjacentHTML("beforeend", (`<div data-automation-id="file-upload-item"><span data-automation-id="file-upload-item-name">${value.name}</span><span ${value.status}>Upload state</span></div>`).repeat(value.copies));
+      }, { name, status, copies });
+      const readback = (await inspectPage(page, "live_session_attachment_01" as never, pageId, uploads))
+        .observation.targets[0]!.readback;
+      assert.deepEqual(readback, expected ? { kind: "upload", ...uploaded } : { kind: "unavailable" });
+      if (expected) {
+        const completed = await new PlaywrightWorkdayApplicationPage(page).observe(new AbortController().signal);
+        assert.ok(completed.ok);
+        assert.equal(completed.value.requiredFields[0]?.verification, "verified");
+      }
+    }
+    await page.locator('[data-automation-id="file-upload-item"]').evaluateAll(items => items.forEach(item => item.remove()));
+    await page.locator('input[type="file"]').evaluate(element => {
+      const input = element as HTMLInputElement;
+      input.onchange = () => {
+        const name = input.files![0]!.name;
+        input.value = "";
+        setTimeout(() => input.parentElement!.insertAdjacentHTML("beforeend",
+          `<div data-automation-id="file-upload-item"><span data-automation-id="file-upload-item-name">${name}</span><span data-automation-id="file-upload-successful">Successfully Uploaded!</span></div>`), 100);
+      };
+    });
+    const bytes = Buffer.from("synthetic test attachment");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const artifact = captureResumeArtifact({ resumeId: uploaded.resumeId, sha256 }, bytes);
+    assert.ok(artifact.ok);
+    const target = semantic.targets.get(browserTargetToken(token))![0]!;
+    assert.equal(await applyMutation(page, target, { kind: "upload", target: target.token, artifact: artifact.value }, bytes, 2000), "applied");
+    const readback = await inspectPage(page, "live_session_attachment_01" as never, pageId,
+      new Map([[token, { resumeId: uploaded.resumeId, sha256: sha256 as never }]]));
+    assert.deepEqual(readback.observation.targets[0]!.readback, { kind: "upload", resumeId: uploaded.resumeId, sha256 });
+  } finally { await browser.close(); }
+});
 
 import {
   createApplicationLaneHandlers,
