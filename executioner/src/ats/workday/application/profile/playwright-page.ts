@@ -2011,7 +2011,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     // Enter may commit after the earlier observation. Do not toggle that
     // already-saved answer off when its result remains visible.
     if (!await this.#selectionReadbackIncludes(control, behavior, value)) {
-      await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
+      try {
+        await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option))
+          .click({ timeout: Math.min(this.#timeoutMs, 5_000) });
+      } catch (error) {
+        // Enter can save the answer while Playwright waits for its option to
+        // settle. Accept that exact committed token, never a vanished row alone.
+        if (!await this.#selectionReadbackIncludes(control, behavior, value)) throw error;
+      }
     }
     interaction.optionActivated = true;
     const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);

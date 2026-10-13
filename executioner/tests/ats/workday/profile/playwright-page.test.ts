@@ -3726,7 +3726,8 @@ test("multi-select selection binds its delayed portal without selecting an unrel
   } finally { await browser.close(); }
 });
 
-for (const freeEntry of [true, false]) test(`multi-select waits for delayed ${freeEntry ? "free-entry" : "catalog"} commitment before retrying`, async () => {
+for (const mode of ["free-entry", "catalog", "detached-option"]) test(`multi-select waits for delayed ${mode} commitment before retrying`, async () => {
+  const freeEntry = mode !== "catalog";
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -3735,6 +3736,7 @@ for (const freeEntry of [true, false]) test(`multi-select waits for delayed ${fr
         <label for="skills--skills">Type to Add Skills</label>
         <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search"><div id="selected"></div></div>
       </div></main><div id="choices" role="listbox" hidden><div role="option">Python</div></div>
+      ${mode === "detached-option" ? '<style>@keyframes moving { from { transform:translateX(0) } to { transform:translateX(50px) } } #choices [role="option"] { animation:moving .1s infinite alternate }</style>' : ''}
       <script>
         const input = document.querySelector('input');
         const choices = document.querySelector('#choices');
@@ -3744,11 +3746,13 @@ for (const freeEntry of [true, false]) test(`multi-select waits for delayed ${fr
           setTimeout(() => {
             document.querySelector('#selected').innerHTML = '<ul role="listbox" data-automation-id="selectedItemList"><li role="option" data-automation-id="selectedItem">Python</li></ul>';
             input.value = ''; choices.hidden = true;
+            if (${mode === "detached-option"}) choices.remove();
           }, 600);
         }
         input.onkeydown = event => {
           if (event.key !== 'Enter') return;
           event.preventDefault();
+          if (${mode === "detached-option"}) choices.hidden = false;
           if (${freeEntry}) commit(); else choices.hidden = false;
         };
         choices.onclick = commit;
