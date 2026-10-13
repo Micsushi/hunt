@@ -148,6 +148,12 @@ const questionAliasCatalog = Object.freeze([
     { kind: "profile", factId: "weekly_hours", ownerProvidedOnly: true },
   ),
   aliasEntry(
+    "workday-question-notice-period-days",
+    ["Notice period in days"],
+    ["text", "textarea", "select", "listbox"],
+    { kind: "profile", factId: "notice_period_days", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
     "workday-question-gender-disclosure",
     ["Gender", "Gender Identity", "Sex"],
     ["radio", "select", "listbox"],
@@ -293,6 +299,7 @@ const questionSemanticCatalog = Object.freeze([
     ["expected", "weekly", "hours"], ["desired", "weekly", "hours"],
     ["many", "hours", "week"], ["available", "hours", "week"],
   ] },
+  { id: "workday-question-notice-period-days", keywordGroups: [["notice", "period", "days"], ["notice", "period", "day"]] },
   { id: "workday-question-gender-disclosure", keywordGroups: [["gender"], ["sex"]] },
   { id: "workday-question-ethnicity-disclosure", keywordGroups: [["ethnicity"], ["ethnicities"], ["race"], ["hispanic"], ["latino"]] },
   { id: "workday-question-veteran-disclosure", keywordGroups: [
@@ -337,6 +344,7 @@ const generatedLearningDefaults = Object.freeze({
   "s1-question-country": "Canada",
   "workday-question-desired-salary": 1,
   "workday-question-weekly-hours": 40,
+  "workday-question-notice-period-days": 0,
   "workday-question-years-experience": 0,
 } as const satisfies Partial<Record<CanonicalQuestionId, string | number | boolean>>);
 

@@ -124,6 +124,7 @@ test("numeric questions share defaults and preserve an owner answer across label
     ["How many hours per week are you available to work?", "40"],
     ["Desired weekly hours", "40"],
     ["5. How many years of related work experience have you obtained?", "0"],
+    ["What is your notice period? Please answer in the amount of days.", "0"],
     ["Years of Relevant Experience", "0"],
   ] as const) {
     const observed = field(label);

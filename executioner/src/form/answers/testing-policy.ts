@@ -49,7 +49,7 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
   if (/\b(?:salary|compensation|pay)\b/u.test(value)) return "compensation";
   if (/\b(?:authorized|authorised)\b.*\bwork\b/u.test(value)) return "authorization";
   if (/\b(?:consent|agree|acknowledge)\b/u.test(value)) return "consent";
-  if (/\b(?:start date|available to start|availability)\b/u.test(value)) return "availability";
+  if (/\b(?:start date|available to start|availability|notice period)\b/u.test(value)) return "availability";
   if (/\b(?:name|language)\b/u.test(value)) return "identity";
   if (/\b(?:employed|employment|associate|relative|relatives)\b/u.test(value)) return "employment";
   return "unknown";
