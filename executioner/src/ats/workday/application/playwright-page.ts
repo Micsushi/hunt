@@ -1607,11 +1607,12 @@ async function readApplicationSnapshot(
     let derivedBackingRuleMatched = false;
     let derivedVisibleUpstreamCount = 0;
     let derivedUpstreamBackingCommitted = false;
-    // Workday renders tokenized combobox selections beside the input inside the
-    // nearest automation-owned ancestor. `closest()` on the control itself can
-    // stop at the input, while the broader form-field owner can contain several
-    // unrelated selected items. Match the profile observer's ancestor semantics.
-    const selectionOwner = control.parentElement?.closest<HTMLElement>(
+    // Search mode nests the input inside monikerSearchBox, beside its tokens.
+    // Use the owning selection widget, not that search-only wrapper or a broad
+    // form-field owner that can contain unrelated selected items.
+    const selectionOwner = control.closest<HTMLElement>(
+      '[data-automation-id="multiselectInputContainer"], [data-automation-id="multiSelectContainer"]',
+    ) ?? control.parentElement?.closest<HTMLElement>(
       '[data-automation-id]',
     ) ?? fieldOwner;
     const selectedItems = selectionOwner === null ? [] :

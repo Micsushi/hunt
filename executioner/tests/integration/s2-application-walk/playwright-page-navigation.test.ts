@@ -1032,6 +1032,36 @@ test("tokenized source requires an exact nonempty controlled selectedValues entr
   });
 });
 
+test("nested prompt search verifies only the owning widget's committed selection", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-education">
+        <div data-automation-id="multiSelectContainer">
+          <div data-automation-id="multiselectInputContainer">
+            <span data-automation-id="selectedItem">Computer Science</span>
+            <div data-automation-id="monikerSearchBox">
+              <input id="searchBox" data-automation-id="searchBox" aria-required="true">
+            </div>
+          </div>
+        </div>
+        <span data-automation-id="selectedItem">Unrelated outer token</span>
+      </div></main>`);
+    for (const [selectedValues, expected] of [
+      [[{ id: "study-1", text: "Computer Science" }], "verified"],
+      [[], "unverified"],
+      [[{ id: "study-1", text: "Another Subject" }], "unverified"],
+    ] as const) {
+      await page.locator('input').evaluate((element, value) => {
+        (element as unknown as Record<string, unknown>).__reactProps$fixture = {
+          selectedValues: value,
+        };
+      }, selectedValues);
+      const observed = await application(page).observe(signal());
+      assert.equal(observed.ok && observed.value.requiredFields[0]?.verification, expected);
+    }
+  });
+});
+
 test("a token presentation mirror cannot verify an empty controlled backing value", async () => {
   await withPage(async (page) => {
     await page.setContent(`
