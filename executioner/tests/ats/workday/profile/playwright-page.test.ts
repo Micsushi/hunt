@@ -5179,7 +5179,7 @@ for (const initialDelay of [0, 150]) for (const discover of [false, true]) test(
   }
 });
 
-test("field-of-study discovery waits for its busy catalog without selecting an answer", async () => {
+test("field-of-study discovery uses its bounded busy catalog without selecting an answer", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -5194,6 +5194,10 @@ test("field-of-study discovery waits for its busy catalog without selecting an a
           prompt.hidden = false;
           prompt.innerHTML = '<div role="listbox"><div role="option">Partial List (First 500 Entries)</div><div role="option">All</div></div>';
           prompt.querySelectorAll('[role="option"]')[1].onclick = () => {
+            document.body.dataset.unboundedCatalogOpened = 'true';
+            prompt.setAttribute('aria-busy', 'true'); prompt.textContent = 'Loading';
+          };
+          prompt.querySelectorAll('[role="option"]')[0].onclick = () => {
             prompt.setAttribute('aria-busy', 'true'); prompt.textContent = 'Loading';
             setTimeout(() => {
               prompt.removeAttribute('aria-busy');
@@ -5207,6 +5211,7 @@ test("field-of-study discovery waits for its busy catalog without selecting an a
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     const control = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study");
     assert.deepEqual(control?.allowedOptions, ["Accounting"]);
+    assert.equal(await page.locator('body').getAttribute('data-unbounded-catalog-opened'), null);
     assert.equal(await page.locator('input[type="radio"]:checked').count(), 0);
     assert.equal(await page.locator('#prompt').isVisible(), false);
   } finally { await browser.close(); }

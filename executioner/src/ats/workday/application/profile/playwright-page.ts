@@ -626,7 +626,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
               'input, [role="checkbox"], [role="radio"]',
             ).count()))).every(count => count === 0)) {
           observationStage = "expand_catalog_scope";
-          await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
+          // Discover a bounded set of actual choices. The unbounded All request
+          // can time out server-side even when search and the partial list work.
+          await (await exactNormalizedOption(scopes, "Partial List (First 500 Entries)"))
+            .click({ timeout: this.#timeoutMs });
           // Large catalogs expose a busy prompt before mounting their listbox.
           // Wait for this control's request instead of treating loading as empty.
           const widget = await control.getAttribute("data-uxi-multiselect-id");
@@ -2164,8 +2167,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
     }
     if (scopes.length === 0) return false;
-    const all = await exactNormalizedOption(scopes, "All");
-    await all.click({ timeout: this.#timeoutMs });
+    const scope = await preferredPromptOption(
+      scopes, new Set(["partial list (first 500 entries)"]),
+    ) ?? await exactNormalizedOption(scopes, "All");
+    await scope.click({ timeout: this.#timeoutMs });
     await this.#page.waitForTimeout(100);
     await control.click({ timeout: this.#timeoutMs });
     await control.fill(value, { timeout: this.#timeoutMs });
