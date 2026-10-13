@@ -705,26 +705,42 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       throw error;
     } finally {
-      await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
-      if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
-      await this.#page.keyboard.press("Escape");
-      await control.blur({ timeout: this.#timeoutMs });
-      if (promptCatalog && (await visibleLocators(this.#page.locator(
-        '[data-automation-id="activeListContainer"][role="listbox"]',
-      ))).length > 0) {
-        const heading = (await this.#assertPageType()).locator('h1, h2, h3, h4, h5, h6, [role="heading"]').first();
-        if (await heading.count() === 1) await heading.click({ timeout: this.#timeoutMs });
-        // Workday scope popups can ignore Escape and outside clicks. Toggle
-        // only this control's still-open catalog, never a neighboring popup.
-        if (await exactPromptCatalogOwner(this.#page, control) !== undefined) {
-          await control.click({ timeout: this.#timeoutMs });
-          await control.blur({ timeout: this.#timeoutMs });
+      let cleanupStage = "release_catalog_handles";
+      try {
+        await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
+        cleanupStage = "restore_search";
+        if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
+        cleanupStage = "dismiss_catalog";
+        await this.#page.keyboard.press("Escape");
+        await control.blur({ timeout: this.#timeoutMs });
+        if (promptCatalog && (await visibleLocators(this.#page.locator(
+          '[data-automation-id="activeListContainer"][role="listbox"]',
+        ))).length > 0) {
+          const heading = (await this.#assertPageType()).locator('h1, h2, h3, h4, h5, h6, [role="heading"]').first();
+          if (await heading.count() === 1) await heading.click({ timeout: this.#timeoutMs });
+          // Workday scope popups can ignore Escape and outside clicks. Toggle
+          // only this control's still-open catalog, never a neighboring popup.
+          if (await exactPromptCatalogOwner(this.#page, control) !== undefined) {
+            await control.click({ timeout: this.#timeoutMs });
+            await control.blur({ timeout: this.#timeoutMs });
+          }
         }
-      }
-      await this.#page.waitForTimeout(25);
-      if (before !== await this.#resolvedReadback(resolved) ||
-          validationBefore !== await validationCleared(control)) {
-        throw new TypeError("profile option observation changed backing state");
+        cleanupStage = "verify_unchanged";
+        await this.#page.waitForTimeout(25);
+        if (before !== await this.#resolvedReadback(resolved) ||
+            validationBefore !== await validationCleared(control)) {
+          throw new TypeError("profile option observation changed backing state");
+        }
+      } catch (error) {
+        this.#trace?.("profile_option_observation_cleanup_failed", {
+          fieldId: resolved.fieldId,
+          failureStage: cleanupStage,
+          errorType: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "other",
+          underlyingError: error instanceof Error && error.message === "profile option observation changed backing state"
+            ? "backing_state_changed" : "unclassified",
+          durationMs: Math.round(performance.now() - started),
+        });
+        throw error;
       }
     }
     this.#trace?.("profile_option_observation_completed", {

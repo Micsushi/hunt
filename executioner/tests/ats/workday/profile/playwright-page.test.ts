@@ -3514,6 +3514,37 @@ test("education discovers a newly opened portal catalog and dismisses it without
   } finally { await browser.close(); }
 });
 
+test("option discovery reports cleanup validation changes without exposing answers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const events: { event: string; details: Readonly<Record<string, unknown>> }[] = [];
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-controls="source-options" aria-required="true">
+      </div>
+      <div id="source-options" role="listbox" hidden><div role="option">Private answer option</div></div>
+    </main><script>
+      const input = document.querySelector('input'), popup = document.querySelector('[role="listbox"]');
+      input.onclick = () => { popup.hidden = false; };
+      input.onblur = () => { input.setAttribute('aria-invalid', 'true'); };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+      trace: (event, details) => { events.push({ event, details: { ...details } }); },
+    });
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    const failure = events.find(({ event }) => event === "profile_option_observation_cleanup_failed");
+    assert.equal(failure?.details.fieldId, "source.how_did_you_hear");
+    assert.equal(failure?.details.failureStage, "verify_unchanged");
+    assert.equal(failure?.details.underlyingError, "backing_state_changed");
+    assert.equal(JSON.stringify(events).includes("Private answer option"), false);
+    assert.equal(events.some(({ event }) => event === "profile_option_observation_completed"), false);
+  } finally { await browser.close(); }
+});
+
 test("source option observation waits for its delayed owned catalog without selecting", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
