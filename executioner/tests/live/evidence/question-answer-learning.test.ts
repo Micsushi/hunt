@@ -45,7 +45,7 @@ test("synthetic attachment learning retains verification and an editable owner r
       questionId: questionId("question-transcript"), field,
       intent: { kind: "resume_upload", behavior: "file_upload", fieldId: field.fieldId,
         target: field.target, artifact: createResumeArtifactFixture(), provenance: "resume_verified" },
-      lane: "synthetic_test_default", protectedCategory: null, generatedDefault: false,
+      lane: "synthetic_test_default", protectedCategory: null, generatedDefault: true,
       conditionalReveal: true,
     }, 1);
     assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);

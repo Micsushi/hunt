@@ -665,6 +665,7 @@ function strategy(
   protectedCategory: string | null,
   generatedDefault: boolean,
 ): QuestionAnswerLearningStrategy {
+  if (intent.kind === "resume_upload") return "resume";
   if (generatedDefault) {
     if (intent.kind === "toggle") return "generated_toggle";
     if (intent.kind === "date") return "generated_date";

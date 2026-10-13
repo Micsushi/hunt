@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright";
 import type { UploadedArtifactReadback } from "../../../src/browser/adapter.ts";
 import { PlaywrightBrowserSession } from "../../../src/browser/session.ts";
@@ -18,10 +21,16 @@ import { testIds } from "../playwright-fixture.ts";
 import { createQuestionnaireSemanticAuthority } from "../../../src/browser/playwright-live/private/questionnaire-semantic-authority.ts";
 
 import { questionnaireTargetPresent } from "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
+import { createQuestionAnswerLearningCapture } from "../../../src/live/evidence/question-answer-learning.ts";
+import { liveApplicationExecutionPolicy } from "../../../src/contracts/application-execution-policy.ts";
 
 test("questionnaire upload verifies through a separate browser authority after native input clears", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  const evidenceRoot = await mkdtemp(join(tmpdir(), "hunt-upload-learning-browser-"));
+  const learning = createQuestionAnswerLearningCapture({ root: evidenceRoot,
+    mode: "synthetic_test_non_submittable",
+    executionPolicy: liveApplicationExecutionPolicy("synthetic_test_non_submittable") });
   try {
     await page.setContent(`<html data-hunt-page-id="page-upload"><body>
       <div data-automation-id="formField-upload">
@@ -61,6 +70,14 @@ test("questionnaire upload verifies through a separate browser authority after n
       observationFor: () => undefined,
       fieldPresent: field => questionnaireTargetPresent(page, field.target),
       driver: authority.driver, verifier: authority.verifier,
+      recordAttempt: input => {
+        learning.recordAttempt(input);
+        learning.monitorAck({ operationId: input.operationId, attempt: 1, moment: "before_mutation" });
+      },
+      recordAnswer: input => {
+        learning.monitorAck({ operationId: input.operationId, attempt: 1, moment: "after_readback" });
+        learning.record(input);
+      },
     });
     const resume = createResumeArtifactFixture();
     assert.ok((await useResumeArtifactUpload(resume, () => ({ ok: true as const, value: undefined }))).ok);
@@ -79,6 +96,13 @@ test("questionnaire upload verifies through a separate browser authority after n
     assert.equal(attempts, 1);
     assert.equal(await page.locator('input').evaluate(element => (element as HTMLInputElement).files!.length), 0);
     assert.equal(result.ok && result.value.kind, "verified", JSON.stringify(result));
+    assert.match(learning.write() ?? "", /^[0-9a-f]{64}$/u);
+    const learned = JSON.parse(await readFile(join(evidenceRoot, "question-answer-learning.json"), "utf8"));
+    assert.equal(learned.questions[0].strategy, "resume");
+    assert.equal(learned.questions[0].terminalDisposition, "verified");
+    assert.equal(learned.questions[0].replaceWithOwnerAnswer, true);
+    const pending = JSON.parse(await readFile(join(evidenceRoot, "pending-profile-questions.json"), "utf8"));
+    assert.equal(pending.pendingProfileQuestions[0].needsUserValue, true);
     await authority.close(new AbortController().signal);
     const fresh = makeSession();
     const observed = await fresh.observe({ sessionId, pageId }, new AbortController().signal);
@@ -89,5 +113,5 @@ test("questionnaire upload verifies through a separate browser authority after n
     assert.ok(changed.ok);
     assert.deepEqual(changed.value.targets[0]?.readback, { kind: "unavailable" });
     await fresh.close({ sessionId }, new AbortController().signal);
-  } finally { await browser.close(); }
+  } finally { await browser.close(); await rm(evidenceRoot, { recursive: true, force: true }); }
 });
