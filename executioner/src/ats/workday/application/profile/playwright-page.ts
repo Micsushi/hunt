@@ -1944,7 +1944,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       // Read one result window together. Virtualized rows can disappear between
       // separate innerText calls as scrolling or an Enter commit updates it.
       const labels = options === undefined ? [] : await options.allInnerTexts();
-      visibleOptions = labels.map((_, index) => options!.nth(index));
+      // Virtualized rows can change position before activation. Keep the
+      // answer identity in the locator so a shifted row cannot receive its click.
+      visibleOptions = labels.map(label => options!.filter({
+        hasText: new RegExp("^\\s*" + label.trim().split(/\s+/u)
+          .map(part => part.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&"))
+          .join("\\s+") + "\\s*$", "u"),
+      }).first());
       exact = [];
       const literal: Locator[] = [];
       for (const [index, text] of labels.slice(0, 128).entries()) {

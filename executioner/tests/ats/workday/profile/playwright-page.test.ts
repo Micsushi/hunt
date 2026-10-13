@@ -2914,7 +2914,7 @@ for (const searchOnEnter of [false, true]) test(`empty multi-select ${searchOnEn
   } finally { await browser.close(); }
 });
 
-for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} exact matches before qualified aliases`, async () => {
+for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} exact matches before qualified aliases despite row movement`, async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -2943,6 +2943,16 @@ for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} 
             input.value = ''; choices.hidden = true;
           };
         });
+        const originalGetAttribute = Element.prototype.getAttribute;
+        let moved = false;
+        Element.prototype.getAttribute = function(name) {
+          const result = originalGetAttribute.call(this, name);
+          if (!moved && name === 'aria-selected' && this.parentElement === choices) {
+            moved = true;
+            choices.prepend(choices.lastElementChild);
+          }
+          return result;
+        };
       </script>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1000 });
     const signal = AbortSignal.any([]);
