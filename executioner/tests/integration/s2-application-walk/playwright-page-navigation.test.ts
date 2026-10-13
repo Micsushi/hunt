@@ -511,6 +511,34 @@ test("repeated Voluntary Disclosures and Self Identify pages verify distinct tra
   });
 });
 
+test("distinct questionnaire roots advance before destination option discovery", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`
+      <main data-automation-id="applyFlowVoluntaryDisclosuresPage">
+        <label>Gender <input required value="ready"></label>
+        <button id="next">Save and Continue</button>
+      </main>
+      <script>
+        document.querySelector('#next').addEventListener('click', () => {
+          document.querySelector('main').hidden = true;
+          document.body.insertAdjacentHTML('beforeend',
+            '<main data-automation-id="applyFlowSelfIdentifyPage">' +
+            '<label>Language <button aria-haspopup="listbox" aria-required="true">English</button></label>' +
+            '<button>Save and Continue</button></main>');
+        });
+      </script>
+    `);
+    const adapter = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 500,
+      navigationSettleTimeoutMs: 1_000,
+    });
+    const result = await adapter.next(await questionnaireRequest(
+      adapter, ["questionnaire", "pre_review"],
+    ), signal());
+    assert.deepEqual(result, { ok: true, value: { advanced: true } });
+  });
+});
+
 test("same-selector questionnaire remount accepts the new active structural step", async () => {
   await withPage(async (page) => {
     await page.setContent(`

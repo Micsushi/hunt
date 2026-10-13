@@ -965,7 +965,11 @@ async function readApplicationSnapshot(
   const visibleRoots = roots.flatMap(([page, selector]) =>
     [...document.querySelectorAll<HTMLElement>(selector)]
       .filter(visible)
-      .map((root) => ({ page, root, selector }))
+      .map((root) => ({
+        page,
+        root,
+        selector: `[data-automation-id="${CSS.escape(root.dataset.automationId!)}"]`,
+      }))
   );
   const physicalRoots = visibleRoots.filter(({ root: candidate }) =>
     visibleRoots.every(({ root: component }) =>
