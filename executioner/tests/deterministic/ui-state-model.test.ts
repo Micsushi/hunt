@@ -27,6 +27,7 @@ const committed = (type: (typeof sharedUiTypes)[number]): SharedUiStateInput => 
 
 test("skill aliases share catalog qualifiers without merging distinct skills or other questions", () => {
   assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", '["Python (Programming Language)","R"]', '["R (Programming Language)","Python"]'), true);
+  assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", '["C++ Programming Language","R"]', '["C++","R Programming Language"]'), true);
   assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", "Python IDLE", '["Python"]'), false);
   assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", "JavaScript (Programming Language)", '["Java"]'), false);
   assert.equal(sharedUiKnownSemanticAliasMatches("skills.values", '["Python","Python (Programming Language)"]', '["Python","Python"]'), false);

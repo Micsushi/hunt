@@ -2944,14 +2944,47 @@ for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} 
     const signal = AbortSignal.any([]);
     const control = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
     const commit = adapter.commit({ controlId: control.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
-    if (exactCopies === 2) {
-      await assert.rejects(commit, /ambiguous/u);
-      assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
-    } else {
-      await commit;
-      assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback,
-        exactCopies === 1 ? "Python" : "Python (Programming Language)");
-    }
+    await commit;
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 1);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback,
+      exactCopies > 0 ? "Python" : "Python (Programming Language)");
+  } finally { await browser.close(); }
+});
+
+test("skill search finds virtualized options and queries qualified equivalents", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search" aria-controls="choices">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" style="height:32px;overflow:auto" hidden></div>
+      <script>
+        const input = document.querySelector('input'), choices = document.getElementById('choices');
+        const render = () => {
+          const label = input.value.includes('programming language') ? 'C++ Programming Language'
+            : input.value === 'C' && choices.scrollTop > 20 ? 'C' : 'C++ STL';
+          choices.innerHTML = '<div style="height:80px"><div role="option">' + label + '</div></div>';
+          choices.querySelector('[role="option"]').onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = label; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        };
+        choices.onscroll = render;
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; choices.scrollTop = 0; render(); }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 600 });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", '["C","C++"]', '["C","C++"]')], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["C", "C++ Programming Language"]);
   } finally { await browser.close(); }
 });
 

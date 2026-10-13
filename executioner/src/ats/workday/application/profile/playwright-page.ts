@@ -1904,8 +1904,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction: MutableInteraction,
     behavior: "search_select" | "multi_select",
     priorCatalogs: readonly (ElementHandle | null)[] | undefined,
+    searchSkillAliases = true,
   ): Promise<boolean> {
     const acceptedLabels = this.#selectionOptionLabels(control, value);
+    const skill = [...this.#controls.values()].some(candidate =>
+      candidate.locator === control && candidate.fieldId === "skills.values");
     // A submitted search can still be loading after the initial animation.
     // Do not fall through to clearing/retyping and cancel its pending request.
     const deadline = Date.now() + (await control.getAttribute("enterkeyhint") === "search"
@@ -1941,10 +1944,28 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       // catalog also offers the requested label verbatim.
       if (literal.length > 0) exact = literal;
       if (exact.length > 0 || Date.now() >= deadline) break;
+      if (owner !== undefined) await advanceOptionWindow(owner);
       await this.#page.waitForTimeout(50);
     } while (Date.now() < deadline);
-    if (exact.length === 0) return false;
-    if (exact.length > 1) {
+    if (exact.length === 0) {
+      // Broad skill searches may omit the exact language from their result
+      // window. Search the same semantic aliases used for independent readback.
+      if (searchSkillAliases && skill) {
+        for (const alias of acceptedLabels) {
+          if (alias === normalize(value)) continue;
+          await this.#page.keyboard.press("Escape");
+          await control.fill(alias, { timeout: this.#timeoutMs });
+          await control.press("Enter", { timeout: this.#timeoutMs });
+          if (await this.#selectSubmittedPromptOption(
+            control, value, interaction, behavior, priorCatalogs, false,
+          )) return true;
+        }
+      }
+      return false;
+    }
+    // A skill catalog can contain multiple IDs for the same canonical skill.
+    // Select one equivalent entry, never duplicate tokens or a related product.
+    if (exact.length > 1 && !skill) {
       throw new TypeError("Workday submitted multi-select option is ambiguous");
     }
 
@@ -2542,6 +2563,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       };
       if (textLeaves.length > 1) {
         throw new TypeError("Workday selectable leaf is ambiguous");
+      }
+      if (await advanceOptionWindow(listbox)) {
+        await this.#page.waitForTimeout(50);
+        continue;
       }
       const category = await expandableCategory(categories, value, expandedCategories);
       if (category !== undefined) {
@@ -3289,6 +3314,17 @@ async function visibleLocators(locator: Locator): Promise<Locator[]> {
   const matches = Array.from({ length: count }, (_, index) => locator.nth(index));
   const visible = await Promise.all(matches.map((item) => item.isVisible()));
   return matches.filter((_, index) => visible[index]);
+}
+
+async function advanceOptionWindow(owner: Locator): Promise<boolean> {
+  return owner.evaluate(element => {
+    const before = element.scrollTop;
+    const next = Math.min(element.scrollHeight - element.clientHeight,
+      before + Math.max(1, Math.floor(element.clientHeight * 0.8)));
+    if (element.clientHeight <= 0 || next <= before) return false;
+    element.scrollTop = next;
+    return element.scrollTop > before;
+  });
 }
 
 async function exactObservedOptionOwner(

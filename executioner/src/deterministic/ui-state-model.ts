@@ -353,8 +353,8 @@ export function sharedSkillOptionLabels(value: string): ReadonlySet<string> {
   // A catalog type qualifier does not change the programming-language skill.
   // Other qualifiers and related products remain distinct answers.
   const normalized = normalizeOption(value);
-  const canonical = /^(.+) \(programming language\)$/u.exec(normalized)?.[1] ?? normalized;
-  return new Set([canonical, `${canonical} (programming language)`]);
+  const canonical = /^(.+?)(?: \(programming language\)| programming language)$/u.exec(normalized)?.[1] ?? normalized;
+  return new Set([canonical, `${canonical} (programming language)`, `${canonical} programming language`]);
 }
 
 function contract(
