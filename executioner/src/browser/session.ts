@@ -276,6 +276,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
           internallyRebound = currentTarget === target && mayRebindInsideAdapter;
           if (currentTarget === undefined || !compatible(currentTarget, mutation)) {
             outcome = current !== undefined && current.length > 1 ? "ambiguous" : "invalid";
+          } else if (mutation.kind === "upload" && currentTarget.readback.kind === "upload" &&
+              currentTarget.readback.resumeId === mutation.artifact.resumeId &&
+              currentTarget.readback.sha256 === mutation.artifact.sha256) {
+            outcome = "applied";
           } else {
             outcome = await applyMutation(
               active.page, currentTarget, mutation, upload, Math.min(5_000, this.#timeoutMs),

@@ -43,6 +43,7 @@ test("questionnaire upload verifies through a separate browser authority after n
     await page.locator('input').evaluate(node => {
       const element = node as HTMLInputElement;
       element.onchange = () => {
+        element.dataset.uploadCount = String(Number(element.dataset.uploadCount ?? 0) + 1);
         const name = element.files![0]!.name;
         element.value = "";
         setTimeout(() => element.parentElement!.insertAdjacentHTML("beforeend",
@@ -62,6 +63,7 @@ test("questionnaire upload verifies through a separate browser authority after n
       createVerifier: createFieldVerifier, prepare: async () => {},
     });
     let attempts = 0;
+    let captureLearning = true;
     const handler = createQuestionnairePageHandler({
       profileQuery: { async query() { return { ok: true as const, value: { kind: "profile_answer_missing" as const } }; } },
       narrative: createConfiguredNarrativeProvider({ revision: "upload-v1", template: undefined }),
@@ -71,17 +73,19 @@ test("questionnaire upload verifies through a separate browser authority after n
       fieldPresent: field => questionnaireTargetPresent(page, field.target),
       driver: authority.driver, verifier: authority.verifier,
       recordAttempt: input => {
+        if (!captureLearning) return;
         learning.recordAttempt(input);
         learning.monitorAck({ operationId: input.operationId, attempt: 1, moment: "before_mutation" });
       },
       recordAnswer: input => {
+        if (!captureLearning) return;
         learning.monitorAck({ operationId: input.operationId, attempt: 1, moment: "after_readback" });
         learning.record(input);
       },
     });
     const resume = createResumeArtifactFixture();
     assert.ok((await useResumeArtifactUpload(resume, () => ({ ok: true as const, value: undefined }))).ok);
-    const result = await handler.complete({
+    const completion = {
       mode: "synthetic_test_non_submittable", answerFallbackPolicy: "deterministic_site_valid_editable",
       journeyId: journeyId("journey_questionnaire_upload_1"),
       sessionId, pageId, guardRevision: guardRevision("policy-s1"),
@@ -92,7 +96,8 @@ test("questionnaire upload verifies through a separate browser authority after n
         label: boundedText("Please upload your transcript."), required: true, behavior: "file_upload",
         options: [], state: "empty",
       }] },
-    }, new AbortController().signal);
+    } as const;
+    const result = await handler.complete(completion, new AbortController().signal);
     assert.equal(attempts, 1);
     assert.equal(await page.locator('input').evaluate(element => (element as HTMLInputElement).files!.length), 0);
     assert.equal(result.ok && result.value.kind, "verified", JSON.stringify(result));
@@ -103,6 +108,10 @@ test("questionnaire upload verifies through a separate browser authority after n
     assert.equal(learned.questions[0].replaceWithOwnerAnswer, true);
     const pending = JSON.parse(await readFile(join(evidenceRoot, "pending-profile-questions.json"), "utf8"));
     assert.equal(pending.pendingProfileQuestions[0].needsUserValue, true);
+    captureLearning = false;
+    const repeated = await handler.complete(completion, new AbortController().signal);
+    assert.equal(repeated.ok && repeated.value.kind, "verified", JSON.stringify(repeated));
+    assert.equal(await page.locator('input').getAttribute('data-upload-count'), "1");
     await authority.close(new AbortController().signal);
     // A new run has no in-memory upload history, but does have its admitted artifact.
     uploadedArtifacts.clear();

@@ -61,7 +61,7 @@ export function semanticSyntheticTestDefault(label: string): boolean | string | 
   const trailingDigits = /\blast (\d{1,2}|four) digits?\b/u.exec(value);
   if (trailingDigits !== null && /\b(?:ssn|social security|identification|identifier)\b/u.test(value)) {
     const count = trailingDigits[1] === "four" ? 4 : Number(trailingDigits[1]);
-    if (count >= 1 && count <= 12) return "0".repeat(count);
+    if (count >= 1 && count <= 12) return "1".repeat(count);
   }
   const type = testingQuestionSemanticType(label);
   if (type === "qualification_requirement") return true;

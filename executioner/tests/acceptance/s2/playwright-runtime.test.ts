@@ -338,8 +338,11 @@ test("questionnaire popup hydration ignores a stale unrelated portal across cont
           const popup = document.createElement('div');
           popup.id = 'target-popup';
           popup.setAttribute('role', 'listbox');
-          popup.innerHTML = '<div role="option">Yes</div><div role="option">No</div>';
+          popup.innerHTML = '<div role="option">Select One</div>';
           document.body.append(popup);
+          setTimeout(() => {
+            popup.innerHTML = '<div role="option">Yes</div><div role="option">No</div>';
+          }, 150);
           button.setAttribute('aria-expanded', 'true');
         });
         bind(document.querySelector('#mcvf1'));

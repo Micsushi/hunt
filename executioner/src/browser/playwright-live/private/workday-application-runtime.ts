@@ -3575,7 +3575,9 @@ async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> 
           '[data-automation-id="formField"], [data-automation-id^="formField-"]',
         ) === field);
       const labels = [...new Set(options.map((option) => normalize(option.textContent)).filter(Boolean))];
-      if (labels.length > 0 && labels.length <= maxOptions && labels.every((label) => label.length <= 512)) {
+      const hasAnswer = labels.some((label) =>
+        !/^(?:select|choose|please select|select one|choose one|none selected)$/iu.test(label));
+      if (hasAnswer && labels.length <= maxOptions && labels.every((label) => label.length <= 512)) {
         control.setAttribute("data-hunt-popup-options", JSON.stringify(labels));
       }
     }
@@ -3711,7 +3713,9 @@ export async function hydrateQuestionnairePopupOptions(
       `[data-hunt-popup-hydration-owner="${targetToken}"] ` +
       '[data-automation-id="promptLeafNode"]:visible:not([data-automation-id="selectedItemList"] *)',
   );
-  await options.first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
+  await options.filter({
+    hasNotText: /^\s*(?:select|choose|please select|select one|choose one|none selected)\s*$/iu,
+  }).first().waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5_000) });
   let labels = [...new Set((await options.allInnerTexts())
     .map((value) => value.normalize("NFC").replace(/\s+/gu, " ").trim())
     .filter(Boolean))];
