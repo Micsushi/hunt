@@ -52,6 +52,8 @@ export interface PlaywrightBrowserSessionOptions {
     readonly page: Page;
     readonly sessionId: BrowserSessionResult["sessionId"];
     readonly pageId: BrowserSessionResult["pageId"];
+    // Metadata only; each observer still verifies the current upload UI independently.
+    readonly uploadedArtifacts?: Map<string, UploadedArtifactReadback>;
   };
   readonly ids: GeneratedIdAllocator;
   readonly timeoutMs?: number;
@@ -72,7 +74,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
   #invalidated = false;
   #targets = new Map<string, readonly ResolvedBrowserTarget[]>();
   readonly #seenTargets = new Set<string>();
-  readonly #uploads = new Map<string, UploadedArtifactReadback>();
+  readonly #uploads: Map<string, UploadedArtifactReadback>;
+  readonly #sharedUploads: boolean;
   readonly #mutationOperations = new Set<string>();
   readonly #navigationOperations = new Set<string>();
 
@@ -80,6 +83,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
     if (options.attached !== undefined && options.context !== undefined) {
       throw new TypeError("attached page cannot be combined with a browser context");
     }
+    this.#uploads = options.attached?.uploadedArtifacts ?? new Map();
+    this.#sharedUploads = options.attached?.uploadedArtifacts !== undefined;
     this.#externalContext = options.context;
     this.#ids = options.ids;
     this.#timeoutMs = options.timeoutMs ?? 5_000;
@@ -152,7 +157,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
       this.#closedSessionId = undefined;
       this.#targets.clear();
       this.#seenTargets.clear();
-      this.#uploads.clear();
+      if (!this.#sharedUploads) this.#uploads.clear();
       this.#mutationOperations.clear();
       this.#navigationOperations.clear();
       return {
@@ -459,7 +464,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     this.#pageId = undefined;
     this.#targets.clear();
     this.#seenTargets.clear();
-    this.#uploads.clear();
+    if (!this.#sharedUploads) this.#uploads.clear();
     this.#mutationOperations.clear();
     this.#navigationOperations.clear();
     if (!this.#attached) await page?.close().catch(() => undefined);

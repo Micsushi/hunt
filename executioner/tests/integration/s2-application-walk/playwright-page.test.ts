@@ -39,6 +39,10 @@ test("conditional questionnaire uploads retain visible ownership and required fi
       assert.equal(truth.value.requiredFields[0]?.verification, "unverified");
     }
     const token = (await page.locator('input[type="file"]').getAttribute("data-hunt-target-token"))!;
+    assert.equal(await questionnaireTargetPresent(page, token), true);
+    await page.locator("#attachment").evaluate(element => { element.setAttribute("hidden", ""); });
+    assert.equal(await questionnaireTargetPresent(page, token), false);
+    await page.locator("#attachment").evaluate(element => { element.removeAttribute("hidden"); });
     const uploaded = { resumeId: upstreamResumeId("resume-upload-fixture"), sha256: "a".repeat(64) as never };
     const uploads = new Map([[token, uploaded]]);
     for (const [name, status, copies, expected] of [
@@ -110,6 +114,7 @@ import {
 import {
   bindQuestionnaireTargets,
   monitorQuestionnaireCoverage,
+  questionnaireTargetPresent,
   hydrateQuestionnairePopupOptions,
   questionnairePopupHydrationTargets,
 } from "../../../src/browser/playwright-live/private/workday-application-runtime.ts";

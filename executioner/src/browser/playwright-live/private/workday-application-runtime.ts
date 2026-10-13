@@ -40,6 +40,7 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
+import type { UploadedArtifactReadback } from "../../adapter.ts";
 import { clickWorkdayApplicationHeading, expandWorkdayPromptCategory, workdayPromptOpener } from "../../adapter.ts";
 import {
   annotateCheckboxGroups,
@@ -355,6 +356,7 @@ export class OwnedWorkdayApplicationRuntime {
   readonly #navigationMonitorAttempts = new Map<string, number>();
   readonly #mutationMonitorAttempts = new Map<string, number>();
   readonly #verifiedQuestionnaireIntents = new Map<string, string>();
+  readonly #questionnaireUploads = new Map<string, Map<string, UploadedArtifactReadback>>();
   readonly #questionnaireRequiredCounts = new Map<string, number>();
   #questionnaireAnswerResolver: ApplicationAnswerResolver | undefined;
   #profileMutationAttempted = false;
@@ -394,6 +396,7 @@ export class OwnedWorkdayApplicationRuntime {
     this.#session = undefined;
     this.#reviewExpected.clear();
     this.#verifiedQuestionnaireIntents.clear();
+    this.#questionnaireUploads.clear();
     this.#questionnaireRequiredCounts.clear();
     this.#questionnaireAnswerResolver = undefined;
   }
@@ -1203,8 +1206,10 @@ export class OwnedWorkdayApplicationRuntime {
       );
       const activeSemanticSessionId =
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
+      const uploadedArtifacts = this.#questionnaireUploads.get(input.pageId) ?? new Map<string, UploadedArtifactReadback>();
+      this.#questionnaireUploads.set(input.pageId, uploadedArtifacts);
       const createSemanticBrowser = () => new PlaywrightBrowserSession({
-        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId },
+        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId, uploadedArtifacts },
         ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
         timeoutMs: this.#timeoutMs,
       });
@@ -1427,10 +1432,7 @@ export class OwnedWorkdayApplicationRuntime {
         fieldPresent: async (field, currentSignal) => {
           this.#assertAuthorized(currentSignal);
           await bindQuestionnaireTargets(page, input.pageId);
-          const target = page.locator(`[data-hunt-target-token="${field.target}"]`);
-          const count = await target.count();
-          if (count > 1) throw new TypeError("ambiguous questionnaire target");
-          return count === 1 && await target.isVisible();
+          return questionnaireTargetPresent(page, field.target);
         },
         previouslyVerified: async ({ pageId, field, intent }) => {
           const prior = this.#verifiedQuestionnaireIntents.get(
@@ -3106,6 +3108,22 @@ function playwrightPage(page: PersistentPage): Page {
     throw new TypeError("Playwright page capability unavailable");
   }
   return page as Page;
+}
+
+export async function questionnaireTargetPresent(page: Page, token: string): Promise<boolean> {
+  const target = page.locator(`[data-hunt-target-token="${token}"]`);
+  const count = await target.count();
+  if (count > 1) throw new TypeError("ambiguous questionnaire target");
+  if (count === 0) return false;
+  if (await target.isVisible()) return true;
+  return target.evaluate(element => {
+    const owner = element instanceof HTMLInputElement && element.type === "file"
+      ? element.closest<HTMLElement>('[data-automation-id$="-FileUpload"]') : null;
+    if (owner === null || owner.hidden || owner.getAttribute("aria-hidden") === "true") return false;
+    const style = getComputedStyle(owner);
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      style.visibility !== "collapse" && owner.getClientRects().length > 0;
+  });
 }
 
 export async function bindQuestionnaireTargets(
