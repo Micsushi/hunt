@@ -140,7 +140,7 @@ test("factory wires the private hold without widening the public browser facade"
   assert.equal(factory.includes("unsettledInspectionHold"), true);
   assert.match(
     factory,
-    /const unsettledInspectionHold = options\.externalMonitor === undefined\s+\? inspectionHold\s+: undefined/u,
+    /const unsettledInspectionHold = options\.externalMonitor === undefined &&\s+options\.applicationRuntime\?\.externalMonitor === undefined\s+\? inspectionHold\s+: undefined/u,
   );
   assert.doesNotMatch(
     factory,

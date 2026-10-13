@@ -65,7 +65,10 @@ export function createPlaywrightPersistentBrowserSession(
     ? undefined
     : () => delay(inspection.holdMs));
   const inspectionHold = holdAction === undefined ? undefined : oneShot(holdAction);
-  const unsettledInspectionHold = options.externalMonitor === undefined
+  // Application runs reserve the operator hold for their final page. A failed
+  // sign-in diagnostic must not consume that hold when account capture is off.
+  const unsettledInspectionHold = options.externalMonitor === undefined &&
+      options.applicationRuntime?.externalMonitor === undefined
     ? inspectionHold
     : undefined;
   return new PlaywrightPersistentBrowserSession({
