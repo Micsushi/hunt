@@ -2933,6 +2933,10 @@ for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} 
           if (event.key === 'Escape') choices.hidden = true;
         };
         choices.querySelectorAll('[role="option"]').forEach(option => {
+          const leaf = document.createElement('div'); leaf.dataset.automationId = 'promptLeafNode';
+          leaf.textContent = option.textContent; option.replaceChildren(leaf);
+          const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+          checkbox.onclick = event => event.stopPropagation(); leaf.prepend(checkbox);
           option.onclick = () => {
             const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
             token.textContent = option.textContent; document.getElementById('selected').append(token);
@@ -5156,6 +5160,39 @@ for (const initialDelay of [0, 150]) for (const discover of [false, true]) test(
   } finally {
     await browser.close();
   }
+});
+
+test("field-of-study discovery waits for its busy catalog without selecting an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-education-fieldOfStudy">
+        <input id="education-1--fieldOfStudy" data-uxi-multiselect-id="study-catalog">
+      </div></main>
+      <div id="prompt" data-automation-id="responsiveMonikerPrompt" data-associated-widget="study-catalog" hidden></div>
+      <script>
+        const input = document.querySelector('input'), prompt = document.getElementById('prompt');
+        input.onclick = () => {
+          prompt.hidden = false;
+          prompt.innerHTML = '<div role="listbox"><div role="option">Partial List (First 500 Entries)</div><div role="option">All</div></div>';
+          prompt.querySelectorAll('[role="option"]')[1].onclick = () => {
+            prompt.setAttribute('aria-busy', 'true'); prompt.textContent = 'Loading';
+            setTimeout(() => {
+              prompt.removeAttribute('aria-busy');
+              prompt.innerHTML = '<div role="listbox"><div role="option"><input type="radio">Accounting</div></div>';
+            }, 6000);
+          };
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') prompt.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study");
+    assert.deepEqual(control?.allowedOptions, ["Accounting"]);
+    assert.equal(await page.locator('input[type="radio"]:checked').count(), 0);
+    assert.equal(await page.locator('#prompt').isVisible(), false);
+  } finally { await browser.close(); }
 });
 
 test("My Experience multi-select owns a local Workday prompt without aria-controls", async () => {

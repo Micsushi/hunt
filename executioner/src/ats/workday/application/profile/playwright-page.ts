@@ -627,6 +627,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             ).count()))).every(count => count === 0)) {
           observationStage = "expand_catalog_scope";
           await (await exactNormalizedOption(scopes, "All")).click({ timeout: this.#timeoutMs });
+          // Large catalogs expose a busy prompt before mounting their listbox.
+          // Wait for this control's request instead of treating loading as empty.
+          const widget = await control.getAttribute("data-uxi-multiselect-id");
+          if (widget !== null) {
+            await this.#page.locator(
+              `[data-automation-id="responsiveMonikerPrompt"][data-associated-widget=${JSON.stringify(widget)}][aria-busy="true"]`,
+            ).waitFor({ state: "hidden", timeout: 30_000 });
+          }
           // Scope navigation opens its leaves asynchronously. Clicking the
           // input again toggles that pending catalog closed.
           const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
@@ -1980,7 +1988,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     interaction.visibleOptionCount = visibleOptions.length;
     interaction.selectedOptionOrdinal = visibleOptions.indexOf(option) + 1;
     interaction.optionFocused = await option.getAttribute("aria-selected") === "true";
-    await (inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
+    // The Workday row owns selection; its nested checkbox can toggle without
+    // committing a token to the form.
+    const leaves = await visibleLocators(option.locator('[data-automation-id="promptLeafNode"]'));
+    await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option)).click({ timeout: this.#timeoutMs });
     interaction.optionActivated = true;
     const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
     do {
