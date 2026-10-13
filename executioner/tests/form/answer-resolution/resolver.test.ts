@@ -119,15 +119,16 @@ test("political exposure uses its visible options without consulting veteran fac
 
 test("numeric questions share defaults and preserve an owner answer across labels", async () => {
   const signal = new AbortController().signal;
-  for (const [label, expected] of [
+  for (const [label, expected, behavior = "text"] of [
     ["Please indicate your expected number of weekly hours:", "40"],
     ["How many hours per week are you available to work?", "40"],
     ["Desired weekly hours", "40"],
     ["5. How many years of related work experience have you obtained?", "0"],
     ["What is your notice period? Please answer in the amount of days.", "0"],
     ["Years of Relevant Experience", "0"],
+    ["How many years of work experience do you have?", "0", "textarea"],
   ] as const) {
-    const observed = field(label);
+    const observed = field(label, behavior);
     if (expected === "40") assert.equal(testingQuestionSemanticType(label), "availability");
     const missing = resolverWith({ kind: "profile_answer_missing" }).resolver;
     const generated = await missing.resolve(syntheticRequest(observed), signal);

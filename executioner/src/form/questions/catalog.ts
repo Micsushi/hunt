@@ -132,7 +132,7 @@ const questionAliasCatalog = Object.freeze([
       "Years of Relevant Experience",
       "Years of Experience",
     ],
-    ["text", "select", "listbox"],
+    ["text", "textarea", "select", "listbox"],
     { kind: "profile", factId: "years_experience", ownerProvidedOnly: true },
   ),
   aliasEntry(
