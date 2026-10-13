@@ -1639,17 +1639,21 @@ async function readApplicationSnapshot(
         inspected.add(value);
         if (Array.isArray(value)) return value.length > 0 && value.some((item) => hasValue(item, depth + 1));
         const record = value as Record<string, unknown>;
-        // Workday's tokenized source widget stores selectedValues as ID/text
-        // records, not scalar values. Match its controlled selection to the
-        // exact owning token; a display token or available option alone fails.
-        if (Array.isArray(record.selectedValues) && record.selectedValues.length === 1 && owner !== null) {
-          const selected = record.selectedValues[0] as Record<string, unknown> | null;
+        // Match every controlled selection to its owning token. This also
+        // covers saved multi-selects whose search input is intentionally empty.
+        if (Array.isArray(record.selectedValues) && record.selectedValues.length > 0 && owner !== null) {
           const tokens = [...owner.querySelectorAll<HTMLElement>('[data-automation-id="selectedItem"]')]
             .filter(item => visible(item) && text(item.textContent) !== "");
-          if (selected !== null && typeof selected === "object" &&
-              typeof selected.id === "string" && text(selected.id) !== "" &&
-              typeof selected.text === "string" && text(selected.text) !== "" &&
-              tokens.length === 1 && text(tokens[0]!.textContent) === text(selected.text)) return true;
+          const remaining = tokens.map(item => text(item.textContent));
+          if (tokens.length === record.selectedValues.length && record.selectedValues.every(selected => {
+            if (selected === null || typeof selected !== "object" ||
+                typeof selected.id !== "string" || text(selected.id) === "" ||
+                typeof selected.text !== "string" || text(selected.text) === "") return false;
+            const index = remaining.indexOf(text(selected.text));
+            if (index < 0) return false;
+            remaining.splice(index, 1);
+            return true;
+          })) return true;
         }
         return ["value", "selectedValue", "selectedOption", "selectedItem", "selectedItems"]
           .some((key) => key in record && hasValue(record[key], depth + 1));
@@ -1986,10 +1990,10 @@ async function readApplicationSnapshot(
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
       verified = verified && (
-        normalizedValue !== "" && !placeholder || selectedItems.length === 1
+        normalizedValue !== "" && !placeholder || selectedItems.length > 0
       ) && (controlledBackingCommitted(semanticLeaf, selectionOwner) ||
         derivedBackingCommitted);
-    } else if (selectedItems.length === 1) {
+    } else if (selectedItems.length > 0) {
       // A presentation token is not backing state. Require the owning control
       // or its controlled component state to retain the selection.
       verified = verified && (

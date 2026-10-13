@@ -1032,6 +1032,29 @@ test("tokenized source requires an exact nonempty controlled selectedValues entr
   });
 });
 
+test("saved multi-select verifies every controlled selection against its owning tokens", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="multiSelectContainer">
+        <span data-automation-id="selectedItem">Python</span>
+        <span data-automation-id="selectedItem">Java</span>
+        <input id="skills--skills" aria-required="true">
+      </div></main>`);
+    for (const [selectedValues, expected] of [
+      [[{ id: "python", text: "Python" }, { id: "java", text: "Java" }], "verified"],
+      [[{ id: "python", text: "Python" }], "unverified"],
+      [[{ id: "python", text: "Python" }, { id: "java", text: "Python" }], "unverified"],
+      [[], "unverified"],
+    ] as const) {
+      await page.locator('input').evaluate((element, value) => {
+        (element as unknown as Record<string, unknown>).__reactProps$fixture = { selectedValues: value };
+      }, selectedValues);
+      const observed = await application(page).observe(signal());
+      assert.equal(observed.ok && observed.value.requiredFields[0]?.verification, expected);
+    }
+  });
+});
+
 test("nested prompt search verifies only the owning widget's committed selection", async () => {
   await withPage(async (page) => {
     await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
