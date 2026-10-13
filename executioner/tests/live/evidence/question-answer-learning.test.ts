@@ -941,6 +941,7 @@ test("one run capture retains the same field identity on two questionnaire pages
 
 test("Profile-only pending evidence keeps exact page row and field occurrences", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-profile-only-pending-"));
+  const exactQuestion = `${"Instructions for current employees. ".repeat(18)}Have you previously worked here?`;
   try {
     const capture = createQuestionAnswerLearningCapture({
       root,
@@ -953,7 +954,7 @@ test("Profile-only pending evidence keeps exact page row and field occurrences",
       ...value,
       questionId: questionId("question-profile-unknown-required-1"),
       fieldId: "unknown.required.1",
-      exactQuestion: "Additional required information",
+      exactQuestion,
       required: true,
       semanticQuestionType: "unknown",
       answerType: "text",
@@ -973,6 +974,7 @@ test("Profile-only pending evidence keeps exact page row and field occurrences",
     const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(
       join(root, "pending-profile-questions.json"), "utf8",
     )));
+    assert.ok(pending.pendingProfileQuestions.every((question) => question.exactQuestion === exactQuestion));
     assert.deepEqual(pending.pendingProfileQuestions.map(({ pageId, rowKey, fieldId }) => ({
       pageId,
       rowKey,

@@ -528,7 +528,7 @@ export function admitPendingProfileQuestionsEvidence(
       !identifier(question.pageId) ||
       !(question.rowKey === null || identifier(question.rowKey)) ||
       !identifier(question.questionId) || !identifier(question.fieldId) ||
-      fields.has(pendingIdentity(question)) || !bounded(question.exactQuestion, 512) ||
+      fields.has(pendingIdentity(question)) || !bounded(question.exactQuestion, 4_096) ||
       typeof question.required !== "boolean" ||
       !testingQuestionTypes.has(question.semanticQuestionType) ||
       !answerTypes.has(question.answerType) || !isSupportedUiBehavior(question.controlType) ||
