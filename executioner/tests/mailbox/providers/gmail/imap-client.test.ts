@@ -2,8 +2,55 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { setImmediate } from "node:timers/promises";
 
-import { encodeGmailImapQueryRequest } from "../../../../src/mailbox/providers/gmail/private/imap-client.ts";
+import { encodeGmailImapQueryRequest, GmailImapClient } from "../../../../src/mailbox/providers/gmail/private/imap-client.ts";
+
+test("shared IMAP client caps processes and cancels waiting and active queries without early permit release", async t => {
+  const children: Array<EventEmitter & { stdout: EventEmitter; stdin: EventEmitter & { end(): void }; kill(): boolean }> = [];
+  let alive = 0, maximum = 0, kills = 0;
+  t.mock.method(childProcess, "spawn", (() => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end() {} }),
+      kill() { kills++; return true; },
+    });
+    children.push(child); maximum = Math.max(maximum, ++alive);
+    child.once("close", () => { alive--; });
+    return child;
+  }) as unknown as typeof childProcess.spawn);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const client = new GmailImapClient();
+  const controllers = Array.from({ length: 7 }, () => new AbortController());
+  const queries = controllers.map(controller => client.query({ accountPassword: "synthetic", companyName: "Example",
+    recipientAddress: "fixture@example.invalid", verificationHost: "example.wd5.myworkdayjobs.com" },
+    { notBefore: "2026-08-15T12:00:00Z", notAfter: "2026-08-15T12:05:00Z" }, controller.signal));
+  const settled = Promise.allSettled(queries);
+  await setImmediate();
+  assert.equal(children.length, 4);
+  controllers[5]!.abort(); // Waiting caller must never spawn.
+  controllers[0]!.abort();
+  await setImmediate();
+  assert.equal(kills, 1);
+  assert.equal(children.length, 4); // Kill requested, but process has not closed.
+  children[0]!.emit("close", null);
+  await setImmediate();
+  assert.equal(children.length, 5);
+  let finished = 1;
+  while (finished < 6) {
+    const batch = children.slice(finished);
+    for (const child of batch) { child.stdout.emit("data", Buffer.from('{"messages":[]}')); child.emit("close", 0); finished++; }
+    await setImmediate();
+  }
+  const results = await settled;
+  assert.equal(maximum, 4);
+  assert.equal(children.length, 6);
+  assert.equal(alive, 0);
+  assert.deepEqual(results.map(result => result.status), ["rejected", "fulfilled", "fulfilled", "fulfilled", "fulfilled", "rejected", "fulfilled"]);
+});
 
 test("IMAP query input excludes resolver-only authorization fields", () => {
   const authorization = {

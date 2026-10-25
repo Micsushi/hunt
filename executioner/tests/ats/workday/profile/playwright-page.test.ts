@@ -126,7 +126,7 @@ test("disappearing prior popups do not block education discovery or selection", 
   } finally { await browser.close(); }
 });
 
-test("choice-first scheduling reduces empty catalog discovery without dropping field verification", async (t) => {
+test("scalar readback avoids repeated empty catalog discovery in either field order", async (t) => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const probes: number[] = [];
@@ -169,7 +169,7 @@ test("choice-first scheduling reduces empty catalog discovery without dropping f
       probes.push(await page.evaluate(() => Reflect.get(globalThis, "emptyOpens")));
     }
     t.diagnostic(`Empty menu openings: original order ${probes[0]}, choice-first order ${probes[1]}`);
-    assert.ok(probes[1]! < probes[0]!, JSON.stringify(probes));
+    assert.ok(probes.every(count => count <= 2), JSON.stringify(probes));
   } finally { await browser.close(); }
 });
 
@@ -2242,6 +2242,10 @@ test("unknown checkbox identity survives generated ID replacement", async () => 
       mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
     }, adapter, AbortSignal.any([]));
     assert.equal(result.kind, "verified", JSON.stringify(result));
+    // Optional unknown checkboxes are preserved unless explicitly requested.
+    assert.equal(await page.locator('input').isChecked(), false);
+    await adapter.commit({ controlId: before.controls[0]!.controlId,
+      uiBehavior: "checkbox", value: "true" }, AbortSignal.any([]));
     const after = await adapter.inspect(AbortSignal.any([]));
     assert.equal(after.controls[0]!.fieldId, before.controls[0]!.fieldId);
     assert.equal(after.controls[0]!.readback, "true");
@@ -2787,6 +2791,98 @@ test("large choice menus reselect the exact saved option without keyboard fallba
       assert.equal(adapter.interaction(selected.controlId)?.visibleOptionCount, 267);
     }
     assert.equal(await page.evaluate(() => Reflect.get(window, "keyboardSelections")), 0);
+  } finally { await browser.close(); }
+});
+
+test("empty optional three-part dates are observed without generating partial dates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage"><div data-automation-id="formField-issuedDate"><label>Issued Date</label>
+      <div id="issued" role="group" data-automation-id="dateInputWrapper">${['Month', 'Day', 'Year'].map(part => `<div id="issued-dateSection${part}"><input id="issued-dateSection${part}-input" role="spinbutton" data-automation-id="dateSection${part}-input" aria-label="${part}" value=""></div>`).join('')}</div>
+      </div></main><script>globalThis.edits = 0; document.addEventListener('input', () => globalThis.edits++);</script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal, false);
+    assert.deepEqual(snapshot.controls.map(control => control.uiBehavior), ['month', 'number', 'year']);
+    assert.ok(snapshot.controls.every(control => control.uiVariant === 'workday_empty_optional_date_segment_v1'));
+    const result = await completeWorkdayProfilePage({ mode: 'synthetic_test_non_submittable', pageType: 'profile', fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(result.kind, 'verified', JSON.stringify(result));
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, 'edits')), 0);
+    await page.locator('input').first().fill('1');
+    assert.ok((await adapter.inspect(signal, false)).controls.every(control => control.uiVariant !== 'workday_empty_optional_date_segment_v1'));
+    await page.locator('input').first().fill('');
+    await page.locator('input').last().evaluate(element => element.setAttribute('aria-required', 'true'));
+    assert.ok((await adapter.inspect(signal, false)).controls.every(control => control.uiVariant !== 'workday_empty_optional_date_segment_v1'));
+  } finally { await browser.close(); }
+});
+
+test("Workday structural prompts discover choices without ARIA while ordinary inputs remain text", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-certification"><label for="certification-7--certification">Certification</label>
+        <div id="owned-widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+          <input id="certification-7--certification" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
+          <span data-automation-id="promptAriaInstruction">0 items selected</span>
+          <div role="listbox" id="choices" data-associated-widget="owned-widget" hidden><div role="option">Example certificate</div></div>
+          <div id="selected"></div>
+        </div>
+      </div>
+      <input id="ordinary" required>
+      <div id="other-widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+        <input id="mismatched" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
+      </div>
+      </main>
+
+      <script>
+        const input = document.getElementById('certification-7--certification');
+        const choices = document.getElementById('choices');
+        input.onclick = () => { choices.hidden = false; input.setAttribute('aria-expanded', 'true'); input.setAttribute('data-automation-id', 'searchBox'); };
+        document.addEventListener('keydown', event => { if(event.key === 'Escape') { choices.hidden = true; input.setAttribute('aria-expanded', 'false'); } });
+        choices.onclick = () => { document.getElementById('selected').innerHTML = '<span data-automation-id="selectedItem">Example certificate</span>'; choices.hidden = true; input.value = ''; input.setAttribute('aria-expanded', 'false'); };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    const choice = snapshot.controls.find(control => control.label === "Certification")!;
+    assert.equal(choice.uiBehavior, "search_select");
+    assert.deepEqual(choice.allowedOptions, ["Example certificate"]);
+    assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.fieldId, choice.fieldId);
+    assert.equal(snapshot.controls.filter(control => control.uiBehavior === "text").length, 2);
+    await page.locator('#ordinary').fill('ordinary');
+    await page.locator('#mismatched').fill('ordinary');
+    const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.readback, "Example certificate");
+    await page.locator('#owned-widget').evaluate(element => {
+      const replacement = element.cloneNode(true) as HTMLElement;
+      replacement.id = "remounted-widget";
+      replacement.querySelector('input')!.setAttribute('data-uxi-multiselect-id', replacement.id);
+      replacement.querySelector('#choices')!.setAttribute('data-associated-widget', replacement.id);
+      element.replaceWith(replacement);
+    });
+    const remounted = (await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification");
+    assert.equal(remounted?.fieldId, choice.fieldId);
+    assert.equal(remounted?.readback, "Example certificate");
+    await page.locator('[data-automation-id="selectedItem"]').evaluate(element => {
+      element.setAttribute('role', 'option');
+      element.setAttribute('aria-label', 'Example certificate, press delete to clear value.');
+    });
+    const retained = await adapter.inspect(signal);
+    assert.deepEqual(retained.controls.find(control => control.label === 'Certification')?.allowedOptions, ['Example certificate']);
+    await page.evaluate(() => {
+      Reflect.set(window, 'savedChoiceEffects', 0);
+      document.querySelector('#certification-7--certification')!.addEventListener('click', () => {
+        Reflect.set(window, 'savedChoiceEffects', Number(Reflect.get(window, 'savedChoiceEffects')) + 1);
+      });
+    });
+    const savedChoice = retained.controls.find(control => control.label === 'Certification')!;
+    await adapter.commit({ controlId: savedChoice.controlId, uiBehavior: 'search_select', value: 'Example certificate' }, signal);
+    assert.equal(await page.evaluate(() => Reflect.get(window, 'savedChoiceEffects')), 0);
+    const untouched = await completeWorkdayProfilePage({ mode: 'synthetic_test_non_submittable', pageType: 'profile', fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(untouched.kind, 'verified', JSON.stringify(untouched));
   } finally { await browser.close(); }
 });
 
@@ -3635,7 +3731,7 @@ test("education discovers a newly opened portal catalog and dismisses it without
   } finally { await browser.close(); }
 });
 
-test("option discovery reports cleanup validation changes without exposing answers", async () => {
+test("option discovery retains required validation revealed by blur without inventing an answer", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const events: { event: string; details: Readonly<Record<string, unknown>> }[] = [];
@@ -3656,13 +3752,13 @@ test("option discovery reports cleanup validation changes without exposing answe
       pageType: "profile", inspectMissingOptions: true,
       trace: (event, details) => { events.push({ event, details: { ...details } }); },
     });
-    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
-    const failure = events.find(({ event }) => event === "profile_option_observation_cleanup_failed");
-    assert.equal(failure?.details.fieldId, "source.how_did_you_hear");
-    assert.equal(failure?.details.failureStage, "verify_unchanged");
-    assert.equal(failure?.details.underlyingError, "backing_state_changed");
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const source = snapshot.controls.find(control => control.fieldId === "source.how_did_you_hear")!;
+    assert.equal(source.required, true);
+    assert.equal(source.readback, null);
+    assert.equal(await page.locator('input').getAttribute('aria-invalid'), 'true');
     assert.equal(JSON.stringify(events).includes("Private answer option"), false);
-    assert.equal(events.some(({ event }) => event === "profile_option_observation_completed"), false);
+    assert.equal(events.some(({ event }) => event === "profile_option_observation_completed"), true);
   } finally { await browser.close(); }
 });
 
@@ -3723,6 +3819,32 @@ test("multi-select selection binds its delayed portal without selecting an unrel
     assert.equal(filled.readback, "Python");
     assert.equal(await page.locator('#unrelated').isVisible(), true);
     assert.notEqual(await page.evaluate(() => (globalThis as typeof globalThis & { unrelatedClicked?: boolean }).unrelatedClicked), true);
+  } finally { await browser.close(); }
+});
+
+for (const matches of [true, false]) test(`single prompt waits for delayed owned token and ${matches ? "accepts matching" : "rejects wrong"} value`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-certificate"><label for="certificate">Certificate</label>
+        <div id="widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+          <input id="certificate" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="widget"><div id="selected"></div>
+        </div></div></main><script>
+      globalThis.commitAttempts = 0;
+      document.querySelector('input').onkeydown = event => {
+        if(event.key !== 'Enter') return;
+        event.preventDefault(); globalThis.commitAttempts++;
+        setTimeout(() => { document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">${matches ? "Example certificate" : "Wrong certificate"}</span>'; document.querySelector('input').value = ''; }, 600);
+      };</script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1200 });
+    const signal = AbortSignal.any([]);
+    const control = (await adapter.inspect(signal, false)).controls[0]!;
+    const commit = adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example certificate" }, signal);
+    if (matches) await commit;
+    else await assert.rejects(commit, /free-entry selection did not commit/u);
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, "commitAttempts")), 1);
+    assert.equal((await adapter.inspect(signal, false)).controls[0]?.readback, matches ? "Example certificate" : "Wrong certificate");
   } finally { await browser.close(); }
 });
 
@@ -5674,3 +5796,162 @@ function traced(
     },
   });
 }
+
+for (const discovery of ["icon", "search", "category"]) test(`unfamiliar Workday prompt discovers by ${discovery} without submitting an answer`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<aside role="listbox"><div role="option">Unrelated option</div></aside>
+      <main data-automation-id="applyFlowMyExperiencePage"><h2>Experience</h2>
+        <div data-automation-id="formField-certificate"><label for="certificate">Certificate</label>
+          <div id="widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+            <input id="certificate" required enterkeyhint="search" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="widget">
+            <span data-automation-id="promptIcon">Open choices</span><div id="selected"></div>
+          </div>
+        </div>
+      </main>
+      <div data-automation-id="responsiveMonikerPrompt" hidden><div role="listbox" data-automation-id="activeListContainer"><div role="option">Example certificate</div></div></div>
+      <script>
+        window.searchCommits = 0;
+        const popup = document.querySelector('[data-automation-id="responsiveMonikerPrompt"]');
+        if('${discovery}' === 'category') {
+          popup.querySelector('[role="listbox"]').innerHTML = '<div role="option"><div data-automation-id="promptLeafNode"><svg role="presentation"></svg>Issuer category</div></div>';
+          popup.onclick = () => { popup.querySelector('[role="listbox"]').innerHTML = '<div role="option"><div data-automation-id="promptLeafNode"><input type="radio">Example certificate</div></div>'; };
+        }
+        document.querySelector('[data-automation-id="promptIcon"]').onclick = () => { if('${discovery}' !== 'search') popup.hidden = false; };
+        document.querySelector('input').oninput = () => { if('${discovery}' === 'search') popup.hidden = document.querySelector('input').value === ''; };
+        document.querySelector('input').onkeydown = event => {
+          if(event.key === 'Enter') { window.searchCommits++; document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">Accidental answer</span>'; }
+        };
+        document.addEventListener('keydown', event => { if(event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const choice = snapshot.controls.find(control => control.label === "Certificate");
+    assert.deepEqual(choice?.allowedOptions, ["Example certificate"]);
+    assert.equal(choice?.readback, null);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "searchCommits")), 0);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('aside').isVisible(), true);
+  } finally { await browser.close(); }
+});
+for (const lostResponse of [false, true]) test(`hidden required Workday attachment retains identity with ${lostResponse ? "lost" : "normal"} upload response`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const locatorPrototype = Object.getPrototypeOf(page.locator("input")) as Locator;
+  const setInputFiles = locatorPrototype.setInputFiles;
+  let uploads = 0;
+  locatorPrototype.setInputFiles = async function(this: Locator, ...args: Parameters<Locator["setInputFiles"]>) {
+    uploads++;
+    await setInputFiles.apply(this, args);
+    if (lostResponse) throw new Error("fixture upload response lost after effect");
+  };
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-" data-fkit-id="certificate-1--attachments">
+        <label>Attachments*</label><button>Select files</button>
+        <input style="display:none" type="file" data-automation-id="file-upload-input-ref">
+      </div>
+      <div data-automation-id="formField-" data-fkit-id="resumeAttachments--attachments">
+        <label>Resume</label><button>Select resume</button>
+        <input style="display:none" type="file" data-automation-id="file-upload-input-ref">
+      </div>
+      </main><script>
+        const attachment = document.querySelector('[data-fkit-id="certificate-1--attachments"]');
+        attachment.querySelector('input').onchange = () => setTimeout(() => {
+          const item = document.createElement('div'); item.dataset.automationId = 'file-upload-item';
+          item.innerHTML = '<span data-automation-id="file-upload-item-name">synthetic-owner-review.pdf</span><span data-automation-id="file-upload-successful">Uploaded</span>'; attachment.append(item);
+          attachment.querySelector('input').value = '';
+        }, 100);
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]?.uiBehavior, "file");
+    assert.equal(snapshot.controls[0]?.required, true);
+    const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls[0]?.readback, "synthetic-owner-review.pdf");
+    const again = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, AbortSignal.any([]));
+    assert.equal(again.kind, "verified", JSON.stringify(again));
+    assert.equal(await page.locator('[data-automation-id="file-upload-item"]').count(), 1);
+    assert.equal(await page.locator('[data-fkit-id="resumeAttachments--attachments"] input').evaluate(element => (element as HTMLInputElement).files?.length), 0);
+    assert.equal(uploads, 1);
+  } finally {
+    locatorPrototype.setInputFiles = setInputFiles;
+    await browser.close();
+  }
+});
+
+test("school discovery restores a sole auto-selected search result before fill", async () => {
+  const browser = await chromium.launch({headless:true}); const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage"><div data-automation-id="formField-school">
+      <label>School or University*</label><input id="education-1--school" required aria-controls="school-options">
+      <div id="school-options" role="listbox" hidden><div role="option">No Items.</div></div><div id="selected"></div>
+    </div></main><script>
+      const input=document.querySelector('input'),popup=document.querySelector('[role=listbox]');
+      input.onclick=()=>{popup.hidden=false;};
+      input.onkeydown=e=>{if(e.key==='Escape')popup.hidden=true;if(e.key==='Enter'&&input.value==='Other'){
+        document.querySelector('#selected').innerHTML='<div data-automation-id="selectedItem"><span data-automation-id="promptOption">Other - Not Listed</span><button data-automation-id="DELETE_charm">Remove</button></div>';
+        input.value='';popup.hidden=true;
+        document.querySelector('button').onclick=()=>document.querySelector('#selected').replaceChildren();
+      }};
+    </script>`);
+    const adapter=new PlaywrightWorkdayProfilePage(page,{pageType:"profile",inspectMissingOptions:true,timeoutMs:1000});
+    const school=(await adapter.inspect(AbortSignal.any([]))).rows.flatMap(row=>row.controls).find(c=>c.fieldId==='education.school')!;
+    assert.deepEqual(school.allowedOptions,['Other - Not Listed']);
+    assert.equal(school.readback,null);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(),0);
+    assert.equal(await page.locator('input').inputValue(),'');
+  } finally {await browser.close();}
+});
+
+test("school commit accepts exact saved value after a lost popup-close acknowledgement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden></div>
+        <div id="selection"></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('school-options');
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => {
+          popup.hidden = false; popup.innerHTML = '<div role="option">Other</div>';
+        }, 100);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Other') throw new Error('status is not selectable');
+        document.getElementById('selection').innerHTML = '<span data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span></span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Other"]);
+    assert.equal(school.readback, null);
+    const originalPress = page.keyboard.press.bind(page.keyboard);
+    let faultInjected = false;
+    page.keyboard.press = async (...args: Parameters<typeof page.keyboard.press>) => {
+      await originalPress(...args);
+      if (!faultInjected && args[0] === "Escape" && await page.locator('[data-automation-id="selectedItem"]').count() === 1) {
+        faultInjected = true;
+        throw new Error("Synthetic lost popup-close acknowledgement");
+      }
+    };
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(faultInjected, true);
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    const observed = await adapter.observeControl(school.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(await page.locator('#school-options').isVisible(), false);
+  } finally { await browser.close(); }
+});

@@ -254,46 +254,73 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
   const nativeDeclarationSetProperty = CSSStyleDeclaration.prototype.setProperty;
   const nativeDeclarationRemoveProperty = CSSStyleDeclaration.prototype.removeProperty;
   const nativeDeclarationGetPropertyValue = CSSStyleDeclaration.prototype.getPropertyValue;
+  const declarationLoaders = new WeakMap<CSSStyleDeclaration, HTMLElement>();
+  const declarationAccessors = new Map<string, {
+    cssName: string;
+    get: (this: CSSStyleDeclaration) => string;
+    set: (this: CSSStyleDeclaration, value: unknown) => void;
+  }>();
   const instrumentDeclarationInstance = (
     declaration: CSSStyleDeclaration,
     loader?: HTMLElement,
   ) => {
+    if (loader !== undefined) declarationLoaders.set(declaration, loader);
+    const properties = new Map<string, boolean>();
     for (const name of Object.getOwnPropertyNames(declaration)) {
       if (/^\d+$/u.test(name)) continue;
       const descriptor = Object.getOwnPropertyDescriptor(declaration, name);
       if (descriptor === undefined || descriptor.configurable !== true ||
           !("value" in descriptor) || descriptor.writable !== true) continue;
-      const cssName = name === "cssFloat" ? "float" : name
-        .replace(/^ms/u, "-ms")
-        .replace(/[A-Z]/gu, (letter) => `-${letter.toLocaleLowerCase("en-US")}`);
-      const getter = () => nativeDeclarationGetPropertyValue.call(declaration, cssName);
-      const setter = (value: unknown) => {
-        if (loader === undefined) invalidateStyleContext();
-        const normalized = String(value);
-        if (normalized === "") nativeDeclarationRemoveProperty.call(declaration, cssName);
-        else nativeDeclarationSetProperty.call(declaration, cssName, normalized);
-        if (loader !== undefined) captureExactLoaderState(loader, "other", "style");
-      };
+      let accessor = declarationAccessors.get(name);
+      if (accessor === undefined) {
+        const cssName = name === "cssFloat" ? "float" : name
+          .replace(/^ms/u, "-ms")
+          .replace(/[A-Z]/gu, (letter) => `-${letter.toLocaleLowerCase("en-US")}`);
+        accessor = {
+          cssName,
+          get() { return nativeDeclarationGetPropertyValue.call(this, cssName); },
+          set(value) {
+            const owner = declarationLoaders.get(this);
+            if (owner === undefined) invalidateStyleContext();
+            const normalized = String(value);
+            if (normalized === "") nativeDeclarationRemoveProperty.call(this, cssName);
+            else nativeDeclarationSetProperty.call(this, cssName, normalized);
+            if (owner !== undefined) captureExactLoaderState(owner, "other", "style");
+          },
+        };
+        declarationAccessors.set(name, accessor);
+      }
       try {
         Object.defineProperty(declaration, name, {
           configurable: true,
           enumerable: descriptor.enumerable ?? true,
-          get: getter,
-          set: setter,
+          get: accessor.get,
+          set: accessor.set,
         });
-        restorers.push(() => {
-          const current = Object.getOwnPropertyDescriptor(declaration, name);
-          if (current?.get === getter && current.set === setter) {
-            Object.defineProperty(declaration, name, {
-              ...descriptor,
-              value: nativeDeclarationGetPropertyValue.call(declaration, cssName),
-            });
-          }
-        });
+        properties.set(name, descriptor.enumerable ?? true);
       } catch {
         state.instrumentationComplete = false;
       }
     }
+    // Share accessors across declarations and restore once per declaration, rather
+    // than retaining three closures and a descriptor for every CSS property.
+    restorers.push(() => {
+      for (const [name, enumerable] of properties) {
+        try {
+          const accessor = declarationAccessors.get(name)!;
+          const current = Object.getOwnPropertyDescriptor(declaration, name);
+          if (current?.get === accessor.get && current.set === accessor.set) {
+            Object.defineProperty(declaration, name, {
+              configurable: true, writable: true, enumerable,
+              value: nativeDeclarationGetPropertyValue.call(declaration, accessor.cssName),
+            });
+          }
+        } catch {
+          // A page can lock one property without preventing cleanup of the rest.
+          state.instrumentationComplete = false;
+        }
+      }
+    });
   };
   const instrumentRuleDeclarations = (rules: CSSRuleList) => {
     for (const rule of [...rules]) {
@@ -508,22 +535,15 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
     if (receiver instanceof Element) captureExactLoaderState(receiver, "other", "hidden");
   });
   const tokenListPrototype = DOMTokenList.prototype;
-  const isOwnedLoaderTokenList = (receiver: unknown): boolean =>
-    [...controller.querySelectorAll(loaderSelector)].some((loader) => loader.classList === receiver);
-  for (const name of ["add", "remove", "replace", "toggle"]) {
-    instrumentMethod(tokenListPrototype, name, () => false, (receiver) => {
-      if (!isOwnedLoaderTokenList(receiver)) return;
-      const loader = [...controller.querySelectorAll(loaderSelector)]
-        .find((candidate) => candidate.classList === receiver);
-      if (loader !== undefined) captureExactLoaderState(loader, "class", "class");
-    });
-  }
-  instrumentSetter(tokenListPrototype, "value", () => false, (receiver) => {
-    if (!isOwnedLoaderTokenList(receiver)) return;
+  const captureOwnedLoaderClass = (receiver: unknown) => {
     const loader = [...controller.querySelectorAll(loaderSelector)]
       .find((candidate) => candidate.classList === receiver);
     if (loader !== undefined) captureExactLoaderState(loader, "class", "class");
-  });
+  };
+  for (const name of ["add", "remove", "replace", "toggle"]) {
+    instrumentMethod(tokenListPrototype, name, () => false, captureOwnedLoaderClass);
+  }
+  instrumentSetter(tokenListPrototype, "value", () => false, captureOwnedLoaderClass);
   const linkPrototype = (globalThis as unknown as {
     HTMLLinkElement?: { prototype: object };
   }).HTMLLinkElement?.prototype;
@@ -632,7 +652,10 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
     if (styleContextChanged) {
       invalidateStyleContext();
     }
-    if (sampleStyleContext() !== armedStyleContextToken) invalidateStyleContext();
+    // This callback is synchronous and only reads CSS. Keep its sample local;
+    // mutation hooks and freeze must still independently sample current styles.
+    const callbackStyleToken = sampleStyleContext();
+    if (callbackStyleToken !== armedStyleContextToken) invalidateStyleContext();
     for (const [recordIndex, record] of records.entries()) {
       if (record.type === "attributes" && record.target === controller &&
           record.attributeName === "aria-busy") {
@@ -656,7 +679,7 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
             register(loader);
             if (visible(loader)) {
               recordLoaderTransition(
-                loader, false, true, "other", sampleStyleContext(), true,
+                loader, false, true, "other", callbackStyleToken, true,
               );
             }
           }
@@ -669,7 +692,7 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
           for (const loader of removed) {
             if (loaderStates.get(loader)?.visible === true) {
               recordLoaderTransition(
-                loader, true, false, "other", sampleStyleContext(), true,
+                loader, true, false, "other", callbackStyleToken, true,
               );
             }
           }
@@ -707,7 +730,7 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
         const nextValue = loader.getAttribute(name ?? "");
         known.attributes = { ...known.attributes, [key]: nextValue };
         const nextVisible = visible(loader);
-        const styleToken = sampleStyleContext();
+        const styleToken = callbackStyleToken;
         recordLoaderTransition(
           loader,
           known.visible,
@@ -777,6 +800,22 @@ export function freezeNavigationWitness(actionId: string): boolean {
   state.frozen = true;
   return witnessed;
 }
+export function disposeNavigationWitness(actionId: string): void {
+  const globalState = globalThis as unknown as Record<string, unknown>;
+  const state = globalState.__huntWorkdayNavigationAction as {
+    actionId?: string;
+    observer?: MutationObserver;
+    restoreInstrumentation?: () => void;
+  } | undefined;
+  if (state?.actionId !== actionId) return;
+  state.observer?.disconnect();
+  state.restoreInstrumentation?.();
+  delete globalState.__huntWorkdayNavigationAction;
+  if (globalState.__huntWorkdayNavigationWitness === actionId) {
+    delete globalState.__huntWorkdayNavigationWitness;
+  }
+}
+
 export function markNavigationWitnessClicked(actionId: string): void {
   const globalState = globalThis as unknown as Record<string, unknown>;
   const state = globalState.__huntWorkdayNavigationAction as {

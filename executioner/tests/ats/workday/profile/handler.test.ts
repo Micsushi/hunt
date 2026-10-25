@@ -65,6 +65,21 @@ const control = (
   readback,
 });
 
+test("synthetic Profile fills a required phone revealed by a choice without restarting", async () => {
+  const plan: ProfilePagePlan = { mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+    fields: [field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile")] };
+  const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+    { ...control("phone.device_type", "search_select"), allowedOptions: ["Mobile"] },
+  ] }, { afterCommit: () => {
+    if (!port.snapshot.controls.some(item => item.fieldId === "phone.number")) {
+      port.snapshot = { ...port.snapshot, controls: [...port.snapshot.controls, control("phone.number", "phone")] };
+    }
+  } });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.filter(item => item.controlId === "control-phone.number").length, 1);
+});
+
 test("synthetic Profile fills a required unplanned work-history row without adding duplicates", async () => {
   const plan: ProfilePagePlan = {
     mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
@@ -208,8 +223,31 @@ test("fills identity, address, phone, dates, and search-selects with independent
       lane: "live_owner_fact",
     },
   ]);
-  // Initial/final scans plus a fresh pre-effect and post-effect scan per field.
-  assert.equal(port.inspections, 2 + 2 * port.commits.length);
+  // Initial/final plus the first pre-effect scan; each commit still gets an
+  // independent readback, reused as the next known field's initial binding.
+  assert.equal(port.inspections, 3 + port.commits.length);
+});
+
+test("reusing the previous scalar snapshot never substitutes for post-commit verification", async () => {
+  class LostSecondCommitPage extends MemoryProfilePage {
+    async commit(request: Parameters<MemoryProfilePage["commit"]>[0]) {
+      if (this.commits.length === 1) { this.commits.push({ ...request }); return; }
+      await super.commit(request);
+    }
+  }
+  const port = new LostSecondCommitPage({ pageType: "contact", rows: [], controls: [
+    control("identity.given_name", "text"), control("identity.family_name", "text"),
+  ] });
+  const result = await completeWorkdayProfilePage({ mode: "live", pageType: "contact", repeatables: [], fields: [
+    field("identity.given_name", "identity", "text", "Ada"),
+    field("identity.family_name", "identity", "text", "Lovelace"),
+  ] }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "blocked");
+  if (result.kind === "blocked") {
+    assert.equal(result.code, "profile_commit_unverified");
+    assert.equal(result.fieldId, "identity.family_name");
+  }
+  assert.equal(port.commits.length, 2);
 });
 
 test("converts a typed metadata mismatch into non-submittable UI learning", async () => {
@@ -1273,6 +1311,29 @@ test("synthetic unknown choice rebind adopts a committed option when its cached 
   assert.equal(finalAnswer?.kind === "answered" ? finalAnswer.value : null, "New option");
 });
 
+test("scalar readbacks avoid unrelated popup discovery but discover a newly revealed choice", async () => {
+  const modes: boolean[] = [];
+  class ConditionalChoicePage extends MemoryProfilePage {
+    async inspect(_signal?: AbortSignal, interactive = true): Promise<ProfilePageSnapshot> {
+      modes.push(interactive);
+      const snapshot = await super.inspect();
+      return { ...snapshot, controls: snapshot.controls.map(item => item.fieldId.startsWith("unknown.")
+        ? { ...item, ...(interactive ? { allowedOptions: ["Yes", "No"] } : {}) } : item) };
+    }
+  }
+  const port = new ConditionalChoicePage({ pageType: "contact", rows: [],
+    controls: [control("identity.given_name", "text")] }, { afterCommit: () => {
+      if (port.commits.length === 1) port.snapshot = { ...port.snapshot, controls: [
+        ...port.snapshot.controls, control("unknown.required.1", "search_select", null, "workday_unknown_required_v1"),
+      ] };
+    } });
+  const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "contact",
+    fields: [field("identity.given_name", "identity", "text", "Ada")], repeatables: [] }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(modes.slice(0, 4), [true, false, false, true]);
+  assert.deepEqual(port.commits.map(item => item.controlId), ["control-identity.given_name", "control-unknown.required.1"]);
+});
+
 test("synthetic mode fills supported unknown controls revealed after a scalar commit", async () => {
   let port!: MemoryProfilePage;
   port = new MemoryProfilePage({
@@ -1790,10 +1851,38 @@ test("fills the tenant-provided blank first repeatable row before adding another
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
   assert.equal(port.added.length, 0);
+  assert.equal(port.inspections, 7);
   assert.deepEqual(port.commits.map(({ value }) => value), [
     "INVIDI Technologies",
     "Software Developer",
   ]);
+});
+
+test("preflights a required control revealed by repeatable commit using its fresh readback", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Example", "resume_verified"),
+    field("experience.title", "employment", "text", "Developer", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile", controls: [],
+    rows: [row("experience", "work-1", false, desired, true)],
+    repeatableSections: ["experience"],
+  }, {
+    afterCommit: () => {
+      port.snapshot = { ...port.snapshot, controls: [
+        control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+      ] };
+    },
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live", pageType: "profile", fields: [],
+    repeatables: [{ section: "experience", rows: [{ rowKey: "work-1", fields: desired }] }],
+  }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "blocked");
+  if (result.kind === "blocked") assert.equal(result.fieldId, "unknown.required.1");
+  assert.equal(port.commits.length, 1);
+  assert.equal(port.inspections, 3);
 });
 
 test("accepts an unpadded Workday month readback for a zero-padded plan month", async () => {
@@ -1917,6 +2006,27 @@ test("synthetic Canadian postal defaults follow the planned, observed, or genera
     assert.equal(postal?.value[0], source === "planned" ? "V" : "T");
     if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) =>
       fieldId === "address.postal_code")?.lane, "synthetic_test_default");
+  }
+});
+
+test("leaves optional unknown checkbox consent and workflow controls untouched unless answered by owner", async () => {
+  for (const initial of ["false", "true"]) {
+    for (const explicit of [false, true]) {
+      const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+        { ...control("unknown.optional.1", "checkbox", initial, "workday_unknown_required_v1"), required: false },
+      ] });
+      const result = await completeWorkdayProfilePage({
+        mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+        fields: explicit ? [field("unknown.optional.1", "unknown", "boolean", "false")] : [],
+      }, port, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      assert.equal(port.snapshot.controls[0]?.readback, explicit ? "false" : initial);
+      if (result.kind !== "verified") continue;
+      assert.equal(result.verifiedFields.length, explicit ? 1 : 0);
+      assert.equal(result.committedFields.length, 0);
+      if (!explicit) assert.equal(port.commits.length, 0);
+      else assert.equal(result.verifiedFields[0]?.provenance, "owner_provided");
+    }
   }
 });
 

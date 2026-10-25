@@ -22,6 +22,7 @@ import type {
   ApplicationAnswerResolutionResult,
   ApplicationAnswerResolver,
 } from "./application-types.ts";
+import { isEmptyCatalogMessage } from "../options/catalog.ts";
 import { mapVisibleOption } from "../options/mapper.ts";
 import {
   generatedLearningDefaultFor,
@@ -273,7 +274,7 @@ function generatedLearningIntent(
     field.behavior === "listbox"
   ) {
     const options = field.options.filter(({ label }) =>
-      !placeholderOption.test(String(label).trim().toLowerCase())
+      !placeholderOption.test(String(label).trim().toLowerCase()) && !isEmptyCatalogMessage(String(label))
     );
     if (options.length === 0) return undefined;
     const index = selectRandomIndex(options.length);
@@ -337,7 +338,7 @@ export function createApplicationAnswerResolver(
   ) => (length: number): number => {
     const { field } = request;
     const options = field.options.filter(({ label }) =>
-      !placeholderOption.test(String(label).trim().toLowerCase())
+      !placeholderOption.test(String(label).trim().toLowerCase()) && !isEmptyCatalogMessage(String(label))
     );
     if (options.length !== length) throw new TypeError("synthetic option set mismatch");
     // Identical physical occurrences must receive one class intent so a

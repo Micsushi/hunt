@@ -36,8 +36,8 @@ interface UnavailableRule {
   readonly selector: string;
 }
 
-const EMAIL_SIGN_IN_CHOICE_SELECTOR =
-  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+export const WORKDAY_EMAIL_SIGN_IN_CHOICE_SELECTOR =
+  '[data-automation-id="SignInWithEmailButton"]';
 export const WORKDAY_MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
 export const WORKDAY_COMPLETE_SIGN_IN_SELECTOR =
@@ -57,6 +57,7 @@ const WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS = Object.freeze({
   applicationQuestions: '[data-automation-id="applyFlowApplicationQuestionsPage"]',
   voluntaryDisclosures: '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
   selfIdentify: '[data-automation-id="applyFlowSelfIdentifyPage"]',
+  assessment: '[data-automation-id="takeAssessmentPage"]',
   review: '[data-automation-id="applyFlowReviewPage"]',
 });
 
@@ -69,7 +70,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="authPage"]'),
   rule("structural_trait_page_account_entry_v1", WORKDAY_MODERN_SIGN_IN_SELECTOR),
   rule("structural_trait_page_account_entry_v1", WORKDAY_COMPLETE_SIGN_IN_SELECTOR),
-  rule("structural_trait_page_account_entry_v1", EMAIL_SIGN_IN_CHOICE_SELECTOR),
+  rule("structural_trait_page_account_entry_v1", WORKDAY_EMAIL_SIGN_IN_CHOICE_SELECTOR),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordPage"]'),
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="forgotPasswordConfirmationPage"]'),
@@ -78,7 +79,7 @@ const pageRules = Object.freeze([
   rule("structural_trait_page_account_entry_v1", '[data-automation-id="resetPasswordSubmitButton"]'),
   rule(
     "structural_trait_navigation_email_sign_in_choice_v1",
-    EMAIL_SIGN_IN_CHOICE_SELECTOR,
+    WORKDAY_EMAIL_SIGN_IN_CHOICE_SELECTOR,
   ),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="emailVerificationPage"]'),
   rule("structural_trait_page_email_verification_v1", '[data-automation-id="verifyEmailPage"]'),
@@ -94,6 +95,7 @@ const pageRules = Object.freeze([
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.applicationQuestions,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.voluntaryDisclosures,
     WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.selfIdentify,
+    WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.assessment,
   ].map((selector) => rule("structural_trait_page_questionnaire_v1", selector)),
   rule("structural_trait_page_review_step_v1", WORKDAY_STRUCTURAL_APPLICATION_PAGE_SELECTORS.review),
 ] satisfies readonly TraitRule[]);
@@ -376,7 +378,7 @@ function exactActionable(fact: SemanticControlFact): boolean {
   return fact.cardinality === 1 && fact.actionable;
 }
 
-async function matchingUnavailable(
+export async function matchingUnavailable(
   page: WorkdayStructuralPage,
 ): Promise<Array<UnavailableRule["reason"]>> {
   const facts = new Set<UnavailableRule["reason"]>();

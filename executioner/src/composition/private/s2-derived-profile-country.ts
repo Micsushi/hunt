@@ -112,6 +112,10 @@ export function withDerivedProfileCountry(
   };
 }
 
+export function canonicalCanadianRegion(value: string): string | undefined {
+  return CANADIAN_REGIONS.get(normalizeRegion(value));
+}
+
 function normalizeRegion(value: string): string {
   return value.normalize("NFC").replace(/\s+/gu, " ").trim()
     .toLocaleLowerCase("en-US");

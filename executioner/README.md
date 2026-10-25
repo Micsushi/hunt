@@ -1,5 +1,11 @@
 # C3 v3
 
+The new local [Applications product](docs/product.md) provides a batch-link UI,
+a current-tab Chrome extension action, and C1/C2 selected-resume handoff. It reuses
+the Workday and hosted ATS engines in one shared browser and stops at Review. Explicit per-job
+submission is isolated from the filling engine and the historical proof harness.
+See that guide for setup and the current verification boundary.
+
 C3 v3 Stage 1 implements one local, controlled Workday fixture journey. It
 wires the accepted components through the F9 journey loop, independently
 verifies required fields, reaches mock Review, and stops without Submit.
@@ -36,7 +42,8 @@ Its source, fixtures, tests, and supporting tools remain available on branch
 - C3 does not depend on C4; C4 is on hold.
 - Stage 1 uses controlled Workday fixtures only.
 - Every field mutation requires independent verification.
-- Final Submit is outside C3 v3 scope.
+- Final Submit remains forbidden in the Stage 1/Stage 2 proof harness. The local
+  Applications product has a separate explicitly confirmed submission action.
 - Legacy owner-facts-only paths can return `profile_answer_missing`. Protected live proof runs use the explicit [application execution policy](src/contracts/application-execution-policy.ts): editable deterministic fallback remains tagged, never becomes an owner fact, and never permits Submit.
 
 Future C1 synchronization for maintenance, runtime-error, and removed-posting statuses is
@@ -85,9 +92,9 @@ answer-resolution path. Choice
 controls still use the existing verified interaction path because they may
 reveal conditional questions. Empty or invalid fields may be filled, every
 mutation is verified, and final Submit remains forbidden. The retained live
-application runtime is still Workday-specific;
-Greenhouse and Lever currently participate in C1 discovery/deduplication but
-are not claimed as C3 live-proof support.
+historical proof runtime remains Workday-specific. The Applications product now
+has initial hosted Greenhouse, Lever, Ashby, and Workable support; see the product guide
+for its separate verification boundary.
 
 ## Future Chrome extension delivery
 

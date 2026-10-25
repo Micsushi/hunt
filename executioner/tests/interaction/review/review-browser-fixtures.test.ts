@@ -52,3 +52,27 @@ test("headless Playwright denies a Review-and-Submit text lookalike structurally
 function fixture(name: string): Promise<string> {
   return readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 }
+
+test("responsive Review requires a unique final active step with matching N of N in its own flow", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 778, height: 446 } });
+    const completed = '<li data-automation-id="progressBarCompletedStep">Completed</li>';
+    const active = '<li data-automation-id="progressBarActiveStep"><label aria-live="polite">current step 3 of 3</label></li>';
+    const review = '<section data-automation-id="applyFlowReviewPage">Review</section><div data-automation-id="pageFooter"><button>Submit</button></div>';
+    for (const [steps, sameFlow, admitted] of [
+      [completed + completed + active, true, true],
+      [completed + completed + active.replace('3 of 3', '2 of 3'), true, false],
+      [completed + active + completed, true, false],
+      [completed + active + active, true, false],
+      [completed + completed + active.replace('3 of 3', '7 of 7'), true, false],
+      [completed + completed + active, false, false],
+    ] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowPage"><ol data-automation-id="progressBar">${steps}</ol>${sameFlow ? review : ''}</main>${sameFlow ? '' : `<main data-automation-id="applyFlowPage">${review}</main>`}`);
+      const observed = await inspectWorkdayReview(page);
+      assert.equal(observed.activeStep.count, admitted ? 1 : 0);
+      assert.equal(observed.activeStep.visible, admitted);
+      assert.equal(observed.finalSubmit.enabled, true);
+    }
+  } finally { await browser.close(); }
+});

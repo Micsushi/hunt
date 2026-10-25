@@ -12,6 +12,7 @@ export interface ReviewReadOnlyLocator {
   count(): Promise<number>;
   isVisible(): Promise<boolean>;
   isEnabled(): Promise<boolean>;
+  evaluate?<T>(callback: (element: Element) => T): Promise<T>;
   getByRole(
     role: "button",
     options: Readonly<{ name: RegExp }>,
@@ -27,6 +28,9 @@ export const workdayReviewSignatures = Object.freeze({
   activeStep:
     '[data-automation-id="progressBarActiveStep"]:text-is("Review"):visible, ' +
     '[data-automation-id="progressBarActiveStep"]:visible:has(label:text-is("Review"))',
+  responsiveProgress:
+    '[data-automation-id="applyFlowPage"]:has([data-automation-id="applyFlowReviewPage"]:visible) ' +
+    'ol[data-automation-id="progressBar"]:visible',
   finalSubmitScope:
     '[data-automation-id="applyFlowReviewPage"]:visible, ' +
     '[data-automation-id="applyFlowPage"] [data-automation-id="pageFooter"]:visible',
@@ -104,12 +108,12 @@ export async function inspectWorkdayReview(
   page: ReviewReadOnlyPage,
 ): Promise<WorkdayReviewStructuralObservationV1> {
   const root = page.locator(workdayReviewSignatures.reviewRoot);
-  const activeStep = page.locator(workdayReviewSignatures.activeStep);
+  let activeStep = page.locator(workdayReviewSignatures.activeStep);
   const validationError = page.locator(workdayReviewSignatures.validationError);
   const finalSubmit = page.locator(workdayReviewSignatures.finalSubmitScope).getByRole("button", {
     name: workdayReviewSignatures.finalSubmitName,
   });
-  const [
+  let [
     reviewRootCount,
     activeStepCount,
     validationErrorCount,
@@ -120,6 +124,23 @@ export async function inspectWorkdayReview(
     validationError.count(),
     finalSubmit.count(),
   ]);
+  if (reviewRootCount === 1 && activeStepCount === 0) {
+    const progress = page.locator(workdayReviewSignatures.responsiveProgress);
+    if (await progress.count() === 1 && progress.evaluate !== undefined && await progress.evaluate(element => {
+      const steps = [...element.children];
+      const active = element.querySelectorAll('[data-automation-id="progressBarActiveStep"]');
+      if (steps.length < 1 || active.length !== 1 || steps.at(-1) !== active[0] ||
+          steps.some(step => step.tagName !== "LI") ||
+          steps.slice(0, -1).some(step => step.getAttribute("data-automation-id") !== "progressBarCompletedStep")) return false;
+      const labels = active[0]!.querySelectorAll('label[aria-live="polite"]');
+      if (labels.length !== 1) return false;
+      const match = labels[0]!.textContent?.trim().match(/^current\s+step\s+(\d+)\s+of\s+(\d+)$/i);
+      return match !== null && match !== undefined && Number(match[1]) === steps.length && Number(match[2]) === steps.length;
+    })) {
+      activeStep = page.locator(`${workdayReviewSignatures.responsiveProgress} > li[data-automation-id="progressBarActiveStep"]:last-child:visible`);
+      activeStepCount = await activeStep.count();
+    }
+  }
   for (const count of [
     reviewRootCount,
     activeStepCount,

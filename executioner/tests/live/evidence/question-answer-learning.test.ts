@@ -992,6 +992,36 @@ test("Profile-only pending evidence keeps exact page row and field occurrences",
   }
 });
 
+test("page-local unknown ordinals retain distinct profile question and UI observations", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-ordinal-reuse-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const questions = [
+      { exactQuestion: "Have you ever worked with this company?", answerType: "single_select" as const,
+        controlType: "radio" as const, options: ["Yes", "No"] },
+      { exactQuestion: "Certification", answerType: "single_select" as const,
+        controlType: "select" as const, options: ["Certificate A", "Certificate B"] },
+    ];
+    for (const question of questions) capture.recordPendingProfile?.({
+      pageId: "s2-profile", rowKey: null, questionId: "question.profile.unknown.required.1",
+      fieldId: "unknown.required.1", exactQuestion: question.exactQuestion,
+      required: true, semanticQuestionType: "unknown", answerType: question.answerType,
+      controlType: question.controlType, options: question.options, constraints: null,
+      conditionalReveal: false, testDefault: null, actualOwnerValue: null,
+      needsUserValue: true, provenance: null, validation: "not_attempted", committedReadback: null,
+    });
+    capture.write();
+    const result = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")));
+    assert.deepEqual(result.pendingProfileQuestions.map(({ exactQuestion, answerType, controlType, options }) =>
+      ({ exactQuestion, answerType, controlType, options })), questions);
+    assert.ok(result.pendingProfileQuestions.every(q => q.actualOwnerValue === null && q.needsUserValue && q.validation === "not_attempted"));
+    assert.throws(() => admitPendingProfileQuestionsEvidence({ ...result,
+      pendingProfileQuestions: [result.pendingProfileQuestions[0]!, result.pendingProfileQuestions[0]!] }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("generated Profile fallback remains exact evidence when owner-source privacy values overlap", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-profile-generated-pending-"));
   try {

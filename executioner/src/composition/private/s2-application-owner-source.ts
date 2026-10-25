@@ -330,7 +330,7 @@ function parsePreparedManifest(
   };
 }
 
-function validateProfileAuthority(
+export function validateProfileAuthority(
   value: unknown,
   facts: readonly { readonly factId: string; readonly value: unknown; readonly provenance: string }[],
 ): ProfilePagePlan {

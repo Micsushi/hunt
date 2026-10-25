@@ -109,7 +109,7 @@ const WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR =
 const WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR =
   '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="createAccountSubmitButton"]) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_PASSWORD_RESET_REQUEST_SUBMIT_OWNER_SELECTOR =
-  '[data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]):not(:has([data-automation-id="verifyPassword"])) [data-automation-id="click_filter"][role="button"]';
+  'button[data-automation-id="resetPasswordButton"]:not([aria-hidden="true"]), [data-automation-id="noCaptchaWrapper"]:has([data-automation-id="resetPasswordButton"]):not(:has([data-automation-id="verifyPassword"])) [data-automation-id="click_filter"][role="button"]';
 const WORKDAY_PASSWORD_RESET_SUBMIT_SELECTOR =
   '[data-automation-id="resetPasswordSubmitButton"], form[data-automation-id="signInFormo"]:has([data-automation-id="password"]):has([data-automation-id="verifyPassword"]):has([data-automation-id="resetPasswordButton"]) [data-automation-id="click_filter"][role="button"]';
 const POST_SUBMIT_DESTINATIONS = [

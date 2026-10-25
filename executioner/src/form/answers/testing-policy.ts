@@ -5,6 +5,8 @@ const normalized = (value: string): string => value.normalize("NFKC")
   .replace(/[^\p{L}\p{N}]+/gu, " ")
   .trim();
 
+const employeeIdQuestion = /\b(?:employee|associate|worker|workday|personnel) (?:id|identification|identifier|number)\b/u;
+
 const birthDateQuestion = /\b(?:date of birth|birth date|birthdate|birthday|dob)\b/u;
 
 export type TestingQuestionSemanticType =
@@ -27,7 +29,7 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
     return "availability";
   }
   const value = normalized(label);
-  if (birthDateQuestion.test(value)) return "identity";
+  if (birthDateQuestion.test(value) || employeeIdQuestion.test(value)) return "identity";
   if (/\b(?:referred|referral)\b.*\b(?:associate|employee)\b/u.test(value)) {
     return "employee_referral";
   }
@@ -46,7 +48,7 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
   if (/\b(?:gender|sex|race|ethnicity|hispanic|latino|veteran|military|disability|disabled)\b/u.test(value)) {
     return "demographic";
   }
-  if (/\b(?:salary|compensation|pay)\b/u.test(value)) return "compensation";
+  if (/\b(?:salary|compensation|pay|hourly rate|hourly wage)\b/u.test(value)) return "compensation";
   if (/\b(?:authorized|authorised)\b.*\bwork\b/u.test(value)) return "authorization";
   if (/\b(?:consent|agree|acknowledge)\b/u.test(value)) return "consent";
   if (/\b(?:start date|available to start|availability|notice period)\b/u.test(value)) return "availability";
@@ -57,12 +59,21 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
 
 export function semanticSyntheticTestDefault(label: string): boolean | string | undefined {
   const value = normalized(label);
+  // Some employers describe numeric constraints only in the question text.
+  // This is a synthetic fallback, never a replacement for an owner answer.
+  const digitCount = /\b(\d{1,2}) digits? (?:number|identifier|id|code)\b/u.exec(value);
+  if (digitCount !== null) {
+    const count = Number(digitCount[1]);
+    if (count >= 1 && count <= 32) return "1".repeat(count);
+  }
+  if (employeeIdQuestion.test(value)) return "1";
   if (birthDateQuestion.test(value) && /\bmmdd\b/u.test(value)) return "0101";
   const trailingDigits = /\blast (\d{1,2}|four) digits?\b/u.exec(value);
   if (trailingDigits !== null && /\b(?:ssn|social security|identification|identifier)\b/u.test(value)) {
     const count = trailingDigits[1] === "four" ? 4 : Number(trailingDigits[1]);
     if (count >= 1 && count <= 12) return "1".repeat(count);
   }
+  if (/\b(?:do|are) you currently (?:work at|employed (?:by|with))\b/u.test(value)) return false;
   const type = testingQuestionSemanticType(label);
   if (type === "compensation") return "1";
   if (type === "qualification_requirement") return true;

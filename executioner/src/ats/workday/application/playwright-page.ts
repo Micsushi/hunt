@@ -20,6 +20,7 @@ import {
 } from "./page-walk-contract.ts";
 import {
   armNavigationWitness,
+  disposeNavigationWitness,
   freezeNavigationWitness,
   markNavigationWitnessClicked,
   readNavigationActionBusySeen,
@@ -218,9 +219,10 @@ export class PlaywrightWorkdayApplicationPage {
       // A DOM click is untrusted and some Workday transitions ignore it. Keep
       // a fixed handle so a footer remount cannot retarget the gesture onto a
       // final Submit control.
+      let handle: Awaited<ReturnType<Locator["elementHandle"]>> | null = null;
       try {
         navigationDiagnostic("hit_test_started");
-        const handle = await action.elementHandle();
+        handle = await action.elementHandle();
         if (handle === null) throw new Error("navigation control detached");
         // Workday commits focused search/select drafts on blur. Move focus to
         // the admitted button before activation so its click sees that commit.
@@ -239,6 +241,8 @@ export class PlaywrightWorkdayApplicationPage {
       } catch {
         navigationDiagnostic("activation_failed");
         // Destination readback owns the result.
+      } finally {
+        await handle?.dispose().catch(() => {});
       }
       navigationDiagnostic("destination_readback_started");
       let after = await this.#waitForChangedSnapshot(
@@ -256,8 +260,9 @@ export class PlaywrightWorkdayApplicationPage {
           signal,
         );
         if (retryAction !== undefined) {
+          let retryHandle: Awaited<ReturnType<Locator["elementHandle"]>> | null = null;
           try {
-            const handle = await retryAction.elementHandle();
+            const handle = retryHandle = await retryAction.elementHandle();
             if (handle === null) throw new Error("navigation control detached");
             await handle.focus();
             const admitted = await handle.evaluate((control) => {
@@ -273,6 +278,8 @@ export class PlaywrightWorkdayApplicationPage {
             navigationDiagnostic("unchanged_source_retry_activated");
           } catch {
             navigationDiagnostic("unchanged_source_retry_activation_failed");
+          } finally {
+            await retryHandle?.dispose().catch(() => {});
           }
           after = await this.#waitForChangedSnapshot(before.value, signal, navigationActionId);
         }
@@ -350,6 +357,12 @@ export class PlaywrightWorkdayApplicationPage {
             : "navigation_uncertain",
         "navigation",
       );
+    } finally {
+      // Destination checks have consumed the witness. Release its DOM references
+      // and CSS instrumentation on every exit, including independent page changes.
+      if (navigationActionId !== undefined) {
+        await this.#page.evaluate(disposeNavigationWitness, navigationActionId).catch(() => {});
+      }
     }
   }
   async #readSnapshot(
@@ -434,6 +447,10 @@ export class PlaywrightWorkdayApplicationPage {
       const deadline = Date.now() + this.#navigationSettleTimeoutMs;
       while (Date.now() < deadline) {
         if (signal.aborted) return failure("operation_cancelled", "none");
+        if (before.rootSelector === WORKDAY_APPLICATION_PAGE_SELECTORS.assessment &&
+            await this.#page.getByText("You must complete the assessment test to continue with your job application.", {exact:true}).isVisible()) {
+          return failure("page_incomplete", "required_field");
+        }
         if (navigationActionId !== undefined && !currentActionBusySeen) {
           currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
         }
@@ -492,7 +509,8 @@ export class PlaywrightWorkdayApplicationPage {
           });
         }
         const remaining = deadline - Date.now();
-        if (remaining > 0) await this.#page.waitForTimeout(Math.min(50, remaining));
+        // Full application snapshots are large; keep shared-browser polling bounded.
+        if (remaining > 0) await this.#page.waitForTimeout(Math.min(250, remaining));
       }
       if (pass > 0 || signal.aborted) break;
       const source = this.#page.locator(before.rootSelector);
@@ -550,7 +568,13 @@ export class PlaywrightWorkdayApplicationPage {
     const actionId = `navigation-${occurrence.nextAction}`;
     const armed = await this.#page.evaluate(armNavigationWitness, { rootSelector, actionId });
     if (!armed) throw new TypeError("navigation witness controller unavailable");
-    await this.#page.evaluate(markNavigationWitnessClicked, actionId);
+    try {
+      await this.#page.evaluate(markNavigationWitnessClicked, actionId);
+    } catch (error) {
+      // The caller does not receive the ID until marking succeeds.
+      await this.#page.evaluate(disposeNavigationWitness, actionId).catch(() => {});
+      throw error;
+    }
     return actionId;
   }
   async #confirmStableDestination(
@@ -570,11 +594,14 @@ export class PlaywrightWorkdayApplicationPage {
     );
     let confirmed = candidate;
     while (Date.now() < deadline) {
-      await this.#page.waitForTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+      await this.#page.waitForTimeout(Math.min(250, Math.max(1, deadline - Date.now())));
       if (signal.aborted || await this.#page.locator(
         '[data-automation-id="applyFlowLoadingPage"]:visible',
       ).count() !== 0) return undefined;
-      const observed = await this.#readSnapshot(signal, true, navigationActionId);
+      // The candidate was already prepared before entering this stability window.
+      // Observe it without repeatedly opening/hydrating questionnaire controls;
+      // a changed destination returns to the outer preparation and verification loop.
+      const observed = await this.#readSnapshot(signal, false, navigationActionId);
       const observedWitness = persistedNavigationActionId === candidate.navigationWitness &&
           observed.ok && observed.value.navigationWitness === "none"
         ? persistedNavigationActionId
@@ -960,6 +987,7 @@ async function readApplicationSnapshot(
     ["questionnaire", selectors.primaryQuestionnaire],
     ["questionnaire", selectors.applicationQuestions],
     ["questionnaire", selectors.voluntaryDisclosuresAndSelfIdentify],
+    ["questionnaire", selectors.assessment],
     ["pre_review", selectors.review],
   ] as const;
   const visibleRoots = roots.flatMap(([page, selector]) =>
@@ -995,13 +1023,16 @@ async function readApplicationSnapshot(
     };
   }
   const { page: rootPage, root, selector: rootSelector } = physicalRoots[0]!;
-  const resumeInputs = [...root.querySelectorAll<HTMLInputElement>(
+  const standardFileInputs = [...root.querySelectorAll<HTMLInputElement>(
     'input[type="file"][data-automation-id="file-upload-input-ref"]',
   )].filter((input) => {
     const owner = input.closest('[data-automation-id$="-FileUpload"]');
     return !input.disabled && input.getAttribute("aria-disabled") !== "true" &&
       (owner === null || visible(owner));
   });
+  const explicitResumeInputs = standardFileInputs.filter(input =>
+    input.closest('[data-fkit-id="resumeAttachments--attachments"]') !== null);
+  const resumeInputs = explicitResumeInputs.length > 0 ? explicitResumeInputs : standardFileInputs;
   const profileControls = [...root.querySelectorAll<HTMLElement>(
     'input, textarea, select, [contenteditable="true"], [role="combobox"], ' +
       'button[data-automation-id="sourcePrompt"]',
@@ -2019,8 +2050,7 @@ async function readApplicationSnapshot(
     }
     const semanticCommitted = verified;
     verified = validationClear && semanticCommitted;
-    const resumeOwnedFile = profileRoot && input?.type === "file" &&
-      input.getAttribute("data-automation-id") === "file-upload-input-ref";
+    const resumeOwnedFile = profileRoot && input?.type === "file" && resumeInputs.includes(input);
     const fieldPage: ApplicationHandlerPage | undefined = resumeOwnedFile
       ? "resume"
       : combinedResumeProfile

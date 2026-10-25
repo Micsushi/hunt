@@ -6,6 +6,32 @@ import test from "node:test";
 import { chromium, type Page } from "playwright";
 import { applyMutation, inspectPage } from "../../../src/browser/adapter.ts";
 
+test("mixed certification attachments and resume use explicit resume ownership", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-" data-fkit-id="certification-7--attachments">
+        <label>Attachments</label><div data-automation-id="attachments-FileUpload"><input type="file" data-automation-id="file-upload-input-ref"></div>
+        <div data-automation-id="file-upload-item">Certificate.pdf</div>
+      </div>
+      <div data-automation-id="formField-" data-fkit-id="resumeAttachments--attachments">
+        <label>Upload a file</label><div data-automation-id="attachments-FileUpload"><input required type="file" data-automation-id="file-upload-input-ref"></div>
+      </div><input id="profile-detail"></main>`);
+    const observed = await new PlaywrightWorkdayApplicationPage(page).observe(AbortSignal.any([]));
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    assert.deepEqual(observed.ok && observed.value.lanes, ['resume', 'profile']);
+    const resume = createPlaywrightWorkdayResumePage(page);
+    const input = resume.locator('input[type="file"][data-automation-id="file-upload-input-ref"]');
+    assert.equal(await input.count(), 1);
+    assert.equal(await resume.locator('[data-automation-id="file-upload-item"]').count(), 0);
+    await input.setInputFiles({ name: 'Resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n') });
+    assert.deepEqual(await page.locator('input[type=file]').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).files?.length)), [0, 1]);
+    await page.locator('[data-fkit-id="resumeAttachments--attachments"]').evaluate(element => element.removeAttribute('data-fkit-id'));
+    assert.equal(await input.count(), 2); // Legacy ambiguity remains denied by the driver.
+  } finally { await browser.close(); }
+});
+
 test("conditional questionnaire uploads retain visible ownership and required file semantics", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -516,6 +542,9 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
       allowed: ["questionnaire"],
     }, new AbortController().signal);
     assert.deepEqual(revealed, { ok: true, value: { advanced: true } });
+    assert.equal(await page.evaluate(() =>
+      "__huntWorkdayNavigationAction" in window
+    ), false, "completed navigation must release its instrumentation");
     const conditional = await application.observe(new AbortController().signal);
     assert.equal(conditional.ok, true, JSON.stringify(conditional));
     if (!conditional.ok) return;
@@ -528,6 +557,9 @@ test("advances same-semantic questionnaire occurrence only after a proven Next t
       allowed: ["questionnaire"],
     }, new AbortController().signal);
     assert.deepEqual(advanced, { ok: true, value: { advanced: true } });
+    assert.equal(await page.evaluate(() =>
+      "__huntWorkdayNavigationAction" in window
+    ), false, "same-semantic navigation must release its consumed witness");
     const second = await application.observe(new AbortController().signal);
     assert.equal(second.ok, true, JSON.stringify(second));
     if (!second.ok) return;
@@ -713,16 +745,13 @@ test("synchronous pre-mounted loader aria, style, and class cycles prove same-pa
       }, new AbortController().signal), { ok: true, value: { advanced: true } }, variant.name);
       const after = await application.observe(new AbortController().signal);
       assert.equal(after.ok, true, `${variant.name}:${JSON.stringify(after)}`);
-      const witnessState = await page.evaluate(() => {
-        const state = (globalThis as unknown as Record<string, unknown>).__huntWorkdayNavigationAction;
-        return JSON.parse(JSON.stringify(state, (key, value) =>
-          ["controller", "observer", "restoreInstrumentation"].includes(key) ? undefined : value
-        ));
-      });
+      assert.equal(await page.evaluate(() =>
+        "__huntWorkdayNavigationAction" in window
+      ), false, `${variant.name}: completed navigation releases its witness`);
       if (after.ok) assert.notEqual(
         after.value.pageId,
         before.value.pageId,
-        `${variant.name}:${JSON.stringify(witnessState)}`,
+        variant.name,
       );
       await page.close();
     }

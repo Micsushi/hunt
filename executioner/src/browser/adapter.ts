@@ -2051,9 +2051,16 @@ async function bindExactFieldPopupOwner(
     popupRoot.setAttribute("data-hunt-field-popup-owner", declaredToken);
     const global = window as unknown as Record<string, unknown>;
     const registry = global.__huntFieldPopupOwners instanceof Map
-      ? global.__huntFieldPopupOwners as Map<string, { control: Element; popupRoot: Element }>
-      : new Map<string, { control: Element; popupRoot: Element }>();
-    registry.set(declaredToken, { control: controls[0]!, popupRoot });
+      ? global.__huntFieldPopupOwners as Map<string, WeakRef<Element> | { popupRoot: Element }>
+      : new Map<string, WeakRef<Element> | { popupRoot: Element }>();
+    // Popups may outlive remounted controls, but must not keep old form trees alive.
+    // Convert entries left by an older runtime and remove collected weak entries.
+    for (const [token, entry] of registry) {
+      const owner = entry instanceof WeakRef ? entry.deref() : entry.popupRoot;
+      if (owner === undefined) registry.delete(token);
+      else if (!(entry instanceof WeakRef)) registry.set(token, new WeakRef(owner));
+    }
+    registry.set(declaredToken, new WeakRef(popupRoot));
     global.__huntFieldPopupOwners = registry;
   }, { declaredToken: target.declaredToken });
 }
@@ -2914,8 +2921,9 @@ async function bindOpenedFieldPopupOwner(
         global.__huntFieldPopupOwners instanceof Map
       ? [...new Set([...(global.__huntFieldPopupOwners as Map<
           string,
-          { popupRoot: Element }
-        >).values()].map(({ popupRoot }) => popupRoot).filter((owner) =>
+          WeakRef<Element> | { popupRoot: Element }
+        >).values()].map((entry) => entry instanceof WeakRef ? entry.deref() : entry.popupRoot)
+        .filter((owner): owner is Element => owner !== undefined &&
           visible(owner) && ownsVisibleOptions(owner) &&
           owner.getAttribute("data-hunt-field-popup-preexisting") === declaredToken
         ))]

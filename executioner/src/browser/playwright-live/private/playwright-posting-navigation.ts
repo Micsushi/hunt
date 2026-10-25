@@ -7,6 +7,7 @@ import type {
 import type { PersistentPage } from "./types.ts";
 import {
   WORKDAY_COMPLETE_SIGN_IN_SELECTOR,
+  WORKDAY_EMAIL_SIGN_IN_CHOICE_SELECTOR,
   WORKDAY_MODERN_SIGN_IN_SELECTOR,
 } from "./workday-structural-catalog.ts";
 
@@ -15,7 +16,7 @@ const ACCOUNT_OR_APPLICATION_DESTINATION = [
   '[data-automation-id="signInPage"]',
   '[data-automation-id="createAccountPage"]',
   '[data-automation-id="authPage"]',
-  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
+  WORKDAY_EMAIL_SIGN_IN_CHOICE_SELECTOR,
   '[data-automation-id="emailVerificationPage"]',
   '[data-automation-id="candidateHomePage"]',
   '[data-automation-id="applyFlowMyInfoPage"]',
@@ -187,6 +188,32 @@ async function matchingCandidates(
     }
     if (matching.length > 0) return matching;
   }
+  if (action === "start_application") {
+    const semanticPage = page as unknown as Pick<Page, "getByRole" | "url">;
+    const matching: Locator[] = [];
+    for (const role of ["button", "link"] as const) {
+      const candidates = semanticPage.getByRole(role, { name: "Continue Application", exact: true });
+      for (let index = 0; index < await candidates.count(); index++) {
+        const candidate = candidates.nth(index);
+        if (await candidate.getAttribute("data-automation-id") !== "continueButton") continue;
+        const href = await candidate.getAttribute("href");
+        if (href === null) continue;
+        try {
+          const current = new URL(semanticPage.url());
+          const destination = new URL(href, current);
+          if (current.protocol !== "https:" || !/\.(?:myworkdayjobs|myworkdaysite)\.com$/i.test(current.hostname) ||
+              destination.origin !== current.origin || destination.username || destination.password || destination.search || destination.hash ||
+              !/\/job\//i.test(current.pathname) || /%2f|%5c/i.test(current.pathname + destination.pathname)) continue;
+          // Workday canonicalizes locale and location slugs in saved-draft links.
+          // The external site and final posting segment establish job identity.
+          const source = decodeURIComponent(current.pathname).match(/^\/(?:[a-z]{2}-[A-Z]{2}\/)?([^/]+)\/job\/(?:[^/]+\/)*([^/]+)\/?$/);
+          const continued = decodeURIComponent(destination.pathname).match(/^\/(?:[a-z]{2}-[A-Z]{2}\/)?([^/]+)\/job\/(?:[^/]+\/)*([^/]+)\/apply\/?$/);
+          if (source && continued && source[1] === continued[1] && source[2] === continued[2]) matching.push(candidate);
+        } catch { /* A malformed or unrelated continuation link is not an admitted action. */ }
+      }
+    }
+    return matching;
+  }
   return [];
 }
 
@@ -236,7 +263,12 @@ async function waitForAnyCandidate(
   page: PersistentPage,
   action: PostingNavigationAction,
 ): Promise<void> {
-  await Promise.any(candidateLocatorTiers(page, action).flat().map((candidate) =>
+  const candidates = candidateLocatorTiers(page, action).flat();
+  if (action === "start_application") {
+    const semanticPage = page as unknown as Pick<Page, "getByRole">;
+    for (const role of ["button", "link"] as const) candidates.push(semanticPage.getByRole(role, { name: "Continue Application", exact: true }));
+  }
+  await Promise.any(candidates.map((candidate) =>
     candidate.first().waitFor({ state: "visible", timeout: 20_000 })
   )).catch(() => undefined);
 }

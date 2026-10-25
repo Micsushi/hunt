@@ -1,3 +1,4 @@
+import { isEmptyCatalogMessage } from "../../../../form/options/catalog.ts";
 import { createHash } from "node:crypto";
 
 import {
@@ -270,6 +271,10 @@ export function createQuestionnairePageHandler(
       const mode = request.mode;
       for (const field of request.page.fields) {
         if (field.state === "hidden") continue;
+        // An optional empty catalog needs no invented selection. Required
+        // catalogs still resolve normally and remain blocked without an answer.
+        if (!field.required && ["listbox", "select", "radio"].includes(field.behavior) &&
+            field.options.length > 0 && field.options.every(option => isEmptyCatalogMessage(String(option.label)))) continue;
         if (await dependencies.fieldPresent?.(field, signal) === false) continue;
         const question = resolveQuestion(field.label);
         const category = protectedQuestionCategory(

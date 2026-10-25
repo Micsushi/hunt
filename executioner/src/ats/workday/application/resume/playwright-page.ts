@@ -10,7 +10,16 @@ export function createPlaywrightWorkdayResumePage(
 ): WorkdayResumePage {
   return Object.freeze({
     locator(selector: string): WorkdayResumeLocator {
-      return resumeLocator(page.locator(selector));
+      if (selector === '[data-automation-id="confirmDeleteFile"]') {
+        return resumeLocator(page.locator(selector));
+      }
+      // Standard upload IDs are also reused for certification attachments.
+      // Prefer Workday's explicit resume field; preserve legacy uniqueness
+      // checks when that ownership marker is absent.
+      const owner = '[data-fkit-id="resumeAttachments--attachments"]';
+      return resumeLocator(page.locator(selector).and(page.locator(
+        `${owner} *, body:not(:has(${owner})) *`,
+      )));
     },
   });
 }

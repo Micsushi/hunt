@@ -19,7 +19,7 @@ const SHORT_ACCOUNT_CREATED_VERIFICATION_SELECTOR =
 const PASSWORD_RESET_REQUIRED_SELECTOR =
   '[role="alert"]:has(:text-is("You need to reset your password due to an administrator request. Click Forgot Password to continue."))';
 const EMAIL_SIGN_IN_CHOICE_SELECTOR =
-  '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+  '[data-automation-id="SignInWithEmailButton"]';
 const MODERN_SIGN_IN_SELECTOR =
   '[data-automation-id="signInContent"]:has([data-automation-id="signInSubmitButton"]):has([data-automation-id="createAccountLink"])';
 const POSTING_SIGN_IN_SELECTOR = '[data-automation-id="navigationItem-Sign In"]';
@@ -480,7 +480,7 @@ test("a provider choice conflicting with create-account structure stays ambiguou
 
 test("hidden provider and application markers cannot classify navigation or readiness", async () => {
   const hiddenSelectors = new Set([
-    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])',
+    '[data-automation-id="SignInWithEmailButton"]',
     '[data-automation-id="candidateHomePage"]',
   ]);
   const page: WorkdayStructuralPage = {

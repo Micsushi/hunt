@@ -151,7 +151,7 @@ test("Apply Manually gives the exact destination 20 seconds without repeating a 
 
 test("Apply Manually admits the exact identity-provider choice page without self-settling email sign-in", async () => {
   const choiceSelector =
-    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])';
+    '[data-automation-id="SignInWithEmailButton"]';
   const applyPage = new SemanticPage({ "button:Apply Manually": locator() });
   const emailPage = new SemanticPage({ "button:Sign in with email": locator() });
   const adapter = new PlaywrightPostingNavigationAdapter();

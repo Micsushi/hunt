@@ -20,7 +20,6 @@ import {
 import {
   createQuestionnaireAnswerResolver,
   createQuestionnairePageHandler,
-  isCanonicalBinaryQuestionnaireLabel,
 } from
   "../../../ats/workday/application/questions/index.ts";
 import {
@@ -83,6 +82,7 @@ import { createSemanticSnapshot } from "../../../form/semantic-snapshot.ts";
 import { createFieldDriver } from "../../../interaction/drivers/registry.ts";
 import {
   workdayReviewSignatures,
+  inspectWorkdayReview as captureReviewStructure,
   type WorkdayReviewStructuralObservationV1,
 } from "../../../interaction/review/index.ts";
 import { createFieldVerifier, fieldIntentMatchesReadback } from
@@ -165,6 +165,7 @@ const applicationReadyRoots = [
   ['[data-automation-id="applyFlowSupplementaryQuestionsPage"]:visible', "Application Questions"],
   ['[data-automation-id="applyFlowVoluntaryDisclosuresPage"]:visible', "Voluntary Disclosures"],
   ['[data-automation-id="applyFlowSelfIdentifyPage"]:visible', "Self Identify"],
+  ['[data-automation-id="takeAssessmentPage"]:visible', "Take Assessment"],
   ['[data-automation-id="applyFlowReviewPage"]:visible', "Review"],
 ] as const;
 
@@ -185,6 +186,8 @@ const applicationReadyHeadingSelectors = [
   '[data-automation-id="applyFlowVoluntaryDisclosuresPage"] h2:visible',
   '[data-automation-id="applyFlowSelfIdentifyPage"] h1:visible',
   '[data-automation-id="applyFlowSelfIdentifyPage"] h2:visible',
+  '[data-automation-id="takeAssessmentPage"] h1:visible',
+  '[data-automation-id="takeAssessmentPage"] h2:visible',
   '[data-automation-id="applyFlowReviewPage"] h1:visible',
   '[data-automation-id="applyFlowReviewPage"] h2:visible',
 ].join(", ");
@@ -327,8 +330,13 @@ interface IndependentMonitorTimingSink {
   recordIndependentMonitor(durationMs: number): void;
 }
 
+export type ApplicationRuntimeSources = Pick<Stage2ApplicationWalkRuntimeBindingRequest,
+  "ownerSources" | "questionLearning"> & {
+  readonly owner?: { readonly roots: { readonly evidence: { readonly path: string } } };
+};
+
 export interface OwnedWorkdayApplicationRuntimeOptions {
-  readonly request: Stage2ApplicationWalkRuntimeBindingRequest;
+  readonly request: ApplicationRuntimeSources;
   readonly acceptances: { record(value: ApplicationLaneAcceptance): void };
   readonly nextOperationId: () => OperationId;
   readonly timeoutMs: number;
@@ -342,7 +350,7 @@ export interface OwnedWorkdayApplicationRuntimeOptions {
 
 /** Fixed browser-owner implementation. Callers supply data, never executable page code. */
 export class OwnedWorkdayApplicationRuntime {
-  #request: Stage2ApplicationWalkRuntimeBindingRequest | undefined;
+  #request: ApplicationRuntimeSources | undefined;
   #session: LiveBrowserSessionV1 | undefined;
   readonly #acceptances: OwnedWorkdayApplicationRuntimeOptions["acceptances"];
   readonly #nextOperationId: () => OperationId;
@@ -600,7 +608,7 @@ export class OwnedWorkdayApplicationRuntime {
       }
       case "reconcile_resume": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"resume">["reconcile"]>[0];
-        const monitorPageName = await this.#monitorPageForLane(page, "resume");
+        const monitorPageName = await this.#monitorPageForLane(page, "resume", signal);
         const monitorAttempt = this.#nextMutationMonitorAttempt(monitorPageName);
         await this.#monitor(
           page, monitorPageName, "before_mutation", ownedRequest.operationId, monitorAttempt, signal,
@@ -641,7 +649,7 @@ export class OwnedWorkdayApplicationRuntime {
       }
       case "reconcile_profile": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"profile">["reconcile"]>[0];
-        const monitorPageName = await this.#monitorPageForLane(page, "profile");
+        const monitorPageName = await this.#monitorPageForLane(page, "profile", signal);
         this.#assertAuthorized(signal);
         let mutationAttempted = false;
         this.#profileMutationAttempted = false;
@@ -677,8 +685,18 @@ export class OwnedWorkdayApplicationRuntime {
           inspectMissingOptions: request.ownerSources.executionPolicy?.answerFallbackPolicy ===
             "deterministic_site_valid_editable",
         });
+        const physicalProfilePage = await page.locator(
+          '[data-automation-id="applyFlowMyInfoPage"]:visible, [data-automation-id="applyFlowMyExperiencePage"]:visible, [data-automation-id="applyFlowMyExpPage"]:visible',
+        ).evaluateAll(roots => roots.map(root => root.getAttribute("data-automation-id")).sort().join("|"));
+        const observedPending = new Map<string, ReturnType<typeof observedPendingProfileQuestions>[number]>();
         const profilePage: WorkdayProfilePagePort = {
-          inspect: (innerSignal, inspectInteractiveOptions) => playwrightProfilePage.inspect(innerSignal, inspectInteractiveOptions),
+          inspect: async (innerSignal, inspectInteractiveOptions) => {
+            const snapshot = await playwrightProfilePage.inspect(innerSignal, inspectInteractiveOptions);
+            if (request.owner === undefined) for (const question of observedPendingProfileQuestions(snapshot, input.pageId)) {
+              observedPending.set(JSON.stringify([question.rowKey, question.fieldId, question.exactQuestion, question.options]), question);
+            }
+            return snapshot;
+          },
           inspectionFailure: () => playwrightProfilePage.inspectionFailure(),
           inspectionFacts: () => playwrightProfilePage.inspectionFacts(),
           commit: async (commit, innerSignal) => {
@@ -693,14 +711,24 @@ export class OwnedWorkdayApplicationRuntime {
             mutationAttempted = true;
             this.#profileMutationAttempted = true;
             this.#assertAuthorized(innerSignal);
-            return playwrightProfilePage.addOwnedRow(section, innerSignal);
+            try { return await playwrightProfilePage.addOwnedRow(section, innerSignal); }
+            catch (error) {
+              this.#trace?.("profile_row_mutation_failed", { fieldId: section, failureStage: "add_row",
+                errorClass: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "row_structure_unavailable" });
+              throw error;
+            }
           },
           removeOwnedRow: async (section, rowId, innerSignal) => {
             await startMutationMonitor(innerSignal);
             mutationAttempted = true;
             this.#profileMutationAttempted = true;
             this.#assertAuthorized(innerSignal);
-            return playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal);
+            try { return await playwrightProfilePage.removeOwnedRow(section, rowId, innerSignal); }
+            catch (error) {
+              this.#trace?.("profile_row_mutation_failed", { fieldId: section, failureStage: "remove_row",
+                errorClass: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "row_structure_unavailable" });
+              throw error;
+            }
           },
           interaction: (controlId) => playwrightProfilePage.interaction(controlId),
         };
@@ -751,7 +779,9 @@ export class OwnedWorkdayApplicationRuntime {
         try {
           result = await completeWorkdayProfilePage(
             request.ownerSources.profilePlan,
-            learning.page,
+            // Campaign evidence requires an independent observer acknowledgement.
+            // Product sessions use the same driver and verified readbacks without that harness.
+            request.owner === undefined ? profilePage : learning.page,
             signal,
             request.ownerSources.executionPolicy?.answerFallbackPolicy ??
               "deterministic_site_valid_editable",
@@ -766,6 +796,13 @@ export class OwnedWorkdayApplicationRuntime {
           reconciliationError = error;
           throw error;
         } finally {
+          if (request.owner === undefined) {
+            for (const question of observedPending.values()) {
+              const committed = result?.kind === "verified" && result.committedFields.some(field =>
+                field.fieldId === question.fieldId && field.label === question.exactQuestion);
+              if (!committed) request.questionLearning?.recordPendingProfile?.(question);
+            }
+          }
           try {
             if (mutationMonitorStarted) {
               await this.#monitor(
@@ -784,6 +821,7 @@ export class OwnedWorkdayApplicationRuntime {
           }
           learningSha256 = learning.write();
         }
+        if (result === undefined) throw new TypeError("profile reconciliation result unavailable");
         if (result.kind !== "verified" || result.ownedDuplicateRows !== 0) {
           this.#profilePreservationCandidate = result.kind === "blocked" &&
             (result.code === "profile_port_unavailable" ||
@@ -892,10 +930,15 @@ export class OwnedWorkdayApplicationRuntime {
               });
             }
           },
-          recordReviewExpectations: () =>
-            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields, input.pageId),
+          recordReviewExpectations: async () => {
+            const readback = result.verifiedFields.some(field => field.answerType === "multi_select" && field.rowKey === undefined)
+              ? await playwrightProfilePage.inspect(signal, false) : undefined;
+            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields,
+              `${input.pageId}:${physicalProfilePage || monitorPageName}`,
+              new Map(readback?.controls.map(control => [control.fieldId, control.readback])));
+          },
           verifyStablePage: async () =>
-            await this.#monitorPageForLane(page, "profile") === monitorPageName,
+            await this.#monitorPageForLane(page, "profile", signal) === monitorPageName,
           assertAuthorized: () => this.#assertAuthorized(signal),
           trace: this.#trace,
         });
@@ -903,7 +946,7 @@ export class OwnedWorkdayApplicationRuntime {
       }
       case "reconcile_questionnaire": {
         const input = operation.input as Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0];
-        const monitorPageName = await this.#monitorPageForLane(page, "questionnaire");
+        const monitorPageName = await this.#monitorPageForLane(page, "questionnaire", signal);
         await this.#monitor(
           page,
           monitorPageName,
@@ -921,7 +964,7 @@ export class OwnedWorkdayApplicationRuntime {
           monitorPageName,
           signal,
         );
-        if (await this.#monitorPageForLane(page, "questionnaire") !== monitorPageName) {
+        if (await this.#monitorPageForLane(page, "questionnaire", signal) !== monitorPageName) {
           throw new TypeError("questionnaire reconciliation page drift denied");
         }
         this.#assertAuthorized(signal);
@@ -996,9 +1039,39 @@ export class OwnedWorkdayApplicationRuntime {
         ).observe(signal);
         if (!application.ok || application.value.page !== "pre_review" ||
             application.value.submitActivated) throw new TypeError("Review page is unavailable");
+        const reviewDeadline = performance.now() + Math.min(this.#timeoutMs, 10_000);
+        let beforeStructure = await captureReviewStructure(page);
+        let pendingTraced = false;
+        while (true) {
+          this.#assertAuthorized(signal);
+          try { assertAcceptedReviewStructure(beforeStructure); break; }
+          catch (error) {
+            if (!pendingTraced) {
+              this.#trace?.("review_structure_pending", { structure: beforeStructure });
+              pendingTraced = true;
+            }
+            if (performance.now() >= reviewDeadline) throw error;
+          }
+          await page.waitForTimeout(Math.min(100, Math.max(1, reviewDeadline - performance.now())));
+          this.#assertAuthorized(signal);
+          beforeStructure = await captureReviewStructure(page);
+        }
+        // Workday collapses long Skills summaries behind a presentation-only
+        // disclosure. Reveal the owned list before verifying every selected value.
+        const moreSkills = page.locator('[data-automation-id="applyFlowReviewPage"] [role="group"][aria-labelledby="skills-section"]:has(> [data-automation-id="skills"])')
+          .getByRole("button", { name: /^MORE \([1-9]\d*\)$/iu });
+        const moreSkillsCount = await moreSkills.count();
+        if (moreSkillsCount > 1) throw new TypeError("Review skills disclosure ambiguous");
+        if (moreSkillsCount === 1) {
+          this.#assertAuthorized(signal);
+          if (!await moreSkills.isVisible() || !await moreSkills.isEnabled() || await moreSkills.getAttribute("type") !== "button") {
+            throw new TypeError("Review skills disclosure unavailable");
+          }
+          await moreSkills.click({ timeout: this.#timeoutMs });
+          await moreSkills.waitFor({ state: "hidden", timeout: this.#timeoutMs });
+          this.#assertAuthorized(signal);
+        }
         const beforeReview = await captureIndependentReviewFields(page, this.#reviewExpected, this.#trace);
-        const beforeStructure = await captureReviewStructure(page);
-        assertAcceptedReviewStructure(beforeStructure);
         await this.#monitor(
           page,
           "review",
@@ -1101,11 +1174,12 @@ export class OwnedWorkdayApplicationRuntime {
   async #monitorPageForLane(
     page: Page,
     lane: "resume" | "profile" | "questionnaire",
+    signal: AbortSignal,
   ): Promise<"resume" | "profile" | "questionnaire"> {
     const observed = await new PlaywrightWorkdayApplicationPage(
       page,
       { timeoutMs: this.#timeoutMs },
-    ).observe(AbortSignal.any([]));
+    ).observe(signal);
     if (!observed.ok || observed.value.submitActivated || observed.value.page === "pre_review") {
       throw new TypeError("application mutation page denied");
     }
@@ -1142,7 +1216,7 @@ export class OwnedWorkdayApplicationRuntime {
   async #reconcileQuestionnaire(
     page: Page,
     input: Parameters<ApplicationPageHandlerPort<"questionnaire">["reconcile"]>[0],
-    request: Stage2ApplicationWalkRuntimeBindingRequest,
+    request: ApplicationRuntimeSources,
     session: LiveBrowserSessionV1,
     monitorPageName: "resume" | "profile" | "questionnaire",
     signal: AbortSignal,
@@ -1271,8 +1345,11 @@ export class OwnedWorkdayApplicationRuntime {
           taxonomyFields: taxonomy.fieldCount,
           taxonomyRequired: taxonomy.requiredFieldCount,
         });
+        const assessmentOnly = visibleFields.length === 0 &&
+          await page.locator(`${WORKDAY_APPLICATION_PAGE_SELECTORS.assessment}:visible`).count() === 1 &&
+          await page.locator(`${WORKDAY_APPLICATION_PAGE_SELECTORS.assessment} [data-automation-id="inlineAssessmentButton"]:visible`).count() === 1;
         const matches = !(
-          visibleFields.length === 0 ||
+          visibleFields.length === 0 && !assessmentOnly ||
           !application.ok || application.value.page !== "questionnaire" ||
           application.value.requiredFields.length !== requiredFieldCount ||
           taxonomy.fieldCount !== visibleFields.length ||
@@ -1281,11 +1358,19 @@ export class OwnedWorkdayApplicationRuntime {
         return { observed, snapshot, application, taxonomy, visibleFields, requiredFieldCount, matches };
       };
       let coverage = await observeCoverage();
-      // Conditional controls can mount between independent observations.
-      // Rebind and compare again; never accept permanently missing coverage.
-      for (let settle = 0; !coverage.matches && settle < 10; settle += 1) {
+      const hydrationDeadline = performance.now() + Math.min(this.#timeoutMs, 30_000);
+      // A newly visible questionnaire shell can precede every field by seconds.
+      // Give coherent zero coverage the bounded page timeout, but keep the
+      // shorter reconciliation budget for disagreement between observers.
+      let mismatchedSamples = 0;
+      while (!coverage.matches) {
+        const awaitingFields = coverage.visibleFields.length === 0 &&
+          coverage.application.ok && coverage.application.value.page === "questionnaire" &&
+          coverage.application.value.requiredFields.length === 0 &&
+          coverage.taxonomy.fieldCount === 0 && coverage.taxonomy.requiredFieldCount === 0;
+        if (awaitingFields ? performance.now() >= hydrationDeadline : mismatchedSamples++ >= 10) break;
         this.#assertAuthorized(signal);
-        await page.waitForTimeout(100);
+        await page.waitForTimeout(awaitingFields ? 500 : 100);
         await prepareQuestionnaireTargets(
           page, input.pageId, this.#timeoutMs,
           () => this.#assertAuthorized(signal), this.#trace, this.#questionnaireCountry(),
@@ -1556,6 +1641,9 @@ export class OwnedWorkdayApplicationRuntime {
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
         this.#trace?.("questionnaire_reconciliation_uncertain", {
+          ...(reconciliationContext.fieldId === null ? {} : { fieldId: reconciliationContext.fieldId }),
+          ...(reconciliationContext.uiBehavior === null ? {} : { uiBehavior: reconciliationContext.uiBehavior }),
+          failureStage: reconciliationContext.failureStage,
           code: completed.error.code,
           learningPresent: questionLearning !== undefined,
         });
@@ -1705,9 +1793,11 @@ export class OwnedWorkdayApplicationRuntime {
     verifiedFields: readonly {
       readonly fieldId: string;
       readonly provenance: string;
+      readonly uiBehavior: string;
       readonly rowKey?: string;
     }[],
     pageId: string,
+    committedReadbacks: ReadonlyMap<string, string | null>,
   ): void {
     const scalarPlans = plan.fields;
     const repeatablePlans = plan.repeatables.flatMap(({ rows }) =>
@@ -1726,14 +1816,28 @@ export class OwnedWorkdayApplicationRuntime {
       }
       const plan = candidates[0];
       if (plan.answer.kind !== "answered") throw new TypeError("profile review truth unavailable");
-      this.#recordReviewExpectation(
-        verifiedField.rowKey === undefined
+      const reviewFieldId = verifiedField.rowKey === undefined
           ? verifiedField.fieldId.startsWith("unknown.")
-            ? `page.${createHash("sha256").update(pageId).digest("hex").slice(0, 16)}.${verifiedField.fieldId}`
+            ? unknownProfileReviewFieldId(pageId, verifiedField.fieldId)
             : verifiedField.fieldId
-          : repeatableReviewFieldId(verifiedField.rowKey, verifiedField.fieldId),
+          : repeatableReviewFieldId(verifiedField.rowKey, verifiedField.fieldId);
+      if (plan.answerType === "multi_select") {
+        // The picker has independently verified the employer's selected labels.
+        // Review renders those labels, which can differ from requested aliases.
+        const readback = verifiedField.rowKey === undefined ? committedReadbacks.get(verifiedField.fieldId) : plan.answer.value;
+        if (readback == null) throw new TypeError("profile review selection readback unavailable");
+        const values: unknown = readback.trim().startsWith("[") ? JSON.parse(readback) : [readback];
+        if (!Array.isArray(values) || values.length === 0 || values.some(value => typeof value !== "string" || value.trim() === "")) {
+          throw new TypeError("profile review selection unavailable");
+        }
+        values.forEach((value, index) => this.#recordReviewExpectation(`${reviewFieldId}.selection.${index}`, verifiedField.provenance, value));
+        continue;
+      }
+      this.#recordReviewExpectation(
+        reviewFieldId,
         verifiedField.provenance,
-        plan.optionMapping?.visibleOption ?? plan.answer.value,
+        profileReviewDisplayValue(plan.answerType, verifiedField.uiBehavior,
+          plan.optionMapping?.visibleOption ?? plan.answer.value),
       );
     }
   }
@@ -1754,6 +1858,30 @@ export class OwnedWorkdayApplicationRuntime {
     }));
   }
 
+}
+
+export function observedPendingProfileQuestions(snapshot: ProfilePageSnapshot, pageId: string) {
+  return [
+    ...snapshot.controls.map(control => ({ control, rowKey: null as string | null })),
+    ...snapshot.rows.flatMap(row => row.controls.map(control => ({ control,
+      rowKey: `observed-${createHash("sha256").update(row.rowId).digest("hex").slice(0, 16)}` }))),
+  ].filter(({ control }) => control.fieldId.startsWith("unknown.") && !!control.label)
+    .map(({ control, rowKey }) => {
+      const answerType = control.uiBehavior === "checkbox" ? "boolean" as const
+        : control.uiBehavior === "multi_select" ? "multi_select" as const
+        : ["radio_group", "select", "search_select"].includes(control.uiBehavior) ? "single_select" as const
+        : control.uiBehavior === "date" ? "date" as const
+        : control.uiBehavior === "file" ? "file" as const : "text" as const;
+      return {
+        pageId, rowKey, questionId: `question.profile.${control.fieldId}`, fieldId: control.fieldId,
+        exactQuestion: control.label!, required: control.required, semanticQuestionType: "unknown" as const,
+        answerType, controlType: profilePendingControlType(control.uiBehavior), options: control.allowedOptions ?? [],
+        constraints: profilePendingConstraints({ answerType, constraints: control.constraints }),
+        conditionalReveal: false, testDefault: null, actualOwnerValue: null, needsUserValue: true as const,
+        provenance: null, validation: "not_attempted" as const, committedReadback: null,
+        observedUi: { behavior: control.uiBehavior, variant: control.uiVariant },
+      };
+    });
 }
 
 function profilePendingAnswerType(
@@ -2114,6 +2242,21 @@ function questionnaireReconciliationError(error: unknown): string {
   return "unknown_error";
 }
 
+export function unknownProfileReviewFieldId(physicalPageId: string, fieldId: string): string {
+  return `page.${createHash("sha256").update(physicalPageId).digest("hex").slice(0, 16)}.${fieldId}`;
+}
+
+export function profileReviewDisplayValue(answerType: string, uiBehavior: string, value: string): string {
+  // Workday summarizes committed checkbox booleans as Yes/No. Do not reinterpret
+  // arbitrary text or radio answers merely because they contain true/false.
+  if (answerType === "boolean" && uiBehavior === "checkbox") {
+    if (value === "true") return "Yes";
+    if (value === "false") return "No";
+  }
+  if (answerType === "month" && /^(?:0?[1-9]|1[0-2])$/u.test(value)) return value.padStart(2, "0");
+  return value;
+}
+
 function normalizeReviewValue(value: string): string {
   return value.normalize("NFC").replace(/\s+/gu, " ").trim();
 }
@@ -2188,6 +2331,7 @@ function applicationMonitorPage(
                 '[data-automation-id="applyFlowApplicationQuestionsPage"]',
                 '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
                 '[data-automation-id="applyFlowSelfIdentifyPage"]',
+                '[data-automation-id="takeAssessmentPage"]',
               ];
       for (const selector of [
         roots.flatMap((root) => [`${root} h1:visible`, `${root} h2:visible`]).join(", "),
@@ -2234,6 +2378,7 @@ export async function monitorQuestionnaireCoverage(page: Page): Promise<{
       '[data-automation-id="applyFlowApplicationQuestionsPage"]',
       '[data-automation-id="applyFlowVoluntaryDisclosuresPage"]',
       '[data-automation-id="applyFlowSelfIdentifyPage"]',
+      '[data-automation-id="takeAssessmentPage"]',
     ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
       .filter(visible)
       .filter((candidate, _index, all) => all.every((root) =>
@@ -2782,6 +2927,8 @@ async function captureIndependentReviewFields(
     const realCount = await realRows.count();
     const byIdentity = new Map([...expected.values()].map((fact) => [fact.rowIdentity, fact]));
     if (byIdentity.size !== expected.size) throw new TypeError("Review identities ambiguous");
+    const factsForIdentity = (identity: string) => [...expected.values()].filter(fact =>
+      fact.rowIdentity === identity || fact.rowIdentity.replace(/\.selection\.\d+$/u, "") === identity);
     const identities = await realRows.evaluateAll((rows) => rows.map((row) =>
       row.getAttribute("data-automation-id") ?? ""
     ));
@@ -2795,7 +2942,7 @@ async function captureIndependentReviewFields(
         },
       })}\n`);
     }
-    const expectedIdentityCount = identities.filter((identity) => byIdentity.has(identity)).length;
+    const expectedIdentityCount = identities.filter((identity) => factsForIdentity(identity).length > 0).length;
     trace?.("review_row_identity_observed", {
       fieldCount: expected.size, candidateCount: realCount, successCount: expectedIdentityCount,
     });
@@ -2804,8 +2951,8 @@ async function captureIndependentReviewFields(
       for (let index = 0; index < realCount; index += 1) {
         const row = realRows.nth(index);
         const identity = identities[index];
-        const fact = identity === undefined ? undefined : byIdentity.get(identity);
-        if (fact === undefined) {
+        const facts = identity === undefined ? [] : factsForIdentity(identity);
+        if (facts.length === 0) {
           extraIds.push(identity ?? "");
           continue;
         }
@@ -2819,17 +2966,19 @@ async function captureIndependentReviewFields(
             .map((element) => element.textContent ?? "");
           return leaves.length === 0 ? [root.textContent ?? ""] : leaves;
         });
-        const matches = values.map(normalizeReviewValue).filter((value) =>
-          value !== "" && createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256
-        );
-        if (matches.length !== 1) {
-          trace?.("review_field_mismatch", { fieldId: fact.fieldId, candidateCount: matches.length });
-          throw new TypeError("Review field mismatch");
+        for (const fact of facts) {
+          const matches = values.map(normalizeReviewValue).filter((value) =>
+            value !== "" && createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256
+          );
+          if (matches.length !== 1) {
+            trace?.("review_field_mismatch", { fieldId: fact.fieldId, candidateCount: matches.length });
+            throw new TypeError("Review field mismatch");
+          }
+          verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
         }
-        verifyReviewBinding(fact, fact.fieldId, matches[0]!, seen);
       }
       logReviewStructuralDrift(expected.size, realCount, extraIds);
-    } else if (realCount === 1 && identities[0] === "formField-") {
+    } else if (realCount > 0 && identities.every((identity) => identity === "formField-")) {
       await verifyWorkdayReviewSummary(page, expected, trace);
       expected.forEach((_fact, id) => seen.add(id));
     } else {
@@ -2931,7 +3080,11 @@ async function verifyWorkdayReviewSummary(
       },
     })}\n`);
   }
-  if (missing.length !== 0) throw new TypeError("Review field mismatch");
+  if (missing.length !== 0) {
+    const missingDigests = new Set(missing.map(([digest]) => digest));
+    const missingFieldIds = [...expected].filter(([, { valueSha256 }]) => missingDigests.has(valueSha256)).map(([fieldId]) => fieldId);
+    throw new TypeError(`Review field mismatch: ${JSON.stringify({ missingFieldIds })}`);
+  }
 }
 
 export function reviewAnswerCandidates(value: string): ReadonlySet<string> {
@@ -2942,13 +3095,18 @@ export function reviewAnswerCandidates(value: string): ReadonlySet<string> {
   if (words.length <= 12 && !/^No Response$/iu.test(normalized)) {
     for (let start = 0; start < words.length; start += 1) {
       for (let length = 1; length <= 8 && start + length <= words.length; length += 1) {
-        const span = words.slice(start, start + length).join(" ")
-          .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "");
+        const exactSpan = words.slice(start, start + length).join(" ");
+        candidates.add(exactSpan);
+        const span = exactSpan.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "");
         if (span !== "") candidates.add(span);
       }
     }
   }
   const digitGroups = normalized.match(/\d+/gu) ?? [];
+  // North American Review phones may combine +1 with the ten-digit national
+  // number. Only this explicit dialing prefix permits removing a digit.
+  const compactNorthAmericanPhone = /^\+1(\d{10})(?=\s|$)/u.exec(normalized);
+  if (compactNorthAmericanPhone !== null) candidates.add(compactNorthAmericanPhone[1]!);
   for (let start = 0; start < digitGroups.length; start += 1) {
     let digits = "";
     for (let end = start; end < digitGroups.length; end += 1) {
@@ -3009,32 +3167,6 @@ function isAcceptedFieldId(value: string): boolean {
   return /^[a-z][a-z0-9._-]{0,127}$/u.test(value);
 }
 
-async function captureReviewStructure(page: Page): Promise<WorkdayReviewStructuralObservationV1> {
-  const root = page.locator(workdayReviewSignatures.reviewRoot);
-  const active = page.locator(workdayReviewSignatures.activeStep);
-  const errors = page.locator(workdayReviewSignatures.validationError);
-  const submit = page.locator(workdayReviewSignatures.finalSubmitScope).getByRole("button", {
-    name: workdayReviewSignatures.finalSubmitName,
-  });
-  const [rootCount, activeCount, errorCount, submitCount] = await Promise.all([
-    root.count(), active.count(), errors.count(), submit.count(),
-  ]);
-  if ([rootCount, activeCount, errorCount, submitCount].some((value) =>
-    !Number.isInteger(value) || value < 0 || value > 64
-  )) throw new TypeError("Review structure denied");
-  return Object.freeze({
-    schemaVersion: 1,
-    reviewRoot: Object.freeze({ count: rootCount, visible: rootCount === 1 && await root.isVisible() }),
-    activeStep: Object.freeze({ count: activeCount, visible: activeCount === 1 && await active.isVisible() }),
-    validationErrorCount: errorCount,
-    finalSubmit: Object.freeze({
-      count: submitCount,
-      visible: submitCount === 1 && await submit.isVisible(),
-      enabled: submitCount === 1 && await submit.isEnabled(),
-    }),
-  });
-}
-
 function assertAcceptedReviewStructure(
   structure: WorkdayReviewStructuralObservationV1,
 ): void {
@@ -3043,7 +3175,7 @@ function assertAcceptedReviewStructure(
     structure.activeStep.count !== 1 || !structure.activeStep.visible ||
     structure.validationErrorCount !== 0 ||
     structure.finalSubmit.count !== 1 || !structure.finalSubmit.visible
-  ) throw new TypeError("Review structure denied");
+  ) throw new TypeError(`Review structure denied: ${JSON.stringify(structure)}`);
 }
 
 function reviewStructureChanges(
@@ -3155,6 +3287,7 @@ export async function bindQuestionnaireTargets(
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
+      selectors.assessment,
     ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)]);
     const roots = candidateRoots.filter(visible);
     if (roots.length !== 1) return false;
@@ -3464,6 +3597,7 @@ export async function questionnairePopupHydrationTargets(
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
+      selectors.assessment,
     ].flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)])
       .filter(visible);
     if (roots.length !== 1) return [];
@@ -3491,7 +3625,6 @@ async function prepareQuestionnaireTargets(
 ): Promise<void> {
   await bindQuestionnaireTargets(page, pageId);
   await seedRenderedQuestionnairePopupOptions(page);
-  await seedCanonicalBinaryQuestionnaireOptions(page);
   await bindQuestionnaireTargets(page, pageId);
   for (let hydration = 0; hydration < 128; hydration += 1) {
     const targetToken = (await questionnairePopupHydrationTargets(page))[0];
@@ -3536,6 +3669,7 @@ async function prepareNavigationQuestionnaireSnapshot(
       selectors.primaryQuestionnaire,
       selectors.applicationQuestions,
       selectors.voluntaryDisclosuresAndSelfIdentify,
+      selectors.assessment,
     ].flatMap((selector) => [...document.querySelectorAll(selector)]).filter(visible).length;
   }, { selectors: WORKDAY_APPLICATION_PAGE_SELECTORS });
   if (questionnaireRootCount === 0) return;
@@ -3582,30 +3716,6 @@ async function seedRenderedQuestionnairePopupOptions(page: Page): Promise<void> 
       }
     }
   }, MAX_OBSERVED_CHOICE_OPTIONS);
-}
-
-export async function seedCanonicalBinaryQuestionnaireOptions(page: Page): Promise<void> {
-  const candidates = await page.evaluate(() => {
-    const normalize = (value: string | null | undefined) =>
-      (value ?? "").normalize("NFC").replace(/\s+/gu, " ").trim();
-    return [...document.querySelectorAll<HTMLElement>(
-      'button[aria-haspopup="listbox"][data-hunt-target-token]:not([data-hunt-popup-options])' +
-        ':not([data-hunt-deferred-options])',
-    )].map((control) => ({
-      token: control.getAttribute("data-hunt-target-token") ?? "",
-      label: normalize(control.closest(
-        '[data-automation-id="formField"], [data-automation-id^="formField-"]',
-      )?.querySelector("label, legend")?.textContent),
-    })).filter(({ token, label }) => token !== "" && label !== "");
-  });
-  for (const candidate of candidates) {
-    if (!isCanonicalBinaryQuestionnaireLabel(candidate.label)) continue;
-    const target = page.locator(`[data-hunt-target-token="${candidate.token}"]`);
-    if (await target.count() !== 1 || !await target.isVisible()) continue;
-    await target.evaluate((control) => {
-      control.setAttribute("data-hunt-deferred-options", '["Yes","No"]');
-    });
-  }
 }
 
 export async function hydrateQuestionnairePopupOptions(
@@ -3763,8 +3873,18 @@ export async function hydrateQuestionnairePopupOptions(
     throw new TypeError("questionnaire popup options denied");
   }
   const rebound = page.locator(`[data-hunt-target-token="${targetToken}"]`);
-  if (await rebound.count() !== 1 || !await rebound.isVisible()) {
-    throw new TypeError("questionnaire popup target unavailable after close");
+  if (await rebound.count() > 1) throw new TypeError("questionnaire popup target is ambiguous after close");
+  if (await rebound.count() === 0 || !await rebound.isVisible()) {
+    // Conditional fields can disappear while their parent answer settles.
+    // Discard this discovery rather than attach its choices to a replacement.
+    // The bounded preparation loop rescans and independently checks coverage.
+    await page.locator(`[data-hunt-popup-hydration-preexisting="${targetToken}"], [data-hunt-popup-hydration-owner="${targetToken}"]`)
+      .evaluateAll(elements => elements.forEach(element => {
+        element.removeAttribute("data-hunt-popup-hydration-preexisting");
+        element.removeAttribute("data-hunt-popup-hydration-owner");
+      }));
+    await bindQuestionnaireTargets(page, pageId);
+    return;
   }
   const selectedAfter = await popupSelectedValue(rebound);
   if (selectedAfter !== selectedBefore) {

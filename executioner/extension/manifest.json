@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Hunt C3",
+  "version": "0.1.2",
+  "minimum_chrome_version": "125",
+  "description": "Fill supported job applications in selected tabs and review them before submission.",
+  "permissions": ["debugger", "tabs", "storage", "activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1:47831/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Fill with C3" }
+}

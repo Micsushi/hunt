@@ -157,6 +157,8 @@ export class GmailImapFailure extends Error {
 
 export class GmailImapClient {
   readonly #executable: string;
+  #active = 0;
+  readonly #waiting: Array<() => void> = [];
 
   constructor(executable = "python.exe") {
     this.#executable = executable;
@@ -167,9 +169,11 @@ export class GmailImapClient {
     window: GmailImapQueryWindow,
     signal: AbortSignal,
   ): Promise<readonly QueriedGmailImapMessage[]> {
-    if (signal.aborted) throw new GmailImapFailure("operation_cancelled");
-    const input = encodeGmailImapQueryRequest(authority, window);
+    await this.#acquire(signal);
+    let input: Buffer | undefined;
     try {
+      if (signal.aborted) throw new GmailImapFailure("operation_cancelled");
+      input = encodeGmailImapQueryRequest(authority, window);
       const output = await this.#run(input, signal);
       try {
         return parseOutput(output, authority.verificationHost, window);
@@ -177,8 +181,25 @@ export class GmailImapClient {
         output.fill(0);
       }
     } finally {
-      input.fill(0);
+      input?.fill(0);
+      this.#active--;
+      this.#waiting.shift()?.();
     }
+  }
+
+  async #acquire(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new GmailImapFailure("operation_cancelled");
+    if (this.#active < 4) { this.#active++; return; }
+    await new Promise<void>((resolve, reject) => {
+      const admit = () => { signal.removeEventListener("abort", cancel); this.#active++; resolve(); };
+      const cancel = () => {
+        const index = this.#waiting.indexOf(admit);
+        if (index >= 0) this.#waiting.splice(index, 1);
+        reject(new GmailImapFailure("operation_cancelled"));
+      };
+      this.#waiting.push(admit);
+      signal.addEventListener("abort", cancel, { once: true });
+    });
   }
 
   #run(input: Uint8Array, signal: AbortSignal): Promise<Uint8Array> {
@@ -191,6 +212,7 @@ export class GmailImapClient {
       const chunks: Buffer[] = [];
       let size = 0;
       let settled = false;
+      let stopped: GmailImapFailure | undefined;
       const finish = (error?: GmailImapFailure, value?: Uint8Array) => {
         if (settled) return;
         settled = true;
@@ -201,27 +223,29 @@ export class GmailImapClient {
         else resolve(value!);
       };
       const cancel = () => {
+        stopped ??= new GmailImapFailure("operation_cancelled");
         child.kill();
-        finish(new GmailImapFailure("operation_cancelled"));
       };
       const timer = setTimeout(() => {
+        stopped ??= new GmailImapFailure("gmail_network_unavailable");
         child.kill();
-        finish(new GmailImapFailure("gmail_network_unavailable"));
       }, timeoutMs);
       signal.addEventListener("abort", cancel, { once: true });
-      child.once("error", () => finish(new GmailImapFailure("gmail_network_unavailable")));
+      child.once("error", () => { stopped ??= new GmailImapFailure("gmail_network_unavailable"); });
       child.stdout.on("data", (chunk: Buffer) => {
+        if (stopped || settled) { chunk.fill(0); return; }
         size += chunk.byteLength;
         if (size > maximumOutputBytes) {
           chunk.fill(0);
+          stopped = new GmailImapFailure("mailbox_query_invalid");
           child.kill();
-          finish(new GmailImapFailure("mailbox_query_invalid"));
           return;
         }
         chunks.push(Buffer.from(chunk));
         chunk.fill(0);
       });
       child.once("close", (code) => {
+        if (stopped) { finish(stopped); return; }
         if (code !== 0) {
           finish(new GmailImapFailure(code === 2 ? "gmail_auth_denied" : code === 4 ? "mailbox_query_invalid" : "gmail_network_unavailable"));
           return;

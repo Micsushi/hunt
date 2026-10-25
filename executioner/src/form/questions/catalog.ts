@@ -148,6 +148,12 @@ const questionAliasCatalog = Object.freeze([
     { kind: "profile", factId: "weekly_hours", ownerProvidedOnly: true },
   ),
   aliasEntry(
+    "workday-question-travel-percentage",
+    ["Travel percentage"],
+    ["text"],
+    { kind: "profile", factId: "travel_percentage", ownerProvidedOnly: true },
+  ),
+  aliasEntry(
     "workday-question-notice-period-days",
     ["Notice period in days"],
     ["text", "textarea", "select", "listbox"],
@@ -325,7 +331,7 @@ const questionSemanticCatalog = Object.freeze([
   { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
   { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
   { id: "workday-placeholder-associate-referral", keywordGroups: [["referred", "associate"], ["referred", "employee"]] },
-  { id: "workday-question-current-associate", keywordGroups: [["current", "integer", "associate"], ["currently", "integer", "associate"]] },
+  { id: "workday-question-current-associate", keywordGroups: [["current", "integer", "associate"], ["currently", "integer", "associate"], ["currently", "work", "at"], ["currently", "employed", "by"], ["currently", "employed", "with"]] },
   { id: "workday-question-previously-applied", keywordGroups: [["previously", "applied"], ["applied", "before"]] },
   { id: "workday-question-essential-functions", keywordGroups: [["able", "perform", "essential", "functions"]] },
   { id: "workday-question-employment-agreement", keywordGroups: [["nda"], ["non", "compete"], ["company", "agreement", "prevent"]] },
@@ -344,6 +350,7 @@ const generatedLearningDefaults = Object.freeze({
   "s1-question-country": "Canada",
   "workday-question-desired-salary": 1,
   "workday-question-weekly-hours": 40,
+  "workday-question-travel-percentage": 1,
   "workday-question-notice-period-days": 0,
   "workday-question-years-experience": 0,
 } as const satisfies Partial<Record<CanonicalQuestionId, string | number | boolean>>);
@@ -355,6 +362,13 @@ export function generatedLearningDefaultFor(
 }
 
 export function resolveQuestion(text: string) {
+  // A numeric amount, not a yes/no willingness or a travel narrative.
+  const value = text.normalize("NFKC").toLowerCase();
+  if (/\btravel\b/u.test(value) &&
+      /(?:\b(?:what|which)\s+(?:percentage|percent)\b|\bhow much\s*%|\b(?:enter|specify|provide|indicate|mention)\b[^?!.]*\bpercentage\b)/u.test(value) &&
+      !/\b(?:describe|explain|why)\b/u.test(value)) {
+    return resolveCatalogText(questionAliasCatalog, "Travel percentage");
+  }
   const canonical = resolveCatalogText(questionCatalog, text);
   if (canonical.kind !== "unknown") return canonical;
   const alias = resolveCatalogText(questionAliasCatalog, text);

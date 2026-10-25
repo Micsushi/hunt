@@ -34,7 +34,13 @@ export function mapVisibleOption(
   const wanted = optionKey(
     typeof value === "boolean" ? (value ? "yes" : "no") : String(value),
   );
-  const matches = options.filter(({ label }) => optionKey(label) === wanted);
+  let matches = options.filter(({ label }) => optionKey(label) === wanted);
+  // Employers often qualify a binary answer ("Yes, I am over 18").
+  // Only accept one matching polarity; multiple qualified answers need more context.
+  if (matches.length === 0 && typeof value === "boolean") {
+    const polarity = value ? /^yes\s*[,:–-]/iu : /^no\s*[,:–-]/iu;
+    matches = options.filter(({ label }) => polarity.test(String(label).trim()));
+  }
 
   if (matches.length === 0) {
     return Object.freeze({ kind: "option_no_match" });

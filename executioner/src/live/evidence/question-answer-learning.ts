@@ -7,6 +7,7 @@ import type {
   FieldObservation,
   QuestionId,
 } from "../../contracts/index.ts";
+import { isSharedProfileUiType, type SharedProfileUiType } from "../../deterministic/ui-state-model.ts";
 import { isSupportedUiBehavior } from "../../deterministic/supported-controls.ts";
 import {
   admitApplicationExecutionPolicy,
@@ -152,6 +153,7 @@ export interface PendingProfileQuestionV1 {
   readonly validation:
     | "not_attempted" | "verified" | "driver_failed" | "verification_failed";
   readonly committedReadback: string | null;
+  readonly observedUi?: { readonly behavior: SharedProfileUiType; readonly variant: string };
 }
 
 export interface PendingProfileQuestionsEvidenceV1 {
@@ -524,7 +526,11 @@ export function admitPendingProfileQuestionsEvidence(
         "answerType", "controlType", "options", "constraints", "conditionalReveal",
         "testDefault", "actualOwnerValue", "needsUserValue", "provenance", "validation",
         "committedReadback",
+        ...(Object.hasOwn(question, "observedUi") ? ["observedUi"] : []),
       ]) ||
+      (Object.hasOwn(question, "observedUi") &&
+        (question.observedUi == null || !exactKeys(question.observedUi, ["behavior", "variant"]) ||
+          !isSharedProfileUiType(question.observedUi.behavior) || !identifier(question.observedUi.variant))) ||
       !identifier(question.pageId) ||
       !(question.rowKey === null || identifier(question.rowKey)) ||
       !identifier(question.questionId) || !identifier(question.fieldId) ||
@@ -552,7 +558,8 @@ export function admitPendingProfileQuestionsEvidence(
   return Object.freeze({
     ...value,
     pendingProfileQuestions: Object.freeze(value.pendingProfileQuestions.map((question) =>
-      Object.freeze({ ...question, options: Object.freeze([...question.options]) })
+      Object.freeze({ ...question, options: Object.freeze([...question.options]),
+        ...(question.observedUi === undefined ? {} : { observedUi: Object.freeze({ ...question.observedUi }) }) })
     )),
   });
 }
@@ -818,8 +825,12 @@ function evidencePageId(value: string | undefined): string {
   return value ?? "questionnaire-page-unspecified";
 }
 
-function pendingIdentity(value: Pick<PendingProfileQuestionV1, "pageId" | "rowKey" | "fieldId">): string {
-  return `${value.pageId}\u0000${value.rowKey ?? ""}\u0000${value.fieldId}`;
+function pendingIdentity(value: Pick<PendingProfileQuestionV1,
+  "pageId" | "rowKey" | "fieldId" | "exactQuestion" | "answerType" | "controlType" | "options">): string {
+  // Unknown ordinals restart for each physical profile page, while pageId can
+  // remain s2-profile. Retain distinct observed questions and choice surfaces.
+  return JSON.stringify([value.pageId, value.rowKey, value.fieldId,
+    value.exactQuestion, value.answerType, value.controlType, value.options]);
 }
 
 function observedQuestionConstraints(

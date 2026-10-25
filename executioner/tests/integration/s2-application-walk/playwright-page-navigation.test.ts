@@ -6,6 +6,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import {
   PlaywrightWorkdayApplicationPage,
 } from "../../../src/ats/workday/application/playwright-page.ts";
+import { armNavigationWitness, disposeNavigationWitness } from "../../../src/ats/workday/application/navigation-witness.ts";
 import {
   isAllowedApplicationTransition,
   isValidApplicationPageSequence,
@@ -1340,6 +1341,89 @@ async function questionnaireRequest(
     allowed,
   };
 }
+
+test("failed witness marking restores instrumentation before navigation returns", async (t) => {
+  await withPage(async (page) => {
+    await page.setContent(`<style>.loader { display:none }</style>
+      <main data-automation-id="applyFlowApplicationQuestionsPage">
+        <label>Question<input required value="committed"></label>
+        <button>Save and Continue</button>
+      </main>`);
+    const application = new PlaywrightWorkdayApplicationPage(page, {
+      timeoutMs: 200, navigationSettleTimeoutMs: 200,
+    });
+    const request = await questionnaireRequest(application, ["questionnaire"]);
+    const evaluate = page.evaluate.bind(page);
+    let failedMarks = 0;
+    t.mock.method(page, "evaluate", (async (fn: Parameters<Page["evaluate"]>[0], arg: Parameters<Page["evaluate"]>[1]) => {
+      if (typeof fn === "function" && fn.name === "markNavigationWitnessClicked") {
+        failedMarks += 1;
+        throw new Error("Injected marking transport failure");
+      }
+      return evaluate(fn, arg);
+    }) as Page["evaluate"]);
+    const result = await application.next(request, signal());
+    assert.equal(result.ok, false);
+    assert.ok(failedMarks > 0);
+    assert.deepEqual(await page.evaluate(() => ({
+      retained: "__huntWorkdayNavigationAction" in window,
+      accessor: typeof Object.getOwnPropertyDescriptor(
+        (document.styleSheets[0]!.cssRules[0] as CSSStyleRule).style, "display",
+      )?.get,
+    })), { retained: false, accessor: "undefined" });
+  });
+});
+
+test("shared stylesheet accessors preserve each declaration and restore current values", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<style>.first { color:red } .second { color:blue }</style>
+      <main><div data-automation-id="applyFlowLoadingPage" hidden>Loading</div></main>`);
+    await page.evaluate(armNavigationWitness, { rootSelector: "main", actionId: "accessors" });
+    assert.deepEqual(await page.evaluate(() => {
+      const [first, second] = [...document.styleSheets[0]!.cssRules] as CSSStyleRule[];
+      first!.style.color = "green";
+      second!.style.color = "purple";
+      return [first!.style.color, second!.style.color];
+    }), ["green", "purple"]);
+    await page.evaluate(disposeNavigationWitness, "accessors");
+    assert.deepEqual(await page.evaluate(() =>
+      [...document.styleSheets[0]!.cssRules].map(rule => {
+        const style = (rule as CSSStyleRule).style;
+        const descriptor = Object.getOwnPropertyDescriptor(style, "color")!;
+        return [style.color, descriptor.writable, descriptor.configurable, typeof descriptor.get];
+      })
+    ), [["green", true, true, "undefined"], ["purple", true, true, "undefined"]]);
+  });
+});
+
+test("witness disposal restores remaining CSS properties when a page locks one accessor", async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<style>.first { color:red }</style>
+      <main><div data-automation-id="applyFlowLoadingPage" hidden>Loading</div></main>`);
+    assert.equal(await page.evaluate(armNavigationWitness, { rootSelector: "main", actionId: "locked-accessor" }), true);
+    const lockedName = await page.evaluate(() => {
+      const style = (document.styleSheets[0]!.cssRules[0] as CSSStyleRule).style;
+      const names = Object.getOwnPropertyNames(style).filter(name =>
+        typeof Object.getOwnPropertyDescriptor(style, name)?.get === "function");
+      if (names.indexOf("color") < 1) throw new Error("Expected an instrumented property before color");
+      const locked = names[0]!;
+      Object.defineProperty(style, locked, { configurable: false });
+      style.color = "green";
+      return locked;
+    });
+    await page.evaluate(disposeNavigationWitness, "locked-accessor");
+    assert.deepEqual(await page.evaluate(locked => {
+      const style = (document.styleSheets[0]!.cssRules[0] as CSSStyleRule).style;
+      const color = Object.getOwnPropertyDescriptor(style, "color")!;
+      return {
+        retained: "__huntWorkdayNavigationAction" in window,
+        locked: Object.getOwnPropertyDescriptor(style, locked)?.configurable === false,
+        color: style.color, accessor: typeof color.get,
+        writable: color.writable, configurable: color.configurable,
+      };
+    }, lockedName), { retained: false, locked: true, color: "green", accessor: "undefined", writable: true, configurable: true });
+  });
+});
 
 function signal(): AbortSignal {
   return new AbortController().signal;

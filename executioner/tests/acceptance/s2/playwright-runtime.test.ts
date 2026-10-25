@@ -50,7 +50,6 @@ import {
   OwnedWorkdayApplicationRuntime,
   questionnairePopupHydrationTargets,
   reviewAnswerCandidates,
-  seedCanonicalBinaryQuestionnaireOptions,
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 
@@ -91,40 +90,26 @@ test("questionnaire finalization preserves causal order and always attempts lear
   assert.equal(writes, 3);
 });
 
-test("known binary questionnaire choices defer discovery to the exact selection popup", async () => {
+test("age question discovers actual choices instead of assuming binary labels", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage">
-      <div data-automation-id="formField-referral">
-        <label>Have you been referred by an Integer associate? <span data-automation-id="required">*</span></label>
-        <button type="button" aria-haspopup="listbox">Select One</button>
+      <div data-automation-id="formField-age">
+        <label>Are you at least 18 years of age?</label>
+        <button type="button" aria-haspopup="listbox" onclick="document.querySelector('[role=listbox]').hidden=false">Select One</button>
+        <ul role="listbox" hidden><li role="option">Yes, I am over 18</li><li role="option">No, I am 16-17</li><li role="option">No, I am under 16</li></ul>
       </div>
-    </main>`);
-    const pageId = "page-deferred-binary-question" as never;
+    </main><script>document.addEventListener('keydown', e => { if(e.key === 'Escape') document.querySelector('[role=listbox]').hidden=true; });</script>`);
+    const pageId = "page-real-age-options" as never;
     await bindQuestionnaireTargets(page, pageId);
-
-    await seedCanonicalBinaryQuestionnaireOptions(page);
-
-    const button = page.locator('button[aria-haspopup="listbox"]');
-    assert.equal(await button.getAttribute("data-hunt-popup-options"), null);
-    assert.equal(await button.getAttribute("data-hunt-deferred-options"), '["Yes","No"]');
-    assert.deepEqual(await questionnairePopupHydrationTargets(page), []);
-    const semantic = await inspectPage(
-      page,
-      "live_session_deferred_binary_01" as never,
-      pageId,
-      new Map(),
-    );
-    const target = semantic.observation.targets[0];
-    assert.equal(target?.control.kind, "select");
-    assert.deepEqual(
-      target?.control.kind === "select" ? target.control.options : [],
-      ["Yes", "No"],
-    );
-  } finally {
-    await browser.close();
-  }
+    const [token] = await questionnairePopupHydrationTargets(page);
+    assert.ok(token);
+    await hydrateQuestionnairePopupOptions(page, pageId, token, 1000);
+    assert.deepEqual(JSON.parse(await page.locator('button').getAttribute('data-hunt-popup-options') ?? '[]'),
+      ["Yes, I am over 18", "No, I am 16-17", "No, I am under 16"]);
+    assert.equal(await page.locator('button').innerText(), 'Select One');
+  } finally { await browser.close(); }
 });
 
 test("conditional visa-status choice is not seeded as a binary sponsorship question", async () => {
@@ -140,7 +125,6 @@ test("conditional visa-status choice is not seeded as a binary sponsorship quest
     const pageId = "page-conditional-visa-status" as never;
     await bindQuestionnaireTargets(page, pageId);
 
-    await seedCanonicalBinaryQuestionnaireOptions(page);
 
     const button = page.locator('button[aria-haspopup="listbox"]');
     assert.equal(await button.getAttribute("data-hunt-deferred-options"), null);
@@ -2101,8 +2085,8 @@ test("questionnaire batches external proof once while every field keeps independ
     ]);
 
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-mount" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage">
-      <div data-automation-id="formField-authorization"><label for="mount-authorization">Are you legally authorized to work in this country?</label><span data-automation-id="required">*</span><div role="slider" tabindex="0"></div></div>
-      <script>setTimeout(() => document.querySelector('[role=slider]').outerHTML = '<select id="mount-authorization" required><option>Select One</option><option>Yes</option><option>No</option></select>', 400);</script>
+      <div data-automation-id="instructionalText">Please complete the questions below.</div>
+      <script>setTimeout(() => document.querySelector('main').insertAdjacentHTML('beforeend', '<div data-automation-id="formField-authorization"><label for="mount-authorization">Are you legally authorized to work in this country?</label><select id="mount-authorization" required><option>Select One</option><option>Yes</option><option>No</option></select></div>'), 3000);</script>
     </main></body></html>`);
     const mounting = await runtime.run(page as never, {
       schemaVersion: 1,
@@ -2131,6 +2115,18 @@ test("questionnaire batches external proof once while every field keeps independ
     }, {
       kind: "reconcile_questionnaire",
       input: { attempt: 1, pageId: "page-questionnaire-gap" } as never,
+    }, new AbortController().signal), /questionnaire field coverage mismatch/u);
+    await page.setContent(`<!doctype html><html data-hunt-page-id="page-questionnaire-empty" data-hunt-submit-activated="false"><body data-hunt-application-page="questionnaire"><main data-automation-id="applyFlowApplicationQuestionsPage"><p>Questions are loading.</p></main></body></html>`);
+    await assert.rejects(runtime.run(page as never, {
+      schemaVersion: 1,
+      journeyId: journeyId("journey_questionnaire_monitor_01"),
+      operationId: generatedOperationId("operation_questionnaire_empty_01"),
+      sessionId: "live_session_questionnaire_monitor_01" as LiveSessionId,
+      target: {} as never,
+      now: "2026-08-05T12:00:00.000Z",
+    }, {
+      kind: "reconcile_questionnaire",
+      input: { attempt: 1, pageId: "page-questionnaire-empty" } as never,
     }, new AbortController().signal), /questionnaire field coverage mismatch/u);
     assert.equal(accepted.filter((checkpoint) => checkpoint === "questionnaire_verified").length, 4);
   } finally {
@@ -2421,7 +2417,7 @@ test("unknown profile controls retain separate Review identities across applicat
     const expected = await runtime.run(page as never, request,
       { kind: "review_expectations" }, new AbortController().signal) as readonly { fieldId: string; valueSha256: string }[];
     assert.deepEqual(expected.map(({ fieldId }) => fieldId), ["profile", "resume"].map(
-      (lane) => `page.${createHash("sha256").update(`page-${lane}`).digest("hex").slice(0, 16)}.unknown.required.1`,
+      (lane) => `page.${createHash("sha256").update(`page-${lane}:${lane === "profile" ? "applyFlowMyInfoPage" : "applyFlowMyExpPage"}`).digest("hex").slice(0, 16)}.unknown.required.1`,
     ));
     assert.deepEqual(expected.map(({ valueSha256 }) => valueSha256), ["Alpha", "Beta"].map(
       (value) => createHash("sha256").update(value).digest("hex"),
@@ -2437,6 +2433,7 @@ test("profile cancellation before mutation remains operation_cancelled", async (
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"></main></body></html>`);
+  const controller = new AbortController();
   const runtime = new OwnedWorkdayApplicationRuntime({
     request: {
       ownerSources: {
@@ -2459,7 +2456,7 @@ fields: [{
     nextOperationId: () => generatedOperationId("operation_profile_cancel_01"),
     timeoutMs: 1_000,
     initialReviewExpected: [],
-    externalMonitor: { async auth() {}, async application() {} },
+    externalMonitor: { async auth() {}, async application() { controller.abort(); } },
     authorizationExpiresAt: "2026-08-05T12:30:00.000Z",
     now: () => "2026-08-05T12:00:00.000Z",
   });
@@ -2471,13 +2468,7 @@ fields: [{
     target: {} as never,
     leaseExpiresAt: "2026-08-05T13:00:00.000Z",
   });
-  let abortReads = 0;
-  const signal = {
-    get aborted() {
-      abortReads += 1;
-      return abortReads > 2;
-    },
-  } as AbortSignal;
+  const signal = controller.signal;
   try {
     const result = await runtime.run(page as never, {
       schemaVersion: 1,
@@ -3751,6 +3742,104 @@ test("Review accepts transient Submit enabled drift when semantic invariants rem
   }
 });
 
+test("Review waits for delayed active step and footer but rejects persistent absence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const events: { event: string; details?: object }[] = [];
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never, acceptances: { record() {} },
+    nextOperationId: () => generatedOperationId("operation_review_delayed_next_01"),
+    timeoutMs: 1_000, initialReviewExpected: [{ fieldId: "s1-field-resume", provenance: "resume_verified",
+      rowIdentity: "formField-s1-field-resume", valueSha256: createHash("sha256").update("resume.pdf").digest("hex") }],
+    trace: (event, details) => events.push({ event, details }),
+    authorizationExpiresAt: "2026-08-05T12:30:00.000Z", now: () => "2026-08-05T12:00:00.000Z",
+  });
+  const session = { schemaVersion: 1 as const, journeyId: journeyId("journey_review_delayed_0001"),
+    sessionId: "live_session_review_delayed_0001" as LiveSessionId,
+    profileLeaseId: "profile_lease_review_delayed_01" as ProfileLeaseId,
+    target: {} as never, leaseExpiresAt: "2026-08-05T13:00:00.000Z" };
+  runtime.bindSession(session);
+  const capture = () => runtime.run(page as never, { schemaVersion: 1,
+    journeyId: session.journeyId, sessionId: session.sessionId, target: session.target,
+    operationId: generatedOperationId("operation_review_delayed_0001"), now: "2026-08-05T12:00:00.000Z",
+  }, { kind: "capture_review" }, new AbortController().signal);
+  try {
+    await page.setContent('<main data-automation-id="applyFlowReviewPage"><section data-hunt-review-field-id="s1-field-resume">resume.pdf</section></main>');
+    const pending = capture();
+    void pending.catch(() => {});
+    for (let attempt = 0; attempt < 50 && !events.some(({ event }) => event === "review_structure_pending"); attempt++) {
+      await page.waitForTimeout(10);
+    }
+    assert.ok(events.some(({ event }) => event === "review_structure_pending"));
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML("afterbegin", '<div data-automation-id="progressBarActiveStep">Review</div>');
+      document.querySelector("main")!.insertAdjacentHTML("beforeend", '<button>Submit</button>');
+    });
+    const result = await pending as { structure: { finalSubmit: { count: number } } };
+    assert.equal(result.structure.finalSubmit.count, 1);
+    assert.equal(events.filter(({ event }) => event === "review_structure_pending").length, 1);
+    assert.doesNotMatch(JSON.stringify(events), /resume\.pdf/);
+    await page.locator("button").evaluate(element => element.remove());
+    await assert.rejects(capture(), /Review structure denied/);
+  } finally { runtime.dispose(); await browser.close(); }
+});
+
+test("Review recognizes an explicit compact North American phone without truncating arbitrary numbers", () => {
+  assert.ok(reviewAnswerCandidates("+14035550100 x0 (Mobile)").has("4035550100"));
+  assert.ok(reviewAnswerCandidates("+14035550100").has("4035550100"));
+  assert.equal(reviewAnswerCandidates("14035550100").has("4035550100"), false);
+  assert.equal(reviewAnswerCandidates("+140355501001").has("4035550100"), false);
+  assert.equal(reviewAnswerCandidates("+444035550100").has("4035550100"), false);
+});
+
+test("Review retains exact punctuation in combined name prefixes and suffixes", () => {
+  const candidates = reviewAnswerCandidates("Dr. Fixture Middle Applicant Sr.");
+  assert.ok(candidates.has("Dr."));
+  assert.ok(candidates.has("Sr."));
+  assert.ok(candidates.has("Fixture Middle Applicant"));
+  assert.equal(candidates.has("Prof."), false);
+});
+
+test("Review verifies each selected item in summary and structured list rows", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const selected of [["TypeScript"], ["TypeScript", "Python"]]) {
+      const runtime = new OwnedWorkdayApplicationRuntime({ request: {} as never,
+        acceptances: { record() {} }, nextOperationId: () => generatedOperationId("operation_review_choices_next_01"),
+        timeoutMs: 1_000, initialReviewExpected: selected.map((value, index) => ({
+          fieldId: `skills.values.selection.${index}`, rowIdentity: `formField-skills.values.selection.${index}`,
+          provenance: "owner_provided", valueSha256: createHash("sha256").update(value).digest("hex"),
+        })), authorizationExpiresAt: "2026-08-05T12:30:00.000Z", now: () => "2026-08-05T12:00:00.000Z",
+      });
+      const session = { schemaVersion: 1 as const, journeyId: journeyId("journey_review_choices_0001"),
+        sessionId: "live_session_review_choices_0001" as LiveSessionId,
+        profileLeaseId: "profile_lease_review_choices_01" as ProfileLeaseId,
+        target: {} as never, leaseExpiresAt: "2026-08-05T13:00:00.000Z" };
+      runtime.bindSession(session);
+      const capture = () => runtime.run(page as never, { schemaVersion: 1, journeyId: session.journeyId,
+        sessionId: session.sessionId, target: session.target, operationId: generatedOperationId("operation_review_choices_0001"),
+        now: "2026-08-05T12:00:00.000Z" }, { kind: "capture_review" }, new AbortController().signal);
+      try {
+        for (const identity of ["formField-", "formField-skills.values"]) {
+          await page.setContent(`<div data-automation-id="progressBarActiveStep">Review</div><main data-automation-id="applyFlowReviewPage"><section data-automation-id="${identity}"><ul data-automation-id="skills">${selected.map(value => `<li>${value}</li>`).join("")}</ul></section><button>Submit</button></main>`);
+          await capture();
+          await page.locator("li").last().evaluate(element => element.remove());
+          await assert.rejects(capture(), /Review field mismatch|Review field hidden/);
+        }
+        if (selected.length === 2) {
+          await page.setContent(`<div data-automation-id="applyFlowPage"><ol data-automation-id="progressBar"><li data-automation-id="progressBarCompletedStep">completed step 1 of 2</li><li data-automation-id="progressBarActiveStep"><label aria-live="polite">current step 2 of 2</label></li></ol><main data-automation-id="applyFlowReviewPage"><section data-automation-id="formField-"><div role="group" aria-labelledby="skills-section"><ul data-automation-id="skills"><li>TypeScript</li></ul><button type="button" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend','<li>Python</li>');this.remove()">MORE (1)</button></div></section><button onclick="window.submitted=true">Submit</button></main></div>`);
+          await capture();
+          assert.equal(await page.evaluate(() => (window as unknown as { submitted?: boolean }).submitted), undefined);
+          assert.equal(await page.locator('[data-automation-id="skills"] li').count(), 2);
+          await page.locator('li').last().evaluate(element => element.remove());
+          await assert.rejects(capture(), /Review field mismatch|Review field hidden/);
+        }
+      } finally { runtime.dispose(); }
+    }
+  } finally { await browser.close(); }
+});
+
 test("Review still rejects Submit disappearance after monitor readback", async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -4191,6 +4280,15 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     });
     const workdaySummaryShape = await runtime.review.capture(new AbortController().signal);
     assert.equal(workdaySummaryShape.request.verification.length, 2);
+    await reviewRoot.evaluate((root) => {
+      for (let index = 0; index < 2; index += 1) {
+        const section = document.createElement("div");
+        section.setAttribute("data-automation-id", "formField-");
+        root.append(section);
+      }
+    });
+    const multiSectionSummary = await runtime.review.capture(new AbortController().signal);
+    assert.equal(multiSectionSummary.request.verification.length, 2);
     await row.locator("span").nth(1).evaluate((node) => {
       node.innerHTML = "Exact configured interest statement.<br>Another summary line";
     });
@@ -4211,7 +4309,7 @@ test("one owned Playwright page completes application, recovers, proves Review, 
     await row.locator("span").nth(1).evaluate((node) => {
       node.textContent = "Exact configured interest statement.";
     });
-    await reviewRoot.locator('[data-automation-id="formField-"]').evaluate((node) => node.remove());
+    await reviewRoot.locator('[data-automation-id="formField-"]').evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
     await resumeRow.evaluate((node) => { node.setAttribute("data-automation-id", "formField-s1-field-resume"); });
     await row.evaluate((node) => { node.setAttribute("data-automation-id", "formField-s1-field-interest"); });
     await resumeRow.locator("span").nth(1).evaluate((node) => {
@@ -5532,3 +5630,17 @@ function fixtureDocument(): string {
     </body>
   </html>`;
 }
+
+
+test("popup discovery discards a conditional field removed on dismissal", async () => {
+  const browser=await chromium.launch({headless:true});const page=await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowApplicationQuestionsPage"><div data-automation-id="formField-conditional"><label>Conditional detail</label><button aria-haspopup="listbox" type="button" onclick="document.querySelector('[role=listbox]').hidden=false">Select One</button><ul role="listbox" hidden><li role="option">Yes</li><li role="option">No</li></ul></div><label>Name<input id="name"></label></main><script>document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('[data-automation-id="formField-conditional"]')?.remove();});</script>`);
+    const pageId='page-conditional-removal' as never;await bindQuestionnaireTargets(page,pageId);
+    const [token]=await questionnairePopupHydrationTargets(page);assert.ok(token);
+    await hydrateQuestionnairePopupOptions(page,pageId,token,1000);
+    assert.deepEqual(await questionnairePopupHydrationTargets(page),[]);
+    assert.equal(await page.locator('input').getAttribute('data-hunt-popup-options'),null);
+    assert.equal(await page.locator('[data-hunt-popup-hydration-owner]').count(),0);
+  }finally{await browser.close();}
+});

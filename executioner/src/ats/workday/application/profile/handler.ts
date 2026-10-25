@@ -157,6 +157,11 @@ export async function completeWorkdayProfilePage(
 
   const cleaned = await cleanOwnedRows(snapshot, page, signal);
   if (cleaned === undefined) return portFailure(signal);
+  if (fallbackEnabled) {
+    const adapted = withSupportedSyntheticUnknowns(effectivePlan, cleaned, syntheticFallbacks, syntheticRows);
+    registerGeneratedFields(effectivePlan, adapted, page);
+    effectivePlan = adapted;
+  }
   const cleanedPreflight = preflightSnapshot(effectivePlan, cleaned);
   if (cleanedPreflight !== undefined) return cleanedPreflight;
   snapshot = cleaned;
@@ -203,7 +208,8 @@ export async function completeWorkdayProfilePage(
         };
         return rank(left) - rank(right);
       })
-    : effectivePlan.fields;
+    : [...effectivePlan.fields];
+  let hasFreshScalarReadback = false;
   for (const plannedItem of fields) {
     if (plannedItem.answer.kind === "profile_answer_missing") continue;
     const matches = snapshot.controls.filter(({ fieldId }) => fieldId === plannedItem.fieldId);
@@ -218,15 +224,35 @@ export async function completeWorkdayProfilePage(
       !readbackMatches(item, current.readback, visibleValue(item))
     ) continue;
     let reconciledSnapshot = snapshot;
+    let firstRead = true;
     const result = await reconcileField(
       item,
       async () => {
-        reconciledSnapshot = await page.inspect(signal);
+        const reuse = firstRead && hasFreshScalarReadback && !/^unknown\./u.test(item.fieldId);
+        firstRead = false;
+        // The preceding field's readback and preflight already refreshed these
+        // bindings. Nothing has touched the browser since. Every post-commit
+        // read still inspects independently; unknown choices still replan fresh.
+        if (reuse) return reconciledSnapshot.controls;
+        // Known fields need fresh DOM/readback, not every unfilled popup opened
+        // again. Unknown choices still need current options when replanning.
+        const discoverChoices = /^unknown\./u.test(item.fieldId) && current !== undefined &&
+          ["select", "search_select", "multi_select", "radio_group"].includes(current.uiBehavior);
+        reconciledSnapshot = await page.inspect(signal, discoverChoices);
+        if (!discoverChoices && reconciledSnapshot.controls.some(control =>
+          !effectivePlan.fields.some(field => field.fieldId === control.fieldId && field.answer.kind === "answered") &&
+          ["select", "search_select", "multi_select", "radio_group"].includes(control.uiBehavior) &&
+          (control.allowedOptions?.length ?? 0) === 0)) {
+          // A conditional choice appeared after a commit. Discover it now so
+          // the existing dynamic-plan expansion can answer it in this run.
+          reconciledSnapshot = await page.inspect(signal, true);
+        }
         return reconciledSnapshot.controls;
       },
       page,
       signal,
       effectivePlan.mode === "synthetic_test_non_submittable" &&
+          plannedItem.answer.kind === "answered" && plannedItem.answer.lane === "synthetic_test_default" &&
           /^unknown\.(?:required|optional)\./u.test(plannedItem.fieldId)
         ? (control) => {
             const rebound = syntheticProfileField(
@@ -257,9 +283,19 @@ export async function completeWorkdayProfilePage(
     if (signal.aborted) return portFailure(signal);
     // Reconcile just independently rescanned the full page for readback. Apply
     // preflight to that same fresh snapshot instead of scanning it twice.
-    const preflight = preflightSnapshot(effectivePlan, reconciledSnapshot);
+    if (fallbackEnabled) {
+      // Choices can reveal required controls. Admit their observed defaults
+      // before preflight, and process them in this same application run.
+      const adapted = withSupportedSyntheticUnknowns(effectivePlan, reconciledSnapshot, syntheticFallbacks, syntheticRows);
+      registerGeneratedFields(effectivePlan, adapted, page);
+      const queued = new Set(fields.map(field => field.fieldId));
+      fields.push(...adapted.fields.filter(field => !queued.has(field.fieldId)));
+      effectivePlan = adapted;
+    }
+    const preflight = validatePlan(effectivePlan) ?? preflightSnapshot(effectivePlan, reconciledSnapshot);
     if (preflight !== undefined) return preflight;
     snapshot = reconciledSnapshot;
+    hasFreshScalarReadback = true;
   }
 
   if (effectivePlan.mode === "synthetic_test_non_submittable") {
@@ -463,7 +499,9 @@ function withSupportedSyntheticUnknowns(
   const region = regionField?.answer.kind === "answered"
     ? regionField.optionMapping?.visibleOption ?? regionField.answer.value
     : regionControl?.readback ?? syntheticProfileOption("address.region", regionControl?.allowedOptions ?? []);
-  const prepared = plan.fields.map((field): ProfileFieldPlan => {
+  const prepared = plan.fields.filter((field) => !(field.answer.kind === "profile_answer_missing" &&
+    controls.get(field.fieldId) !== undefined && optionalUnknownUnansweredControl(controls.get(field.fieldId)!)))
+    .map((field): ProfileFieldPlan => {
     if (field.answer.kind !== "profile_answer_missing") return field;
     const control = controls.get(field.fieldId);
     return control === undefined
@@ -492,7 +530,7 @@ function withSupportedSyntheticUnknowns(
     );
     return field === undefined ? [] : [field];
   });
-  const changed = prepared.some((field, index) => field !== plan.fields[index]);
+  const changed = prepared.length !== plan.fields.length || prepared.some((field, index) => field !== plan.fields[index]);
   const repeatables = [...plan.repeatables];
   for (const catalog of profileRepeatableCatalog) {
     if (repeatables.some(({ section }) => section === catalog.section)) continue;
@@ -520,6 +558,12 @@ function withSupportedSyntheticUnknowns(
   };
 }
 
+function optionalUnknownUnansweredControl(control: ProfileControlSnapshot): boolean {
+  return /^unknown\.(?:required|optional)\./u.test(control.fieldId) &&
+    !control.required && (control.uiBehavior === "checkbox" ||
+      control.uiVariant === "workday_empty_optional_date_segment_v1");
+}
+
 function syntheticProfileField(
   control: ProfileControlSnapshot,
   fallbacks: Map<string, ProfileFieldPlan> = new Map(),
@@ -528,6 +572,8 @@ function syntheticProfileField(
   country?: string,
   region?: string,
 ): ProfileFieldPlan | undefined {
+  // Optional consent and workflow toggles are observed UI, not inferred answers.
+  if (optionalUnknownUnansweredControl(control)) return undefined;
   const unknown = /^unknown\.(?:required|optional)\./u.test(control.fieldId);
   if (!unknown && (template === undefined ||
       template.answer.kind !== "profile_answer_missing")) return undefined;
@@ -628,6 +674,7 @@ async function reconcileSupportedSyntheticUnknowns(
       }))),
     ].filter(({ control, rowId, rowKey }) =>
       /^unknown\.(?:required|optional)\./u.test(control.fieldId) &&
+      !optionalUnknownUnansweredControl(control) &&
       (rowId === undefined || rowKey !== undefined)
     );
     const pending = candidates.find(({ control, rowKey }) =>
@@ -1207,13 +1254,14 @@ async function reconcileSection(
         ? desired.fields.find(({ fieldId }) => fieldId === item.fieldId.replace(
           /_(month|year)$/u, (_, part: string) => part === "month" ? "_year" : "_month",
         )) : undefined;
+      let reconciledSnapshot = snapshot;
       const result = await reconcileField(
         item,
         async () => {
           // The initial discovery already supplied this row's choice plan.
           // Verify backing without reopening unrelated, still-unfilled popups.
-          const fresh = await page.inspect(signal, false);
-          return fresh.rows.find((row) => row.rowId === rowId)?.controls ?? [];
+          reconciledSnapshot = await page.inspect(signal, false);
+          return reconciledSnapshot.rows.find((row) => row.rowId === rowId)?.controls ?? [];
         },
         page,
         signal,
@@ -1236,9 +1284,11 @@ async function reconcileSection(
         return result;
       }
       verified.push({ ...result.field, rowKey: desired.rowKey });
-      const refreshed = await inspectAndPreflight(plan, page, signal, false);
-      if (refreshed.kind === "blocked") return refreshed;
-      snapshot = refreshed.snapshot;
+      if (signal.aborted) return portFailure(signal);
+      // Readback just rescanned the whole page, including newly revealed controls.
+      const preflight = preflightSnapshot(plan, reconciledSnapshot);
+      if (preflight !== undefined) return preflight;
+      snapshot = reconciledSnapshot;
       current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
     }
   }

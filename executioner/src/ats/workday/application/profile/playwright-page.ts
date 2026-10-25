@@ -135,6 +135,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const inspectScalar = async (entry: ProfileControlCatalogEntry) => {
       try {
         const matches = await visibleLocators(profile.locator(entry.selector));
+        if (matches.length === 0) {
+          scalarSnapshots.set(entry, []);
+          return;
+        }
         if ((matches.length === 1 || entry.uiBehavior === "radio_group" && matches.length > 0) && retainedProfileControlGuide.some((guide) =>
           guide.identity === entry.fieldId && guide.uiVariant === entry.uiVariant)) {
           const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
@@ -251,6 +255,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     digestInputs: readonly string[],
     error: unknown,
   ): Error {
+    this.#trace?.("profile_inspection_failed", { failureStage: phase,
+      errorClass: error instanceof Error ? error.name : "unknown",
+      underlyingError: error instanceof Error ? /^([a-zA-Z]+\.[a-zA-Z]+):/.exec(error.message)?.[1] ?? "inspection_failed" : "unknown" });
     const wrapped = createProfileInspectionFailure(
       error,
       phase,
@@ -546,8 +553,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (!inspectInteractiveOptions) return [];
     const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
-    const validationBefore = await validationCleared(control);
     const promptCatalog = resolved.uiBehavior === "multi_select" ||
+      resolved.uiBehavior === "search_select" && await control.evaluate(element => {
+        const widgetId = element.getAttribute("data-uxi-multiselect-id");
+        return element.getAttribute("data-uxi-widget-type") === "selectinput" &&
+          widgetId !== null && element.closest(
+            '[data-automation-id="multiSelectContainer"][data-uxi-widget-type="multiselect"]',
+          )?.id === widgetId;
+      }) ||
       ["source.how_did_you_hear", "education.school", "education.field_of_study"].includes(resolved.fieldId);
     const priorCatalogs = promptCatalog
       ? await this.#page.locator('[role="listbox"]:visible').elementHandles()
@@ -565,18 +578,26 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         ? await exactPromptCatalogOwner(this.#page, control, priorCatalogs)
         : await exactObservedOptionOwner(this.#page, control);
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
+          promptCatalog && resolved.uiBehavior === "search_select") {
+        const icons = await visibleLocators(control.locator(
+          'xpath=ancestor::*[@data-automation-id="multiSelectContainer"][1]',
+        ).locator('[data-automation-id="promptIcon"]'));
+        if (icons.length === 1) {
+          observationStage = "open_prompt_catalog";
+          await this.#openPromptSearch(icons[0]!, control, true);
+          owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+        }
+      }
+      if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           this.#inspectMissingOptions && (resolved.uiBehavior === "multi_select" ||
             resolved.uiBehavior === "search_select" && await control.getAttribute("enterkeyhint") === "search") &&
           await control.evaluate(element => element instanceof HTMLInputElement && !element.readOnly)) {
-        // A keyboard hint is not a behavior contract: free-entry tag inputs
-        // also advertise search. Submit multi-select text only during commit,
-        // after choosing an actual answer. Restore the discovery draft here.
+        // Enter can select a suggestion even when the input advertises search.
+        // Discover choices without submitting text, then restore the draft.
+        observationStage = "search_draft";
         searchDraft ??= await control.inputValue();
         await control.fill("", { timeout: this.#timeoutMs });
         await control.pressSequentially("a", { timeout: this.#timeoutMs });
-        if (resolved.uiBehavior !== "multi_select" && await control.getAttribute("enterkeyhint") === "search") {
-          await control.press("Enter", { timeout: this.#timeoutMs });
-        }
         const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
         do {
           owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
@@ -587,15 +608,22 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if ((owner === undefined || (await observedOptionLabels(owner)).length === 0) &&
           ["education.school", "education.field_of_study"].includes(resolved.fieldId) &&
           await control.evaluate((element) => element instanceof HTMLInputElement)) {
+        observationStage = "search_draft";
         searchDraft ??= await control.inputValue();
-        await control.fill("Other", { timeout: this.#timeoutMs });
-        await control.press("Enter", { timeout: this.#timeoutMs });
-        const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
-        do {
-          owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
-          if (owner !== undefined && (await observedOptionLabels(owner)).length > 0) break;
-          await this.#page.waitForTimeout(50);
-        } while (Date.now() < deadline);
+        const queries = resolved.fieldId === "education.school" ? ["Other", "University"] : ["Other"];
+        for (const query of queries) {
+          await control.fill(query, { timeout: this.#timeoutMs });
+          await control.press("Enter", { timeout: this.#timeoutMs });
+          const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+          do {
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+            if (owner !== undefined && (await observedOptionLabels(owner)).length > 0 ||
+                await this.#resolvedReadback(resolved) !== before) break;
+            await this.#page.waitForTimeout(50);
+          } while (Date.now() < deadline);
+          if (owner !== undefined && (await observedOptionLabels(owner)).length > 0 ||
+              await this.#resolvedReadback(resolved) !== before) break;
+        }
       }
       if (owner === undefined && resolved.fieldId === "source.how_did_you_hear") {
         observationStage = "open_source_catalog";
@@ -648,6 +676,39 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             await this.#page.waitForTimeout(50);
           } while (Date.now() < deadline);
           if (labels.length === 0) throw new TypeError("Workday catalog scope has no selectable options");
+        }
+      }
+      // Structural prompts can expose categories before selectable answers.
+      // Explore one bounded branch for synthetic discovery; never record a
+      // navigation category as an answer or activate a selectable leaf here.
+      if (promptCatalog && resolved.fieldId.startsWith("unknown.")) {
+        for (let depth = 0; owner !== undefined && depth < 4; depth += 1) {
+          const options = await visibleLocators(owner.locator('[role="option"]'));
+          const branches: Locator[] = [];
+          const leaves: Locator[] = [];
+          for (const option of options) {
+            const navigation = await option.locator('[data-automation-id="promptLeafNode"] svg[role="presentation"]').count() > 0 &&
+              await option.locator('input, [role="checkbox"], [role="radio"]').count() === 0;
+            (navigation ? branches : leaves).push(option);
+          }
+          if (leaves.length > 0) {
+            labels = uniqueObservedOptions(await Promise.all(leaves.map(option => option.innerText())));
+            break;
+          }
+          if (branches.length === 0) break;
+          observationStage = "expand_prompt_category";
+          const previous = await owner.innerText();
+          await (await promptOptionActivation(branches[0]!)).click({ timeout: this.#timeoutMs });
+          const deadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+          do {
+            owner = await exactPromptCatalogOwner(this.#page, control, priorCatalogs);
+            if (owner !== undefined && await owner.innerText() !== previous) break;
+            await this.#page.waitForTimeout(50);
+          } while (Date.now() < deadline);
+          if (owner !== undefined && await owner.innerText() === previous) {
+            throw new TypeError("Workday prompt category did not advance");
+          }
+          if (depth === 3) throw new TypeError("Workday prompt category depth exceeded");
         }
       }
       if (owner !== undefined) {
@@ -724,7 +785,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       try {
         await Promise.all((priorCatalogs ?? []).map(handle => handle?.dispose()));
         cleanupStage = "restore_search";
-        if (searchDraft !== undefined) await control.fill(searchDraft, { timeout: this.#timeoutMs });
+        if (searchDraft !== undefined) {
+          // Workday can auto-select its sole search result. Undo only that new,
+          // exactly owned token before returning discovered choices to the filler.
+          const discovered = await this.#resolvedReadback(resolved);
+          if (before === null && discovered !== null && resolved.uiBehavior === "search_select") {
+            const owner = control.locator('xpath=ancestor::*[starts-with(@data-automation-id,"formField")][1]');
+            const tokens = await visibleLocators(owner.locator('[data-automation-id="selectedItem"]'));
+            const remove = owner.locator('[data-automation-id="DELETE_charm"]:visible');
+            if (tokens.length !== 1 || await remove.count() !== 1) {
+              throw new TypeError("profile discovery selection rollback is ambiguous");
+            }
+            await remove.click({ timeout: this.#timeoutMs });
+            if (await this.#resolvedReadback(resolved) !== null) {
+              throw new TypeError("profile discovery selection rollback did not settle");
+            }
+            if (!labels.includes(discovered)) labels.push(discovered);
+          }
+          await control.fill(searchDraft, { timeout: this.#timeoutMs });
+        }
         cleanupStage = "dismiss_catalog";
         await this.#page.keyboard.press("Escape");
         await control.blur({ timeout: this.#timeoutMs });
@@ -742,8 +821,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         }
         cleanupStage = "verify_unchanged";
         await this.#page.waitForTimeout(25);
-        if (before !== await this.#resolvedReadback(resolved) ||
-            validationBefore !== await validationCleared(control)) {
+        if (before !== await this.#resolvedReadback(resolved)) {
           throw new TypeError("profile option observation changed backing state");
         }
       } catch (error) {
@@ -775,23 +853,44 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     this.#interactions.set(request.controlId, interaction);
     try {
     if (request.uiBehavior === "file") {
+      if (await this.#readback(resolved.locator, "file") === request.value &&
+          await validationCleared(resolved.locator)) {
+        interaction.backingValueCommitted = true;
+        interaction.validationCleared = true;
+        return;
+      }
       if (request.syntheticFile === undefined || request.value !== request.syntheticFile.name) {
         throw new TypeError("synthetic profile file artifact is missing");
       }
-      await resolved.locator.setInputFiles({
-        name: request.syntheticFile.name,
-        mimeType: request.syntheticFile.mimeType,
-        buffer: Buffer.from(
-          request.syntheticFile.bytes.buffer,
-          request.syntheticFile.bytes.byteOffset,
-          request.syntheticFile.bytes.byteLength,
-        ),
-      }, { timeout: this.#timeoutMs });
-      interaction.backingValueCommitted = await this.#readback(resolved.locator, "file") === request.value;
-      interaction.validationCleared = await validationCleared(resolved.locator);
+      let uploadError: unknown;
+      try {
+        await resolved.locator.setInputFiles({
+          name: request.syntheticFile.name,
+          mimeType: request.syntheticFile.mimeType,
+          buffer: Buffer.from(request.syntheticFile.bytes.buffer,
+            request.syntheticFile.bytes.byteOffset, request.syntheticFile.bytes.byteLength),
+        }, { timeout: this.#timeoutMs });
+      } catch (error) { uploadError = error; }
+      // A remount can lose the browser action's reply after upload succeeded.
+      // Reconcile the owned receipt and filename without transferring twice.
+      const deadline = Date.now() + (uploadError === undefined ? this.#timeoutMs : Math.min(this.#timeoutMs, 5_000));
+      do {
+        abort(signal);
+        try {
+          interaction.backingValueCommitted = await this.#readback(resolved.locator, "file") === request.value;
+          interaction.validationCleared = await validationCleared(resolved.locator);
+        } catch {
+          interaction.backingValueCommitted = false;
+          interaction.validationCleared = false;
+        }
+        if (interaction.backingValueCommitted && interaction.validationCleared) break;
+        await this.#page.waitForTimeout(50);
+      } while (Date.now() < deadline);
       if (!interaction.backingValueCommitted || !interaction.validationCleared) {
-        throw new TypeError("Workday profile file did not commit");
+        throw uploadError ?? new TypeError("Workday profile file did not commit");
       }
+      this.#trace?.("profile_file_upload_reconciled", { fieldId: resolved.fieldId,
+        underlyingError: uploadError === undefined ? "acknowledged" : "action_error_reconciled" });
     } else if (request.uiBehavior === "multi_select" &&
         await resolved.locator.evaluate((element) => element instanceof HTMLSelectElement)) {
       const options = parseOptionList(request.value);
@@ -858,7 +957,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday multi-select value did not commit");
       }
     } else if (request.uiBehavior === "search_select" || request.uiBehavior === "select") {
-      if (resolved.fieldId === "source.how_did_you_hear" &&
+      if (await this.#selectionReadbackIncludes(resolved.locator, request.uiBehavior, request.value) &&
+          await validationCleared(resolved.locator)) {
+        // A saved choice is already complete. Reopening its prompt can target
+        // hidden search inputs or toggle the selected token unnecessarily.
+        interaction.backingValueCommitted = true;
+        interaction.validationCleared = true;
+      } else if (resolved.fieldId === "source.how_did_you_hear" &&
           await committedPromptPrefill(resolved.locator, request.value) ||
           resolved.fieldId === "education.school" &&
           equivalentOption(await committedMultiSelectReadback(resolved.locator) ?? "", request.value)) {
@@ -953,6 +1058,50 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       throw new TypeError("Workday profile shared UI state did not commit");
     }
     } catch (error) {
+      if (["search_select", "select", "multi_select"].includes(request.uiBehavior) && !signal.aborted) {
+        // A successful selection can remount its popup before the action returns.
+        // Dismiss residual search UI, then reconcile the exact committed value;
+        // the handler's independent verifier still owns final acceptance.
+        await this.#resetFailedSelection(resolved.locator);
+        try {
+          const observed = await this.#readback(resolved.locator, request.uiBehavior);
+          const matches = request.uiBehavior === "multi_select"
+            ? exactOptionListReadback(observed, parseOptionList(request.value), resolved.fieldId)
+            : observed !== null && equivalentOption(observed, request.value);
+          if (matches && await resolved.locator.count() === 1 && await resolved.locator.isVisible() &&
+              await validationCleared(resolved.locator) &&
+              await resolved.locator.getAttribute("aria-expanded") !== "true" &&
+              await exactPromptCatalogOwner(this.#page, resolved.locator) === undefined) {
+            interaction.backingValueCommitted = true;
+            interaction.validationCleared = true;
+            interaction.popupClosed = true;
+            abort(signal);
+            return;
+          }
+        } catch { /* Preserve the original error when exact readback is unavailable. */ }
+      }
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1" &&
+          ["search_select", "select", "multi_select"].includes(request.uiBehavior)) {
+        try {
+          const observed = await this.#readback(resolved.locator, request.uiBehavior);
+          const digest = (value: string) => createHash("sha256").update(normalize(value)).digest("hex");
+          const knownErrors = [
+            "Workday profile shared UI state did not commit",
+            "Workday prompt catalog value did not commit",
+            "Workday submitted multi-select option did not commit",
+            "Workday selected-item ownership is ambiguous",
+            "Workday selected-item owner is incomplete or ambiguous",
+            "Workday prompt catalog option is unavailable",
+          ];
+          process.stderr.write(`${JSON.stringify({ profileFailedSelectionReadback: {
+            fieldId: resolved.fieldId,
+            expectedSha256: digest(request.value),
+            observedSha256: observed === null ? null : digest(observed),
+            matchesNow: observed !== null && equivalentOption(observed, request.value),
+            error: error instanceof Error && knownErrors.includes(error.message) ? error.message : "other",
+          } })}\n`);
+        } catch { /* Optional diagnostics must not replace the original failure. */ }
+      }
       this.#trace?.("profile_driver_failed", {
         fieldId: resolved.fieldId,
         uiBehavior: request.uiBehavior,
@@ -1137,22 +1286,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           ? "native_social_account" : await nativeCountryControlBinding(match, entry.fieldId)
           ? "native_country_control" : "catalog_selector_exact",
       });
-      const [currentReadback, valid, isRequired] = await Promise.all([
-        this.#readback(match, entry.uiBehavior), validationCleared(match), required(match),
+      const [currentReadback, isRequired] = await Promise.all([
+        this.#readback(match, entry.uiBehavior), required(match),
       ]);
-      const allowedOptions = this.#inspectMissingOptions && inspectInteractiveOptions && isChoice(entry.uiBehavior)
+      const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
           ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
-            entry.fieldId !== "phone.country_code")
+            inspectInteractiveOptions && entry.fieldId !== "phone.country_code")
           : [currentReadback]
         : [];
+      // Blur during catalog discovery may reveal required-field validation.
+      // Report its current state instead of treating validation as an answer edit.
+      const currentValid = await validationCleared(match);
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
-        required: !valid || isRequired,
+        required: !currentValid || isRequired,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        readback: valid ? currentReadback : null,
+        readback: currentValid ? currentReadback : null,
         ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
       });
     }
@@ -1244,6 +1396,14 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const candidates = await visibleLocators(
       profile.locator(`${profileInteractiveControlSelector}, ${profileRequiredControlSelector}`),
     );
+    // Workday hides native upload inputs behind a visible owned drop zone.
+    const uploads = profile.locator('input[type="file"][data-automation-id="file-upload-input-ref"]');
+    for (let index = 0; index < await uploads.count(); index += 1) {
+      const upload = uploads.nth(index);
+      if (!await upload.isVisible() && await upload.locator(
+        'xpath=ancestor::*[@data-fkit-id][1]',
+      ).isVisible()) candidates.push(upload);
+    }
     const catalog = {
       scalarSelectors: profileScalarControlCatalog.map(({ selector }) => selector)
         .filter((selector) => !unresolvedSelectors.has(selector)),
@@ -1266,7 +1426,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         if (element.getAttribute("role") === "radio" &&
             element.closest('[role="radiogroup"]') !== null) return true;
         if (element.matches('input[type="file"][data-automation-id="file-upload-input-ref"]')) {
-          return true;
+          const owner = element.closest('[data-fkit-id]');
+          return owner === null || owner.getAttribute('data-fkit-id') === 'resumeAttachments--attachments';
         }
         if (reviewed.scalarSelectors.some((selector) => element.matches(selector))) {
           return true;
@@ -1388,12 +1549,22 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         this.#unknownControlOrdinals.set(stableKey, ordinal);
       }
       const isRequired = await required(candidate);
-      const uiBehavior = await unknownUiBehavior(candidate);
+      const emptyDatePart = !isRequired ? await candidate.evaluate(element => {
+        const owner = element.closest('[data-automation-id="dateInputWrapper"][role="group"]');
+        if (!owner || owner.getAttribute('aria-required') === 'true') return null;
+        const parts = ['Month', 'Day', 'Year'];
+        const inputs = parts.map(part => [...owner.querySelectorAll<HTMLInputElement>(`input[role="spinbutton"][data-automation-id="dateSection${part}-input"]`)]);
+        if (inputs.some(matches => matches.length !== 1 || matches[0]!.value !== '' || matches[0]!.required || matches[0]!.getAttribute('aria-required') === 'true')) return null;
+        const index = inputs.findIndex(matches => matches[0] === element);
+        return index < 0 ? null : parts[index]!;
+      }) : null;
+      const uiBehavior = emptyDatePart === "Month" ? "month" : emptyDatePart === "Year" ? "year" : emptyDatePart === "Day" ? "number" : await unknownUiBehavior(candidate);
+      const uiVariant = emptyDatePart === null ? "workday_unknown_required_v1" : "workday_empty_optional_date_segment_v1";
       const resolved: ResolvedControl = {
         locator: candidate,
         fieldId: `unknown.${isRequired ? "required" : "optional"}.${ordinal}`,
         uiBehavior,
-        uiVariant: "workday_unknown_required_v1",
+        uiVariant,
         binderStrategy: "opaque_machine_key",
       };
       const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
@@ -1416,7 +1587,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         label,
         required: isRequired,
         uiBehavior,
-        uiVariant: "workday_unknown_required_v1",
+        uiVariant,
         readback: currentReadback,
         ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
         ...(constraints === undefined ? {} : { constraints }),
@@ -1730,7 +1901,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }
       await control.focus({ timeout: this.#timeoutMs });
       await control.press("Enter", { timeout: this.#timeoutMs });
-      await this.#page.waitForTimeout(250);
+      // Enter can commit asynchronously. Observe the owned value without
+      // repeating Enter or accepting the search draft as a saved selection.
+      const commitDeadline = Date.now() + Math.min(this.#timeoutMs, 5_000);
+      do {
+        interaction.backingValueCommitted = await this.#selectionReadbackIncludes(control, behavior, value);
+        interaction.validationCleared = await validationCleared(control);
+        if (interaction.backingValueCommitted && interaction.validationCleared) break;
+        await this.#page.waitForTimeout(50);
+      } while (Date.now() < commitDeadline);
       await this.#captureSelectionDiagnostic("free-entry-committed", behavior);
       interaction.popupBound = false;
       interaction.optionFocused = false;
@@ -2839,6 +3018,16 @@ async function unknownUiBehavior(
       element.getAttribute("aria-haspopup") === "listbox"
     ) return "search_select";
     if (element instanceof HTMLInputElement) {
+      // Workday prompts can omit ARIA combobox semantics. Bind the input to
+      // its own widget before treating it as a choice rather than free text.
+      const widgetId = element.getAttribute("data-uxi-multiselect-id");
+      const widget = element.closest('[data-automation-id="multiSelectContainer"][data-uxi-widget-type="multiselect"]');
+      if (element.getAttribute("data-uxi-widget-type") === "selectinput" &&
+          widgetId && widget?.id === widgetId &&
+          [...widget.querySelectorAll('input[data-uxi-widget-type="selectinput"]')]
+            .filter(input => input.getAttribute("data-uxi-multiselect-id") === widgetId).length === 1) {
+        return "search_select";
+      }
       if (element.type === "checkbox") return "checkbox";
       if (element.type === "date") return "date";
       if (element.type === "month") return "month";
@@ -2918,7 +3107,9 @@ async function unknownAllowedOptions(locator: Locator): Promise<readonly string[
         .map((option) => normalize(option.label || option.textContent))
       : [...owner.querySelectorAll(
           '[role="option"], [role="radio"], input[type="radio"], input[type="checkbox"]',
-        )].map((option) => {
+        )].filter(option => option.closest(
+          '[data-automation-id="selectedItem"], [data-automation-id="selectedItemList"]',
+        ) === null).map((option) => {
           if (option instanceof HTMLInputElement) {
             return normalize(option.labels?.[0]?.textContent ?? option.getAttribute("aria-label"));
           }
@@ -2932,6 +3123,34 @@ async function unknownAllowedOptions(locator: Locator): Promise<readonly string[
 async function unknownMachineKey(locator: Locator): Promise<string | null> {
   return await locator.evaluate((element) => {
     const type = element instanceof HTMLInputElement ? element.type : "element";
+    if (element instanceof HTMLInputElement && element.type === "file") {
+      const owner = element.closest('[data-fkit-id]');
+      const key = owner?.getAttribute('data-fkit-id');
+      if (key && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(key) &&
+          element.ownerDocument.querySelectorAll(`[data-fkit-id="${key}"]`).length === 1 &&
+          owner!.querySelectorAll('input[type="file"]').length === 1) {
+        return ["input", "file", "workday-upload", key].join("\u0000");
+      }
+    }
+
+    // Opening a Workday prompt adds searchBox/aria-controls to the same input.
+    // Prefer the input ID: React can remount its owner with a new widget UUID.
+    const widgetId = element.getAttribute("data-uxi-multiselect-id");
+    const widget = element.closest('[data-automation-id="multiSelectContainer"][data-uxi-widget-type="multiselect"]');
+    if (element instanceof HTMLInputElement &&
+        element.getAttribute("data-uxi-widget-type") === "selectinput" &&
+        widgetId && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(widgetId) &&
+        widget?.id === widgetId &&
+        element.ownerDocument.querySelectorAll(`[id="${widgetId}"]`).length === 1 &&
+        [...widget.querySelectorAll('input[data-uxi-widget-type="selectinput"]')]
+          .filter(input => input.getAttribute("data-uxi-multiselect-id") === widgetId).length === 1) {
+      const inputId = element.id;
+      if (inputId && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(inputId) &&
+          element.ownerDocument.querySelectorAll(`[id="${inputId}"]`).length === 1) {
+        return [element.tagName.toLowerCase(), type, "workday-prompt-input", inputId].join("\u0000");
+      }
+      return [element.tagName.toLowerCase(), type, "workday-prompt", widgetId].join("\u0000");
+    }
     const automationId = element.getAttribute("data-automation-id");
     // A unique automation identity survives React replacing generated DOM IDs.
     // Repeated automation identities still need the full disambiguating key.
@@ -2965,8 +3184,19 @@ async function readback(
   }
   if (behavior === "file") {
     return await locator.evaluate((element) => {
-      if (!(element instanceof HTMLInputElement) || element.type !== "file" ||
-          element.files === null || element.files.length !== 1) return null;
+      if (!(element instanceof HTMLInputElement) || element.type !== "file") return null;
+      if (element.getAttribute("data-automation-id") === "file-upload-input-ref") {
+        const owner = element.closest('[data-fkit-id]');
+        const items = owner?.querySelectorAll('[data-automation-id="file-upload-item"]');
+        if (items?.length !== 1 || owner?.querySelector('[data-automation-id="file-upload-error"]')) return null;
+        const item = items[0]!;
+        if (!item.matches('[data-upload-state="success"]') && !item.querySelector(
+          '[data-automation-id="file-upload-success"], [data-automation-id="file-upload-successful"]',
+        )) return null;
+        const names = item.querySelectorAll('[data-automation-id="file-upload-item-name"]');
+        return names.length === 1 ? names[0]!.textContent?.trim() || null : null;
+      }
+      if (element.files === null || element.files.length !== 1) return null;
       return element.files[0]?.name ?? null;
     });
   }

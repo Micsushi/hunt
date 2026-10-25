@@ -1229,3 +1229,15 @@ test("configured narrative provider is versioned and only serves eligible prompt
     /empty/u,
   );
 });
+
+
+test("optional empty catalog messages are not driven as answers", async () => {
+  const { handler, calls } = dependencies();
+  const observed = { ...field("optional-empty", "Identification Details", "listbox", [{id: optionId("empty"), label: boundedText("No Items.")}]), required: false };
+  const result = await handler.complete(request([observed]), new AbortController().signal);
+  assert.equal(result.ok, true);
+  assert.equal(calls.driven, 0);
+  const required = await handler.complete(request([{...observed, required: true}]), new AbortController().signal);
+  assert.notDeepEqual(required, result);
+  assert.equal(calls.driven, 0);
+});

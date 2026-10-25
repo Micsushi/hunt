@@ -1376,3 +1376,41 @@ test("missing known facts use editable defaults only in non-submittable learning
     },
   });
 });
+
+
+test("travel percentage uses an editable numeric fallback and preserves owner facts", async () => {
+  const signal = new AbortController().signal;
+  for (const label of ["Please mention how much % can travel?", "What percentage of time can you travel?", "Please indicate your travel percentage"]) {
+    const observed = field(label);
+    const missing = resolverWith({ kind: "profile_answer_missing" }).resolver;
+    const generated = await missing.resolve({ ...request(observed), answerFallbackPolicy: "deterministic_site_valid_editable" }, signal);
+    assert.equal(generated.ok && generated.value.kind === "resolved" && generated.value.intent.kind === "text" && generated.value.intent.value, "1");
+    const denied = await missing.resolve(request(observed), signal);
+    assert.equal(denied.ok && denied.value.kind, "profile_answer_missing");
+    for (const ownerValue of [0, 35]) {
+      const owner = resolverWith({ kind: "answered", value: ownerValue, provenance: "owner_provided", lane: "live_owner_fact" }).resolver;
+      const preserved = await owner.resolve(syntheticRequest(observed), signal);
+      assert.equal(preserved.ok && preserved.value.kind === "resolved" && preserved.value.intent.kind === "text" && preserved.value.intent.value, String(ownerValue));
+    }
+  }
+  const missing = resolverWith({ kind: "profile_answer_missing" }).resolver;
+  for (const label of ["Describe your travel experience", "Explain why you can travel 50%", "Are you willing to travel 25%?"]) {
+    const result = await missing.resolve(syntheticRequest(field(label)), signal);
+    assert.notEqual(result.ok && result.value.kind === "resolved" && result.value.intent.kind === "text" && result.value.intent.value, "0");
+  }
+});
+
+
+test("question-text digit counts produce numeric synthetic defaults", async () => {
+  const resolver = resolverWith({ kind: "profile_answer_missing" }).resolver;
+  for (const [label, expected] of [["What is your WIN? Please ensure you enter a 9-digit number.", "111111111"], ["Enter a 6 digit code", "111111"]]) {
+    const result = await resolver.resolve(syntheticRequest(field(label!)), new AbortController().signal);
+    assert.equal(result.ok && result.value.kind === "resolved" && result.value.intent.kind === "text" && result.value.intent.value, expected);
+  }
+});
+
+test("qualified binary choices require an unambiguous actual option", () => {
+  const options = ["Yes, I am over 18", "No, I am 16-17", "No, I am under 16"].map((label, i) => ({ id: optionId(`age-${i}`), label: boundedText(label) }));
+  assert.equal(mapVisibleOption(true, options).kind, "matched");
+  assert.equal(mapVisibleOption(false, options).kind, "option_ambiguous");
+});
