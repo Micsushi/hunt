@@ -10,6 +10,35 @@ permissions:
   contents: read
 
 jobs:
+  c3-windows:
+    name: C3 full checks (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repo and frozen acceptance history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install C3 browser runtime
+        run: |
+          npm --prefix executioner ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node executioner/node_modules/playwright/cli.js install chromium
+
+      - name: Run complete C3 checks
+        run: python ci.py c3
+
   trusted-linux-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, hunt]
@@ -184,6 +213,8 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -208,14 +239,21 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Install C3 browser runtime
-        run: |
-          npm --prefix executioner ci
-          node executioner/node_modules/playwright/cli.js install chromium
+      - name: Install portable C3 check dependencies
+        run: npm --prefix executioner ci
 
-      - name: Run full CI
+      - name: Run Linux C3 runtime and provenance checks
+        working-directory: executioner
+        timeout-minutes: 10
+        run: |
+          node --test tests/live/preflight/runtime-readiness.test.ts tests/live/evidence/process-start-time.test.ts tests/live/evidence/external-monitor-runtime.test.ts tests/revisions/f1-base.test.ts tests/revisions/s2-f0-base.test.ts tests/security/privacy/privacy-baseline.test.ts tests/form/catalogs/catalogs.test.ts tests/product/queue.test.ts
+          node scripts/audit-corpus.ts --static
+
+      - name: Run Python and frontend checks
         timeout-minutes: 30
-        run: python ci.py
+        run: |
+          python quality.py all
+          python test.py all
 
   ci:
     if: github.event_name == 'pull_request'
@@ -224,6 +262,8 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -248,11 +288,18 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Install C3 browser runtime
-        run: |
-          npm --prefix executioner ci
-          node executioner/node_modules/playwright/cli.js install chromium
+      - name: Install portable C3 check dependencies
+        run: npm --prefix executioner ci
 
-      - name: Run full CI
+      - name: Run Linux C3 runtime and provenance checks
+        working-directory: executioner
+        timeout-minutes: 10
+        run: |
+          node --test tests/live/preflight/runtime-readiness.test.ts tests/live/evidence/process-start-time.test.ts tests/live/evidence/external-monitor-runtime.test.ts tests/revisions/f1-base.test.ts tests/revisions/s2-f0-base.test.ts tests/security/privacy/privacy-baseline.test.ts tests/form/catalogs/catalogs.test.ts tests/product/queue.test.ts
+          node scripts/audit-corpus.ts --static
+
+      - name: Run Python and frontend checks
         timeout-minutes: 30
-        run: python ci.py
+        run: |
+          python quality.py all
+          python test.py all

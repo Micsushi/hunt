@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "modules": {
+    "src/ats/workday/application/profile/catalog.ts": { "disposition": "Retain the declarative Workday field labels, selectors, and repeatable mappings in their established catalog owner.", "regressionImpact": "Covered by profile catalog, discovery, and Playwright profile suites." },
+    "src/product/engine.ts": { "disposition": "Retain supported-family dispatch, fill and retry reconciliation, and verified Review admission in the product engine owner.", "regressionImpact": "Covered by product hosted application, account transition, learning, review completeness, and no-Submit suites." },
     "src/account/entry/adapter.ts": { "disposition": "Retain the established account entry boundary.", "regressionImpact": "Covered by account entry and composition suites." },
     "src/account/lifecycle/lifecycle.ts": { "disposition": "Retain the established lifecycle state machine.", "regressionImpact": "Covered by lifecycle, outcome, and receipt suites." },
     "src/acceptance/s2-journey.ts": { "disposition": "Retain exact Stage 2 account, recovery, application, Review, evidence, cleanup, and terminal ordering in one fail-closed journey owner.", "regressionImpact": "Covered by Stage 2 journey, MCP terminal, recovery, cleanup-failure, cancellation, and no-Submit suites." },

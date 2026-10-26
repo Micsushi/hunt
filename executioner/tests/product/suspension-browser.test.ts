@@ -91,7 +91,7 @@ test("real extension retains Review and recovers after browser-initiated discard
     for (let i = 0; i < 100 && !await worker.evaluate("typeof chrome !== 'undefined' && !!chrome.storage?.local && typeof connect === 'function'"); i++) await new Promise(resolve => setTimeout(resolve, 100));
     await worker.evaluate(`chrome.storage.local.set({token:${JSON.stringify(token)}}).then(() => connect())`);
     for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) await new Promise(r => setTimeout(r, 50));
-    await api("settings", { applicant: { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }, resumeBase64: Buffer.from("%PDF-1.4\nfixture").toString("base64") });
+    await api("settings", { applicant: { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }, resumeBase64: Buffer.from("%PDF-1.4\nfixture").toString("base64") });
     await api("jobs", { jobs: [{ url: "https://suspension.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" }] });
     const job = service.queue.jobs[0]!;
     const deadline = Date.now() + 90_000;

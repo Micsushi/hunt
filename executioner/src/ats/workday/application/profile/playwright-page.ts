@@ -957,6 +957,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         throw new TypeError("Workday multi-select value did not commit");
       }
     } else if (request.uiBehavior === "search_select" || request.uiBehavior === "select") {
+      const sourceBacking = resolved.fieldId === "source.how_did_you_hear"
+        ? await committedPromptPrefill(resolved.locator, request.value) : undefined;
+      if (sourceBacking === false &&
+          await this.#selectionReadbackIncludes(resolved.locator, request.uiBehavior, request.value)) {
+        throw new TypeError("Workday saved source does not match its controlled backing");
+      }
       if (await this.#selectionReadbackIncludes(resolved.locator, request.uiBehavior, request.value) &&
           await validationCleared(resolved.locator)) {
         // A saved choice is already complete. Reopening its prompt can target
@@ -1069,6 +1075,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
             ? exactOptionListReadback(observed, parseOptionList(request.value), resolved.fieldId)
             : observed !== null && equivalentOption(observed, request.value);
           if (matches && await resolved.locator.count() === 1 && await resolved.locator.isVisible() &&
+              (resolved.fieldId !== "source.how_did_you_hear" ||
+                await committedPromptPrefill(resolved.locator, request.value) !== false) &&
               await validationCleared(resolved.locator) &&
               await resolved.locator.getAttribute("aria-expanded") !== "true" &&
               await exactPromptCatalogOwner(this.#page, resolved.locator) === undefined) {
@@ -3643,6 +3651,13 @@ async function exactPromptCatalogOwner(
   const education = /^education-[^\s]+--(?:school|fieldOfStudy)$/u.test(await control.getAttribute("id") ?? "");
   const deadline = Date.now() + (source || education ? 1_500 : 0);
   do {
+    const ownedIds = [await control.getAttribute("aria-controls"), await control.getAttribute("aria-owns")]
+      .flatMap(value => value?.trim().split(/\s+/u).filter(Boolean) ?? []);
+    // Focus and newly visible popups cannot disambiguate duplicate declared owners.
+    for (const id of new Set(ownedIds)) {
+      if (/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(id) &&
+          await page.locator(`[id="${id}"]`).count() > 1) return undefined;
+    }
     const focused = page.locator(":focus");
     if (
       await focused.count() === 1 && await focused.isVisible() &&
@@ -3720,13 +3735,12 @@ async function preferredPromptOption(
   return preferred[0]!.option;
 }
 
-async function committedPromptPrefill(control: Locator, expected: string): Promise<boolean> {
+async function committedPromptPrefill(control: Locator, expected: string): Promise<boolean | undefined> {
   return control.evaluate((element, value) => {
     const normalize = (text: string) => text.replace(/\s+/gu, " ").trim();
     const owner = element.closest('[data-automation-id="formField"], [data-automation-id^="formField-"]');
     const tokens = [...owner?.querySelectorAll('[data-automation-id="selectedItem"]') ?? []]
       .filter(token => token.getClientRects().length > 0 && getComputedStyle(token).visibility !== "hidden");
-    if (tokens.length !== 1 || normalize(tokens[0]!.textContent ?? "") !== normalize(value)) return false;
     const node = element as unknown as Record<string, unknown>;
     const fiberKey = Object.keys(node).find(key => key.startsWith("__reactFiber$"));
     let fiber = fiberKey === undefined ? undefined : node[fiberKey] as Record<string, unknown> | undefined;
@@ -3743,7 +3757,8 @@ async function committedPromptPrefill(control: Locator, expected: string): Promi
       }
       fiber = fiber.return as Record<string, unknown> | undefined;
     }
-    return found;
+    if (!found) return undefined;
+    return tokens.length === 1 && normalize(tokens[0]!.textContent ?? "") === normalize(value);
   }, expected);
 }
 

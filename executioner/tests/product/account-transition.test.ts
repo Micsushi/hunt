@@ -34,7 +34,7 @@ test("missing answers reload only a bound required empty busy catalog and only o
       page.reload = async options => { const result = await reload(options); if (scenario === "persistent") await install(); return result; };
       const stages: string[] = [];
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.timeout(25_000), stage => {
         stages.push(stage);
@@ -67,7 +67,7 @@ test("unverified saved Review or Experience rewinds and verifies the complete dr
       await page.goto(url);
       const stages: string[] = [];
       const fill = fillApplication(page, { url, learningRoot,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.timeout(25_000), stage => stages.push(stage));
       if (scenario === "bad-summary") await assert.rejects(fill);
@@ -118,9 +118,9 @@ test("account entry prefers existing sign-in and follows creation without retryi
       await page.goto(url);
       const stages: string[] = [];
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
-        credentials: { email: "fixture@example.test", password: "Synthetic-only-123!" },
+        credentials: { email: "fixture@example.invalid", password: "Synthetic-only-123!" },
       }, AbortSignal.timeout(25_000), stage => stages.push(stage));
       if (reject) await assert.rejects(fill, /site rejected account access/);
       else assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
@@ -165,7 +165,7 @@ test("employer error recovery waits for delayed readiness and stops at its reloa
       }) as typeof page.evaluate;
       const controller = new AbortController();
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.any([controller.signal, AbortSignal.timeout(100_000)]), stage => {
         stages.push(stage);
@@ -204,9 +204,9 @@ test("administrator reset follows email link and resumes the application", { tim
         : `<div role="alert"><p>You need to reset your password due to an administrator request. Click Forgot Password to continue.</p></div><button data-automation-id="forgotPasswordLink" onclick="document.body.innerHTML='<input data-automation-id=email><button data-automation-id=resetPasswordButton onclick=resetRequested()>Reset Password</button>'">Forgot password</button>` }));
     await page.goto(url);
     const result = await fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
-      credentials: { email: "fixture@example.test", password: "Synthetic-only-123!" },
+      credentials: { email: "fixture@example.invalid", password: "Synthetic-only-123!" },
       verifyEmail: async target => { links++; await target.goto("https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic"); },
     }, AbortSignal.timeout(45_000), () => {});
     assert.match(result.reviewDigest, /^[a-f0-9]{64}$/);
@@ -226,7 +226,7 @@ test("stalled saved-draft Back reopens the posting once and verifies the complet
     const url = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1";
     await page.goto(url);
     const result = await fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
     }, AbortSignal.timeout(45_000), () => {});
     assert.equal(loads, 2); assert.ok(result.completedPages > 0);
@@ -264,7 +264,7 @@ for (const late of [true, false]) test(`application entry ${late ? "accepts a ve
     };
     await page.goto(url); const stages: string[] = [];
     const fill = fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" }),
+      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
     }, AbortSignal.timeout(45_000), stage => stages.push(stage));
     if (late) {
@@ -286,7 +286,7 @@ for (const required of [false, true]) test(`assessment stage ${required ? "repor
     const fixture=applicationFixture.replace('review();', 'assessment();').replace('function review()', `function assessment(){root.innerHTML='<section data-automation-id="takeAssessmentPage"><h2>Take Assessment</h2><button data-automation-id="inlineAssessmentButton">Take Assessment</button><button data-automation-id="pageFooterNextButton">Save and Continue</button></section>';root.querySelector('[data-automation-id="pageFooterNextButton"]').onclick=()=>{${required ? `root.insertAdjacentHTML('beforeend','<div role="alert">You must complete the assessment test to continue with your job application.</div>');` : 'review();'}};} function review()`);
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:fixture}));
     const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';await page.goto(url);
-    const run=fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.test'}),resume:Buffer.from('%PDF-1.4 synthetic fixture')},AbortSignal.timeout(45000),()=>{});
+    const run=fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-1.4 synthetic fixture')},AbortSignal.timeout(45000),()=>{});
     if(required)await assert.rejects(run,/requires an assessment before Review/);else assert.match((await run).reviewDigest,/^[a-f0-9]{64}$/);
     assert.equal(await page.evaluate('submits'),0);
   }finally{await browser.close();}
@@ -309,7 +309,7 @@ test("confirmed existing account recovers a rejected sign-in once", {timeout:600
       signIn();</script></body>`;
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url().includes('/resetPassword') ? '<input data-automation-id="password" type="password"><input data-automation-id="verifyPassword" type="password"><button data-automation-id="resetPasswordSubmitButton" onclick="resetDone().then(()=>document.body.innerHTML=\'Password reset\')">Reset</button>' : reset?applicationFixture:account}));
     const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';await page.goto(url);
-    const result=await fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.test'}),resume:Buffer.from('%PDF-1.4 synthetic fixture'),credentials:{email:'fixture@example.test',password:'Synthetic-only-123!'},verifyEmail:async target=>{links++;await target.goto('https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic');}},AbortSignal.timeout(50000),()=>{});
+    const result=await fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-1.4 synthetic fixture'),credentials:{email:'fixture@example.invalid',password:'Synthetic-only-123!'},verifyEmail:async target=>{links++;await target.goto('https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic');}},AbortSignal.timeout(50000),()=>{});
     assert.match(result.reviewDigest,/^[a-f0-9]{64}$/);assert.equal(creates,1);assert.equal(requests,1);assert.equal(links,1);assert.equal(await page.evaluate('submits'),0);
   }finally{await browser.close();}
 });

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, normalize, resolve } from "node:path";
+import { join, normalize, resolve, sep } from "node:path";
 
 export type RuntimeReadinessCode =
   | "ready"
@@ -221,7 +221,7 @@ function admittedProfilePath(value: string): string {
   const tempRoot = resolve(tmpdir());
   const relative = resolved.slice(tempRoot.length + 1);
   if (
-    comparable(resolved).startsWith(`${comparable(tempRoot)}\\`) &&
+    comparable(resolved).startsWith(`${comparable(tempRoot)}${sep}`) &&
     /^hunt-c3-readiness-[A-Za-z0-9-]{8,80}$/u.test(relative) &&
     normalize(value) === value
   ) return resolved;

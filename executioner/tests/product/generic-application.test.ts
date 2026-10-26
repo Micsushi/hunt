@@ -17,7 +17,7 @@ test('generic partial fill preserves choices and edits, supports French fields a
       <input type=file><button onclick="window.submitted=true;return false">Submit application</button></form>
       <form><label>Email<input name=newsletter type=email></label><button>Subscribe</button></form>` }));
     await page.goto('https://employer.example.test/apply');
-    const source = applicantProfile({ given_name: 'Test', family_name: 'Applicant', email_address: 'test@example.test', city: 'New York', country: 'United States' }) as { profile: unknown };
+    const source = applicantProfile({ given_name: 'Test', family_name: 'Applicant', email_address: 'test@example.invalid', city: 'New York', country: 'United States' }) as { profile: unknown };
     const result = await fillGenericIdentityFields(page, source.profile, AbortSignal.timeout(5000));
     assert.equal(result.filled.length, 4);
     assert.equal(await page.locator('[name=first]').inputValue(), 'Test');

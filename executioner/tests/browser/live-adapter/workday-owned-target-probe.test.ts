@@ -649,7 +649,7 @@ test("an exact email sign-in choice remains one posting-free account descendant"
   page.currentUrl = "https://approved.wd5.myworkdayjobs.invalid/en-US/Careers/apply";
   page.counts = {
     '[data-automation-id="authPage"]': 1,
-    '[data-automation-id="signInContent"]:has([data-automation-id="SignInWithEmailButton"])': 1,
+    '[data-automation-id="SignInWithEmailButton"]': 1,
   };
 
   const result = await probe.inspect(page, expected, new AbortController().signal);

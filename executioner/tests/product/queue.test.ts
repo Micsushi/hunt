@@ -9,7 +9,7 @@ import { applicantProfile } from "../../src/product/sources.ts";
 test("legacy campaign profile imports without promoting its non-submittable mode", async () => {
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-legacy-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
   try {
-    const profile = applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }) as any;
+    const profile = applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }) as any;
     profile.profilePlan.mode = "synthetic_test_non_submittable";
     delete profile.executionPolicy;
     queue.configure(profile, Buffer.from("%PDF-original").toString("base64"));
@@ -23,7 +23,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
   const root = mkdtempSync(join(tmpdir(), "c3-queue-"));
   const bridge: BrowserConnection = { connected: false, open: async () => { throw new Error("should not open"); }, release: async () => {} };
   const queue = new ApplicationQueue(root, bridge);
-  const profile = applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" });
+  const profile = applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" });
   queue.configure(profile, Buffer.from("%PDF-1.4 original").toString("base64"));
   const [first, second] = queue.add([1, 2].map(i => ({ url: `https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Test_R${i}` })));
   queue.configure(profile, Buffer.from("%PDF-1.4 new default").toString("base64"));
@@ -44,7 +44,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
 test("restoring a replaced job and silently changing its selected resume are rejected", async () => {
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-duplicate-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
   try {
-    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-original").toString("base64"));
+    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-original").toString("base64"));
     const input = { url: "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" };
     const [first] = queue.add([input]);
     assert.throws(() => queue.add([{ ...input, resumeBase64: Buffer.from("%PDF-replacement").toString("base64") }]), /different resume/);
@@ -55,7 +55,7 @@ test("restoring a replaced job and silently changing its selected resume are rej
 });
 
 test("editing basic details preserves imported policy and cannot promote test profiles", () => {
-  const values = { given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" };
+  const values = { given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" };
   const original = applicantProfile(values) as any;
   original.executionPolicy = { ...original.executionPolicy, answerFallbackPolicy: "owner_facts_only" };
   const edited = applicantProfile({ ...values, given_name: "Changed" }, original) as any;
@@ -70,7 +70,7 @@ test("disk failure pauses scheduling instead of crashing the service", async () 
   const bridge: BrowserConnection = { connected: false, open: async () => { opened = true; throw new Error(); }, release: async () => {} };
   const queue = new ApplicationQueue(root, bridge);
   try {
-    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-original").toString("base64"));
+    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-original").toString("base64"));
     const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" }]);
     const stateFile = join(root, "jobs.json"); unlinkSync(stateFile); mkdirSync(stateFile);
     bridge.connected = true;
@@ -89,7 +89,7 @@ test("a matching C1 handoff preserves its source and selected resume identity", 
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-origin-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
   try {
     const resumeBase64 = Buffer.from("%PDF-selected").toString("base64");
-    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), resumeBase64);
+    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), resumeBase64);
     const input = { url: "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" };
     const [manual] = queue.add([input]);
     queue.add([{ ...input, resumeBase64, sourceJobId: 7, resumeVersion: "version-2", resumeName: "selected.pdf" }]);
@@ -120,7 +120,7 @@ test("shutdown drains an opening runner and releases its late session without fi
   const queue = new ApplicationQueue(root, bridge, async () => {
     fills++; return { reviewDigest: "fixture", completedPages: 1 };
   });
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-fixture").toString("base64"));
+  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
   const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
   await opened.promise;
   let closed = false;
@@ -146,7 +146,7 @@ test("shutdown is bounded while a pending open remains responsible for late clea
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-close-bound-")), bridge, async () => {
     fills++; return { reviewDigest: "fixture", completedPages: 1 };
   });
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-fixture").toString("base64"));
+  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
   const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
   await opened.promise;
   await queue.close(10);
@@ -163,7 +163,7 @@ test("shutdown also drains pending review opens and prevents further review work
     release: async () => { released.resolve(); },
   };
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-close-review-")), bridge);
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-fixture").toString("base64"));
+  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
   const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
   job!.status = "review"; job!.tabId = 44;
   const reviewing = assert.rejects(queue.action(job!.id, "refresh_review"), /stopping/);
@@ -179,7 +179,7 @@ test("shutdown also drains pending review opens and prevents further review work
 test("shutdown preserves uncertain submission state even when progress cannot be saved", async () => {
   const root = mkdtempSync(join(tmpdir(), "c3-close-storage-"));
   const queue = new ApplicationQueue(root, { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-fixture").toString("base64"));
+  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
   const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
   job!.status = "submitting"; job!.reviewDigest = "fixture";
   queue.setConcurrency(6);
@@ -204,7 +204,7 @@ test("shutdown detaches a stalled automation connection and drains the active fi
     filling.resolve(); await finishFill.promise;
     return { reviewDigest: "fixture", completedPages: 1 };
   });
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.test" }), Buffer.from("%PDF-fixture").toString("base64"));
+  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
   const [job] = queue.add([{ url }]);
   await filling.promise;
   let closed = false;

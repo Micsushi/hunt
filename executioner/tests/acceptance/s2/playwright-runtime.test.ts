@@ -4005,7 +4005,7 @@ import { recoverBrowserInterruption } from "../../../src/journey/recovery/index.
 test("external monitor budget outlives the base application operation timeout", async () => {
   const browser = await chromium.launch({ headless: true });
   const html = encodeURIComponent(
-    '<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><input required data-automation-id="legalNameSection_firstName"></main></body></html>',
+    '<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><h2>My Information</h2><input required data-automation-id="legalNameSection_firstName"><button type="button" data-automation-id="pageFooterNextButton">Next</button></main></body></html>',
   );
   const run = async (
     applicationOperationTimeoutMs: number | undefined,
@@ -4079,12 +4079,13 @@ test("external monitor budget outlives the base application operation timeout", 
     return result;
   };
   try {
-    assert.deepEqual(await run(2_500, "budgeted_0001"), { ok: true, value: undefined });
+    // Include the application's stable-page sampling before the slow monitor.
+    assert.deepEqual(await run(5_000, "budgeted_0001"), { ok: true, value: undefined });
     assert.deepEqual(await run(undefined, "base_000000001"), {
       ok: false,
       error: { code: "browser_timeout", retryable: true },
     });
-    assert.deepEqual(await run(2_500, "cancelled_00001", 25), {
+    assert.deepEqual(await run(5_000, "cancelled_00001", 25), {
       ok: false,
       error: { code: "operation_cancelled", retryable: false },
     });

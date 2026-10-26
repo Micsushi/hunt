@@ -2765,7 +2765,7 @@ test("large choice menus reselect the exact saved option without keyboard fallba
     await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
       <label for="tenant-choice">Language</label>
       <button id="tenant-choice" type="button" role="combobox" aria-required="true"
-        aria-controls="tenant-options" aria-expanded="false">Choice 0</button>
+        aria-controls="tenant-options" aria-expanded="false">Select One</button>
       <div id="tenant-options" role="listbox" hidden>
         ${Array.from({ length: 267 }, (_, index) => `<div role="option">Choice ${index}</div>`).join('')}
       </div><script>
@@ -3268,7 +3268,7 @@ test("synthetic traversal commits required ARIA, contenteditable, plural, and co
           <div role="checkbox" aria-required="true" aria-checked="false"
             data-automation-id="tenantConsent">Agree</div>
           <label for="tenant-fluent">I am fluent in this language.</label>
-          <input id="tenant-fluent" type="checkbox" data-automation-id="tenantFluent">
+          <input id="tenant-fluent" type="checkbox" required data-automation-id="tenantFluent">
           <div role="radiogroup" aria-required="true" aria-label="Status"
             data-automation-id="tenantStatus">
             <div role="radio" aria-label="Alpha" aria-checked="false">Alpha</div>
@@ -3556,7 +3556,7 @@ test("single-choice search discovers real answers and waits for submitted result
         if (event.key === 'Escape') popup.hidden = true;
         if (event.key === 'Enter') searchTimer = setTimeout(() => {
           popup.hidden = false;
-          popup.innerHTML = input.value === 'a' || input.value === 'Alpha University'
+          popup.innerHTML = input.value === 'University' || input.value === 'Alpha University'
             ? '<div role="option"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Alpha University</span></div></div>'
             : '<div role="option">No Items.</div>';
         }, 2500);

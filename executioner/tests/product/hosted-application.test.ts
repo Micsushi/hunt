@@ -13,7 +13,7 @@ test('hosted targets preserve job and employer identities and reject unrelated o
     assert.equal(a.key,applicationTarget(`https://${host}/one/${id}/application?source=test`).key);
     assert.notEqual(a.key,applicationTarget(`https://${host}/two/${id}`).key);
   }
-  for(const url of ['https://jobs.lever.co.evil.test/one/'+id,'https://jobs.lever.co/','http://jobs.lever.co/one/'+id,'https://user@jobs.ashbyhq.com/one/'+id,'https://jobs.ashbyhq.com/one%2ftwo/'+id])assert.throws(()=>applicationTarget(url));
+  for(const url of ['https://jobs.lever.co.evil.test/one/'+id,'https://jobs.lever.co/','http://jobs.lever.co/one/'+id,Object.assign(new URL('https://jobs.ashbyhq.com/one/'+id), {username:'user'}).href,'https://jobs.ashbyhq.com/one%2ftwo/'+id])assert.throws(()=>applicationTarget(url));
   assert.equal(applicationTarget('https://job-boards.greenhouse.io/test/jobs/123').key,applicationTarget('https://boards.greenhouse.io/test/jobs/123').key);
   assert.equal(applicationTarget('https://apply.workable.com/one/j/ABC123/apply/').key,applicationTarget('https://apply.workable.com/one/j/ABC123').key);
   assert.throws(()=>applicationTarget('https://apply.workable.com.evil.test/one/j/ABC123'));
@@ -29,7 +29,7 @@ test('hosted fill answers owned radio groups and never submits; edits invalidate
       <fieldset><legend>Will you require sponsorship?</legend><label><input type=radio name=sponsor value=Yes required>Yes</label><label><input type=radio name=sponsor value=No required>No</label></fieldset>
       <button onclick="window.submits++">Submit application</button><script>window.submits=0</script>`}));
     await p.goto(url);
-    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.test'});
+    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
     const result=await fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
     assert.equal(await p.locator('[name=name]').inputValue(),'Fixture Applicant');
     assert.equal(await p.locator('input[type=radio]:checked').count(),1);
@@ -51,7 +51,7 @@ test('custom required buttons and one-of questions must be answered before revie
       <section class=ashby-application-form-section-container><h2>Answer 1 of 3 Questions</h2><label>Describe a project<textarea></textarea></label><label>Describe a challenge<textarea></textarea></label><label>Describe your interests<textarea></textarea></label></section>
       <button onclick="window.submits++">Submit Application</button><script>window.submits=0;document.querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>{b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)))});</script>`}));
     await p.goto(url);await assert.rejects(reviewDigest(p));
-    await fillApplication(p,{url,profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.test'}),resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    await fillApplication(p,{url,profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
     assert.equal(await p.locator('[aria-pressed=true]').count(),1);
     assert.equal(await p.locator('textarea').evaluateAll(es=>es.filter(e=>(e as HTMLTextAreaElement).value).length),1);
     assert.equal(await p.evaluate('submits'),0);
@@ -81,7 +81,7 @@ test('Workable ARIA choices use group labels and selected UI state, not native p
       document.querySelectorAll('[role=checkbox]').forEach(c=>c.onclick=e=>{e.preventDefault();c.setAttribute('aria-checked','true');});
       </script>`}));
     await p.goto(url);
-    const result=await fillApplication(p,{url,profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.test'}),resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    const result=await fillApplication(p,{url,profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
     assert.equal(await p.locator('[role=radio][aria-checked=true]').count(),1);
     assert.equal(await p.locator('input[type=radio]:checked').count(),0);
     assert.equal(await p.locator('[role=checkbox][aria-checked=true]').count(),1);
@@ -100,7 +100,7 @@ test('stored profile answers beat defaults across fresh applications and narrati
       const p=await b.newPage();const url=`https://jobs.lever.co/fixture/${id}/apply`;
       await p.route('**/*',r=>r.fulfill({contentType:'text/html',body:`<label>First &amp; Last Name<input name=full required></label><label>Email Address<input type=email required></label><label>LinkedIn URL<input name=link required></label><label>Brief interest statement<textarea required></textarea></label><fieldset><legend>Do you currently work at Example?</legend><label><input type=radio name=current value=Yes required>Yes</label><label><input type=radio name=current value=No required>No</label></fieldset><button>Submit application</button>`}));
       await p.goto(url);
-      const profile=structuredClone(applicantProfile({given_name:'Stored',family_name:'Applicant',email_address:'stored@example.test'})) as {profile:{facts:unknown[];unsetFactIds:string[]}};
+      const profile=structuredClone(applicantProfile({given_name:'Stored',family_name:'Applicant',email_address:'stored@example.invalid'})) as {profile:{facts:unknown[];unsetFactIds:string[]}};
       const narrative=current?'Updated saved narrative.':'Original saved narrative.';
       profile.profile.facts.push({factId:'configured_narrative',value:narrative,provenance:'configured_template',lane:'live_owner_fact'},{factId:'current_associate',value:current,provenance:'owner_provided',lane:'live_owner_fact'});
       profile.profile.unsetFactIds=profile.profile.unsetFactIds.filter(x=>!['configured_narrative','current_associate'].includes(x));
@@ -120,7 +120,7 @@ test('generic partial fill preserves entries, skips credentials, and never submi
   try{
     const p=await b.newPage();await p.route('**/*',r=>r.fulfill({contentType:'text/html',body:'<form><label>First name<input name=firstName></label><label>Last name<input name=lastName></label><label>Email<input type=email name=email></label><input type=file><button onclick="window.submitted=true">Submit</button></form><form><label>Password<input type=password></label></form>'}));
     await p.goto('https://employer.example.test/apply');
-    const profile=applicantProfile({given_name:'Stored',family_name:'Applicant',email_address:'stored@example.test'}) as {profile:unknown};
+    const profile=applicantProfile({given_name:'Stored',family_name:'Applicant',email_address:'stored@example.invalid'}) as {profile:unknown};
     const result=await fillGenericIdentityFields(p,profile.profile,AbortSignal.timeout(10000));
     assert.equal(result.status,'partial');assert.equal(result.filled.length,3);
     assert.equal(await p.locator('[name=firstName]').inputValue(),'Stored');

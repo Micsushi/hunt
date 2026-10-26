@@ -30,7 +30,7 @@ test("application-ready monitoring accepts the Workday Next footer and reports d
         <div data-automation-id="formField-source"><label>How Did You Hear About Us?*</label>
           <button id="source--1" type="button" role="combobox" aria-haspopup="listbox">Select One</button>
         </div>
-        <div data-automation-id="formField-previous-worker"><fieldset><legend>Worked here before?*</legend>
+        <div data-automation-id="formField-previous-worker"><fieldset><legend>Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.*</legend>
           <input type="radio" name="candidateIsPreviousWorker" value="yes">
           <input type="radio" name="candidateIsPreviousWorker" value="no">
         </fieldset></div>

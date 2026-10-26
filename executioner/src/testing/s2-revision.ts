@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -69,15 +70,27 @@ export function assertS2FrozenContractBase(
 ): void {
   const record = readS2ContractRevision(repository);
   assertRevisionRecord(record);
+  let ancestryRevision = revision;
+  let frozenRevision = revision;
+  try { git(repository, "merge-base", "--is-ancestor", acceptedStage1Base, revision); }
+  catch {
+    // A selective squash retains verified source objects without importing trial history.
+    if (revision !== "HEAD") throw new Error(`S2 contract base ancestry mismatch: accepted Stage 1 base ${acceptedStage1Base} is not an ancestor of ${revision}`);
+    const release = assertReleaseContractProvenance(repository, s2FrozenTreePaths);
+    ancestryRevision = release.sourceRevision;
+    frozenRevision = release.contractFreezeRevision;
+    assertAncestor(s2ContractSource, frozenRevision, repository, "Stage 2 contract source");
+    assertAncestor(frozenRevision, ancestryRevision, repository, "accepted contract freeze");
+  }
   assertAncestor(
     acceptedStage1Base,
-    revision,
+    ancestryRevision,
     repository,
     "accepted Stage 1 base",
   );
   assertAncestor(
     s2ContractSource,
-    revision,
+    ancestryRevision,
     repository,
     "Stage 2 contract source",
   );
@@ -94,13 +107,44 @@ export function assertS2FrozenContractBase(
   assertS2FrozenRootsClean(revision, repository);
 
   for (const path of s2FrozenTreePaths) {
-    const actual = git(repository, "rev-parse", `${revision}:${path}`).trim();
+    const actual = git(repository, "rev-parse", `${frozenRevision}:${path}`).trim();
     if (record.contractTreeOids[path] !== actual) {
       throw new Error(
         `S2 contract tree mismatch: ${path}: expected ${record.contractTreeOids[path]}, received ${actual}`,
       );
     }
   }
+}
+
+/** Verify the reviewed squash and reject any later frozen-root drift. */
+export function assertReleaseContractProvenance(repository: string, roots: readonly string[]) {
+  const release = JSON.parse(readFileSync(join(repository, "executioner/docs/release-provenance.json"), "utf8"));
+  if (release.schemaVersion !== 1 ||
+      release.sourceRevision !== "26325870cc577d02046553672e3eb7b17ede0da6" ||
+      release.integrationRevision !== "09e0cd0b1b83f121801cc6ef2e2e8e16e2d0b601" ||
+      release.contractFreezeRevision !== "63218cbcbec87d420d1fda6924a6e7a220491518") {
+    throw new Error("release provenance identity mismatch");
+  }
+  git(repository, "merge-base", "--is-ancestor", release.integrationRevision, "HEAD");
+  for (const [revision, tree] of [[release.sourceRevision, release.sourceTree],
+    [release.integrationRevision, release.integrationTree]]) {
+    if (git(repository, "rev-parse", `${revision}^{tree}`).trim() !== tree) throw new Error("release provenance tree mismatch");
+  }
+  // Raw blob transitions are independent of checkout line endings and diff formatting.
+  const delta = git(repository, "diff-tree", "-r", "--raw", "--no-abbrev", "--no-renames",
+    release.sourceRevision, release.integrationRevision);
+  if (createHash("sha256").update(delta).digest("hex") !== release.integrationBlobDeltaSha256) {
+    throw new Error("release provenance blob delta mismatch");
+  }
+  for (const path of roots) {
+    if (git(repository, "rev-parse", `HEAD:${path}`).trim() !==
+        git(repository, "rev-parse", `${release.integrationRevision}:${path}`).trim() ||
+        git(repository, "diff", "--name-only", "HEAD", "--", path).trim() !== "" ||
+        git(repository, "ls-files", "--others", "--exclude-standard", "--", path).trim() !== "") {
+      throw new Error(`release contract tree mismatch: ${path}`);
+    }
+  }
+  return release as { sourceRevision: string; contractFreezeRevision: string };
 }
 
 function assertRevisionRecord(record: S2ContractRevisionRecord): void {

@@ -374,7 +374,10 @@ export function resolveQuestion(text: string) {
   if (canonical.kind !== "unknown") return canonical;
   const alias = resolveCatalogText(questionAliasCatalog, text);
   return alias.kind === "unknown"
-    ? resolveCatalogKeywords(questionSemanticCatalog, text)
+    ? resolveCatalogKeywords(
+      /\b(?:relative|relatives|family)\b/u.test(value)
+        ? questionSemanticCatalog.filter(entry => entry.id !== "workday-question-current-associate")
+        : questionSemanticCatalog, text)
     : alias;
 }
 

@@ -9,7 +9,7 @@ import { observedPendingProfileQuestions } from "../../src/browser/playwright-li
 
 import { admitPendingProfileQuestionsEvidence } from "../../src/live/evidence/question-answer-learning.ts";
 
-const basic = { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.test" };
+const basic = { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" };
 
 test("failed profile page observations reach the product journal despite reused unknown ordinals", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-failed-profile-learning-"));

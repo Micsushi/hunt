@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "26325870cc577d02046553672e3eb7b17ede0da6",
+  "integrationRevision": "09e0cd0b1b83f121801cc6ef2e2e8e16e2d0b601",
+  "sourceTree": "01a3b8f75196abeb919b4919b1bd4f3cbcde7bcc",
+  "integrationTree": "eb342ed0a520517494cb95ce952a5b3f2351e772",
+  "method": "Reviewed selective squash; frozen source ancestry is validated against sourceRevision, released contract trees against integrationRevision.",
+  "contractFreezeRevision": "63218cbcbec87d420d1fda6924a6e7a220491518",
+  "integrationBlobDeltaSha256": "3c1e442408e821a7665a7c40555c2d972b817417cf31eca21c54f29f1e7ef3de"
+}
