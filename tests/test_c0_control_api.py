@@ -1049,6 +1049,10 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(response.json()["accounts"][0]["username"], "user@example.com")
 
     def test_system_status_reports_db_and_component_state(self):
+        from backend.app import HUNT_FLETCHER_URL, HUNT_HUNTER_URL
+
+        requested_urls = []
+
         class FakeResponse:
             status_code = 200
 
@@ -1069,6 +1073,7 @@ class C0ControlApiTests(unittest.TestCase):
                 return False
 
             def get(self, url, headers=None):
+                requested_urls.append(url)
                 return FakeResponse({"status": "ok", "url": url, "authorized": bool(headers)})
 
         with patch("backend.app.httpx.Client", FakeClient):
@@ -1079,8 +1084,14 @@ class C0ControlApiTests(unittest.TestCase):
         self.assertEqual(data["db"]["status"], "ok")
         self.assertEqual(data["components"]["c1"]["status"], "ok")
         self.assertEqual(data["components"]["c2"]["status"], "ok")
-        self.assertEqual(data["components"]["c3"]["status"], "planned")
+        self.assertEqual(data["components"]["c3"]["status"], "unknown")
+        self.assertIsNone(data["components"]["c3"]["status_code"])
+        self.assertIn("Open Applications", data["components"]["c3"]["detail"])
         self.assertEqual(data["components"]["c4"]["status"], "paused")
+        self.assertEqual(
+            requested_urls,
+            [f"{HUNT_HUNTER_URL}/status", f"{HUNT_FLETCHER_URL}/status"],
+        )
 
     def test_c3_v2_queue_bridge_is_removed(self):
         from backend.app import app
