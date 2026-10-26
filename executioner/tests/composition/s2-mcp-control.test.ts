@@ -321,22 +321,33 @@ test("prepared-run MCP preserves the journey's exact factual terminal and page c
 });
 
 test("default MCP production journey retains, expires, and falls back without replacing its error", async () => {
-  const approvalExpiryAt = new Date(Date.now() + 3_000).toISOString();
-  const leaseExpiryAt = new Date(Date.now() + 6_000).toISOString();
-  const approvedAt = new Date(Date.now() - 100).toISOString();
-  const admittedAt = new Date(Date.now() - 50).toISOString();
-  const fixture = preparedFixture(approvalExpiryAt, approvedAt);
-  const scenario: RetentionScenario = {
-    preserveAccepted: true,
-    leaseExpiryAt,
-    calls: [],
-    observedExpiry: [],
-    releaseAt: 0,
-    closeCalls: 0,
-  };
-  activeRetentionScenario = scenario;
+  const fixture = preparedFixture();
   try {
     protectFixtureForCurrentUser(fixture);
+    // Start the retention clock after native ACL setup, not during it.
+    const now = Date.now();
+    const approvalExpiryAt = new Date(now + 3_000).toISOString();
+    const leaseExpiryAt = new Date(now + 6_000).toISOString();
+    const approvedAt = new Date(now - 100).toISOString();
+    const admittedAt = new Date(now - 50).toISOString();
+    const scenario: RetentionScenario = {
+      preserveAccepted: true,
+      leaseExpiryAt,
+      calls: [],
+      observedExpiry: [],
+      releaseAt: 0,
+      closeCalls: 0,
+    };
+    activeRetentionScenario = scenario;
+    const owner = JSON.parse(readFileSync(fixture.paths.ownerConfig, "utf8"));
+    Object.assign(owner.approval, { approvedAt, expiresAt: approvalExpiryAt });
+    owner.accountSecret.expiresAt = approvalExpiryAt;
+    owner.gmailAuthorization.expiresAt = approvalExpiryAt;
+    writeFileSync(fixture.paths.ownerConfig, JSON.stringify(owner));
+    const profilePath = join(fixture.paths.runtime, "application-profile.json");
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.approvedAt = approvedAt;
+    writeFileSync(profilePath, JSON.stringify(profile));
     const prepared = captureStage2PreparedMcpRun(fixture.args, {
       inspectSource: () => ({
         repositoryRoot: fixture.repositoryRoot,
