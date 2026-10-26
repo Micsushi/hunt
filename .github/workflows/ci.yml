@@ -208,7 +208,13 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Install C3 browser runtime
+        run: |
+          npm --prefix executioner ci
+          node executioner/node_modules/playwright/cli.js install chromium
+
       - name: Run full CI
+        timeout-minutes: 30
         run: python ci.py
 
   ci:
@@ -242,5 +248,11 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Install C3 browser runtime
+        run: |
+          npm --prefix executioner ci
+          node executioner/node_modules/playwright/cli.js install chromium
+
       - name: Run full CI
+        timeout-minutes: 30
         run: python ci.py
