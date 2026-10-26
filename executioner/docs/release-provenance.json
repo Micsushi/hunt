@@ -6,5 +6,31 @@
   "integrationTree": "eb342ed0a520517494cb95ce952a5b3f2351e772",
   "method": "Reviewed selective squash; frozen source ancestry is validated against sourceRevision, released contract trees against integrationRevision.",
   "contractFreezeRevision": "63218cbcbec87d420d1fda6924a6e7a220491518",
-  "integrationBlobDeltaSha256": "3c1e442408e821a7665a7c40555c2d972b817417cf31eca21c54f29f1e7ef3de"
+  "integrationBlobDeltaSha256": "3c1e442408e821a7665a7c40555c2d972b817417cf31eca21c54f29f1e7ef3de",
+  "contractCompatibility": {
+    "unchangedRoots": [
+      "executioner/src/contracts/live",
+      "executioner/src/control/orchestrator/live",
+      "executioner/src/testing/live",
+      "executioner/tests/live/contracts",
+      "executioner/tests/live/walking-skeleton"
+    ],
+    "additiveChanges": [
+      {
+        "path": "executioner/src/contracts/types.ts",
+        "freezeBlob": "860263a9c9ea3f13e0cf43494dd825769837e331",
+        "sourceBlob": "87b8f135bb48678f9e005fc33c52b0327f71ccea",
+        "integrationBlob": "87b8f135bb48678f9e005fc33c52b0327f71ccea",
+        "classification": "Adds only MAX_OBSERVED_CHOICE_OPTIONS = 512 and its comment; existing declarations unchanged."
+      },
+      {
+        "path": "executioner/src/contracts/ownership.ts",
+        "freezeBlob": "e518fd2e2d1d59ba0cfca9e5519987fc808a2734",
+        "sourceBlob": "e518fd2e2d1d59ba0cfca9e5519987fc808a2734",
+        "integrationBlob": "06618c345442c523ff0a97c83b61dd7df982cfa7",
+        "classification": "Appends productBoundary separately from the unchanged frozen component matrix; no serialized contract change."
+      }
+    ],
+    "verification": "Existing S2 preservation assertion checks unchanged prior type declarations and ownership matrix; existing version, golden-parser, wire-schema and architecture tests retained."
+  }
 }

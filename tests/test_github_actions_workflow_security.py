@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+JOBS = re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", WORKFLOW.split("jobs:\n", 1)[1])
 
 
 def _job_block(workflow: str, job: str) -> str:
@@ -52,11 +53,14 @@ class GitHubActionsWorkflowSecurityTest(unittest.TestCase):
             )
 
     def test_windows_jobs_remain_hosted(self) -> None:
-        self.assertEqual(WORKFLOW.count("runs-on: windows-latest"), 3)
+        self.assertEqual(WORKFLOW.count("runs-on: windows-latest"), 4)
+        for job in ("c3-windows", "ui-cli-smoke", "hunter-cli-smoke", "fletch-cli-smoke"):
+            self.assertIn("runs-on: windows-latest", _job_block(WORKFLOW, job))
+            _assert_actions_commit_pinned(WORKFLOW, job)
         self.assertNotIn("pull_request_target", WORKFLOW)
 
-    def test_self_hosted_actions_are_commit_pinned(self) -> None:
-        for job in ("trusted-linux-smoke", "ci-trusted"):
+    def test_all_job_actions_are_commit_pinned(self) -> None:
+        for job in JOBS:
             _assert_actions_commit_pinned(WORKFLOW, job)
 
     def test_job_target_check_does_not_borrow_configuration_from_later_job(self) -> None:
@@ -78,13 +82,16 @@ class GitHubActionsWorkflowSecurityTest(unittest.TestCase):
             )
 
     def test_commit_pin_check_rejects_branch_references(self) -> None:
-        mutated = WORKFLOW.replace(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-            "actions/checkout@main",
-            1,
-        )
-        with self.assertRaises(AssertionError):
-            _assert_actions_commit_pinned(mutated, "trusted-linux-smoke")
+        for job in JOBS:
+            with self.subTest(job=job):
+                original = _job_block(WORKFLOW, job)
+                mutated_block = re.sub(
+                    r"(uses:\s+[^@\s]+)@[0-9a-f]{40}", r"\1@main", original, count=1
+                )
+                self.assertNotEqual(original, mutated_block)
+                mutated = WORKFLOW.replace(original, mutated_block, 1)
+                with self.assertRaises(AssertionError):
+                    _assert_actions_commit_pinned(mutated, job)
 
 
 if __name__ == "__main__":

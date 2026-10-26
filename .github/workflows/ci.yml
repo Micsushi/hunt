@@ -36,6 +36,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node executioner/node_modules/playwright/cli.js install chromium
 
+      - name: Use canonical Windows temporary paths
+        run: |
+          $canonicalTemp = node -e "const fs=require('node:fs'),path=require('node:path'); const root=path.join(fs.realpathSync.native(process.env.RUNNER_TEMP),'hunt-c3-tests'); fs.mkdirSync(root,{recursive:true}); process.stdout.write(fs.realpathSync.native(root))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "TEMP=$canonicalTemp" >> $env:GITHUB_ENV
+          "TMP=$canonicalTemp" >> $env:GITHUB_ENV
+
+      - name: Verify canonical C3 temporary root
+        run: node -e "const fs=require('node:fs'),os=require('node:os'); const root=os.tmpdir(); if(root!==fs.realpathSync.native(root)||process.env.TMP!==root||process.env.TEMP!==root) throw new Error('Noncanonical C3 temporary root'); console.log('Canonical C3 temporary root verified')"
+
       - name: Run complete C3 checks
         run: python ci.py c3
 

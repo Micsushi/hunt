@@ -120,6 +120,23 @@ test("Stage 2 preserves every pre-existing Stage 1 contract blob", () => {
     indexDiff.filter((line) => line.startsWith("-") && !line.startsWith("---")),
     [],
   );
+  const freeze = "63218cbcbec87d420d1fda6924a6e7a220491518";
+  const changed = git(repository, "diff", "--name-only", freeze, "HEAD", "--", ...s2FrozenTreePaths).trim().split("\n");
+  assert.deepEqual(changed, ["executioner/src/contracts/ownership.ts", "executioner/src/contracts/types.ts"]);
+  const types = "executioner/src/contracts/types.ts";
+  const addedChoiceBound = "// Country and nationality catalogs exceed 128 choices. Preserve their options\n" +
+    "// through browser inspection and editable learning records.\n" +
+    "export const MAX_OBSERVED_CHOICE_OPTIONS = 512 as const;\n\n";
+  assert.equal(git(repository, "show", `HEAD:${types}`).replace(addedChoiceBound, ""),
+    git(repository, "show", `${freeze}:${types}`), "All existing contract declarations remain byte-identical");
+  const ownership = "executioner/src/contracts/ownership.ts";
+  const frozenOwnership = git(repository, "show", `${freeze}:${ownership}`);
+  const releasedOwnership = git(repository, "show", `HEAD:${ownership}`);
+  assert.equal(releasedOwnership.slice(0, frozenOwnership.length), frozenOwnership,
+    "The frozen component ownership matrix is unchanged");
+  assert.deepEqual(releasedOwnership.slice(frozenOwnership.length).match(/^export .*$/gmu),
+    ["export const productBoundary = {"], "Only the separately reviewed product boundary is appended");
+
 });
 
 test("a pre-F0 revision is rejected with a Stage 2 source diagnostic", () => {
