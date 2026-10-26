@@ -4,7 +4,7 @@ const base = proxied ? '/api/c3/' : '/';
 if (proxied) $('pair').hidden = true;
 let token = sessionStorage.getItem('c3-token') || new URLSearchParams(location.hash.slice(1)).get('token') || '';
 if (new URLSearchParams(location.hash.slice(1)).has('token')) { sessionStorage.setItem('c3-token', token); history.replaceState(null, '', location.pathname + location.search); }
-let state, busy = false, rendered = '', pendingSubmit, historyBusy = false, profileLoaded = false, polling = false, profileDirty = false;
+let state, busy = false, rendered = '', pendingSubmit, historyBusy = false, profileLoaded = false, polling = false, profileDirty = false, profileSuggestions = [];
 $('profile-form').addEventListener('input', () => { profileDirty = true; $('draft-state').textContent='Unsaved changes'; $('profile-status').textContent='Not saved'; });
 const viewCopy={profile:'Profile',applications:'Applications',settings:'Settings'};
 for(const item of [$('account-form'),$('backup-file').closest('details'),$('import-profile').closest('details')]) $('settings-panel').append(item);
@@ -40,13 +40,14 @@ $('recover-storage').onclick = () => perform(() => api('recover-storage', {}));
 $('pair').onsubmit = e => { e.preventDefault(); token = $('token').value.trim(); sessionStorage.setItem('c3-token', token); void perform(refresh); };
 $('batch').onsubmit = e => { e.preventDefault(); const submitted = $('links').value; void perform(async () => {
   const jobs = [...new Set(submitted.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))].map(url=>({url}));
-  await api('jobs', { jobs }); if($('links').value === submitted) $('links').value = ''; $('links').focus();
+  const added = await api('jobs', { jobs }); const existing=new Set(state.jobs.map(job=>job.id));const distinct=[...new Map(added.map(job=>[job.id,job])).values()];const reused=distinct.filter(job=>existing.has(job.id)).length; $('notice').textContent=`${distinct.length-reused} new applications · ${reused} already in your list · ${added.length-distinct.length} duplicate links ignored`; if($('links').value === submitted) $('links').value = ''; $('links').focus();
 }); };
 $('concurrency').onchange = () => { const before = state.concurrency, after = Number($('concurrency').value); void perform(async () => {
   await api('concurrency', { value: after }); remember({undo:()=>api('concurrency',{value:before}),redo:()=>api('concurrency',{value:after})});
 }); };
 const base64 = async file => { const bytes = new Uint8Array(await file.arrayBuffer()); let text=''; for(let i=0;i<bytes.length;i+=8192) text += String.fromCharCode(...bytes.subarray(i,i+8192)); return btoa(text); };
 $('profile-form').onsubmit = e => { e.preventDefault(); void perform(async () => {
+  if(!$('suggestion-review').hidden && !$('accept-suggestions').checked)throw new Error('Review the suggested answers and confirm them before saving.');
   const resume = $('resume').files[0], applicant = Object.fromEntries(new FormData($('profile-form'))), before = await api('settings');
   if(!resume && !before) throw new Error('Choose your PDF resume.');
   if(resume?.size > 5*1024*1024) throw new Error('Choose a PDF smaller than 5 MB.');
@@ -59,9 +60,10 @@ $('profile-form').onsubmit = e => { e.preventDefault(); void perform(async () =>
   $('notice').textContent = 'Saved for new jobs. Queued jobs keep their original profile and resume.';
 }); };
 async function restoreSettings(value) { await api('settings',{profile:value.profile,resumeBase64:value.resume}); if(!profileDirty)await loadProfile(); }
-async function loadProfile() {
+async function loadProfile(suggest = false) {
   if (!$('answer-fields').children.length) {
     const schema = await api('profile-fields');
+    profileSuggestions = schema.fields.filter(field => field.suggestedValue !== undefined);
     $('storage-path').textContent = `Saved on this device: ${schema.storage}`;
     const labels = {configured_narrative:'Reusable interest statement', work_authorization:'Authorized to work in the application country', sponsorship_required:'Need employer sponsorship', age_requirement_met:'At least 18 years old', essential_functions_ability:'Able to perform essential job functions', employment_agreement_prevents_employment:'An existing agreement prevents new employment', highest_education:'Highest education level', current_company:'Current employer', current_title:'Current job title', salary_expectations:'Salary expectations (include currency and period)', desired_salary:'Desired salary amount', weekly_hours:'Available hours per week', notice_period_days:'Notice period in days', travel_percentage:'Willingness to travel (%)', application_source:'How you find job opportunities'};
     const groups=[
@@ -90,6 +92,18 @@ async function loadProfile() {
   if(!profileDirty)for(const input of $('profile-form').querySelectorAll('[name]')) {
     if(input.name==='answer_policy') { input.value=saved?.profile?.executionPolicy?.answerFallbackPolicy==='deterministic_site_valid_editable'?'test':'real'; continue; }
     input.value=String(saved?.profile?.profile?.facts?.find(f=>f.factId===input.name)?.value ?? '');
+  }
+  if(!profileDirty){
+    for(const badge of document.querySelectorAll('.suggested-answer'))badge.remove();
+    let suggestions=0;
+    for(const field of suggest ? profileSuggestions : []){
+      const input=$('profile-form').elements.namedItem(field.id);
+      if(!input || input.value!=='')continue;
+      input.value=String(field.suggestedValue);
+      const badge=document.createElement('span');badge.className='suggested-answer';badge.textContent='Suggested';input.closest('label').append(badge);suggestions++;
+    }
+    $('suggestion-review').hidden=!suggestions;$('accept-suggestions').checked=false;
+    if(suggestions)profileDirty=true;
   }
   $('saved-policy').textContent = saved?.profile?.executionPolicy?.answerFallbackPolicy === 'deterministic_site_valid_editable' ? 'Saved mode: test values enabled.' : 'Saved mode: your answers only.';
   profileLoaded=true;
@@ -129,12 +143,13 @@ async function refresh() {
   state = await api('state'); $('pair').hidden=true;
   if(state.storageError)error(state.storageError);
   $('recover-storage').hidden = !state.storageError;
-  if(!profileLoaded)await loadProfile();
+  if(!profileLoaded)await loadProfile(true);
   $('connection').textContent=state.connected ? 'Connected' : 'Extension disconnected'; $('connection').dataset.connected=String(state.connected);
   $('start').disabled=!state.configured || !state.connected; $('concurrency').disabled=false; $('concurrency').value=String(state.concurrency);
   $('profile-status').textContent=profileDirty?'Not saved':state.configured ? 'Saved on this device' : 'Profile and resume required';
   $('summary').textContent=`${state.jobs.filter(j=>j.status==='review').length} ready to review · ${state.jobs.filter(j=>j.status==='running').length} running`;
   $('empty').hidden=state.jobs.length>0;
+  $('profile-usage').textContent=`${state.jobs.length} applications have their own saved profile snapshot. Re-adding the same recognized job returns its existing entry.`;
   const signature=JSON.stringify(state.jobs); if(signature===rendered)return; rendered=signature;
   const active=document.activeElement, focusJob=active?.closest('[data-job]')?.dataset.job, focusText=active?.textContent;
   const rows=state.jobs.map(job=>{

@@ -10,13 +10,22 @@ import { createWorkdayResumeFileIntent } from "../ats/workday/application/resume
 import { validateProfileAuthority, type Stage2ApplicationOwnerSources } from "../composition/private/s2-application-owner-source.ts";
 import { applicationTextProfileFactIds, applicationBooleanProfileFactIds, applicationNumberProfileFactIds } from '../form/answers/application-types.ts';
 
+import { questionAnswerGuide, questionFor, generatedLearningDefaultFor } from '../form/questions/catalog.ts';
+import { semanticSyntheticTestDefault } from '../form/answers/testing-policy.ts';
+
 // Employer-specific answers and legal consent must be decided on each application.
 const perApplication = new Set(['terms_consent', 'previously_worked_for_organization', 'associate_referral', 'current_associate', 'previously_applied', 'relatives_employed']);
 export const applicantFields = [
   ...applicationTextProfileFactIds.map(id => ({id, type:'text'})),
   ...applicationBooleanProfileFactIds.map(id => ({id, type:'boolean'})),
   ...applicationNumberProfileFactIds.map(id => ({id, type:'number'})),
-].filter(field => !perApplication.has(field.id));
+].filter(field => !perApplication.has(field.id)).map(field => {
+  const question = questionAnswerGuide.map(entry => questionFor(entry.id)).find(question => question?.source && 'factId' in question.source && question.source.factId === field.id);
+  const source = question?.source;
+  const suggestedValue = question ? semanticSyntheticTestDefault(question.labels[0]!) ??
+    (source && 'syntheticDefault' in source ? source.syntheticDefault : undefined) ?? generatedLearningDefaultFor(question.id) : undefined;
+  return {...field, ...(suggestedValue === undefined ? {} : {suggestedValue})};
+});
 
 const basicFields = {
   given_name: ["identity.given_name", "identity", "text"],
