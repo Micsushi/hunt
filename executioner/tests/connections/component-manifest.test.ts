@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import test from "node:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
+import test, { after } from "node:test";
 
 const acceptedF1Base = "f274d9a6624978b61ab1dd1433ebdddfdef029d2";
 const acceptedStage1Final = "87c77e538d8bba378ec93516dbea3f4747beb822";
@@ -13,6 +14,25 @@ const acceptedPreReviewF13Tree = "a33c2a72836985e125f35907bc3ba5f2bf250b23";
 const acceptedF4RepairTip = "0908aa70d25ef2353c6091940bddbac12c8db135";
 const acceptedF4RepairTree = "27caccaf42d4b54ff1089cce93fb3ec64eccb096";
 const repository = resolve(process.cwd(), "..");
+// Selective releases retain exact provenance metadata without publishing historical file contents.
+const metadata = readFileSync(new URL("./component-provenance.pack", import.meta.url));
+assert.equal(createHash("sha256").update(metadata).digest("hex"),
+  "9d37a4cfec7adaf1ba5459c2e875dd8b12758adcd6105e7efc349aad8d22c36c");
+const objects = mkdtempSync(join(tmpdir(), "hunt-component-provenance-"));
+mkdirSync(join(objects, "pack"));
+const inheritedObjects = process.env.GIT_OBJECT_DIRECTORY ?? execFileSync("git",
+  ["rev-parse", "--path-format=absolute", "--git-path", "objects"],
+  { cwd: repository, encoding: "utf8" }).trim();
+const provenanceEnvironment = {
+  ...process.env,
+  GIT_OBJECT_DIRECTORY: objects,
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: [inheritedObjects,
+    process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter),
+};
+after(() => rmSync(objects, { recursive: true, force: true }));
+execFileSync("git", ["index-pack", "--stdin"], {
+  cwd: repository, env: provenanceEnvironment, input: metadata, stdio: ["pipe", "pipe", "pipe"],
+});
 const manifestPath = "tests/connections/component-revisions.json";
 const boundaryRepairPath =
   "executioner/tests/connections/component-manifest.test.ts";
@@ -947,6 +967,7 @@ function hashPaths(paths: readonly string[]): string {
 function nativeGit(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], {
     cwd,
+    env: provenanceEnvironment,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
