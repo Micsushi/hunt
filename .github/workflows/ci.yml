@@ -46,11 +46,6 @@ jobs:
       - name: Verify canonical C3 temporary root
         run: node -e "const fs=require('node:fs'),os=require('node:os'); const root=os.tmpdir(); if(root!==fs.realpathSync.native(root)||process.env.TMP!==root||process.env.TEMP!==root) throw new Error('Noncanonical C3 temporary root'); console.log('Canonical C3 temporary root verified')"
 
-      - name: Diagnose native helper environment and concurrency
-        working-directory: executioner
-        timeout-minutes: 8
-        run: node --experimental-test-module-mocks scripts/diagnose-windows-ci.ts
-
       - name: Run complete C3 checks
         run: python ci.py c3
 
