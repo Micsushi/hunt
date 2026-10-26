@@ -30,18 +30,28 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
   const pending = useRef(false)
   const [applicationBatch, setApplicationBatch] = useState<number[]>([])
   const [result, setResult] = useState<HandoffResult | null>(null)
-  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+    }
+  }, [])
   const ids = Array.from(selectedIds)
   const n = ids.length
 
   const awaitingReview = action === 'apply' && result?.selection === selectedIds
-  const unsent = result?.outcomes.filter(item => item.status === 'not_sent').map(item => item.sourceJobId) ?? []
+  const unsent =
+    result?.outcomes.filter((item) => item.status === 'not_sent').map((item) => item.sourceJobId) ??
+    []
 
   if (n === 0 && !loading && !result) return null
 
   async function run() {
     if (disabled || pending.current || awaitingReview || n === 0) return
-    if (action === 'apply' && n > 30) { showToast('Select up to 30 jobs for one application batch', 'error'); return }
+    if (action === 'apply' && n > 30) {
+      showToast('Select up to 30 jobs for one application batch', 'error')
+      return
+    }
     if (!action) {
       showToast('Choose an action', 'error')
       return
@@ -61,7 +71,11 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
             clearSelection()
             navigate('/executioner')
           } else {
-            setResult({ selection: selectedIds, outcomes: ids.map(sourceJobId => ({ sourceJobId, status: 'confirmed' })), message: 'Batch confirmed in Applications. Your new selection is unchanged.' })
+            setResult({
+              selection: selectedIds,
+              outcomes: ids.map((sourceJobId) => ({ sourceJobId, status: 'confirmed' })),
+              message: 'Batch confirmed in Applications. Your new selection is unchanged.',
+            })
           }
         }
         return
@@ -81,9 +95,31 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
     } catch (e) {
       if (active.current) {
         if (action === 'apply') {
-          const outcomes = e instanceof ApiError ? (e.data as { outcomes?: HandoffOutcome[] } | undefined)?.outcomes : undefined
-          const valid = Array.isArray(outcomes) && outcomes.length === ids.length && ids.every(id => outcomes.filter(item => item?.sourceJobId === id && ['confirmed', 'unconfirmed', 'not_sent'].includes(item.status)).length === 1)
-          setResult({ selection: selectedIds, outcomes: valid ? outcomes : ids.map(sourceJobId => ({ sourceJobId, status: 'unconfirmed' })), message: e instanceof Error ? e.message : 'Handoff could not be confirmed. Check Applications.' })
+          const outcomes =
+            e instanceof ApiError
+              ? (e.data as { outcomes?: HandoffOutcome[] } | undefined)?.outcomes
+              : undefined
+          const valid =
+            Array.isArray(outcomes) &&
+            outcomes.length === ids.length &&
+            ids.every(
+              (id) =>
+                outcomes.filter(
+                  (item) =>
+                    item?.sourceJobId === id &&
+                    ['confirmed', 'unconfirmed', 'not_sent'].includes(item.status),
+                ).length === 1,
+            )
+          setResult({
+            selection: selectedIds,
+            outcomes: valid
+              ? outcomes
+              : ids.map((sourceJobId) => ({ sourceJobId, status: 'unconfirmed' })),
+            message:
+              e instanceof Error
+                ? e.message
+                : 'Handoff could not be confirmed. Check Applications.',
+          })
         } else showToast(e instanceof Error ? e.message : 'Action failed', 'error')
       }
     } finally {
@@ -142,15 +178,47 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
       <button className={styles.clearBtn} onClick={clearSelection} title="Deselect all rows">
         Clear
       </button>
-      {loading && applicationBatch.length > 0 && <p className={styles.result} role="status">Sending jobs {applicationBatch.map(id => `#${id}`).join(', ')}. Stops before submission.</p>}
-      {result && <div className={styles.result}>
-        <p role="status">{result.message}</p>
-        <ul>{result.outcomes.map(item => <li key={item.sourceJobId}>
-          <Link to={`/jobs/${item.sourceJobId}`}>Job #{item.sourceJobId}</Link>: <span>{({ confirmed: 'Confirmed in Applications', unconfirmed: 'Not confirmed. Check Applications.', not_sent: 'Not sent' })[item.status]}</span>
-        </li>)}</ul>
-        <button className={styles.clearBtn} onClick={() => navigate('/executioner')}>View Applications</button>
-        {unsent.length > 0 && <button className={styles.clearBtn} disabled={loading} onClick={() => { selectAll(unsent); setAction('apply') }}>Select unsent jobs</button>}
-      </div>}
+      {loading && applicationBatch.length > 0 && (
+        <p className={styles.result} role="status">
+          Sending jobs {applicationBatch.map((id) => `#${id}`).join(', ')}. Stops before submission.
+        </p>
+      )}
+      {result && (
+        <div className={styles.result}>
+          <p role="status">{result.message}</p>
+          <ul>
+            {result.outcomes.map((item) => (
+              <li key={item.sourceJobId}>
+                <Link to={`/jobs/${item.sourceJobId}`}>Job #{item.sourceJobId}</Link>:{' '}
+                <span>
+                  {
+                    {
+                      confirmed: 'Confirmed in Applications',
+                      unconfirmed: 'Not confirmed. Check Applications.',
+                      not_sent: 'Not sent',
+                    }[item.status]
+                  }
+                </span>
+              </li>
+            ))}
+          </ul>
+          <button className={styles.clearBtn} onClick={() => navigate('/executioner')}>
+            View Applications
+          </button>
+          {unsent.length > 0 && (
+            <button
+              className={styles.clearBtn}
+              disabled={loading}
+              onClick={() => {
+                selectAll(unsent)
+                setAction('apply')
+              }}
+            >
+              Select unsent jobs
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

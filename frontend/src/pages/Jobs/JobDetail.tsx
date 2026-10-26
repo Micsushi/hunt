@@ -314,50 +314,117 @@ function ApplicationActions({ job }: { job: JobDetail }) {
   const pending = useRef(false)
   const [queuing, setQueuing] = useState(false)
   const [handoffError, setHandoffError] = useState('')
-  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+    }
+  }, [])
   // Match the handoff gateway's families; it also validates the posting URL and resume.
-  const supported = ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(job.ats_type ?? '')
+  const supported = ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(
+    job.ats_type ?? '',
+  )
   const connection = useQuery({
     queryKey: ['c3-job', job.id],
-    queryFn: () => get<{ connected: boolean; configured: boolean; jobs: { id: string; sourceJobId?: number; stage: string; status: string }[] }>('/api/c3/state'),
-    enabled: supported, retry: false, refetchInterval: 10000, refetchOnWindowFocus: false,
+    queryFn: () =>
+      get<{
+        connected: boolean
+        configured: boolean
+        jobs: { id: string; sourceJobId?: number; stage: string; status: string }[]
+      }>('/api/c3/state'),
+    enabled: supported,
+    retry: false,
+    refetchInterval: 10000,
+    refetchOnWindowFocus: false,
   })
-  const application = connection.data?.jobs.find(item => item.sourceJobId === job.id)
-  const blocked = ['applied', 'canceled', 'cancelled'].includes((job.status ?? '').trim().toLowerCase())
+  const application = connection.data?.jobs.find((item) => item.sourceJobId === job.id)
+  const blocked = ['applied', 'canceled', 'cancelled'].includes(
+    (job.status ?? '').trim().toLowerCase(),
+  )
     ? 'This job is already applied or cancelled.'
-    : job.discovery_suppressed_reason ? 'This job is excluded from discovery.'
-    : !supported ? 'Supported application sites: Workday, Greenhouse, Lever, Ashby and Workable.'
-    : job.apply_type !== 'external_apply' ? 'An external application is required.'
-    : !['done', 'done_verified'].includes(job.enrichment_status ?? '') ? 'Finish discovery verification first.'
-    : job.selected_resume_ready_for_c3 !== 1 || !job.selected_resume_pdf_path || !job.selected_resume_version_id ? 'Prepare and select a C2 resume first.'
-    : connection.isError ? 'Application progress is unavailable. Retry the connection before filling.'
-    : !connection.data ? 'Checking application service…'
-    : !connection.data.configured ? 'Set up your profile in Applications first.' : ''
+    : job.discovery_suppressed_reason
+      ? 'This job is excluded from discovery.'
+      : !supported
+        ? 'Supported application sites: Workday, Greenhouse, Lever, Ashby and Workable.'
+        : job.apply_type !== 'external_apply'
+          ? 'An external application is required.'
+          : !['done', 'done_verified'].includes(job.enrichment_status ?? '')
+            ? 'Finish discovery verification first.'
+            : job.selected_resume_ready_for_c3 !== 1 ||
+                !job.selected_resume_pdf_path ||
+                !job.selected_resume_version_id
+              ? 'Prepare and select a C2 resume first.'
+              : connection.isError
+                ? 'Application progress is unavailable. Retry the connection before filling.'
+                : !connection.data
+                  ? 'Checking application service…'
+                  : !connection.data.configured
+                    ? 'Set up your profile in Applications first.'
+                    : ''
 
   async function handoff() {
     if (pending.current || blocked) return
-    pending.current = true; setQueuing(true); setHandoffError('')
+    pending.current = true
+    setQueuing(true)
+    setHandoffError('')
     try {
       await post('/api/c3/handoff', { job_ids: [job.id] })
       void qc.invalidateQueries({ queryKey: ['c3-job', job.id] })
       if (active.current) navigate('/executioner')
     } catch (error) {
-      if (active.current) setHandoffError(error instanceof Error ? error.message : 'Could not queue application')
+      if (active.current)
+        setHandoffError(error instanceof Error ? error.message : 'Could not queue application')
     } finally {
       pending.current = false
       if (active.current) setQueuing(false)
     }
   }
 
-  return <div className={styles.applicationActions}>
-    {application && <p role="status">{connection.isError ? 'Last known application' : 'Application'}: {application.stage}. <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>View application</button></p>}
-    {blocked && <p role="status">{blocked}</p>}
-    {supported && connection.isError && <p role="alert">{connection.error.message} <button className={styles.actionBtn} disabled={connection.isFetching} onClick={() => connection.refetch()}>Retry connection</button></p>}
-    {supported && !connection.isError && connection.data?.configured && !connection.data.connected && <p role="status">Browser extension disconnected. New applications will wait in the queue.</p>}
-    {handoffError && <p role="alert">{handoffError} <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>Check Applications</button></p>}
-    <button className={styles.actionBtn} disabled={queuing || !!blocked} onClick={handoff}>{queuing ? 'Queuing…' : 'Fill application'}</button>
-    <p>Stops before submission.</p>
-  </div>
+  return (
+    <div className={styles.applicationActions}>
+      {application && (
+        <p role="status">
+          {connection.isError ? 'Last known application' : 'Application'}: {application.stage}.{' '}
+          <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>
+            View application
+          </button>
+        </p>
+      )}
+      {blocked && <p role="status">{blocked}</p>}
+      {supported && connection.isError && (
+        <p role="alert">
+          {connection.error.message}{' '}
+          <button
+            className={styles.actionBtn}
+            disabled={connection.isFetching}
+            onClick={() => connection.refetch()}
+          >
+            Retry connection
+          </button>
+        </p>
+      )}
+      {supported &&
+        !connection.isError &&
+        connection.data?.configured &&
+        !connection.data.connected && (
+          <p role="status">
+            Browser extension disconnected. New applications will wait in the queue.
+          </p>
+        )}
+      {handoffError && (
+        <p role="alert">
+          {handoffError}{' '}
+          <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>
+            Check Applications
+          </button>
+        </p>
+      )}
+      <button className={styles.actionBtn} disabled={queuing || !!blocked} onClick={handoff}>
+        {queuing ? 'Queuing…' : 'Fill application'}
+      </button>
+      <p>Stops before submission.</p>
+    </div>
+  )
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────

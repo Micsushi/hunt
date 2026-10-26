@@ -87,9 +87,18 @@
   overflow-y: auto;
 }
 
-.result button { margin: 4px 8px 0 0; }
+.result button {
+  margin: 4px 8px 0 0;
+}
 
 @media (max-width: 600px) {
-  .label { flex-wrap: wrap; min-width: 0; max-width: 100%; }
-  .select { max-width: 100%; min-width: 0; }
+  .label {
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .select {
+    max-width: 100%;
+    min-width: 0;
+  }
 }

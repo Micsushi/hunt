@@ -252,13 +252,13 @@ app = FastAPI(title="Hunt Control Plane", version="0.1.0", lifespan=lifespan)
 
 from backend.audit_log import MAX_AUDIT_REQUEST_BYTES  # noqa: E402
 from backend.audit_log import router as _audit_router  # noqa: E402
+from backend.c3 import router as _c3_router  # noqa: E402
 from backend.gateway import router as _gateway_router  # noqa: E402
 from backend.request_id import RequestIDMiddleware  # noqa: E402
 from shared.mutation_audit import audit_mutation_request  # noqa: E402
 
 app.include_router(_audit_router)
 app.include_router(_gateway_router)
-from backend.c3 import router as _c3_router
 app.include_router(_c3_router)
 
 # CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
@@ -306,11 +306,15 @@ async def security_headers_and_csrf(request: Request, call_next):
         origin = request.headers.get("origin", "").strip()
         referer = request.headers.get("referer", "").strip()
         if origin and not _request_origin_is_allowed(request, origin):
-            return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+            return JSONResponse(
+                status_code=403, content={"detail": "Cross-origin request blocked."}
+            )
         if not origin and referer:
             referer_origin = "{uri.scheme}://{uri.netloc}".format(uri=urlsplit(referer))
             if not _request_origin_is_allowed(request, referer_origin):
-                return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+                return JSONResponse(
+                    status_code=403, content={"detail": "Cross-origin request blocked."}
+                )
 
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
