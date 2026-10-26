@@ -812,7 +812,7 @@ def parse_markdown_feed(raw: str, source: str, *, hours_old: int) -> list[dict]:
         if len(cells) < 5:
             continue
         company, title, location, link, date_text = cells[:5]
-        if company == "↳":
+        if company == "â†³":
             company = current_company
         elif company and company.lower() not in {"company", "---"}:
             current_company = company

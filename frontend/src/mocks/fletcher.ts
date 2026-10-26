@@ -58,6 +58,7 @@ export const MOCK_REVIEW: ResumeReviewPackage = {
       tex_url: '',
       dirty: false,
       document_revision: 0,
+      edit_revision: 0,
       compiled_revision: 0,
       compiled_document_revision: 0,
       compile_status: 'ok',

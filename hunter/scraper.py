@@ -496,7 +496,12 @@ def scrape_single(site, term, location, category, *, hours_old=None, raise_error
     return jobs
 
 
-def _scrape_jobspy_task(site, term, location, category, hours_old):
+def _scrape_jobspy_task(site, term, location, category, hours_old, health_sink=None):
+    def record(source, **health):
+        record_discovery_source_health(source, **health)
+        if health_sink is not None:
+            health_sink(health)
+
     source = f"jobspy_{site}: {category} / {term} / {location}"
     try:
         if site in {"linkedin", "indeed"}:
@@ -519,12 +524,12 @@ def _scrape_jobspy_task(site, term, location, category, hours_old):
                 )
                 for job in jobs
             ]
-            record_discovery_source_health(source, **{**health, "lead_count": len(jobs)})
+            record(source, **{**health, "lead_count": len(jobs)})
             return jobs
         jobs = scrape_single(site, term, location, category, hours_old=hours_old, raise_errors=True)
         # JobSpy returns an empty batch for HTTP failures and does not expose terminal-page
         # evidence. Neither zero results nor a batch below the configured cap proves completion.
-        record_discovery_source_health(
+        record(
             source,
             status="partial",
             lead_count=len(jobs),
@@ -532,7 +537,7 @@ def _scrape_jobspy_task(site, term, location, category, hours_old):
         )
         return jobs
     except Exception as exc:
-        record_discovery_source_health(source, status="failed", error=str(exc)[:500])
+        record(source, status="failed", error=str(exc)[:500])
         return []
 
 
@@ -799,12 +804,14 @@ def scrape(
 
         print(f"Starting {len(tasks)} scrape tasks with {MAX_WORKERS} workers...\n")
 
+        board_health = []
+
         def discover_boards():
             def discover(task):
                 key = "board:" + repr(task)
                 if not run.start(key):
                     return
-                jobs = _scrape_jobspy_task(*task, effective_hours_old)
+                jobs = _scrape_jobspy_task(*task, effective_hours_old, board_health.append)
                 save_batch(jobs)
                 run.saved(key, len(jobs))
 
@@ -865,6 +872,12 @@ def scrape(
                     print("[scrape] Post-scrape enrichment finished with some unresolved failures.")
 
             summary = {
+                "search_tasks": len(tasks),
+                "failed_tasks": sum(item.get("status") == "failed" for item in board_health),
+                "partial_tasks": sum(
+                    item.get("status") not in {"ok", "failed"} for item in board_health
+                )
+                + max(0, len(tasks) - len(board_health)),
                 "scraped_total": scraped_total,
                 "inserted": inserted,
                 "refreshed": refreshed,

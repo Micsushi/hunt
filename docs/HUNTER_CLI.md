@@ -47,6 +47,40 @@ Examples:
 
 ## Command groups
 
+### Direct Workday intake
+
+Verify supplied public Workday links through C1, including their live CXS posting
+identity, description, publication status and external application availability:
+
+```text
+python -m hunter.workday_intake --urls-file jobs.json --db path/to/private.sqlite
+```
+
+The input is a JSON list of URLs or objects with `url` and optional `company`,
+or one URL per line. This command uses the specified SQLite database, regardless
+of `HUNT_DB_URL`. It reports exclusions without forcing eligibility. Existing
+applied, cancelled and suppressed records remain unchanged. Successful intake
+does not generate a resume; use C2's `generate-ready` command on the same database.
+
+Discovery preferences default to Canada, excluding experienced titles and roles
+outside the supported search lanes. Set these environment variables for the
+process, or the corresponding lowercase keys in the user config file, then
+restart the affected C1/C2 processes:
+
+- `DISCOVERY_ALLOWED_GEOGRAPHIES`: comma-separated country/region labels,
+  default `Canada`. Canada's existing city/province matching is retained; other
+  labels require those words in the posting location. `*` removes geographic
+  filtering, including for unspecified locations. This is a search preference,
+  not a claim about work authorization.
+- `DISCOVERY_ALLOW_EXPERIENCED`: default `false`; `true` admits experienced titles.
+- `DISCOVERY_ALLOW_ALL_LANES`: default `false`; `true` admits roles outside the
+  predefined search lanes.
+
+These preferences do not bypass title blacklists, Easy Apply exclusions,
+posting verification, owner dispositions, or resume readiness. Use process-local
+environment values and an isolated database when evaluating a broader cohort;
+changing preferences does not automatically requeue previously suppressed jobs.
+
 ### Auth
 
 - `auth-save`

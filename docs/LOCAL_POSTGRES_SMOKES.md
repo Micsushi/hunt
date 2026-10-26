@@ -125,3 +125,14 @@ Each script tears down its own containers on exit. If you need manual cleanup:
 ```bash
 docker compose -f docker-compose.pipeline.yml down -v --remove-orphans
 ```
+
+## Isolated concurrency qualification, 2026-10-26
+
+A disposable PostgreSQL 16.15 instance passed 11 checks against the current
+settings and resume adapters: concurrent create/update batches admitted one
+writer and rejected stale peers, a forced second-key failure rolled back the
+first write, and a real relation-lock wait completed after release. Resume-path
+persistence rejected arbitrary paths and junction escapes. Review save revision,
+concurrency and idempotent retry also passed; review records remain file-backed.
+The server was stopped afterward. This qualifies these local contracts, not the
+full compose pipeline, external discovery, browser applications or submission.

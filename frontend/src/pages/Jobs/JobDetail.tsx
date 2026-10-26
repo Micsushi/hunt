@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
 import { useUiStore } from '@/store/ui'
@@ -21,7 +21,8 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { discoveryLabel } from '@/utils/discovery'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
-import type { JobsQuery, SortDirection, SortField } from '@/types/job'
+import type { JobDetail, JobsQuery, SortDirection, SortField } from '@/types/job'
+import { get, post } from '@/api/client'
 
 const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
 
@@ -83,34 +84,107 @@ function InlineField({
   options,
   placeholder,
 }: InlineFieldProps) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
+  const { id } = useParams<{ id: string }>()
+  const qc = useQueryClient()
+  const cacheKey = ['job-field-draft', id, field]
+  const [recovery] = useState(() => qc.getQueryData<string>(cacheKey))
+  const [editing, setEditing] = useState(recovery !== undefined)
+  const [draft, setDraft] = useState(recovery ?? '')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const pending = useRef(false)
+  const cancelled = useRef(false)
+  const mounted = useRef(false)
+  const restoreFocus = useRef(false)
+  const draftRef = useRef(draft)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  useEffect(() => {
+    if (editing) {
+      const key = ['job-field-draft', id, field]
+      qc.setQueryDefaults(key, { gcTime: Infinity })
+      qc.setQueryData(key, draft)
+    }
+  }, [qc, id, field, editing, draft])
+  useEffect(() => {
+    if (!editing && restoreFocus.current) {
+      restoreFocus.current = false
+      buttonRef.current?.focus()
+    }
+  }, [editing])
+
+  function updateDraft(value: string) {
+    draftRef.current = value
+    setDraft(value)
+  }
 
   function startEdit() {
-    setDraft(value != null ? String(value) : '')
+    cancelled.current = false
+    setError('')
+    updateDraft(value != null ? String(value) : '')
     setEditing(true)
     setTimeout(() => inputRef.current?.focus(), 0)
   }
 
+  function closeEdit() {
+    restoreFocus.current =
+      inputRef.current?.parentElement?.contains(document.activeElement) ?? false
+    qc.removeQueries({ queryKey: cacheKey, exact: true })
+    setEditing(false)
+  }
+
   async function commit() {
+    if (pending.current || cancelled.current) return
     if (draft === (value != null ? String(value) : '')) {
-      setEditing(false)
+      closeEdit()
       return
     }
+    const submitted = draft
+    pending.current = true
     setSaving(true)
+    setError('')
     try {
-      await onSave(field, draft)
+      await onSave(field, submitted)
+      if (mounted.current && draftRef.current === submitted) closeEdit()
+    } catch (error) {
+      if (mounted.current) setError(error instanceof Error ? error.message : 'Save failed')
     } finally {
-      setSaving(false)
-      setEditing(false)
+      pending.current = false
+      if (mounted.current) setSaving(false)
     }
   }
 
+  function cancel() {
+    if (pending.current) return
+    cancelled.current = true
+    closeEdit()
+  }
+
+  function onBlur(event: React.FocusEvent) {
+    if (error) return
+    if (
+      event.relatedTarget instanceof Node &&
+      event.currentTarget.parentElement?.contains(event.relatedTarget)
+    )
+      return
+    void commit()
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') setEditing(false)
-    if (e.key === 'Enter' && type !== 'textarea') commit()
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      cancel()
+    }
+    if (e.key === 'Enter' && type !== 'textarea') {
+      e.preventDefault()
+      void commit()
+    }
   }
 
   const display = value != null && value !== '' ? String(value) : null
@@ -125,9 +199,11 @@ function InlineField({
           <select
             ref={inputRef as React.Ref<HTMLSelectElement>}
             className={styles.inlineInput}
+            aria-label={label || 'Description'}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
+            onChange={(e) => updateDraft(e.target.value)}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
           >
             {options.map((o) => (
               <option key={o.value} value={o.value}>
@@ -139,11 +215,11 @@ function InlineField({
           <textarea
             ref={inputRef as React.Ref<HTMLTextAreaElement>}
             className={`${styles.inlineInput} ${styles.inlineTextarea}`}
+            aria-label={label || 'Description'}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
+            onChange={(e) => updateDraft(e.target.value)}
+            onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={saving}
             rows={8}
             placeholder={placeholder}
           />
@@ -151,11 +227,11 @@ function InlineField({
           <input
             ref={inputRef as React.Ref<HTMLInputElement>}
             className={styles.inlineInput}
+            aria-label={label || 'Description'}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
+            onChange={(e) => updateDraft(e.target.value)}
+            onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={saving}
             placeholder={placeholder}
           />
         )
@@ -163,6 +239,7 @@ function InlineField({
         <button
           className={`${styles.inlineValue} ${mono ? styles.mono : ''} ${type === 'textarea' ? styles.inlineValueBlock : ''}`}
           onClick={startEdit}
+          ref={buttonRef}
           title="Click to edit"
         >
           {display ?? (
@@ -170,6 +247,18 @@ function InlineField({
           )}
           <span className={styles.editHint}>✎</span>
         </button>
+      )}
+      {editing && (
+        <div className={styles.inlineRecovery}>
+          {error && <p role="alert">{error}. Your draft is preserved.</p>}
+          <button className={styles.actionBtn} disabled={saving} onClick={() => void commit()}>
+            {saving ? 'Saving...' : error ? 'Retry save' : 'Save'}
+          </button>
+          <button className={styles.actionBtn} disabled={saving} onClick={cancel}>
+            Cancel edit
+          </button>
+          <small>Drafts stay with this job during this session.</small>
+        </div>
       )}
     </div>
   )
@@ -218,12 +307,87 @@ function ServiceChip({ label, componentKey }: { label: string; componentKey: str
   )
 }
 
+function ApplicationActions({ job }: { job: JobDetail }) {
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const active = useRef(false)
+  const pending = useRef(false)
+  const [queuing, setQueuing] = useState(false)
+  const [handoffError, setHandoffError] = useState('')
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  // Match the handoff gateway's families; it also validates the posting URL and resume.
+  const supported = ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(job.ats_type ?? '')
+  const connection = useQuery({
+    queryKey: ['c3-job', job.id],
+    queryFn: () => get<{ connected: boolean; configured: boolean; jobs: { id: string; sourceJobId?: number; stage: string; status: string }[] }>('/api/c3/state'),
+    enabled: supported, retry: false, refetchInterval: 10000, refetchOnWindowFocus: false,
+  })
+  const application = connection.data?.jobs.find(item => item.sourceJobId === job.id)
+  const blocked = ['applied', 'canceled', 'cancelled'].includes((job.status ?? '').trim().toLowerCase())
+    ? 'This job is already applied or cancelled.'
+    : job.discovery_suppressed_reason ? 'This job is excluded from discovery.'
+    : !supported ? 'Supported application sites: Workday, Greenhouse, Lever, Ashby and Workable.'
+    : job.apply_type !== 'external_apply' ? 'An external application is required.'
+    : !['done', 'done_verified'].includes(job.enrichment_status ?? '') ? 'Finish discovery verification first.'
+    : job.selected_resume_ready_for_c3 !== 1 || !job.selected_resume_pdf_path || !job.selected_resume_version_id ? 'Prepare and select a C2 resume first.'
+    : connection.isError ? 'Application progress is unavailable. Retry the connection before filling.'
+    : !connection.data ? 'Checking application service…'
+    : !connection.data.configured ? 'Set up your profile in Applications first.' : ''
+
+  async function handoff() {
+    if (pending.current || blocked) return
+    pending.current = true; setQueuing(true); setHandoffError('')
+    try {
+      await post('/api/c3/handoff', { job_ids: [job.id] })
+      void qc.invalidateQueries({ queryKey: ['c3-job', job.id] })
+      if (active.current) navigate('/executioner')
+    } catch (error) {
+      if (active.current) setHandoffError(error instanceof Error ? error.message : 'Could not queue application')
+    } finally {
+      pending.current = false
+      if (active.current) setQueuing(false)
+    }
+  }
+
+  return <div className={styles.applicationActions}>
+    {application && <p role="status">{connection.isError ? 'Last known application' : 'Application'}: {application.stage}. <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>View application</button></p>}
+    {blocked && <p role="status">{blocked}</p>}
+    {supported && connection.isError && <p role="alert">{connection.error.message} <button className={styles.actionBtn} disabled={connection.isFetching} onClick={() => connection.refetch()}>Retry connection</button></p>}
+    {supported && !connection.isError && connection.data?.configured && !connection.data.connected && <p role="status">Browser extension disconnected. New applications will wait in the queue.</p>}
+    {handoffError && <p role="alert">{handoffError} <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>Check Applications</button></p>}
+    <button className={styles.actionBtn} disabled={queuing || !!blocked} onClick={handoff}>{queuing ? 'Queuing…' : 'Fill application'}</button>
+    <p>Stops before submission.</p>
+  </div>
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const jobId = parseInt(id ?? '0', 10)
   const navigate = useNavigate()
+  const jobId = Number(id)
+  if (!Number.isSafeInteger(jobId) || jobId <= 0)
+    return (
+      <div className={styles.errorPage}>
+        <p role="alert">Invalid job address.</p>
+        <button className={styles.backBtn} onClick={() => navigate('/jobs')}>
+          Back to jobs
+        </button>
+      </div>
+    )
+  return <JobDetail key={jobId} jobId={jobId} />
+}
+
+function JobDetail({ jobId }: { jobId: number }) {
+  const navigate = useNavigate()
+  const active = useRef(false)
+  const openingReview = useRef(false)
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+    }
+  }, [])
   const [searchParams] = useSearchParams()
   const qc = useQueryClient()
   const showToast = useUiStore((s) => s.showToast)
@@ -236,15 +400,20 @@ export function JobDetailPage() {
   const detailSearch = effectiveParams.toString() ? `?${effectiveParams.toString()}` : ''
   const jobsListPath = `/jobs${detailSearch}`
 
-  const { data: job, isLoading, error } = useJobDetail(jobId)
-  const { data: attempts = [] } = useResumeAttempts(jobId)
-  const { data: adjacent } = useAdjacentJobs(jobId, adjacentQuery)
+  const { data: job, isLoading, error, refetch, isFetching } = useJobDetail(jobId)
+  const history = useResumeAttempts(jobId)
+  const attempts = history.data ?? []
+  const navigation = useAdjacentJobs(jobId, adjacentQuery)
+  const adjacent = navigation.data
 
   if (isLoading) return <div className={styles.loading}>Loading...</div>
-  if (error || !job)
+  if (!job)
     return (
       <div className={styles.errorPage}>
-        <p>Job not found or failed to load.</p>
+        <p role="alert">{error?.message || 'Job could not be loaded.'}</p>
+        <button className={styles.backBtn} disabled={isFetching} onClick={() => void refetch()}>
+          Retry job
+        </button>
         <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
           Back to jobs
         </button>
@@ -262,10 +431,13 @@ export function JobDetailPage() {
         payload[field] = value.trim() || null
       }
       await patchJob(jobId, payload)
-      showToast('Saved')
-      qc.invalidateQueries({ queryKey: ['job', jobId] })
+      qc.setQueryData<JobDetail>(['job', jobId], (previous) =>
+        previous ? { ...previous, ...payload } : previous,
+      )
+      if (active.current) showToast('Saved')
+      void qc.invalidateQueries({ queryKey: ['job', jobId] })
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Update failed', 'error')
+      if (active.current) showToast(e instanceof Error ? e.message : 'Update failed', 'error')
       throw e
     }
   }
@@ -278,7 +450,8 @@ export function JobDetailPage() {
         // auto-lock when saving text; if cleared, leave source as-is (user controls lock)
         ...(trimmed ? { description_source: 'manual' } : {}),
       })
-      showToast(trimmed ? 'Description saved and locked' : 'Description cleared')
+      if (active.current)
+        showToast(trimmed ? 'Description saved and locked' : 'Description cleared')
       qc.invalidateQueries({ queryKey: ['job', jobId] })
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed', 'error')
@@ -310,8 +483,12 @@ export function JobDetailPage() {
     if (!window.confirm(`Delete job #${jobId}? This cannot be undone.`)) return
     try {
       await deleteJob(jobId)
+      qc.removeQueries({ queryKey: ['job', jobId], exact: true })
+      qc.removeQueries({ queryKey: ['job-field-draft', String(jobId)] })
+      void qc.invalidateQueries({ queryKey: ['job-adjacent'] })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
       showToast('Job deleted')
-      navigate(jobsListPath)
+      if (active.current) navigate(jobsListPath)
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Delete failed', 'error')
     }
@@ -322,6 +499,7 @@ export function JobDetailPage() {
     setVerifyResult(null)
     try {
       const result = await verifyEasyApply(jobId)
+      if (!active.current) return
       setVerifyResult(result)
       showToast(
         result.pass ? 'Easy Apply: PASS' : `Easy Apply: FAIL (${result.failures.length} issue(s))`,
@@ -348,26 +526,34 @@ export function JobDetailPage() {
   }
 
   async function handleOpenSelectedResumeReview() {
+    if (openingReview.current) return
+    openingReview.current = true
     setOpeningReviewId('selected')
     try {
       const review = await openJobResumeReview(jobId)
-      navigate(`/fletcher/reviews/${review.review_id}`)
+      if (active.current) navigate(`/fletcher/reviews/${review.review_id}`)
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
+      if (active.current)
+        showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
     } finally {
-      setOpeningReviewId(null)
+      openingReview.current = false
+      if (active.current) setOpeningReviewId(null)
     }
   }
 
   async function handleOpenAttemptReview(attemptId: number) {
+    if (openingReview.current) return
+    openingReview.current = true
     setOpeningReviewId(attemptId)
     try {
       const review = await openAttemptResumeReview(attemptId)
-      navigate(`/fletcher/reviews/${review.review_id}`)
+      if (active.current) navigate(`/fletcher/reviews/${review.review_id}`)
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
+      if (active.current)
+        showToast(e instanceof Error ? e.message : 'Could not open resume review', 'error')
     } finally {
-      setOpeningReviewId(null)
+      openingReview.current = false
+      if (active.current) setOpeningReviewId(null)
     }
   }
 
@@ -391,6 +577,26 @@ export function JobDetailPage() {
 
   return (
     <div className={styles.page}>
+      {error && (
+        <p role="alert">
+          Refresh failed. Showing the last loaded job.{' '}
+          <button className={styles.actionBtn} disabled={isFetching} onClick={() => void refetch()}>
+            Retry job
+          </button>
+        </p>
+      )}
+      {navigation.isError && (
+        <p role="alert">
+          Previous and next jobs could not be loaded.{' '}
+          <button
+            className={styles.actionBtn}
+            disabled={navigation.isFetching}
+            onClick={() => void navigation.refetch()}
+          >
+            Retry navigation
+          </button>
+        </p>
+      )}
       {/* Top menu card */}
       <div className={styles.menuCard}>
         <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
@@ -403,7 +609,7 @@ export function JobDetailPage() {
             onClick={() =>
               adjacent?.prev_id != null && navigate(`/jobs/${adjacent.prev_id}${detailSearch}`)
             }
-            disabled={adjacent?.prev_id == null}
+            disabled={navigation.isError || adjacent?.prev_id == null}
             title="Previous job"
           >
             ‹
@@ -413,7 +619,7 @@ export function JobDetailPage() {
             onClick={() =>
               adjacent?.next_id != null && navigate(`/jobs/${adjacent.next_id}${detailSearch}`)
             }
-            disabled={adjacent?.next_id == null}
+            disabled={navigation.isError || adjacent?.next_id == null}
             title="Next job"
           >
             ›
@@ -574,6 +780,7 @@ export function JobDetailPage() {
               )}
             </div>
             <div className={styles.panelActions}>
+              <ApplicationActions key={job.id} job={job} />
               <button
                 className={styles.actionBtn}
                 onClick={handleRequeue}
@@ -739,6 +946,20 @@ export function JobDetailPage() {
                 </a>
               </div>
             )}
+            {history.isPending && <p role="status">Loading resume history...</p>}
+            {history.isError && (
+              <p role="alert">
+                Resume history could not be loaded.{' '}
+                {history.data ? 'Showing the last loaded attempts.' : ''}{' '}
+                <button
+                  className={styles.actionBtn}
+                  disabled={history.isFetching}
+                  onClick={() => void history.refetch()}
+                >
+                  Retry resume history
+                </button>
+              </p>
+            )}
             {attempts.length > 0 && (
               <div style={{ marginTop: 14 }}>
                 <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 8 }}>
@@ -827,7 +1048,7 @@ export function JobDetailPage() {
                 ))}
               </div>
             )}
-            {attempts.length === 0 && (
+            {history.isSuccess && attempts.length === 0 && (
               <p className="muted" style={{ fontSize: '0.85rem', marginTop: 12 }}>
                 No attempts yet.
               </p>

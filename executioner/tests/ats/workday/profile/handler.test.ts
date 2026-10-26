@@ -1,0 +1,2262 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  classifyProfileInspectionFailure,
+  completeWorkdayProfilePage,
+  profileInspectionDiagnostic,
+  type ProfileControlSnapshot,
+  type ProfileFieldPlan,
+  type ProfilePagePlan,
+  type ProfilePageSnapshot,
+  type ProfileRepeatableSection,
+  type WorkdayProfilePagePort,
+} from "../../../../src/ats/workday/application/profile/index.ts";
+import {
+  createProfileInspectionFailure,
+  profileInspectionFailureFromError,
+} from "../../../../src/ats/workday/application/profile/inspection.ts";
+
+const answered = (
+  value: string,
+  provenance: "owner_provided" | "resume_verified" = "owner_provided",
+) => ({
+  kind: "answered" as const,
+  value,
+  provenance,
+  lane: "live_owner_fact" as const,
+});
+
+const field = (
+  fieldId: string,
+  questionType: ProfileFieldPlan["questionType"],
+  answerType: ProfileFieldPlan["answerType"],
+  value: string,
+  provenance: "owner_provided" | "resume_verified" = "owner_provided",
+  visibleOption?: string,
+): ProfileFieldPlan => ({
+  fieldId,
+  questionType,
+  answerType,
+  allowedOptions: visibleOption === undefined ? [] : [visibleOption],
+  answer: answered(value, provenance),
+  ...(visibleOption === undefined
+    ? {}
+    : {
+        optionMapping: {
+          canonicalValue: value,
+          visibleOption,
+          provenance: "visible_option" as const,
+        },
+      }),
+});
+
+const control = (
+  fieldId: string,
+  behavior: ProfileControlSnapshot["uiBehavior"],
+  readback: string | null = null,
+  variant = `workday_${behavior}_v1`,
+): ProfileControlSnapshot => ({
+  controlId: `control-${fieldId}`,
+  fieldId,
+  required: true,
+  uiBehavior: behavior,
+  uiVariant: variant,
+  readback,
+});
+
+test("synthetic Profile fills a required phone revealed by a choice without restarting", async () => {
+  const plan: ProfilePagePlan = { mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+    fields: [field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile")] };
+  const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+    { ...control("phone.device_type", "search_select"), allowedOptions: ["Mobile"] },
+  ] }, { afterCommit: () => {
+    if (!port.snapshot.controls.some(item => item.fieldId === "phone.number")) {
+      port.snapshot = { ...port.snapshot, controls: [...port.snapshot.controls, control("phone.number", "phone")] };
+    }
+  } });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.filter(item => item.controlId === "control-phone.number").length, 1);
+});
+
+test("synthetic Profile fills a required unplanned work-history row without adding duplicates", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [{
+    section: "experience", rowId: "existing-row", ownedByC3: false,
+    controls: [
+      control("experience.company", "text"),
+      control("experience.title", "text"),
+      control("experience.start_month", "month"),
+      control("experience.start_year", "year"),
+      control("experience.end_month", "month"),
+      control("experience.end_year", "year"),
+    ],
+  }] });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 6);
+  assert.deepEqual(port.added, []);
+  assert.deepEqual(port.removed, []);
+  if (result.kind === "verified") {
+    assert.ok(result.verifiedFields.every((item) => item.lane === "synthetic_test_default"));
+  }
+});
+
+test("synthetic education retains its partly completed source row and generates numeric GPA", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [{
+    section: "education", rowId: "education-row", ownedByC3: false,
+    controls: [
+      { ...control("education.school", "search_select", "Other", "workday_search_select_v2"), allowedOptions: ["Other"] },
+      { ...control("education.degree", "select"), allowedOptions: ["Diploma"] },
+      control("education.gpa", "number"),
+    ],
+  }] });
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 3);
+  assert.deepEqual(port.added, []);
+  assert.deepEqual(port.removed, []);
+  assert.equal(port.commits.find(({ controlId }) => controlId === "control-education.gpa")!.value, "0");
+});
+
+test("synthetic Profile settles observed single-choice UI before text while preserving country dependencies", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+    fields: [
+      field("identity.given_name", "identity", "text", "Ada"),
+      field("identity.prefix", "identity", "option", "Ms.", "owner_provided", "Ms."),
+      field("source.how_did_you_hear", "application_source", "option", "Website", "owner_provided", "Website"),
+      field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile"),
+      field("address.region", "address", "option", "Alberta", "owner_provided", "Alberta"),
+      field("address.country", "address", "option", "Canada", "owner_provided", "Canada"),
+    ],
+  };
+  const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+    control("identity.given_name", "text"), control("source.how_did_you_hear", "search_select"),
+    control("identity.prefix", "search_select"),
+    control("phone.device_type", "search_select"),
+    control("address.region", "search_select"), control("address.country", "search_select"),
+  ] });
+  assert.equal((await completeWorkdayProfilePage(plan, port, AbortSignal.any([]))).kind, "verified");
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-source.how_did_you_hear", "control-address.country", "control-address.region", "control-phone.device_type", "control-identity.prefix", "control-identity.given_name",
+  ]);
+});
+
+test("fills identity, address, phone, dates, and search-selects with independent verification", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "live",
+    pageType: "contact",
+    fields: [
+      field("identity.given_name", "identity", "text", "Ada"),
+      field("address.country", "address", "option", "CA", "owner_provided", "Canada"),
+      field("phone.number", "phone", "phone", "+1 555 0100"),
+      field("experience.start_date", "experience", "date", "2021-03-01", "resume_verified"),
+    ],
+    repeatables: [],
+  };
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("address.country", "search_select"),
+      control("phone.number", "phone"),
+      control("experience.start_date", "date"),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified");
+  if (result.kind !== "verified") return;
+  assert.equal(result.pageType, "contact");
+  assert.equal(result.ownedDuplicateRows, 0);
+  assert.deepEqual(port.commits.map(({ uiBehavior, value }) => [uiBehavior, value]), [
+    ["text", "Ada"],
+    ["search_select", "Canada"],
+    ["phone", "+1 555 0100"],
+    ["date", "2021-03-01"],
+  ]);
+  assert.deepEqual(result.verifiedFields, [
+    {
+      fieldId: "identity.given_name",
+      questionType: "identity",
+      answerType: "text",
+      uiBehavior: "text",
+      uiVariant: "workday_text_v1",
+      provenance: "owner_provided",
+      lane: "live_owner_fact",
+    },
+    {
+      fieldId: "address.country",
+      questionType: "address",
+      answerType: "option",
+      uiBehavior: "search_select",
+      uiVariant: "workday_search_select_v1",
+      provenance: "owner_provided",
+      lane: "live_owner_fact",
+      optionMappingProvenance: "visible_option",
+    },
+    {
+      fieldId: "phone.number",
+      questionType: "phone",
+      answerType: "phone",
+      uiBehavior: "phone",
+      uiVariant: "workday_phone_v1",
+      provenance: "owner_provided",
+      lane: "live_owner_fact",
+    },
+    {
+      fieldId: "experience.start_date",
+      questionType: "experience",
+      answerType: "date",
+      uiBehavior: "date",
+      uiVariant: "workday_date_v1",
+      provenance: "resume_verified",
+      lane: "live_owner_fact",
+    },
+  ]);
+  // Initial/final plus the first pre-effect scan; each commit still gets an
+  // independent readback, reused as the next known field's initial binding.
+  assert.equal(port.inspections, 3 + port.commits.length);
+});
+
+test("reusing the previous scalar snapshot never substitutes for post-commit verification", async () => {
+  class LostSecondCommitPage extends MemoryProfilePage {
+    async commit(request: Parameters<MemoryProfilePage["commit"]>[0]) {
+      if (this.commits.length === 1) { this.commits.push({ ...request }); return; }
+      await super.commit(request);
+    }
+  }
+  const port = new LostSecondCommitPage({ pageType: "contact", rows: [], controls: [
+    control("identity.given_name", "text"), control("identity.family_name", "text"),
+  ] });
+  const result = await completeWorkdayProfilePage({ mode: "live", pageType: "contact", repeatables: [], fields: [
+    field("identity.given_name", "identity", "text", "Ada"),
+    field("identity.family_name", "identity", "text", "Lovelace"),
+  ] }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "blocked");
+  if (result.kind === "blocked") {
+    assert.equal(result.code, "profile_commit_unverified");
+    assert.equal(result.fieldId, "identity.family_name");
+  }
+  assert.equal(port.commits.length, 2);
+});
+
+test("converts a typed metadata mismatch into non-submittable UI learning", async () => {
+  let commits = 0;
+  const failure = {
+    code: "profile_metadata_reconciliation_failed" as const,
+    mismatches: [{
+      fieldId: "profile.address.country",
+      uiBehavior: "search_select" as const,
+      uiVariant: "workday_search_select_v2",
+      reasons: ["option_catalog" as const],
+    }],
+  };
+  const page: WorkdayProfilePagePort = {
+    async inspect() {
+      throw new TypeError("profile metadata reconciliation failed");
+    },
+    metadataReconciliationFailure: () => failure,
+    async commit() { commits += 1; },
+    async addOwnedRow() { throw new TypeError("not used"); },
+    async removeOwnedRow() { throw new TypeError("not used"); },
+  };
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("address.country", "address", "option", "CA", "owner_provided", "Canada")],
+    repeatables: [],
+  }, page, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_metadata_reconciliation_failed",
+    metadataReconciliationFailure: failure,
+    learningConversion: {
+      kind: "profile_ui_learning",
+      executionMode: "synthetic_test_non_submittable",
+      testOnly: true,
+      mutationAllowed: false,
+      defaultsGenerated: false,
+      liveAcceptanceEligible: false,
+      fieldIds: ["profile.address.country"],
+      affected: [{
+        fieldId: "profile.address.country",
+        reasons: ["option_catalog"],
+      }],
+    },
+  });
+  assert.equal(commits, 0);
+});
+
+test("observes the page before a missing required fact stops mutation", async () => {
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      fieldId: "identity.family_name",
+      questionType: "identity",
+      answerType: "text",
+      allowedOptions: [],
+      answer: { kind: "profile_answer_missing" },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_answer_missing",
+    fieldId: "identity.family_name",
+  });
+  assert.equal(port.inspections, 1);
+  assert.equal(port.commits.length, 0);
+});
+
+test("accepts a tenant CELL readback for the canonical Mobile phone device type", async () => {
+  const plan: ProfilePagePlan = {
+    mode: "live",
+    pageType: "profile",
+    fields: [field("phone.device_type", "phone", "option", "Mobile", "owner_provided", "Mobile")],
+    repeatables: [],
+  };
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("phone.device_type", "search_select", "CELL", "workday_search_select_v2")],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 0);
+});
+
+test("retries a transient read-only inspection after a committed field", async () => {
+  let failuresRemaining = 1;
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.given_name", "text")],
+    rows: [],
+  }, {
+    inspectFailure: () =>
+      port.commits.length === 1 && port.inspections >= 3 && failuresRemaining-- > 0,
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("identity.given_name", "identity", "text", "Ada")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 1);
+  assert.ok(port.inspections >= 4);
+});
+
+test("retains value-free typed diagnostics for liveness, binding, and unknown inspection failures", () => {
+  const cases = [
+    {
+      error: new Error("Target page, context or browser has been closed"),
+      classification: "liveness" as const,
+    },
+    {
+      error: new TypeError("Workday profile control binding is missing"),
+      classification: "dom_owner_binding" as const,
+    },
+    {
+      error: new Error("opaque profile inspection backend fault"),
+      classification: "unknown" as const,
+    },
+  ];
+
+  for (const { error, classification } of cases) {
+    assert.equal(classifyProfileInspectionFailure(error), classification);
+    const diagnostic = profileInspectionDiagnostic(error, {
+      classification,
+      phase: "scalar",
+      bindingIds: ["identity.given_name"],
+      bindingPaths: ["profile.scalar"],
+      bindingDigests: ["a".repeat(64)],
+    }, 4, 1_000, 1_002);
+
+    assert.deepEqual(diagnostic, {
+      classification,
+      phase: "scalar",
+      bindingIds: ["identity.given_name"],
+      bindingPaths: ["profile.scalar"],
+      bindingDigests: ["a".repeat(64)],
+      retryCount: 4,
+      deadlineMs: 1_000,
+      elapsedMs: 1_002,
+    });
+    assert.doesNotMatch(JSON.stringify(diagnostic), /opaque|closed|missing|secret|Ada/u);
+  }
+});
+
+test("preserves the sanitized unknown-control denial through inspection wrapping", () => {
+  const wrap = (message: string) => createProfileInspectionFailure(
+    new TypeError(message),
+    "unknown_controls",
+    ["unknown_controls"],
+    ["profile.unknown_controls"],
+    ["profile.interactive"],
+    (value) => value,
+  );
+
+  const identityDenied = wrap("Workday unknown required control identity denied");
+  assert.equal(identityDenied.message, "Workday unknown required control identity denied");
+  assert.equal(profileInspectionFailureFromError(identityDenied)?.phase, "unknown_controls");
+  assert.equal(wrap("opaque profile inspection backend fault").message, "profile inspection failed");
+});
+
+for (const missing of [
+  {
+    fieldId: "source.how_did_you_hear",
+    questionType: "application_source",
+    uiBehavior: "search_select",
+    uiVariant: "workday_source_select_v1",
+    options: ["Referral", "Company Website"],
+    expected: "Company Website",
+  },
+  {
+    fieldId: "employment.previously_worked_for_organization",
+    questionType: "prior_employment",
+    uiBehavior: "radio_group",
+    uiVariant: "workday_previous_worker_radio_v1",
+    options: ["Yes", "No"],
+    expected: "No",
+  },
+] as const) {
+  test(`uses a non-submittable deterministic fallback for ${missing.fieldId}`, async () => {
+    const port = new MemoryProfilePage({
+      pageType: "profile",
+      controls: [{ ...control(
+        missing.fieldId,
+        missing.uiBehavior,
+        null,
+        missing.uiVariant,
+      ), allowedOptions: missing.options }],
+      rows: [],
+    });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [{
+        fieldId: missing.fieldId,
+        questionType: missing.questionType,
+        answerType: "option",
+        allowedOptions: missing.options,
+        answer: { kind: "profile_answer_missing" },
+      }],
+      repeatables: [],
+    }, port, AbortSignal.any([]), "deterministic_site_valid_editable");
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(port.commits[0]?.value, missing.expected);
+    if (result.kind !== "verified") return;
+    assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+    assert.equal(result.verifiedFields[0]?.provenance, "generated_default");
+    assert.equal(result.committedFields[0]?.synthetic, true);
+  });
+}
+
+test("a generated prior-employment default requires owner input before mutation", async () => {
+  const fieldId = "employment.previously_worked_for_organization";
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control(
+      fieldId,
+      "radio_group",
+      null,
+      "workday_previous_worker_radio_v1",
+    )],
+    rows: [],
+  });
+
+  assert.deepEqual(await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      fieldId,
+      questionType: "prior_employment",
+      answerType: "option",
+      allowedOptions: ["Yes", "No"],
+      answer: {
+        kind: "answered",
+        value: "false",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "false",
+        visibleOption: "No",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([])), {
+    kind: "blocked",
+    code: "profile_answer_provenance_denied",
+    fieldId,
+  });
+  assert.equal(port.inspections, 1);
+  assert.equal(port.commits.length, 0);
+});
+
+test("unresolved tenant owner inputs do not block a tenant where their controls are absent", async () => {
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [
+      {
+        fieldId: "source.how_did_you_hear",
+        questionType: "application_source",
+        answerType: "option",
+        allowedOptions: [],
+        answer: { kind: "profile_answer_missing" },
+      },
+      {
+        fieldId: "employment.previously_worked_for_organization",
+        questionType: "prior_employment",
+        answerType: "option",
+        allowedOptions: ["Yes", "No"],
+        answer: { kind: "profile_answer_missing" },
+      },
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("a derived email answer is skipped when the tenant renders email as display-only", async () => {
+  const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("contact.email", "identity", "text", "owner-email-redacted")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("maps exact owner source and prior-employment options", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      control(
+        "source.how_did_you_hear",
+        "search_select",
+        null,
+        "workday_source_select_v1",
+      ),
+      control(
+        "employment.previously_worked_for_organization",
+        "radio_group",
+        null,
+        "workday_previous_worker_radio_v1",
+      ),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [
+      field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "owner_provided",
+        "Company Website",
+      ),
+      field(
+        "employment.previously_worked_for_organization",
+        "prior_employment",
+        "option",
+        "false",
+        "owner_provided",
+        "No",
+      ),
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ uiBehavior, value }) => [uiBehavior, value]), [
+    ["search_select", "Company Website"],
+    ["radio_group", "No"],
+  ]);
+});
+
+test("rejects journey-derived source and employment answers in live mode", async () => {
+  const source = field(
+    "source.how_did_you_hear",
+    "application_source",
+    "option",
+    "company-website",
+    "owner_provided",
+    "Company Website",
+  );
+  const derivedSource = {
+    ...source,
+    answer: {
+      ...source.answer,
+      provenance: "journey_derived" as const,
+      lane: "synthetic_test_default" as const,
+    },
+  };
+  const sourcePort = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("source.how_did_you_hear", "search_select", "")],
+    rows: [],
+  });
+
+  const sourceResult = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [derivedSource],
+    repeatables: [],
+  }, sourcePort, AbortSignal.any([]));
+  assert.equal(sourceResult.kind, "blocked", JSON.stringify(sourceResult));
+  assert.equal(sourcePort.commits.length, 0);
+
+  const prior = field(
+    "employment.previously_worked_for_organization",
+    "prior_employment",
+    "option",
+    "false",
+    "owner_provided",
+    "No",
+  );
+  const rejected = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      ...prior,
+      answer: {
+        kind: "answered",
+        value: "false",
+        provenance: "journey_derived" as const,
+        lane: "synthetic_test_default" as const,
+      },
+    }],
+    repeatables: [],
+  }, new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] }), AbortSignal.any([]));
+  assert.deepEqual(rejected, {
+    kind: "blocked",
+    code: "profile_answer_provenance_denied",
+    fieldId: "employment.previously_worked_for_organization",
+  });
+});
+
+test("semantically correct option prefills are verified without mutation", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      control("address.country", "search_select", "  Canada  "),
+      control(
+        "employment.previously_worked_for_organization",
+        "radio_group",
+        "No",
+        "workday_previous_worker_radio_v1",
+      ),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [
+      field("address.country", "address", "option", "CA", "owner_provided", "Canada"),
+      field(
+        "employment.previously_worked_for_organization",
+        "prior_employment",
+        "option",
+        "false",
+        "owner_provided",
+        "No",
+      ),
+    ],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("rejects a driver success when fresh visible readback does not match", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.family_name", "text")],
+    rows: [],
+  }, { ignoreCommits: true });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("identity.family_name", "identity", "text", "Lovelace")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_commit_unverified",
+    fieldId: "identity.family_name",
+  });
+  assert.equal(port.commits.length, 1);
+  assert.equal(port.inspections, 3);
+});
+
+test("continues after an optional tenant widget rejects its configured default", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("education.field_of_study", "multi_select"),
+      required: false,
+    }],
+    rows: [],
+  }, { ignoreCommits: true });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field(
+      "education.field_of_study",
+      "education",
+      "multi_select",
+      '["Computer Science"]',
+      "resume_verified",
+      '["Computer Science"]',
+    )],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 1);
+});
+
+test("preserves an already-populated optional multi-select instead of replacing it", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("skills.values", "multi_select", '["Python"]'),
+      required: false,
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field(
+      "skills.values",
+      "skill",
+      "multi_select",
+      '["TypeScript"]',
+      "resume_verified",
+      '["TypeScript"]',
+    )],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 0);
+});
+
+test("continues a repeatable row after an optional tenant widget rejects its default", async () => {
+  const study = field(
+    "education.field_of_study",
+    "education",
+    "multi_select",
+    '["Computer Science"]',
+    "resume_verified",
+    '["Computer Science"]',
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "education",
+      rowId: "existing-education",
+      ownedByC3: false,
+      controls: [{
+        ...control("education.field_of_study", "multi_select"),
+        required: false,
+      }],
+    }],
+    repeatableSections: ["education"],
+  }, { ignoreCommits: true });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "education",
+      rows: [{ rowKey: "education_1", fields: [study] }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(port.commits.length, 1);
+});
+
+test("reconciles repeatables without deleting foreign rows or creating duplicates", async () => {
+  const experience = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+    field("experience.title", "experience", "text", "Programmer", "resume_verified"),
+  ];
+  const education = [
+    field("education.school", "education", "text", "University of London", "resume_verified"),
+    field("education.end_date", "education", "date", "1835-06-01", "resume_verified"),
+  ];
+  const skill = [
+    field("skills.name", "skill", "option", "TypeScript", "resume_verified", "TypeScript"),
+  ];
+  const plan: ProfilePagePlan = {
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [
+      { section: "experience", rows: [{ rowKey: "experience-1", fields: experience }] },
+      { section: "education", rows: [{ rowKey: "education-1", fields: education }] },
+      { section: "skills", rows: [{ rowKey: "skill-1", fields: skill }] },
+    ],
+  };
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [
+      row("experience", "foreign-experience", false, experience),
+      row("education", "foreign-education", false, education),
+      row("education", "owned-duplicate", true, education),
+      row("skills", "owned-empty", true, skill, true),
+    ],
+  }, {
+    rowTemplates: {
+      experience,
+      education,
+      skills: skill,
+    },
+  });
+
+  const first = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(first.kind, "verified");
+  if (first.kind === "verified") {
+    assert.deepEqual(
+      first.verifiedFields.filter(({ rowKey }) => rowKey !== undefined),
+      [
+        verifiedRow("experience.company", "experience", "text", "text", "experience-1"),
+        verifiedRow("experience.title", "experience", "text", "text", "experience-1"),
+        verifiedRow("education.school", "education", "text", "text", "education-1"),
+        verifiedRow("education.end_date", "education", "date", "date", "education-1"),
+        {
+          fieldId: "skills.name",
+          questionType: "skill",
+          answerType: "option",
+          uiBehavior: "search_select",
+          uiVariant: "workday_search_select_v1",
+          provenance: "resume_verified",
+          lane: "live_owner_fact",
+          optionMappingProvenance: "visible_option",
+          rowKey: "skill-1",
+        },
+      ],
+    );
+  }
+  assert.deepEqual(port.removed, [
+    ["education", "owned-duplicate"],
+    ["skills", "owned-empty"],
+  ]);
+  assert.equal(port.added.length, 1);
+  assert.equal(port.added[0], "skills");
+  assert.equal(port.snapshot.rows.some(({ rowId }) => rowId === "foreign-experience"), true);
+  assert.equal(port.snapshot.rows.some(({ rowId }) => rowId === "foreign-education"), true);
+
+  const additions = port.added.length;
+  const removals = port.removed.length;
+  const second = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+  assert.equal(second.kind, "verified");
+  assert.equal(port.added.length, additions);
+  assert.equal(port.removed.length, removals);
+  if (second.kind === "verified") assert.equal(second.ownedDuplicateRows, 0);
+});
+
+function verifiedRow(
+  fieldId: string,
+  questionType: ProfileFieldPlan["questionType"],
+  answerType: ProfileFieldPlan["answerType"],
+  uiBehavior: ProfileControlSnapshot["uiBehavior"],
+  rowKey: string,
+) {
+  return {
+    fieldId,
+    questionType,
+    answerType,
+    uiBehavior,
+    uiVariant: `workday_${uiBehavior}_v1`,
+    provenance: "resume_verified",
+    lane: "live_owner_fact",
+    rowKey,
+  } as const;
+}
+
+test("keeps classification layers independent and stops on an unreviewed UI variant", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control(
+      "skills.name",
+      "search_select",
+      null,
+      "workday_search_select_unreviewed",
+    )],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("skills.name", "skill", "option", "TypeScript", "resume_verified", "TypeScript")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_ui_variant_unreviewed",
+    fieldId: "skills.name",
+    uiVariant: "workday_search_select_unreviewed",
+  });
+  assert.equal(port.commits.length, 0);
+});
+
+test("rejects invented provenance after one nonmutating page inspection", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.given_name", "text")],
+    rows: [],
+  });
+  const plan = {
+    mode: "live",
+    pageType: "profile",
+    fields: [{
+      fieldId: "identity.given_name",
+      questionType: "identity",
+      answerType: "text",
+      allowedOptions: [],
+      answer: {
+        kind: "answered",
+        value: "Ada",
+        provenance: "invented",
+        lane: "live_owner_fact",
+      },
+    }],
+    repeatables: [],
+  } as unknown as ProfilePagePlan;
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage(plan, port, AbortSignal.any([])),
+    { kind: "blocked", code: "profile_plan_invalid", fieldId: "identity.given_name" },
+  );
+  assert.equal(port.inspections, 1);
+});
+
+test("stops before mutation when an observed required field has no authoritative plan", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("address.city", "text"),
+    ],
+    rows: [],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "contact",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, port, AbortSignal.any([])),
+    { kind: "blocked", code: "profile_answer_missing", fieldId: "address.city" },
+  );
+  assert.equal(port.inspections, 1);
+  assert.equal(port.commits.length, 0);
+});
+
+test("classifies an unknown required profile control without exposing its identity", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+    ],
+    rows: [],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "contact",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiBehavior: "text",
+      uiVariant: "workday_unknown_required_v1",
+    },
+  );
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("synthetic mode fills supported unknown profile controls without owner input", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+      {
+        ...control("unknown.required.2", "select", null, "workday_unknown_required_v1"),
+        allowedOptions: ["Option A", "Option B"],
+      },
+      {
+        ...control("unknown.required.3", "checkbox", "false", "workday_unknown_required_v1"),
+        allowedOptions: ["I am fluent in this language."],
+      },
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 3);
+  assert.equal(port.commits[0]?.value, "Test response pending owner review.");
+  assert.ok(["Option A", "Option B"].includes(port.commits[1]?.value ?? ""));
+  assert.equal(port.commits[2]?.value, "true");
+});
+
+test("rejects fresh visible profile readback when controlled backing remains empty", async () => {
+  const port = new BackinglessMemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.family_name", "text")],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [field("identity.family_name", "identity", "text", "Lovelace")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.deepEqual(result, {
+    kind: "blocked",
+    code: "profile_commit_unverified",
+    fieldId: "identity.family_name",
+  });
+  assert.equal(port.snapshot.controls[0]?.readback, "Lovelace");
+});
+
+test("a live profile transport traverses supported unknowns under the explicit fallback policy", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]), "deterministic_site_valid_editable");
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  if (result.kind !== "verified") return;
+  assert.equal(result.committedFields[0]?.synthetic, true);
+  assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  assert.equal(result.verifiedFields[0]?.provenance, "generated_default");
+  assert.notEqual(result.verifiedFields[0]?.provenance, "owner_provided");
+});
+
+test("a matching synthetic prefill still proves backing commit in the current run", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control(
+        "source.how_did_you_hear",
+        "search_select",
+        "Recruiter",
+        "workday_source_select_v1",
+      ),
+      allowedOptions: ["Recruiter", "Company Website"],
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [{
+      fieldId: "source.how_did_you_hear",
+      questionType: "application_source",
+      answerType: "option",
+      allowedOptions: ["Recruiter"],
+      answer: {
+        kind: "answered",
+        value: "recruiter",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "recruiter",
+        visibleOption: "Recruiter",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), ["Recruiter"]);
+  if (result.kind !== "verified") return;
+  assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  assert.equal(result.committedFields[0]?.synthetic, true);
+});
+
+test("a matching derived country-code mirror defers to independent upstream backing", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control(
+        "phone.country_code",
+        "search_select",
+        "United States (+1)",
+        "workday_search_select_v2",
+      ),
+      allowedOptions: ["United States (+1)"],
+    }],
+    rows: [],
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [{
+      fieldId: "phone.country_code",
+      questionType: "phone",
+      answerType: "option",
+      allowedOptions: ["United States (+1)"],
+      answer: {
+        kind: "answered",
+        value: "US-1",
+        provenance: "generated_default",
+        lane: "synthetic_test_default",
+      },
+      optionMapping: {
+        canonicalValue: "US-1",
+        visibleOption: "United States (+1)",
+        provenance: "visible_option",
+      },
+    }],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits, []);
+});
+
+test("synthetic unknown values honor native constraints", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      {
+        ...control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+        constraints: {
+          inputType: "email", min: null, max: null, maxLength: 8,
+          pattern: "[^@]+@[^@]+",
+        },
+      },
+      {
+        ...control("unknown.required.2", "number", null, "workday_unknown_required_v1"),
+        constraints: {
+          inputType: "number", min: 5, max: 8, maxLength: null, pattern: null,
+        },
+      },
+      {
+        ...control("unknown.required.3", "text", null, "workday_unknown_required_v1"),
+        constraints: {
+          inputType: "text", min: null, max: null, maxLength: 4, pattern: "[A-Z][a-z]+",
+        },
+      },
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.slice(0, 2).map(({ value }) => value), ["A@A", "5"]);
+  assert.match(port.commits[2]?.value ?? "", /^[A-Z][a-z]+$/u);
+});
+
+test("synthetic required file uses a bounded transient artifact and clears its bytes", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [{
+      ...control("unknown.required.1", "file", null, "workday_unknown_required_v1"),
+      constraints: {
+        inputType: "text",
+        min: null,
+        max: null,
+        maxLength: null,
+        pattern: null,
+        acceptedExtensions: [".pdf"],
+        maxFileBytes: 1024,
+      },
+    }],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits[0]?.syntheticFile?.name, "synthetic-owner-review.pdf");
+  assert.equal(port.commits[0]?.syntheticFile?.mimeType, "application/pdf");
+  assert.equal(port.commits[0]?.syntheticFile?.bytes.every((byte) => byte === 0), true);
+  if (result.kind === "verified") {
+    assert.equal(result.effectivePlan.fields[0]?.fieldId, "unknown.required.1");
+    assert.equal(result.effectivePlan.fields[0]?.answer.kind, "answered");
+    assert.deepEqual(result.committedFields.map(({ fieldId, uiBehavior, synthetic }) => ({
+      fieldId, uiBehavior, synthetic,
+    })), [{ fieldId: "unknown.required.1", uiBehavior: "file", synthetic: true }]);
+  }
+});
+
+test("synthetic unknown choice rebind adopts a committed option when its cached option disappears", async () => {
+  let inspections = 0;
+  const registered: ProfileFieldPlan[] = [];
+  const commits: string[] = [];
+  const snapshot = (option: string, readback: string | null): ProfilePageSnapshot => ({
+    pageType: "contact",
+    controls: [{
+      ...control("unknown.required.1", "select", readback, "workday_unknown_required_v1"),
+      controlId: inspections < 2 ? "control-before-remount" : "control-after-remount",
+      allowedOptions: [option],
+    }],
+    rows: [],
+  });
+  const page: WorkdayProfilePagePort = {
+    async inspect() {
+      inspections += 1;
+      return inspections === 1 ? snapshot("Old option", null) : snapshot("New option", "New option");
+    },
+    registerSyntheticField(field) { registered.push(field); },
+    async commit(request) { commits.push(request.value); },
+    async addOwnedRow() { throw new TypeError("not used"); },
+    async removeOwnedRow() { throw new TypeError("not used"); },
+  };
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [],
+    repeatables: [],
+  }, page, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(commits, ["New option"]);
+  const firstAnswer = registered[0]?.answer;
+  const finalAnswer = registered.at(-1)?.answer;
+  assert.equal(firstAnswer?.kind === "answered" ? firstAnswer.value : null, "Old option");
+  assert.equal(finalAnswer?.kind === "answered" ? finalAnswer.value : null, "New option");
+});
+
+test("scalar readbacks avoid unrelated popup discovery but discover a newly revealed choice", async () => {
+  const modes: boolean[] = [];
+  class ConditionalChoicePage extends MemoryProfilePage {
+    async inspect(_signal?: AbortSignal, interactive = true): Promise<ProfilePageSnapshot> {
+      modes.push(interactive);
+      const snapshot = await super.inspect();
+      return { ...snapshot, controls: snapshot.controls.map(item => item.fieldId.startsWith("unknown.")
+        ? { ...item, ...(interactive ? { allowedOptions: ["Yes", "No"] } : {}) } : item) };
+    }
+  }
+  const port = new ConditionalChoicePage({ pageType: "contact", rows: [],
+    controls: [control("identity.given_name", "text")] }, { afterCommit: () => {
+      if (port.commits.length === 1) port.snapshot = { ...port.snapshot, controls: [
+        ...port.snapshot.controls, control("unknown.required.1", "search_select", null, "workday_unknown_required_v1"),
+      ] };
+    } });
+  const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "contact",
+    fields: [field("identity.given_name", "identity", "text", "Ada")], repeatables: [] }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(modes.slice(0, 4), [true, false, false, true]);
+  assert.deepEqual(port.commits.map(item => item.controlId), ["control-identity.given_name", "control-unknown.required.1"]);
+});
+
+test("synthetic mode fills supported unknown controls revealed after a scalar commit", async () => {
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [control("identity.given_name", "text")],
+    rows: [],
+  }, {
+    afterCommit: () => {
+      if (port.commits.length !== 1) return;
+      port.snapshot = {
+        ...port.snapshot,
+        controls: [
+          ...port.snapshot.controls,
+          control("unknown.required.1", "textarea", null, "workday_unknown_required_v1"),
+        ],
+      };
+    },
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "contact",
+    fields: [field("identity.given_name", "identity", "text", "Ada")],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-identity.given_name",
+    "control-unknown.required.1",
+  ]);
+  if (result.kind === "verified") {
+    assert.equal(result.verifiedFields.at(-1)?.lane, "synthetic_test_default");
+    assert.equal(result.effectivePlan.fields.some(({ fieldId }) =>
+      fieldId === "unknown.required.1"), true);
+    assert.equal(result.committedFields.at(-1)?.fieldId, "unknown.required.1");
+    assert.equal(
+      result.committedFields.at(-1)?.committedReadback,
+      "Test response pending owner review.",
+    );
+  }
+});
+
+test("synthetic mode fills a supported unknown field in a selected repeatable row", async () => {
+  const company = field(
+    "experience.company",
+    "experience",
+    "text",
+    "Analytical Engines",
+    "resume_verified",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "tenant-row",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Analytical Engines"),
+        control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+      ],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-1", fields: [company] }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-unknown.required.1",
+  ]);
+  if (result.kind === "verified") {
+    assert.equal(result.verifiedFields.at(-1)?.rowKey, "experience-1");
+    assert.equal(result.verifiedFields.at(-1)?.lane, "synthetic_test_default");
+  }
+});
+
+test("rechecks required controls revealed after a scalar commit before the next mutation", async () => {
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "contact",
+    controls: [
+      control("identity.given_name", "text"),
+      control("identity.family_name", "text"),
+    ],
+    rows: [],
+  }, {
+    afterCommit: () => {
+      if (port.commits.length !== 1) return;
+      port.snapshot = {
+        ...port.snapshot,
+        controls: [
+          ...port.snapshot.controls,
+          control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "contact",
+      fields: [
+        field("identity.given_name", "identity", "text", "Ada"),
+        field("identity.family_name", "identity", "text", "Lovelace"),
+      ],
+      repeatables: [],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiBehavior: "text",
+      uiVariant: "workday_unknown_required_v1",
+    },
+  );
+  assert.deepEqual(port.commits.map(({ controlId }) => controlId), [
+    "control-identity.given_name",
+  ]);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("rejects invalid runtime classifications and non-opaque repeatable keys", async () => {
+  const cases = [
+    {
+      mode: "live",
+      pageType: "profile",
+      fields: [{
+        fieldId: "identity.given_name",
+        questionType: "identity",
+        answerType: "holding_value",
+        answer: answered("Ada"),
+      }],
+      repeatables: [],
+    },
+    {
+      mode: "live",
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "skills",
+        rows: [{
+          rowKey: "candidate@example.invalid",
+          fields: [field("skills.name", "skill", "option", "typescript", "resume_verified", "TypeScript")],
+        }],
+      }],
+    },
+  ] as unknown as ProfilePagePlan[];
+
+  for (const plan of cases) {
+    const port = new MemoryProfilePage({ pageType: "profile", controls: [], rows: [] });
+    const result = await completeWorkdayProfilePage(plan, port, AbortSignal.any([]));
+    assert.equal(result.kind, "blocked");
+    if (result.kind === "blocked") assert.equal(result.code, "profile_plan_invalid");
+    assert.equal(port.inspections, 1);
+  }
+});
+
+test("reports exact cancellation when the signal aborts during a field effect", async () => {
+  const controller = new AbortController();
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [control("identity.given_name", "text")],
+    rows: [],
+  }, { afterCommit: () => controller.abort() });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, port, controller.signal),
+    { kind: "blocked", code: "operation_cancelled" },
+  );
+});
+
+test("stops when a repeatable row exposes an unplanned required subfield", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "foreign-experience",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Analytical Engines"),
+        control("experience.end_date", "date"),
+      ],
+    }],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "experience",
+        rows: [{ rowKey: "experience-1", fields: desired }],
+      }],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: "experience.end_date",
+    },
+  );
+  assert.equal(port.commits.length, 0);
+});
+
+test("preflights required repeatable fields before cleaning any owned row", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [
+      {
+        section: "experience",
+        rowId: "foreign-experience",
+        ownedByC3: false,
+        controls: [
+          control("experience.company", "text", "Analytical Engines"),
+          control("experience.start_date", "date"),
+        ],
+      },
+      row("education", "owned-empty", true, [
+        field("education.school", "education", "text", "Example", "resume_verified"),
+      ], true),
+    ],
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "experience",
+        rows: [{ rowKey: "experience-1", fields: desired }],
+      }],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "profile_answer_missing",
+      fieldId: "experience.start_date",
+    },
+  );
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("binds heterogeneous repeatable requirements only to each selected row", async () => {
+  const past = [
+    field("experience.company", "experience", "text", "Past Company", "resume_verified"),
+    field("experience.title", "experience", "text", "Engineer", "resume_verified"),
+    field("experience.end_date", "experience", "date", "2024-01-31", "resume_verified"),
+  ];
+  const current = [
+    field("experience.company", "experience", "text", "Current Company", "resume_verified"),
+    field("experience.title", "experience", "text", "Senior Engineer", "resume_verified"),
+  ];
+  const unrelated = [
+    field("experience.company", "experience", "text", "Preserved Company", "resume_verified"),
+    field("experience.start_date", "experience", "date", "2018-01-01", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [
+      row("experience", "foreign-past", false, past),
+      row("experience", "foreign-current", false, current),
+      row("experience", "foreign-unrelated", false, unrelated),
+    ],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [
+        { rowKey: "experience-past", fields: past },
+        { rowKey: "experience-current", fields: current },
+      ],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified");
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.added.length, 0);
+  assert.equal(port.removed.length, 0);
+  assert.equal(
+    port.snapshot.rows.some(({ rowId }) => rowId === "foreign-unrelated"),
+    true,
+  );
+});
+
+test("reuses one semantic job when the tenant omits an optional subfield", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Analytical Engines", "resume_verified"),
+    field("experience.title", "employment", "text", "Engineer", "resume_verified"),
+    field("experience.location", "employment", "text", "London", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "tenant-job-1",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Analytical Engines"),
+        control("experience.title", "text", "Engineer"),
+      ],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+  assert.equal(port.commits.length, 0);
+});
+
+test("checks a current role and does not invent an end date after Workday removes it", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Current Company", "resume_verified"),
+    field("experience.title", "employment", "text", "Engineer", "resume_verified"),
+    field("experience.current", "employment", "boolean", "true", "resume_verified"),
+    field("experience.end_month", "employment", "month", "12", "resume_verified"),
+    field("experience.end_year", "employment", "year", "2026", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "current-job-1",
+      ownedByC3: false,
+      controls: [
+        control("experience.company", "text", "Current Company"),
+        control("experience.title", "text", "Engineer"),
+        {
+          ...control(
+            "experience.current",
+            "checkbox",
+            "false",
+            "workday_checkbox_v2",
+          ),
+          required: false,
+        },
+        control("experience.end_month", "month", "11"),
+        control("experience.end_year", "year", "2025"),
+      ],
+    }],
+    repeatableSections: ["experience"],
+  }, {
+    afterCommit: () => {
+      if (port.commits.at(-1)?.controlId !== "control-experience.current") return;
+      port.snapshot = {
+        ...port.snapshot,
+        rows: port.snapshot.rows.map((item) => ({
+          ...item,
+          controls: item.controls.filter(({ fieldId }) =>
+            fieldId !== "experience.end_month" && fieldId !== "experience.end_year"
+          ),
+        })),
+      };
+    },
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-current", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ controlId, value }) => [controlId, value]), [
+    ["control-experience.current", "true"],
+  ]);
+  assert.equal(port.added.length, 0);
+});
+
+test("defers repeatable data when the current UI state has no matching section", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+    repeatableSections: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience-1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+});
+
+test("rechecks required controls revealed by a repeatable add before filling the row", async () => {
+  const desired = [
+    field("experience.company", "experience", "text", "Analytical Engines", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+  }, {
+    rowTemplates: { experience: desired },
+    afterAdd: () => {
+      port.snapshot = {
+        ...port.snapshot,
+        controls: [
+          ...port.snapshot.controls,
+          control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(
+    await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [],
+      repeatables: [{
+        section: "experience",
+        rows: [{ rowKey: "experience-1", fields: desired }],
+      }],
+    }, port, AbortSignal.any([])),
+    {
+      kind: "blocked",
+      code: "answer_type_unknown",
+      fieldId: "unknown.required.1",
+      uiBehavior: "text",
+      uiVariant: "workday_unknown_required_v1",
+    },
+  );
+  assert.deepEqual(port.added, ["experience"]);
+  assert.equal(port.commits.length, 0);
+  assert.equal(port.removed.length, 0);
+});
+
+test("fills the tenant-provided blank first repeatable row before adding another", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "INVIDI Technologies", "resume_verified"),
+    field("experience.title", "employment", "text", "Software Developer", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      ...row("experience", "workExperience-4", false, desired, true),
+      controls: [
+        ...row("experience", "workExperience-4", false, desired, true).controls,
+        { ...control("experience.current", "checkbox", "false"), required: false },
+      ],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience_1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.added.length, 0);
+  assert.equal(port.inspections, 7);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "INVIDI Technologies",
+    "Software Developer",
+  ]);
+});
+
+test("preflights a required control revealed by repeatable commit using its fresh readback", async () => {
+  const desired = [
+    field("experience.company", "employment", "text", "Example", "resume_verified"),
+    field("experience.title", "employment", "text", "Developer", "resume_verified"),
+  ];
+  let port!: MemoryProfilePage;
+  port = new MemoryProfilePage({
+    pageType: "profile", controls: [],
+    rows: [row("experience", "work-1", false, desired, true)],
+    repeatableSections: ["experience"],
+  }, {
+    afterCommit: () => {
+      port.snapshot = { ...port.snapshot, controls: [
+        control("unknown.required.1", "text", null, "workday_unknown_required_v1"),
+      ] };
+    },
+  });
+  const result = await completeWorkdayProfilePage({
+    mode: "live", pageType: "profile", fields: [],
+    repeatables: [{ section: "experience", rows: [{ rowKey: "work-1", fields: desired }] }],
+  }, port, AbortSignal.any([]));
+  assert.equal(result.kind, "blocked");
+  if (result.kind === "blocked") assert.equal(result.fieldId, "unknown.required.1");
+  assert.equal(port.commits.length, 1);
+  assert.equal(port.inspections, 3);
+});
+
+test("accepts an unpadded Workday month readback for a zero-padded plan month", async () => {
+  const desired = [
+    field("experience.start_month", "employment", "month", "09", "resume_verified"),
+  ];
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [{
+      section: "experience",
+      rowId: "workExperience-4",
+      ownedByC3: false,
+      controls: [control("experience.start_month", "month", "9", "workday_month_v1")],
+    }],
+    repeatableSections: ["experience"],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [],
+    repeatables: [{
+      section: "experience",
+      rows: [{ rowKey: "experience_1", fields: desired }],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.equal(port.commits.length, 0);
+});
+
+test("routes dedicated social URLs before deduplicated generic website rows", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const genericLinkedin = field(
+    "website.url",
+    "website",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const portfolio = field(
+    "website.url",
+    "website",
+    "url",
+    "https://portfolio.example.com",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("social.linkedin", "text", null, "workday_text_v2"),
+      required: false,
+    }],
+    rows: [],
+    repeatableSections: ["websites"],
+  }, { rowTemplates: { websites: [portfolio] } });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [{
+      section: "websites",
+      rows: [
+        { rowKey: "website-linkedin", fields: [genericLinkedin] },
+        { rowKey: "website-portfolio", fields: [portfolio] },
+      ],
+    }],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.added, ["websites"]);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://portfolio.example.com",
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
+test("synthetic postal fallback uses the planned or observed Canadian country without replacing owner facts", async () => {
+  for (const source of ["planned", "observed", "owner"] as const) {
+    const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+      { ...control("address.country", "search_select", source === "planned" ? "United States" : "Canada"),
+        allowedOptions: ["Canada", "United States"] },
+      control("address.postal_code", "text"),
+    ] });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+      fields: [
+        ...(source === "planned" ? [field("address.country", "address", "option", "CA", "owner_provided", "Canada")] : []),
+        ...(source === "owner" ? [field("address.postal_code", "address", "text", "T2P 1J9")] : []),
+      ],
+    }, port, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const postal = port.commits.find(({ controlId }) => controlId === "control-address.postal_code");
+    assert.match(postal?.value ?? "", /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTVWXYZ] \d[ABCEGHJ-NPRSTVWXYZ]\d$/u);
+    if (source === "owner") assert.equal(postal?.value, "T2P 1J9");
+    else if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) => fieldId === "address.postal_code")?.lane, "synthetic_test_default");
+  }
+});
+
+test("synthetic Canadian postal defaults follow the planned, observed, or generated province", async () => {
+  for (const source of ["planned", "observed", "generated", "previous_default"] as const) {
+    const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+      { ...control("address.country", "search_select", "Canada"), allowedOptions: ["Canada"] },
+      { ...control("address.region", "search_select", source === "generated" ? null : "Alberta"),
+        allowedOptions: ["Alberta", "British Columbia"] },
+      control("address.postal_code", "text", source === "previous_default" ? "A0A 0A0" : null),
+    ] });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+      fields: source === "planned"
+        ? [field("address.region", "address", "option", "BC", "owner_provided", "British Columbia")]
+        : [],
+    }, port, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    const postal = port.commits.find(({ controlId }) => controlId === "control-address.postal_code");
+    assert.equal(postal?.value[0], source === "planned" ? "V" : "T");
+    if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) =>
+      fieldId === "address.postal_code")?.lane, "synthetic_test_default");
+  }
+});
+
+test("leaves optional unknown checkbox consent and workflow controls untouched unless answered by owner", async () => {
+  for (const initial of ["false", "true"]) {
+    for (const explicit of [false, true]) {
+      const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
+        { ...control("unknown.optional.1", "checkbox", initial, "workday_unknown_required_v1"), required: false },
+      ] });
+      const result = await completeWorkdayProfilePage({
+        mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+        fields: explicit ? [field("unknown.optional.1", "unknown", "boolean", "false")] : [],
+      }, port, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      assert.equal(port.snapshot.controls[0]?.readback, explicit ? "false" : initial);
+      if (result.kind !== "verified") continue;
+      assert.equal(result.verifiedFields.length, explicit ? 1 : 0);
+      assert.equal(result.committedFields.length, 0);
+      if (!explicit) assert.equal(port.commits.length, 0);
+      else assert.equal(result.verifiedFields[0]?.provenance, "owner_provided");
+    }
+  }
+});
+
+test("fills recognized unplanned optional controls with explicit test fallbacks", async () => {
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [
+      { ...control("social.linkedin", "text", null, "workday_text_v2"), required: false },
+      { ...control("social.facebook", "text", null, "workday_text_v2"), required: false },
+      { ...control("social.twitter", "text", null, "workday_text_v2"), required: false },
+    ],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "synthetic_test_non_submittable",
+    pageType: "profile",
+    fields: [],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/hunt-test-owner-review",
+    "https://www.facebook.com/hunt.test.owner.review",
+    "https://twitter.com/hunt_test_26",
+  ]);
+  if (result.kind !== "verified") return;
+  assert.equal(result.committedFields.length, 3);
+  assert.ok(result.committedFields.every(({ synthetic }) => synthetic));
+  assert.ok(result.verifiedFields.every(({ provenance, lane }) =>
+    provenance === "generated_default" && lane === "synthetic_test_default"
+  ));
+});
+
+test("canonicalizes a bare LinkedIn host for Workday URL validation", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://linkedin.com/in/example",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [{
+      ...control("social.linkedin", "text", null, "workday_text_v2"),
+      required: false,
+    }],
+    rows: [],
+  });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
+test("falls back from an absent dedicated social control to a generic website row", async () => {
+  const linkedin = field(
+    "social.linkedin",
+    "social_network",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const generic = field(
+    "website.url",
+    "website",
+    "url",
+    "https://www.linkedin.com/in/example",
+  );
+  const port = new MemoryProfilePage({
+    pageType: "profile",
+    controls: [],
+    rows: [],
+    repeatableSections: ["websites"],
+  }, { rowTemplates: { websites: [generic] } });
+
+  const result = await completeWorkdayProfilePage({
+    mode: "live",
+    pageType: "profile",
+    fields: [linkedin],
+    repeatables: [],
+  }, port, AbortSignal.any([]));
+
+  assert.equal(result.kind, "verified", JSON.stringify(result));
+  assert.deepEqual(port.added, ["websites"]);
+  assert.deepEqual(port.commits.map(({ value }) => value), [
+    "https://www.linkedin.com/in/example",
+  ]);
+});
+
+function row(
+  section: ProfileRepeatableSection,
+  rowId: string,
+  ownedByC3: boolean,
+  fields: readonly ProfileFieldPlan[],
+  empty = false,
+) {
+  return {
+    section,
+    rowId,
+    ownedByC3,
+    controls: fields.map((item) => control(
+      item.fieldId,
+      item.answerType === "date"
+        ? "date"
+        : item.answerType === "phone"
+          ? "phone"
+          : item.answerType === "option"
+            ? "search_select"
+            : "text",
+      empty || item.answer.kind !== "answered"
+        ? null
+        : item.optionMapping?.visibleOption ?? item.answer.value,
+    )),
+  } as const;
+}
+
+class MemoryProfilePage implements WorkdayProfilePagePort {
+  snapshot: ProfilePageSnapshot;
+  inspections = 0;
+  readonly commits: Array<{
+    controlId: string;
+    uiBehavior: ProfileControlSnapshot["uiBehavior"];
+    value: string;
+    syntheticFile?: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array };
+  }> = [];
+  readonly added: ProfileRepeatableSection[] = [];
+  readonly removed: Array<readonly [ProfileRepeatableSection, string]> = [];
+  readonly #ignoreCommits: boolean;
+  readonly #templates: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
+  readonly #afterCommit: (() => void) | undefined;
+  readonly #afterAdd: (() => void) | undefined;
+  readonly #inspectFailure: (() => boolean) | undefined;
+
+  constructor(
+    snapshot: ProfilePageSnapshot,
+    options: {
+      readonly ignoreCommits?: boolean;
+      readonly rowTemplates?: Partial<Record<ProfileRepeatableSection, readonly ProfileFieldPlan[]>>;
+      readonly afterCommit?: () => void;
+      readonly afterAdd?: () => void;
+      readonly inspectFailure?: () => boolean;
+    } = {},
+  ) {
+    this.snapshot = structuredClone(snapshot);
+    this.#ignoreCommits = options.ignoreCommits ?? false;
+    this.#templates = options.rowTemplates ?? {};
+    this.#afterCommit = options.afterCommit;
+    this.#afterAdd = options.afterAdd;
+    this.#inspectFailure = options.inspectFailure;
+  }
+
+  async inspect(): Promise<ProfilePageSnapshot> {
+    this.inspections += 1;
+    if (this.#inspectFailure?.()) throw new TypeError("transient inspect failure");
+    return structuredClone(this.snapshot);
+  }
+
+  async commit(request: {
+    readonly controlId: string;
+    readonly uiBehavior: ProfileControlSnapshot["uiBehavior"];
+    readonly value: string;
+    readonly syntheticFile?: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array };
+  }): Promise<void> {
+    this.commits.push({ ...request });
+    if (this.#ignoreCommits) {
+      this.#afterCommit?.();
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      controls: this.snapshot.controls.map((item) =>
+        item.controlId === request.controlId
+          ? { ...item, readback: request.value }
+          : item
+      ),
+      rows: this.snapshot.rows.map((current) => ({
+        ...current,
+        controls: current.controls.map((item) =>
+          item.controlId === request.controlId
+            ? { ...item, readback: request.value }
+            : item
+        ),
+      })),
+    };
+    this.#afterCommit?.();
+  }
+
+  async addOwnedRow(section: ProfileRepeatableSection): Promise<string> {
+    this.added.push(section);
+    const rowId = `owned-${section}-${this.added.length}`;
+    const template = this.#templates[section] ?? [];
+    this.snapshot = {
+      ...this.snapshot,
+      rows: [...this.snapshot.rows, row(section, rowId, true, template, true)],
+    };
+    this.#afterAdd?.();
+    return rowId;
+  }
+
+  async removeOwnedRow(section: ProfileRepeatableSection, rowId: string): Promise<void> {
+    const candidate = this.snapshot.rows.find((item) => item.rowId === rowId);
+    assert.equal(candidate?.ownedByC3, true, "the handler may remove only C3-owned rows");
+    this.removed.push([section, rowId]);
+    this.snapshot = {
+      ...this.snapshot,
+      rows: this.snapshot.rows.filter((item) => item.rowId !== rowId),
+    };
+  }
+}
+
+class BackinglessMemoryProfilePage extends MemoryProfilePage {
+  interaction() {
+    return {
+      popupBound: null,
+      optionFocused: null,
+      optionActivated: null,
+      popupClosed: null,
+      backingValueCommitted: false,
+      validationCleared: true,
+      visibleOptionCount: null,
+      selectedOptionOrdinal: null,
+    } as const;
+  }
+}

@@ -258,6 +258,8 @@ from shared.mutation_audit import audit_mutation_request  # noqa: E402
 
 app.include_router(_audit_router)
 app.include_router(_gateway_router)
+from backend.c3 import router as _c3_router
+app.include_router(_c3_router)
 
 # CORS - only needed during local development (Vite on :5173, FastAPI on :8000)
 _DEV_ORIGINS = [
@@ -268,12 +270,65 @@ _DEV_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_DEV_ORIGINS,
-    allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "X-Hunt-Async",
+        "X-Request-ID",
+        "X-Review-Ops-Token",
+    ],
 )
 app.add_middleware(RequestIDMiddleware)
+
+
+_SAME_ORIGIN_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _request_origin_is_allowed(request: Request, origin: str) -> bool:
+    """Allow same-origin browser requests and explicitly configured CORS origins."""
+    if origin in _DEV_ORIGINS:
+        return True
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    request_host = request.headers.get("host", "").strip().lower()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip().lower()
+    return parsed.netloc.lower() in {request_host, forwarded_host} - {""}
+
+
+@app.middleware("http")
+async def security_headers_and_csrf(request: Request, call_next):
+    method = request.method.upper()
+    if method in _SAME_ORIGIN_METHODS and request.cookies.get(SESSION_COOKIE_NAME):
+        origin = request.headers.get("origin", "").strip()
+        referer = request.headers.get("referer", "").strip()
+        if origin and not _request_origin_is_allowed(request, origin):
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+        if not origin and referer:
+            referer_origin = "{uri.scheme}://{uri.netloc}".format(uri=urlsplit(referer))
+            if not _request_origin_is_allowed(request, referer_origin):
+                return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked."})
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    if request.url.scheme == "https" or forwarded_proto == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 def _mutation_component(path: str) -> str:
@@ -397,15 +452,24 @@ def _queue_resume_upload_path(filename: str) -> Path:
 
 
 def _resolve_fletcher_queue_resume_path(job_input: dict) -> str:
-    from fletcher.config import DEFAULT_OG_RESUME_PATH  # type: ignore
+    from fletcher.config import (  # type: ignore
+        AD_HOC_DIRNAME,
+        DEFAULT_OG_RESUME_PATH,
+        resolve_runtime_root,
+    )
 
     raw_path = str(job_input.get("resume_path") or "").strip()
     if raw_path:
-        path = Path(raw_path)
-        if path.exists():
+        path = Path(raw_path).resolve()
+        upload_dir = (resolve_runtime_root() / AD_HOC_DIRNAME / "queue_uploads").resolve()
+        if path != DEFAULT_OG_RESUME_PATH.resolve() and (
+            not path.is_relative_to(upload_dir) or path.suffix.lower() not in {".tex", ".pdf"}
+        ):
+            raise ValueError("Queued resume must be an owned upload or the configured default.")
+        if path.is_file():
             return str(path)
         raise FileNotFoundError(f"queued resume file is missing: {path}")
-    if DEFAULT_OG_RESUME_PATH.exists():
+    if DEFAULT_OG_RESUME_PATH.is_file():
         return str(DEFAULT_OG_RESUME_PATH)
     raise FileNotFoundError(
         "queued Fletcher job has no persisted resume upload and default main.tex was not found"
@@ -3131,6 +3195,18 @@ def require_session_or_service_token(request: Request) -> str:
     raise HTTPException(status_code=401, detail="Not authenticated.")
 
 
+def require_metrics_auth(request: Request) -> str:
+    """Protect queue metrics while still allowing an internal bearer token."""
+    username = _session_username(request)
+    if username:
+        return username
+    expected = (HUNT_SERVICE_TOKEN or "").strip()
+    auth = request.headers.get("authorization") or ""
+    if expected and auth.lower().startswith("bearer ") and auth[7:].strip() == expected:
+        return "service"
+    raise HTTPException(status_code=401, detail="Metrics authentication required.")
+
+
 def _bool_value(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -3245,8 +3321,25 @@ def _check_db() -> dict:
 
 async def _read_login_payload(request: Request) -> dict[str, str]:
     """Read login payload without requiring python-multipart in local dev venvs."""
+    max_bytes = 16 * 1024
+    content_length = request.headers.get("content-length", "")
+    if content_length.isdigit() and int(content_length) > max_bytes:
+        raise HTTPException(status_code=413, detail="Login request is too large.")
     content_type = (request.headers.get("content-type") or "").lower()
-    raw = await request.body()
+    stream = getattr(request, "stream", None)
+    if stream is None:
+        raw = await request.body()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail="Login request is too large.")
+    else:
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in stream():
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail="Login request is too large.")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
     if content_type.startswith("application/json"):
         try:
             parsed = json.loads(raw.decode("utf-8") or "{}")
@@ -3279,7 +3372,8 @@ async def auth_login(request: Request, response: Response):
         httponly=True,
         samesite="lax",
         max_age=60 * 60 * 24 * 7,
-        secure=False,  # set True behind HTTPS in production
+        secure=os.getenv("HUNT_COOKIE_SECURE", "1").strip().lower()
+        not in {"0", "false", "no", "off"},
     )
     return result
 
@@ -3291,7 +3385,13 @@ def auth_logout(request: Request, response: Response):
     if token:
         delete_session(token)
     result = JSONResponse({"status": "ok"})
-    result.delete_cookie(SESSION_COOKIE_NAME)
+    result.delete_cookie(
+        SESSION_COOKIE_NAME,
+        secure=os.getenv("HUNT_COOKIE_SECURE", "1").strip().lower()
+        not in {"0", "false", "no", "off"},
+        httponly=True,
+        samesite="lax",
+    )
     return result
 
 
@@ -3632,6 +3732,7 @@ async def api_fletcher_jobs_enqueue(request: Request, _auth: str = Depends(requi
 
     content_type = request.headers.get("content-type", "")
     resume_path = None
+    upload = None
     resume_filename = "main.tex"
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
@@ -3639,22 +3740,39 @@ async def api_fletcher_jobs_enqueue(request: Request, _auth: str = Depends(requi
         if isinstance(payload.get("options"), str):
             try:
                 payload["options"] = json.loads(str(payload.get("options") or "{}"))
-            except json.JSONDecodeError:
-                payload["options"] = {}
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=400, detail="options must be a JSON object"
+                ) from exc
         upload = form.get("resume")
         if upload is not None and getattr(upload, "filename", ""):
             resume_filename = str(getattr(upload, "filename", "") or "resume.tex")
-            resume_upload_path = _queue_resume_upload_path(resume_filename)
-            data = await upload.read()
-            resume_upload_path.write_bytes(data)
-            resume_path = str(resume_upload_path)
     else:
-        payload = await request.json()
-        resume_path = payload.get("resume_path")
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Provide a valid JSON object") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Provide a valid JSON object")
+        if payload.get("resume_path") not in (None, ""):
+            raise HTTPException(
+                status_code=400,
+                detail="Upload a resume file or omit resume_path to use the configured resume.",
+            )
         resume_filename = payload.get("resume_filename") or "main.tex"
 
-    raw_job_id = payload.get("job_id") or payload.get("jobId")
-    job_id = int(raw_job_id) if raw_job_id not in {None, ""} else None
+    options = payload.get("options")
+    if options is not None and not isinstance(options, dict):
+        raise HTTPException(status_code=400, detail="options must be a JSON object")
+    raw_job_id = payload.get("job_id")
+    if raw_job_id in (None, ""):
+        raw_job_id = payload.get("jobId")
+    try:
+        job_id = int(str(raw_job_id)) if raw_job_id not in (None, "") else None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="job_id must be a positive integer") from exc
+    if job_id is not None and job_id <= 0:
+        raise HTTPException(status_code=400, detail="job_id must be a positive integer")
     description = str(payload.get("description") or payload.get("job_details") or "").strip()
     job_context = get_job_by_id(job_id) if job_id is not None else None
     if job_id is not None and not job_context:
@@ -3679,6 +3797,26 @@ async def api_fletcher_jobs_enqueue(request: Request, _auth: str = Depends(requi
     company = str(payload.get("company") or "").strip()
     if not company and job_context:
         company = str(job_context.get("company") or "").strip()
+    if upload is not None and getattr(upload, "filename", ""):
+        resume_upload_path = None
+        try:
+            resume_upload_path = _queue_resume_upload_path(resume_filename)
+            data = await upload.read()
+            if not data:
+                raise HTTPException(
+                    status_code=400, detail="The resume file is empty. Choose a PDF or TeX resume."
+                )
+            resume_upload_path.write_bytes(data)
+        except OSError as exc:
+            if resume_upload_path is not None:
+                try:
+                    resume_upload_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise HTTPException(
+                status_code=503, detail="Could not store the resume. Please try again."
+            ) from exc
+        resume_path = str(resume_upload_path)
     item = enqueue_fletcher_job(
         {
             "job_id": job_id,
@@ -3865,12 +4003,16 @@ def api_fletcher_resumes_clear(payload: dict = Body({}), _auth: str = Depends(re
 
     include_ad_hoc = bool((payload or {}).get("include_ad_hoc", False))
     delete_artifacts = bool((payload or {}).get("delete_artifacts", True))
-    return JSONResponse(
-        clear_generated_resumes(
-            include_ad_hoc=include_ad_hoc,
-            delete_artifacts=delete_artifacts,
+    try:
+        return JSONResponse(
+            clear_generated_resumes(
+                include_ad_hoc=include_ad_hoc,
+                delete_artifacts=delete_artifacts,
+                retry_only=bool((payload or {}).get("retry_only", False)),
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/fletcher/tailor/jobs/{queue_item_id}/log")
@@ -4078,70 +4220,250 @@ def api_settings(component: str | None = None, _auth: str = Depends(require_auth
     return JSONResponse({"settings": [_setting_row(row) for row in rows]})
 
 
-@app.post("/api/settings")
-def api_settings_upsert(payload: dict = Body(...), _auth: str = Depends(require_auth)):
-    """Create or update one component setting."""
+def _validated_setting(payload: dict) -> dict:
+    import math
+    from urllib.parse import urlparse
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Each setting must be an object.")
     component = _component_allowed(str(payload.get("component") or ""))
-    key = str(payload.get("key") or "").strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="key is required.")
-    value_type = str(payload.get("value_type") or "string").strip() or "string"
-    secret = bool(payload.get("secret"))
+    key = payload.get("key")
     value = payload.get("value")
-    updated_by = _auth
-    conn = get_connection()
-    try:
-        conn.execute(
-            """
-            INSERT INTO component_settings (component, key, value, value_type, secret, updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-            ON CONFLICT(component, key) DO UPDATE SET
-                value = excluded.value,
-                value_type = excluded.value_type,
-                secret = excluded.secret,
-                updated_at = CURRENT_TIMESTAMP,
-                updated_by = excluded.updated_by
-            """,
-            (component, key, value, value_type, secret, updated_by),
+    kind = payload.get("value_type", "string")
+    secret = payload.get("secret", False)
+    if not isinstance(key, str) or not key.strip() or not isinstance(value, str):
+        raise HTTPException(
+            status_code=400, detail="A setting needs a key and a text value; null is not allowed."
         )
+    key = key.strip()
+    if (
+        kind not in {"string", "text", "secret", "boolean", "integer", "number", "json"}
+        or type(secret) is not bool
+    ):
+        raise HTTPException(status_code=400, detail="Invalid setting type or secret flag.")
+    if key.endswith("_api_key") and not secret:
+        raise HTTPException(status_code=400, detail="API keys must be stored as secrets.")
+    integer_minimums = {
+        "bullet_rewrite_parallelism": 1,
+        "bullet_rewrite_min_available_mb": 0,
+        "bullet_rewrite_max_memory_pct": 1,
+        "keyword_selection_max_keywords": 1,
+        "keyword_selection_min_words": 0,
+        "keyword_selection_max_words": 1,
+        "job_metadata_prompt_max_chars": 1,
+        "skill_addition_limit": 0,
+        "option_a_min_experience": 0,
+        "option_a_max_experience": 0,
+        "option_a_min_projects": 0,
+        "option_a_max_projects": 0,
+        "option_a_max_experience_bullets": 1,
+        "option_a_max_project_bullets": 1,
+    }
+    float_minimums = {
+        "ollama_timeout_sec": 0,
+        "job_metadata_min_confidence": 0,
+        "option_a_experience_position_bonus": 0,
+        "option_a_project_position_bonus": 0,
+        "option_a_bullet_position_bonus": 0,
+    }
+    runtime_inherited = key.startswith("bullet_rewrite_") or key == "ollama_timeout_sec"
+    try:
+        if kind == "boolean" or key == "cloud_llm_confirm":
+            if value.strip().lower() not in {"true", "false", "1", "0", ""}:
+                raise ValueError("use true or false")
+        if kind == "json":
+            parsed = json.loads(value)
+            if component == "c2" and (
+                not isinstance(parsed, list)
+                or any(not isinstance(item, str) or not item.strip() for item in parsed)
+            ):
+                raise ValueError("use a list of nonblank text values")
+        numeric = key in integer_minimums or key in float_minimums or kind in {"number", "integer"}
+        if numeric and not (runtime_inherited and not value.strip()):
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("use a finite number")
+            if (key in integer_minimums or kind == "integer") and not number.is_integer():
+                raise ValueError("use a whole number")
+            if number < integer_minimums.get(key, float_minimums.get(key, 0)) or (
+                key == "ollama_timeout_sec" and number == 0
+            ):
+                raise ValueError("value is below the supported minimum")
+            if (key == "bullet_rewrite_max_memory_pct" and number > 100) or (
+                key == "job_metadata_min_confidence" and number > 1
+            ):
+                raise ValueError("value exceeds the supported maximum")
+        if key == "llm_provider" and value not in {
+            "",
+            "heuristic",
+            "ollama",
+            "codex",
+            "openai",
+            "openrouter",
+            "anthropic",
+            "gemini",
+        }:
+            raise ValueError("select a supported provider")
+        if key == "ollama_host" and value.strip():
+            url = urlparse(value.strip())
+            if url.scheme not in {"http", "https"} or not url.hostname:
+                raise ValueError("use an HTTP or HTTPS host")
+        if key == "llm_timeout_sec":
+            raise ValueError("generic LLM timeout is not supported; use the Ollama timeout")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"{key}: {exc}") from exc
+    return {
+        **payload,
+        "component": component,
+        "key": key,
+        "value": value,
+        "value_type": kind,
+        "secret": secret,
+    }
+
+
+def _save_component_settings(payloads: list[dict], updated_by: str) -> dict:
+    from datetime import UTC, datetime
+
+    if not isinstance(payloads, list) or not payloads or len(payloads) > 100:
+        raise HTTPException(status_code=400, detail="Provide between 1 and 100 settings.")
+    settings = [_validated_setting(item) for item in payloads]
+    if len({(item["component"], item["key"]) for item in settings}) != len(settings):
+        raise HTTPException(status_code=400, detail="A setting may appear only once per save.")
+    conn = get_connection()
+    rows = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if os.getenv("HUNT_DB_URL", "").strip():
+            conn.execute("LOCK TABLE component_settings IN SHARE ROW EXCLUSIVE MODE")
+        for item in settings:
+            before = conn.execute(
+                "SELECT * FROM component_settings WHERE component = ? AND key = ?",
+                (item["component"], item["key"]),
+            ).fetchone()
+            if "expected" in item and item["expected"] != (
+                _setting_row(before) if before else None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{item['key']} changed. Reload saved settings before retrying.",
+                )
+        merged = {
+            row["key"]: row["value"]
+            for row in conn.execute(
+                "SELECT key, value FROM component_settings WHERE component = 'c2'"
+            ).fetchall()
+        }
+        merged.update(
+            {item["key"]: item["value"] for item in settings if item["component"] == "c2"}
+        )
+        from fletcher import job_metadata_settings as defaults
+
+        touched = {item["key"] for item in settings if item["component"] == "c2"}
+        for low, high in [
+            ("option_a_min_experience", "option_a_max_experience"),
+            ("option_a_min_projects", "option_a_max_projects"),
+            ("keyword_selection_min_words", "keyword_selection_max_words"),
+        ]:
+            if touched.intersection({low, high}):
+                try:
+                    low_value = float(merged.get(low) or getattr(defaults, "C2_" + low.upper()))
+                    high_value = float(merged.get(high) or getattr(defaults, "C2_" + high.upper()))
+                    invalid = low_value > high_value
+                except (ValueError, TypeError):
+                    invalid = True
+                if invalid:
+                    raise HTTPException(status_code=400, detail=f"{low} must not exceed {high}.")
+        for item in settings:
+            conn.execute(
+                """
+                INSERT INTO component_settings (component, key, value, value_type, secret, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(component, key) DO UPDATE SET value = excluded.value,
+                  value_type = excluded.value_type, secret = excluded.secret,
+                  updated_at = excluded.updated_at, updated_by = excluded.updated_by
+                """,
+                (
+                    item["component"],
+                    item["key"],
+                    item["value"],
+                    item["value_type"],
+                    item["secret"],
+                    datetime.now(UTC).isoformat(),
+                    updated_by,
+                ),
+            )
+            rows.append(
+                _setting_row(
+                    conn.execute(
+                        "SELECT * FROM component_settings WHERE component = ? AND key = ?",
+                        (item["component"], item["key"]),
+                    ).fetchone()
+                )
+            )
         conn.commit()
-        row = conn.execute(
-            """
-            SELECT component, key, value, value_type, secret, updated_at, updated_by
-            FROM component_settings
-            WHERE component = ? AND key = ?
-            """,
-            (component, key),
-        ).fetchone()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-    try:
-        append_review_audit_entry(
-            "setting_upsert", {"component": component, "key": key, "secret": secret}
-        )
-    except Exception:
-        pass
-    if component == "c2" and key.startswith("option_a_"):
+    warnings = []
+    selection_keys = {
+        "option_a_min_experience": "min_experience",
+        "option_a_max_experience": "max_experience",
+        "option_a_min_projects": "min_projects",
+        "option_a_max_projects": "max_projects",
+        "option_a_max_experience_bullets": "max_bullets_per_experience",
+        "option_a_max_project_bullets": "max_bullets_per_project",
+        "option_a_experience_position_bonus": "experience_position_bonus",
+        "option_a_project_position_bonus": "project_position_bonus",
+        "option_a_bullet_position_bonus": "bullet_position_bonus",
+    }
+    selection = {
+        selection_keys[item["key"]]: item["value"]
+        for item in settings
+        if item["component"] == "c2" and item["key"] in selection_keys
+    }
+    if selection:
         try:
+            from fletcher.config import DEFAULT_MASTER_RESUME_PATH
             from fletcher.resume.master import sync_master_selection_config
 
-            setting_to_yaml = {
-                "option_a_min_experience": "min_experience",
-                "option_a_max_experience": "max_experience",
-                "option_a_min_projects": "min_projects",
-                "option_a_max_projects": "max_projects",
-                "option_a_max_experience_bullets": "max_bullets_per_experience",
-                "option_a_max_project_bullets": "max_bullets_per_project",
-                "option_a_experience_position_bonus": "experience_position_bonus",
-                "option_a_project_position_bonus": "project_position_bonus",
-                "option_a_bullet_position_bonus": "bullet_position_bonus",
-            }
-            yaml_key = setting_to_yaml.get(key)
-            if yaml_key:
-                sync_master_selection_config({yaml_key: value})
+            if not Path(DEFAULT_MASTER_RESUME_PATH).exists():
+                raise FileNotFoundError("Master resume template is missing")
+            sync_master_selection_config(selection)
         except Exception:
-            pass
-    return JSONResponse({"setting": _setting_row(row)})
+            warnings.append(
+                "Settings were saved, but the master resume template was not synchronized. Retry template sync."
+            )
+    try:
+        for item in settings:
+            append_review_audit_entry(
+                "setting_upsert",
+                {"component": item["component"], "key": item["key"], "secret": item["secret"]},
+            )
+    except Exception:
+        pass
+    return {"settings": rows, "warnings": warnings}
+
+
+@app.post("/api/settings")
+def api_settings_upsert(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    """Validate and update one component setting; retain the existing response shape."""
+    result = _save_component_settings([payload], _auth)
+    return JSONResponse({"setting": result["settings"][0], "warnings": result["warnings"]})
+
+
+@app.post("/api/settings/batch")
+def api_settings_batch(payload: dict = Body(...), _auth: str = Depends(require_auth)):
+    items = payload.get("settings")
+    if not isinstance(items, list) or any(
+        not isinstance(item, dict) or "expected" not in item for item in items
+    ):
+        raise HTTPException(
+            status_code=400, detail="Each setting needs its last acknowledged value."
+        )
+    return JSONResponse(_save_component_settings(items, _auth))
 
 
 @app.get("/api/linkedin/accounts")
@@ -4260,9 +4582,9 @@ def api_system_status(_auth: str = Depends(require_auth)):
     c2 = _check_component("c2", HUNT_FLETCHER_URL)
     c3 = {
         "component": "c3",
-        "status": "planned",
+        "status": "unknown",
         "status_code": None,
-        "detail": "C3 v2 was removed. C3 v3 is planned but not implemented.",
+        "detail": "Open Applications to check the local C3 service and browser connection.",
     }
     c4 = {
         "component": "c4",
@@ -4291,11 +4613,8 @@ def api_system_status(_auth: str = Depends(require_auth)):
 
 @app.get("/health")
 def health():
-    summary = get_review_queue_summary()
-    return {
-        "status": "ok",
-        "queue": summary,
-    }
+    # Keep the unauthenticated liveness probe free of queue counts and state.
+    return {"status": "ok"}
 
 
 @app.get("/api/summary")
@@ -4525,7 +4844,7 @@ def api_summary_queue_age(_auth: str = Depends(require_auth)):
 
 
 @app.get("/metrics")
-def metrics():
+def metrics(_auth: str = Depends(require_metrics_auth)):
     return PlainTextResponse(
         render_metrics(get_review_queue_summary()), media_type="text/plain; version=0.0.4"
     )
@@ -4627,7 +4946,7 @@ systemctl list-timers | grep -i hunt
 
 
 @app.get("/legacy/health-view", response_class=HTMLResponse)
-def health_view():
+def health_view(_auth: str = Depends(require_auth)):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
@@ -4652,13 +4971,16 @@ def health_view():
 
 
 @app.get("/legacy/summary")
-def summary_redirect():
+def summary_redirect(_auth: str = Depends(require_auth)):
     """Legacy path : merged into Queue & health."""
     return RedirectResponse(url="/legacy/health-view", status_code=307)
 
 
 @app.get("/legacy/ops", response_class=HTMLResponse)
-def ops_console(updated: int | None = Query(default=None, ge=0)):
+def ops_console(
+    updated: int | None = Query(default=None, ge=0),
+    _auth: str = Depends(require_auth),
+):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
@@ -5276,7 +5598,7 @@ def api_jobs_bulk_selection(payload: dict = Body(...)):
 
 
 @app.get("/legacy", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, _auth: str = Depends(require_auth)):
     summary = get_review_queue_summary()
     ready_rows = list_jobs_for_review(status="ready", limit=8)
     blocked_rows = list_jobs_for_review(status="blocked", limit=8)
@@ -5309,6 +5631,7 @@ def jobs_page(
     tag: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
+    _auth: str = Depends(require_auth),
 ):
     validate_job_source_filter(source)
     if status not in STATUS_OPTIONS:
@@ -5355,7 +5678,12 @@ def jobs_page(
 
 
 @app.get("/legacy/jobs/{job_id}", response_class=HTMLResponse)
-def job_detail(request: Request, job_id: int, return_to: str = ""):
+def job_detail(
+    request: Request,
+    job_id: int,
+    return_to: str = "",
+    _auth: str = Depends(require_auth),
+):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -5469,6 +5797,7 @@ def job_detail(request: Request, job_id: int, return_to: str = ""):
 def jobs_compare(
     a: int | None = Query(None),
     b: int | None = Query(None),
+    _auth: str = Depends(require_auth),
 ):
     if a is None or b is None:
         a_val = "" if a is None else str(int(a))

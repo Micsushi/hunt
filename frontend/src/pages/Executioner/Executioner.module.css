@@ -1,0 +1,2 @@
+.workspace { width: 100%; min-height: calc(100dvh - 110px); border: 0; background: var(--bg); }
+.unavailable { display: grid; gap: 16px; justify-items: start; }

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" data-ats="workday" data-page-type="account" data-fixture-page-id="fixture-account" data-hunt-page-id="page-account">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic account access</title>
+  <style>body{font:16px system-ui;margin:2rem auto;max-width:48rem}button{padding:.6rem 1rem}</style>
+</head>
+<body>
+  <main>
+    <h1>Account access</h1>
+    <p>This controlled journey uses a synthetic local session.</p>
+    <form action="/profile" method="get"><button type="submit" data-action="next" data-hunt-target-token="target-next-account">Continue</button></form>
+  </main>
+</body>
+</html>

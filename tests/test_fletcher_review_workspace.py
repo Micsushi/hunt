@@ -333,7 +333,7 @@ def test_compile_failure_does_not_promote_missing_revision(tmp_path, monkeypatch
     assert artifact_path_for_review(review_id, "no_summary", "pdf") == attempt_dir / "output.pdf"
 
 
-def test_review_mutations_are_serialized_per_review(tmp_path, monkeypatch):
+def test_review_compile_rejects_an_intervening_saved_edit(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime"
     monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
     attempt_dir = runtime / "ad_hoc" / "serialized"
@@ -385,12 +385,18 @@ def test_review_mutations_are_serialized_per_review(tmp_path, monkeypatch):
         assert compile_started.wait(2)
         save_future = executor.submit(save_after_compile)
         assert save_started.wait(2)
-        assert not save_finished.wait(0.05)
+        assert save_finished.wait(2)
         release_compile.set()
-        compiled = compile_future.result(timeout=2)
+        with pytest.raises(ValueError, match="Resume changed during compilation"):
+            compile_future.result(timeout=2)
         saved = save_future.result(timeout=2)
 
-    assert compiled.versions[ResumeReviewVersionName.NO_SUMMARY].compiled_revision == 1
+    assert (
+        load_review_package(review_id)
+        .versions[ResumeReviewVersionName.NO_SUMMARY]
+        .compiled_revision
+        == 0
+    )
     assert saved.versions[ResumeReviewVersionName.NO_SUMMARY].document_revision == 1
     final = load_review_package(review_id)
     final_version = final.versions[ResumeReviewVersionName.NO_SUMMARY]
@@ -615,3 +621,208 @@ def test_attempt_dirs_are_unique_for_same_label(monkeypatch, tmp_path):
     second = build_attempt_dir(job_id=None, role_family="ad_hoc", ad_hoc_label="same")
     assert first != second
     assert first.parent == second.parent
+
+
+def test_successful_recompile_selects_the_new_revision(tmp_path, monkeypatch):
+    import sqlite3
+
+    from fletcher.resume import review_store
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(runtime))
+    attempt = runtime / "synthetic-recompile"
+    previous = attempt / "versions" / "no_summary" / "revisions" / "0001"
+    previous.mkdir(parents=True)
+    for suffix in ("pdf", "tex"):
+        (previous / f"output.{suffix}").write_text("previous", encoding="utf-8")
+    doc = _doc()
+    doc.header.name = "Synthetic Candidate"
+    rid = build_review_id(attempt)
+    write_review_package(
+        attempt,
+        ResumeReviewPackage(
+            review_id=rid,
+            job=ResumeReviewJobInfo(job_id=7),
+            log_url="/synthetic-log",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    compiled_revision=1,
+                    pdf_url="/synthetic.pdf",
+                    tex_url="/synthetic.tex",
+                )
+            },
+        ),
+    )
+    db = tmp_path / "selection.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE jobs (id INTEGER PRIMARY KEY, selected_resume_pdf_path TEXT, "
+            "selected_resume_tex_path TEXT, selected_resume_selected_at TEXT, "
+            "selected_resume_ready_for_c3 INTEGER)"
+        )
+        conn.execute("INSERT INTO jobs (id) VALUES (7)")
+    monkeypatch.setattr(review_store, "get_connection", lambda _: sqlite3.connect(db))
+
+    def compile_fixture(path):
+        path.with_suffix(".pdf").write_bytes(b"%PDF synthetic new revision")
+        return {"compile_status": "ok"}
+
+    monkeypatch.setattr(review_store, "compile_tex", compile_fixture)
+    result = compile_current_document(rid, "no_summary")
+    assert result.versions[ResumeReviewVersionName.NO_SUMMARY].compiled_revision == 2
+    with sqlite3.connect(db) as conn:
+        selected = conn.execute(
+            "SELECT selected_resume_pdf_path, selected_resume_tex_path, "
+            "selected_resume_ready_for_c3 FROM jobs WHERE id = 7"
+        ).fetchone()
+    expected = attempt / "versions" / "no_summary" / "revisions" / "0002"
+    assert selected == (str(expected / "output.pdf"), str(expected / "output.tex"), 1)
+
+
+def test_compile_completion_preserves_newer_saved_edit(tmp_path, monkeypatch):
+    import pytest
+
+    from fletcher.resume import review_store
+
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(tmp_path))
+    attempt = tmp_path / "synthetic-stale"
+    doc = _doc()
+    doc.header.name = "Synthetic Candidate"
+    rid = build_review_id(attempt)
+    write_review_package(
+        attempt,
+        ResumeReviewPackage(
+            review_id=rid,
+            log_url="/synthetic",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/old.pdf",
+                    tex_url="/old.tex",
+                )
+            },
+        ),
+    )
+    promoted = []
+    monkeypatch.setattr(
+        review_store, "_update_job_selected_resume", lambda *args: promoted.append(args)
+    )
+
+    def compile_with_interleaved_save(path):
+        edited = _doc()
+        edited.summary = "Newer saved edit"
+        review_store.save_current_document(rid, "no_summary", edited)
+        path.with_suffix(".pdf").write_bytes(b"%PDF obsolete")
+        return {"compile_status": "ok"}
+
+    monkeypatch.setattr(review_store, "compile_tex", compile_with_interleaved_save)
+    with pytest.raises(ValueError, match="changed during compilation"):
+        compile_current_document(rid, "no_summary")
+    saved = review_store.load_review_package(rid).versions[ResumeReviewVersionName.NO_SUMMARY]
+    assert saved.current.summary == "Newer saved edit"
+    assert saved.dirty and saved.compiled_revision == 0
+    assert not promoted
+
+
+def test_compile_rejects_edit_then_revert_even_when_content_matches(tmp_path, monkeypatch):
+    import pytest
+
+    from fletcher.resume import review_store
+
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(tmp_path))
+    attempt = tmp_path / "synthetic-aba"
+    doc = _doc()
+    rid = build_review_id(attempt)
+    write_review_package(
+        attempt,
+        ResumeReviewPackage(
+            review_id=rid,
+            log_url="/synthetic",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/old.pdf",
+                    tex_url="/old.tex",
+                )
+            },
+        ),
+    )
+
+    def interleave(path):
+        review_store.save_current_document(rid, "no_summary", doc)
+        review_store.save_current_document(rid, "no_summary", doc)
+        path.with_suffix(".pdf").write_bytes(b"%PDF obsolete")
+        return {"compile_status": "ok"}
+
+    monkeypatch.setattr(review_store, "compile_tex", interleave)
+    with pytest.raises(ValueError, match="changed during compilation"):
+        compile_current_document(rid, "no_summary")
+    assert (
+        review_store.load_review_package(rid)
+        .versions[ResumeReviewVersionName.NO_SUMMARY]
+        .edit_revision
+        == 2
+    )
+
+
+def test_overlapping_compiles_publish_only_one_isolated_revision(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from fletcher.resume import review_store
+
+    monkeypatch.setenv("HUNT_RESUME_ARTIFACTS_DIR", str(tmp_path))
+    attempt = tmp_path / "synthetic-overlap"
+    doc = _doc()
+    rid = build_review_id(attempt)
+    write_review_package(
+        attempt,
+        ResumeReviewPackage(
+            review_id=rid,
+            log_url="/synthetic",
+            versions={
+                ResumeReviewVersionName.NO_SUMMARY: ResumeReviewVersion(
+                    original=doc,
+                    generated=doc,
+                    current=doc,
+                    pdf_url="/old.pdf",
+                    tex_url="/old.tex",
+                )
+            },
+        ),
+    )
+    barrier = Barrier(2)
+    paths = []
+
+    def compile_fixture(path):
+        paths.append(path)
+        path.with_suffix(".pdf").write_bytes(b"%PDF synthetic")
+        barrier.wait(timeout=5)
+        return {"compile_status": "ok"}
+
+    def run():
+        try:
+            compile_current_document(rid, "no_summary")
+            return "published"
+        except ValueError as exc:
+            assert "changed during compilation" in str(exc)
+            return "stale"
+
+    monkeypatch.setattr(review_store, "compile_tex", compile_fixture)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda _: run(), range(2))) == ["published", "stale"]
+    assert paths[0] != paths[1]
+    assert (
+        review_store.load_review_package(rid)
+        .versions[ResumeReviewVersionName.NO_SUMMARY]
+        .compiled_revision
+        == 1
+    )
+    assert not list(attempt.rglob(".compile-*"))

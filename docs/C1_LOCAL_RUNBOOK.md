@@ -619,3 +619,12 @@ no certificate check is disabled, and no missing date or posting is invented.
 Follow the [ordered C1 testing walkthrough](C1_TESTING_GUIDE.md). It explains the
 new features, exact controls to use, expected results, restoration steps and known
 source limits. Start with read-only checks before changing the live search profile.
+## Reading search coverage
+
+Overview separates saved-job totals from the latest recorded C1 search outcome.
+Missing or older records without query counts show unknown coverage. Failed,
+partially successful, successful-empty and successful searches remain distinct.
+A successful query cannot erase a failure from another query for the same source;
+successful leads are still saved. Other discovery tools and the spreadsheet
+automation are not verified by this C1 status. A failed refresh preserves cached
+results with a warning and an explicit retry.

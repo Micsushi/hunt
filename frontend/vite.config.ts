@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
+        '/api/c3': { target: backendUrl, changeOrigin: false },
         // Forward backend calls to FastAPI during non-mock local dev.
         '/api': { target: backendUrl, changeOrigin: true },
         '/auth': { target: backendUrl, changeOrigin: true },

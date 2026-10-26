@@ -7,6 +7,8 @@ import {
   clearGeneratedResumes,
   deleteFletcherJob,
   enqueueFletcherJob,
+  findFletcherEnqueue,
+  FletcherEnqueueUnconfirmedError,
   fetchFletcherJobs,
   fetchC2Status,
   moveFletcherJob,
@@ -21,6 +23,8 @@ import {
 } from './persistedResumeFile'
 import type { FletcherQueueItem } from './review/types'
 
+const FLETCHER_UNCONFIRMED_KEY = 'hunt.fletcher.unconfirmedEnqueues'
+const FLETCHER_CLEANUP_PENDING_KEY = 'hunt.fletcher.cleanupPending'
 const FLETCHER_FORM_STORAGE_KEY = 'hunt.fletcher.optionBForm'
 const FLETCHER_JOB_ID_STORAGE_KEY = 'hunt.fletcher.optionAJobId'
 const FLETCHER_DISPLAY_PROGRESS_STORAGE_KEY = 'hunt.fletcher.displayedProgress'
@@ -53,6 +57,27 @@ function readStoredText(key: string): string {
     return localStorage.getItem(key) ?? ''
   } catch {
     return ''
+  }
+}
+
+type UnconfirmedEnqueue = {
+  requestId: string
+  label: string
+  jobId?: number
+  description?: string
+  resumeFilename?: string
+}
+
+function readUnconfirmedEnqueues(): UnconfirmedEnqueue[] {
+  try {
+    const saved = JSON.parse(readStoredText(FLETCHER_UNCONFIRMED_KEY) || '[]')
+    return Array.isArray(saved)
+      ? saved.filter(
+          (item) => typeof item?.requestId === 'string' && typeof item?.label === 'string',
+        )
+      : []
+  } catch {
+    return []
   }
 }
 
@@ -240,6 +265,49 @@ export function FletcherPage() {
   const [inputMode, setInputMode] = useState<'upload' | 'saved'>('upload')
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
+  const refreshRunsButton = useRef<HTMLButtonElement>(null)
+  const [unconfirmedEnqueues, setUnconfirmedEnqueues] = useState(readUnconfirmedEnqueues)
+  useEffect(() => {
+    try {
+      localStorage.setItem(FLETCHER_UNCONFIRMED_KEY, JSON.stringify(unconfirmedEnqueues))
+    } catch {
+      // Keep the current page's recovery actions when storage is unavailable.
+    }
+  }, [unconfirmedEnqueues])
+
+  function rememberUnconfirmed(error: unknown, input: Omit<UnconfirmedEnqueue, 'requestId'>) {
+    if (error instanceof FletcherEnqueueUnconfirmedError) {
+      setUnconfirmedEnqueues((current) => [...current, { ...input, requestId: error.requestId }])
+    }
+    showToast(error instanceof Error ? error.message : 'Queue failed', 'error')
+  }
+
+  const checkEnqueue = useMutation({
+    mutationFn: (item: UnconfirmedEnqueue) => findFletcherEnqueue(item.requestId),
+    onSuccess: (saved, item) => {
+      if (!saved) {
+        showToast(
+          'No exact match was found in recent runs. This does not prove the request failed. Check again before queueing another run.',
+          'error',
+        )
+        return
+      }
+      qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
+        upsertFletcherJob(cache, saved),
+      )
+      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
+      setUnconfirmedEnqueues((current) =>
+        current.filter((entry) => entry.requestId !== item.requestId),
+      )
+      showToast(`Saved run found. Its status is ${saved.status.replace(/_/g, ' ')}.`)
+    },
+    onError: () =>
+      showToast('Could not check saved runs. Your request is still unconfirmed.', 'error'),
+    onSettled: () =>
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) refreshRunsButton.current?.focus()
+      }),
+  })
 
   const [jobDetails, setJobDetails] = useState(() => readStoredOptionBForm().jobDetails)
   const resumeFile = useUiStore((s) => s.fletcherResumeFile)
@@ -259,11 +327,12 @@ export function FletcherPage() {
     retry: false,
   })
 
-  const { data: queueData } = useQuery({
+  const queue = useQuery({
     queryKey: ['fletcher-jobs', 100],
     queryFn: () => fetchFletcherJobs(100),
     refetchInterval: fletcherQueueRefetchInterval,
   })
+  const queueData = queue.data
 
   useEffect(() => {
     try {
@@ -317,20 +386,34 @@ export function FletcherPage() {
       )
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
+    onError: (e, id) => rememberUnconfirmed(e, { jobId: id, label: `Job ${id}` }),
   })
 
+  const enqueuePending = useRef(false)
   const enqueue = useMutation({
-    mutationFn: () => enqueueFletcherJob({ description: jobDetails, resume: resumeFile }),
-    onSuccess: (res) => {
+    mutationFn: (input: { description: string; resume: File }) => enqueueFletcherJob(input),
+    onSuccess: (res, submitted) => {
       showToast('Fletcher job queued')
-      setJobDetails('')
+      setJobDetails((current) =>
+        current === submitted.description &&
+        useUiStore.getState().fletcherResumeFile === submitted.resume
+          ? ''
+          : current,
+      )
       qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
         upsertFletcherJob(cache, res),
       )
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Queue failed', 'error'),
+    onError: (e, submitted) =>
+      rememberUnconfirmed(e, {
+        description: submitted.description.trim(),
+        resumeFilename: submitted.resume.name,
+        label: `${submitted.description.trim().split('\n')[0].slice(0, 90)}: ${submitted.resume.name}`,
+      }),
+    onSettled: () => {
+      enqueuePending.current = false
+    },
   })
 
   const moveJob = useMutation({
@@ -371,10 +454,18 @@ export function FletcherPage() {
       showToast('Job ID required', 'error')
       return
     }
+    if (
+      unconfirmedEnqueues.some((item) => item.jobId === id) &&
+      !window.confirm(
+        'An earlier request for this job is unconfirmed. Creating another run may duplicate it. Create another anyway?',
+      )
+    )
+      return
     generate.mutate(id)
   }
 
   function submitTailor() {
+    if (enqueuePending.current) return
     if (!jobDetails.trim()) {
       showToast('Job details required', 'error')
       return
@@ -383,7 +474,17 @@ export function FletcherPage() {
       showToast('Resume file required', 'error')
       return
     }
-    enqueue.mutate()
+    if (
+      unconfirmedEnqueues.some(
+        (item) => item.description === jobDetails.trim() && item.resumeFilename === resumeFile.name,
+      ) &&
+      !window.confirm(
+        'An earlier request with these job details and filename is unconfirmed. Creating another run may duplicate it. Create another anyway?',
+      )
+    )
+      return
+    enqueuePending.current = true
+    enqueue.mutate({ description: jobDetails, resume: resumeFile })
   }
 
   const serviceOnline = !statusError && !!statusData
@@ -393,15 +494,12 @@ export function FletcherPage() {
   const matchingActiveJob = activeFletcherJobs.find(
     (job) => (job.input.description || '').trim() === jobDetails.trim(),
   )
-  const optionBSubmitDisabled =
-    enqueue.isPending || !!matchingActiveJob || !resumeFile || !jobDetails.trim()
+  const optionBSubmitDisabled = enqueue.isPending || !resumeFile || !jobDetails.trim()
   const optionBSubmitText = enqueue.isPending
     ? 'Queueing...'
-    : matchingActiveJob?.status === 'running'
-      ? 'Resume run in progress'
-      : matchingActiveJob
-        ? 'Resume run queued'
-        : 'Tailor resume'
+    : matchingActiveJob
+      ? 'Queue another resume run'
+      : 'Queue resume run'
 
   return (
     <div className={styles.page}>
@@ -516,7 +614,10 @@ export function FletcherPage() {
               </button>
             </ResumeCheck>
             {matchingActiveJob ? (
-              <div className={styles.activeRunNotice}>This job is already in the queue.</div>
+              <div className={styles.activeRunNotice}>
+                This description already has a background run. Queueing again creates a separate run
+                with the currently selected resume. Open the existing run from the queue below.
+              </div>
             ) : activeFletcherJobs.length ? (
               <div className={styles.activeRunNotice}>
                 {activeFletcherJobs.length} active run{activeFletcherJobs.length === 1 ? '' : 's'}.
@@ -525,11 +626,56 @@ export function FletcherPage() {
           </div>
         </div>
       </section>
-      <FletcherQueuePanel
-        jobs={queueData?.jobs || []}
-        onMove={(id, direction) => moveJob.mutate({ id, direction })}
-        onCancel={(id) => cancelJob.mutate(id)}
-      />
+      {unconfirmedEnqueues.length > 0 && (
+        <section className={styles.queuePanel} aria-label="Unconfirmed resume requests">
+          <h2 className={styles.workflowTitle}>Check saved resume runs</h2>
+          <p role="alert">These requests may have been saved. Check before queueing them again.</p>
+          <ul className={styles.formGrid}>
+            {unconfirmedEnqueues.map((item) => (
+              <li key={item.requestId}>
+                <p style={{ overflowWrap: 'anywhere' }}>{item.label}</p>
+                <button
+                  className={styles.btn}
+                  disabled={checkEnqueue.isPending}
+                  onClick={() => checkEnqueue.mutate(item)}
+                >
+                  {checkEnqueue.isPending && checkEnqueue.variables?.requestId === item.requestId
+                    ? 'Checking saved request...'
+                    : 'Check saved request'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <div className={styles.queueHeader}>
+        <p role={queue.isError ? 'alert' : 'status'}>
+          {queue.isError
+            ? queueData
+              ? 'Could not refresh resume runs. Showing last loaded runs.'
+              : 'Could not load resume runs.'
+            : queue.isFetching
+              ? 'Loading resume runs…'
+              : ''}
+        </p>
+        <button
+          className={styles.btn}
+          ref={refreshRunsButton}
+          aria-disabled={queue.isFetching}
+          onClick={() => {
+            if (!queue.isFetching) void queue.refetch({ cancelRefetch: false })
+          }}
+        >
+          {queue.isError ? 'Retry resume runs' : 'Refresh resume runs'}
+        </button>
+      </div>
+      {queueData && (
+        <FletcherQueuePanel
+          jobs={queueData.jobs}
+          onMove={(id, direction) => moveJob.mutate({ id, direction })}
+          onCancel={(id) => cancelJob.mutate(id)}
+        />
+      )}
     </div>
   )
 }
@@ -602,8 +748,22 @@ function FletcherQueuePanel({
         .sort((a, b) => runTimeMillis(b.finished_at) - runTimeMillis(a.finished_at)),
     [historyBlockedJobIds, jobs],
   )
+  const [cleanupPending, updateCleanupPending] = useState(
+    () => readStoredText(FLETCHER_CLEANUP_PENDING_KEY) === 'true',
+  )
+  function rememberCleanupPending(pending: boolean) {
+    updateCleanupPending(pending)
+    try {
+      localStorage.setItem(FLETCHER_CLEANUP_PENDING_KEY, String(pending))
+    } catch {
+      // Keep the warning visible even when browser storage is unavailable.
+    }
+  }
   const [historySearch, setHistorySearch] = useState('')
   const [detailJob, setDetailJob] = useState<FletcherQueueItem | null>(null)
+  const currentDetailJob = jobs.find((job) => job.queue_item_id === detailJob?.queue_item_id)
+  const historyHeading = useRef<HTMLHeadingElement>(null)
+  const cleanupButton = useRef<HTMLButtonElement>(null)
   const [selectedActiveIds, setSelectedActiveIds] = useState<string[]>([])
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([])
   const [batchOptionsOpen, setBatchOptionsOpen] = useState(false)
@@ -634,38 +794,80 @@ function FletcherQueuePanel({
     activeJobs.length > 0 && activeJobs.every((job) => selectedActiveIdSet.has(job.queue_item_id))
   const deleteHistory = useMutation({
     mutationFn: async (queueItemIds: string[]) => {
-      await Promise.all(queueItemIds.map((id) => deleteFletcherJob(id)))
-      return queueItemIds
+      const results = await Promise.allSettled(queueItemIds.map((id) => deleteFletcherJob(id)))
+      return {
+        deleted: queueItemIds.filter((_, index) => results[index].status === 'fulfilled'),
+        failed: results.flatMap((result, index) => {
+          if (result.status === 'fulfilled') return []
+          const job = jobs.find((item) => item.queue_item_id === queueItemIds[index])
+          return [
+            {
+              id: queueItemIds[index],
+              title: job ? fletcherTitle(job) : 'Run unavailable',
+              message:
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : 'Deletion could not be confirmed.',
+            },
+          ]
+        }),
+      }
     },
-    onSuccess: (queueItemIds) => {
+    onSuccess: async ({ deleted: queueItemIds }) => {
+      await qc.cancelQueries({ queryKey: ['fletcher-jobs'] })
+      qc.setQueriesData<FletcherJobsCache>({ queryKey: ['fletcher-jobs'] }, (cache) =>
+        cache
+          ? { jobs: cache.jobs.filter((job) => !queueItemIds.includes(job.queue_item_id)) }
+          : cache,
+      )
       setSelectedHistoryIds((current) => current.filter((id) => !queueItemIds.includes(id)))
       setDetailJob((current) =>
         current && queueItemIds.includes(current.queue_item_id) ? null : current,
       )
-      qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
-      showToast(
-        `${queueItemIds.length} Fletcher histor${queueItemIds.length === 1 ? 'y entry' : 'y entries'} deleted`,
-      )
+      await qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     },
     onError: (e) =>
       showToast(e instanceof Error ? e.message : 'Delete Fletcher history failed', 'error'),
+    onSettled: () =>
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) historyHeading.current?.focus()
+      }),
   })
   const clearResumes = useMutation({
-    mutationFn: () => clearGeneratedResumes({ includeAdHoc: false, deleteArtifacts: true }),
-    onSuccess: (result) => {
-      setSelectedHistoryIds([])
-      setDetailJob(null)
+    mutationFn: (retryOnly: boolean) =>
+      clearGeneratedResumes({ includeAdHoc: false, deleteArtifacts: true, retryOnly }),
+    onMutate: () => rememberCleanupPending(true),
+    onSuccess: (result, retryOnly) => {
+      if (!retryOnly) {
+        setSelectedHistoryIds([])
+        setDetailJob(null)
+      }
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
-      showToast(
-        `Cleared ${result.resume_attempts_deleted} resume attempt${
-          result.resume_attempts_deleted === 1 ? '' : 's'
-        } and ${result.fletcher_jobs_deleted} history run${
-          result.fletcher_jobs_deleted === 1 ? '' : 's'
-        }`,
-      )
+      const incomplete = result.artifact_errors.length > 0
+      rememberCleanupPending(incomplete)
+      if (incomplete) {
+        showToast('Some saved files could not be removed. Retry file cleanup.', 'error')
+      } else {
+        showToast(
+          retryOnly
+            ? 'File cleanup complete.'
+            : `Cleared ${result.resume_attempts_deleted} resume attempt${
+                result.resume_attempts_deleted === 1 ? '' : 's'
+              } and ${result.fletcher_jobs_deleted} history run${
+                result.fletcher_jobs_deleted === 1 ? '' : 's'
+              }`,
+        )
+      }
     },
     onError: (e) =>
-      showToast(e instanceof Error ? e.message : 'Clear generated resumes failed', 'error'),
+      showToast(
+        e instanceof Error ? e.message : 'File cleanup could not be confirmed. Retry cleanup.',
+        'error',
+      ),
+    onSettled: () =>
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) cleanupButton.current?.focus()
+      }),
   })
   const cancelActive = useMutation({
     mutationFn: (queueItemIds: string[]) => cancelFletcherJobs(queueItemIds),
@@ -904,14 +1106,18 @@ function FletcherQueuePanel({
   }
 
   function clearGeneratedJobResumes() {
+    if (cleanupPending) {
+      clearResumes.mutate(true)
+      return
+    }
     if (
       !window.confirm(
-        'Clear all generated job resumes and Fletcher history for job-linked runs? Active runs will be skipped.',
+        'Permanently clear all generated job resumes and their Fletcher history? This cannot be undone. Active preparation must finish or be cancelled first.',
       )
     ) {
       return
     }
-    clearResumes.mutate()
+    clearResumes.mutate(false)
   }
 
   return (
@@ -1065,19 +1271,58 @@ function FletcherQueuePanel({
       <section className={styles.queuePanel}>
         <div className={styles.queueHeader}>
           <div>
-            <h2 className={styles.workflowTitle}>History</h2>
+            <h2 ref={historyHeading} tabIndex={-1} className={styles.workflowTitle}>
+              Fletcher history
+            </h2>
+            <div className={styles.workflowDesc}>
+              Previous Option B runs are stored in the Hunt DB for this project.
+            </div>
           </div>
           <span className={styles.meta}>
             {historyJobs.length} previous run{historyJobs.length === 1 ? '' : 's'}
           </span>
           <button
             className={`${styles.btn} ${styles.btnDanger}`}
-            disabled={clearResumes.isPending}
+            ref={cleanupButton}
+            disabled={clearResumes.isPending || deleteHistory.isPending}
             onClick={clearGeneratedJobResumes}
           >
-            {clearResumes.isPending ? 'Clearing...' : 'Clear generated resumes'}
+            {clearResumes.isPending
+              ? 'Clearing...'
+              : cleanupPending
+                ? 'Retry file cleanup'
+                : 'Clear generated resumes'}
           </button>
         </div>
+        {cleanupPending && !clearResumes.isPending && (
+          <p role="alert">
+            File cleanup has not been confirmed. Retry file cleanup to finish your earlier request.
+            New resumes will be kept.
+          </p>
+        )}
+        {deleteHistory.data && !deleteHistory.isPending && (
+          <div role={deleteHistory.data.failed.length ? 'alert' : 'status'}>
+            <p>
+              {deleteHistory.data.deleted.length} deleted; {deleteHistory.data.failed.length} could
+              not be deleted.
+            </p>
+            {deleteHistory.data.failed.length > 0 && (
+              <>
+                <p>
+                  Check the remaining runs before retrying. A failed request may still have reached
+                  the service.
+                </p>
+                <ul>
+                  {deleteHistory.data.failed.map((item) => (
+                    <li key={item.id}>
+                      {item.title}: {item.message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
         {historyJobs.length ? (
           <>
             <div className={styles.historyFilterBar}>
@@ -1112,7 +1357,11 @@ function FletcherQueuePanel({
               </button>
               <button
                 className={`${styles.btn} ${styles.btnDanger}`}
-                disabled={!selectedHistoryIdsInView.length || deleteHistory.isPending}
+                disabled={
+                  !selectedHistoryIdsInView.length ||
+                  deleteHistory.isPending ||
+                  clearResumes.isPending
+                }
                 onClick={deleteSelectedHistory}
               >
                 {deleteHistory.isPending ? 'Deleting...' : 'Delete selected'}
@@ -1225,7 +1474,7 @@ function FletcherQueuePanel({
                     </a>
                     <button
                       className={`${styles.btn} ${styles.btnDanger}`}
-                      disabled={deleteHistory.isPending}
+                      disabled={deleteHistory.isPending || clearResumes.isPending}
                       onClick={() => deleteOneHistory(job.queue_item_id, title)}
                     >
                       Delete
@@ -1259,16 +1508,16 @@ function FletcherQueuePanel({
           )}
         </div>
       </section>
-      {detailJob ? (
+      {currentDetailJob ? (
         <FletcherJobDetailModal
-          job={detailJob}
+          job={currentDetailJob}
           onClose={() => setDetailJob(null)}
           onMove={onMove}
           onCancel={onCancel}
           onDelete={(jobToDelete) =>
             deleteOneHistory(jobToDelete.queue_item_id, fletcherTitle(jobToDelete))
           }
-          deletePending={deleteHistory.isPending}
+          deletePending={deleteHistory.isPending || clearResumes.isPending}
         />
       ) : null}
     </>
@@ -1290,6 +1539,18 @@ function FletcherJobDetailModal({
   onDelete: (job: FletcherQueueItem) => void
   deletePending: boolean
 }) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = dialogRef.current
+    const opener = document.activeElement as HTMLElement | null
+    dialog?.showModal()
+    return () => {
+      const restoreFocus =
+        document.activeElement === document.body || dialog?.contains(document.activeElement)
+      dialog?.close()
+      if (restoreFocus && opener?.isConnected) opener.focus()
+    }
+  }, [])
   const title = fletcherTitle(job)
   const reviewId = job.result.review_id
   const startingPdfUrl = reviewId ? `/api/fletcher/reviews/${reviewId}/versions/starting/pdf` : null
@@ -1310,14 +1571,16 @@ function FletcherJobDetailModal({
   const progressPercent = fletcherProgressPercent(job)
 
   return (
-    <div className={styles.modalBackdrop} role="presentation" onClick={onClose}>
-      <section
-        className={styles.detailModal}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="fletcher-job-detail-title"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <dialog
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      className={styles.modalBackdrop}
+      aria-labelledby="fletcher-job-detail-title"
+      onCancel={onClose}
+      onClick={onClose}
+    >
+      <section className={styles.detailModal} onClick={(e) => e.stopPropagation()}>
         <div className={styles.detailHeader}>
           <div className={styles.detailHeaderCopy}>
             <div className={styles.workflowLabel}>{fletcherSourceLabel(job)}</div>
@@ -1455,6 +1718,6 @@ function FletcherJobDetailModal({
           </div>
         </div>
       </section>
-    </div>
+    </dialog>
   )
 }

@@ -8,6 +8,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public data?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -22,15 +23,17 @@ async function handleResponse<T>(res: Response): Promise<T> {
   }
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
+    let data: unknown
     try {
       const body = await res.json()
+      data = body
       if (typeof body.detail === 'string') detail = body.detail
       else if (body.detail) detail = JSON.stringify(body.detail)
       else if (body.error) detail = body.error
     } catch {
       // ignore parse errors
     }
-    throw new ApiError(res.status, detail)
+    throw new ApiError(res.status, detail, data)
   }
   // 204 No Content
   if (res.status === 204) return undefined as T

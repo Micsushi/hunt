@@ -1,0 +1,69 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import test from "node:test";
+
+const expected = {
+  schemaVersion: 1,
+  stage: "s2",
+  feature: "s2-f2-t3",
+  assemblyBaseRevision: "16c48bd1470addc9d9480d785ae84e412edd55ef",
+  acceptedInputs: {
+    s2F0: "730846b57a8ab7901a9818794921f8f9da01e0ed",
+    s2F1T5: "d6602abf41f181376164eac2d32d587fc6bf5a5b",
+    s2F2T1: "1493a1dcf26bc53666d47385a5b4984dc842b026",
+    s2F2T2Atomic: "523c3d78131a13692e3ba6c3e0afb3c7734ed2d2",
+    s2F2IntegratedPrerequisites: "7479b9fc89bc7853ab8a19b3f1096854d3fb2baf",
+    s2F2AtomicNavigator: "92803a501d1245fa900046bcc4a862967c994db4",
+    s2F2BrowserNavigation: "c3a05fb444b030b832c2b9a40270956439ab4867",
+    s2F2AccountLifecycle: "17a04ce0f3abf205b841926e7a449d4f6fa32f8a",
+    s2F2AcceptanceBoundary: "9148ea427434ee1bd4608443c95f43c930f345ae",
+    s2F2ProductionComposition: "0e2404b03c6b01d6f76e1186b96ae0db50ab047a",
+    s2F2LifecycleOwnership: "bc56b99249410754ca8a9d0bc9c15b5c397b0a5f",
+    s2F0FrozenTreeRepair: "cc0965f9ad23a1f1571f0980399a84eeabead46f",
+    s2F2ReviewResponseBound: "c56f49d063d62bedbab1801a4cd0a9d11912e752",
+    s2F2ReviewPagination: "92610535ec3e111f12405432d73843dddab6f154",
+    s2F2ReviewOauthReconciliation: "91a9eb28e43b2e97732604ed06f984fae6e157f3",
+    s2F2ReviewLiveExpiry: "ac925c4b8c76e5f2e3f59d9ed4de627372e79fee",
+    s2F2ReviewGrantLookup: "816f5126922208b3c27395f63adc20dfdba444d8",
+    s2F2ReviewRevocationAdmission: "fc1415cd8749c526fa053c6c3b1a418821245495",
+    s2F2ReviewTypeNarrowing: "c5fa00156f282487fefa6dc8adfde5d8a75a1c91",
+    s2F2GoogleRefreshExpiry: "c33d9249ea88bcf22727e57045d52675d011138c",
+    s2F2MailboxPolling: "6f24fa1fff27b06d74030ef6e8f64ca1ef79a451",
+    s2F2AccountReuseLoginFirst: "b3cbbe5af4a5b12354544b5d82735cdf70985547",
+    s2F2AccountExistencePrivacy: "834e40cc4d44440f67a974bf9860a4be89266dd3",
+    s2F2AccountOwnershipRepair: "6c6263da88c60711b0bc9d6c4761bb90381edf5f",
+    s2F2AccountComposition: "ade576baa49568299e95f5505eed7420a09c7e2b",
+    s2F2PollingOwnership: "c8bc005338942d414bb41b00c6c4b13cb6550895",
+    s2F2HelperPhaseClassification: "949c2cb9e346bb98ff376f0d81eb8bdac699adb8",
+    s2F2WindowsHelperLaunch: "a9a1854ff6ce840f253e2fb64926c59b7a2ed239",
+    s2F2RunbookReconciliation: "8b7e4cc132dee3fff06bddaf411bdafe3bdfb205",
+    s2F2SubmitSettlement: "15aaf41cf70c167e4937fb2f0cf7c6620e1b195e",
+    s2F2LiveInspectionHold: "ebaf396b497afb0b446e1f2cc726c7bfba77d512",
+    s2F2LiveVerificationAlert: "4e8243a770898aad77be62e626b1393f936df92d",
+    s2F2VerificationContinuation: "b5ea86563d34e1e9d8412823bbc203c33460f630",
+    s2F0VerificationMailboxJourneyBinding: "6dde499f0e5a82047c8ce6fbbf5cc87b5de3dd47",
+    s2F2VerificationMailboxAdmission: "3c6b8c9323af5a76ef1b8040eafd5647ede512b5",
+    s2F0AccountSubmitDiagnosticAndFreshCreate: "4962e5c85ee4b664e623b32d67cbaa5a2f7f677b",
+    s2F2MaintenanceReplayStorageIntegration: "16c48bd1470addc9d9480d785ae84e412edd55ef",
+  },
+  frozenContractRevision: "16c48bd1470addc9d9480d785ae84e412edd55ef",
+  frozenContractTree: "d9643fcac18a79d9506e68cbeebb1ba200809e64",
+};
+
+test("S2-F2-T3 manifest pins the exact accepted non-self-referential assembly", () => {
+  const value = JSON.parse(readFileSync(resolve("docs/s2-integration-manifest.json"), "utf8"));
+  assert.deepEqual(value, expected);
+  for (const revision of Object.values(expected.acceptedInputs)) {
+    execFileSync("git", ["merge-base", "--is-ancestor", revision, expected.assemblyBaseRevision]);
+  }
+  assert.equal(
+    execFileSync(
+      "git",
+      ["rev-parse", `${expected.frozenContractRevision}^{tree}`],
+      { encoding: "utf8" },
+    ).trim(),
+    expected.frozenContractTree,
+  );
+});

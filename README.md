@@ -4,20 +4,21 @@ Putting in the Work so it is less Work for you to apply for Work
 
 Automated Hunt runtime. The active runtime scope is **C0 (Frontend)**,
 **C1 (Hunter)** discovery/enrichment, and **C2 (Fletcher)** resume generation.
-**C3 v3 is planned but not implemented. C4 is on hold.**
+This release candidate includes local **C3 v3 (Executioner)** workflows for
+Workday and supported hosted ATS families. C4 remains on hold.
 
 Historical operator confidence snapshot (2026-07-30; not current acceptance):
 
 - **C0**: mostly done
 - **C1 / Hunter**: AI-free scheduled discovery and searchable storage are implemented; source coverage and verification limits are documented in [the C1 runbook](docs/C1_LOCAL_RUNBOOK.md).
 - **C2 / Fletcher**: about 80% done
-- **C3**: v2 removed from `main`; v3 implementation has not started
+- **C3**: retained v3 candidate; Workday preparation reaches Review and never Submit
 - **C4**: paused, excluded from active deployment and runtime paths; its direct
   service, CLI, and worker entrypoints fail closed, with source retained for
   possible reuse
 
-The active path currently ends after C2 resume preparation. C3 v3 will add the
-application journey after its planned stages are implemented.
+The retained candidate connects C1/C2 readiness to C3 preparation while keeping
+the final job Submit action forbidden.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
@@ -114,6 +115,10 @@ cp hunt_user_config.example.json hunt_user_config.json
 - `sites` : boards to scrape (`indeed`, `linkedin`)
 - `run_interval_seconds` : time between scrape cycles (default 600)
 - `hours_old` : job posting lookback window (default 24)
+- `backfill_hours_old` / `backfill_interval_seconds` : rolling 14-day daily pass
+- `public_feed_discovery` : include the deterministic internship/new-grad feeds
+- `company_career_sites` : employer career URLs; Greenhouse, Lever, and Ashby
+  use public APIs and other sites remain visibly queued for review
 - `results_wanted` : max listings per search term (default 500)
 - `enrichment_batch_limit` : rows enriched per cycle (default 25)
 - `enrichment_max_attempts` : retries before marking failed (default 4)
@@ -200,21 +205,21 @@ Repo homes by component:
 - `frontend/` + `backend/` : **C0 (Frontend)** UI and control-plane backend
 - `hunter/` : **C1 (Hunter)** runtime package
 - `fletcher/` : **C2 (Fletcher)** source and contracts
-- `executioner/` : **C3 v3** status only; implementation has not started
+- `executioner/` : **C3 v3** retained implementation and verification suite
 - `coordinator/` : paused C4 source retained for possible reuse
 
 Testing posture by component:
 
 - `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2 services
 - C1/C2: runnable from terminal without C0
-- C3 v3: planned, not runnable
+- C3 v3: runnable retained Workday candidate; final Submit remains forbidden
 - C4: paused and excluded from active component completion
 
 Current local checkpoint for later components:
 
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
-- `executioner/` : **C3 v3** contains only public status and boundaries. The v2
-  runtime is preserved on `codex/c3-v2-backup-20260730`.
+- `executioner/` : **C3 v3** contains the retained Workday implementation. The
+  v2 runtime is preserved on `codex/c3-v2-backup-20260730`.
 - `coordinator/` : **C4 (Coordinator)** source is retained but the component is on hold and has no active deploy, UI, polling, smoke, or worker path.
 
 ## Legacy Helpers

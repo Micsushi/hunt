@@ -62,13 +62,43 @@ class GenerateAdHocRequest(BaseModel):
 
 @app.get("/status", dependencies=[Depends(require_service_token)])
 def get_status():
+    import os
+
+    from fletcher import config
+
     with _generate_lock:
         generate_running = _generate_running
         generate_last_error = _generate_last_error
+    rewrite = config.bullet_rewrite_runtime()
+    environment_overrides = {}
+    for key, suffix in [
+        ("llm_provider", "LLM_PROVIDER"),
+        ("llm_model", "LLM_MODEL"),
+        ("cloud_llm_confirm", "CLOUD_LLM_CONFIRM"),
+    ]:
+        for name in [f"HUNT_C2_{suffix}", f"HUNT_{suffix}"]:
+            if os.getenv(name, "").strip():
+                environment_overrides[key] = name
+                break
     return {
         "service": "c2-fletcher",
         "generate_running": generate_running,
         "generate_last_error": generate_last_error,
+        "runtime_settings": {
+            "values": {
+                "llm_provider": config.resume_llm_provider(),
+                "llm_model": config.resume_llm_model(),
+                "cloud_llm_confirm": str(config.resume_cloud_llm_confirmed()).lower(),
+                "ollama_host": config.ollama_host(),
+                "ollama_model": config.ollama_model_name(),
+                "ollama_timeout_sec": str(config.ollama_timeout_sec()),
+                "ollama_keep_alive": str(config.ollama_keep_alive_payload()),
+                "bullet_rewrite_parallelism": str(rewrite["parallelism"]),
+                "bullet_rewrite_min_available_mb": str(rewrite["min_available_mb"]),
+                "bullet_rewrite_max_memory_pct": str(rewrite["max_memory_pct"]),
+            },
+            "environment_overrides": environment_overrides,
+        },
     }
 
 

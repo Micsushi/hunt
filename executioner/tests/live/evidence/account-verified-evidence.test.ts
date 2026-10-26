@@ -1,0 +1,100 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { writeAccountVerifiedEvidence } from "../../../src/live/evidence/account-verified-evidence.ts";
+
+function packet() {
+  return {
+    schemaVersion: 1 as const,
+    evidenceRevision: "s2-account-verified-acceptance-v2" as const,
+    checkpoint: "account_verified" as const,
+    status: "passed" as const,
+    sourceRevision: "0123456789abcdef0123456789abcdef01234567",
+    revisionId: "revision_abcdefghijklmnop",
+    approvalId: "approval_abcdefghijklmnop",
+    journeyId: "journey_abcdefghijklmnop",
+    targetHandleId: "target_ref_abcdefghijklmnop",
+    accountState: "application_ready" as const,
+    independentlyObservedVerifiedState: true as const,
+    verificationProof: "gmail_candidate_consumed" as const,
+    provider: "gmail-api-v1" as const,
+    consumedCandidateCount: 1 as const,
+    messageBodyRetained: false as const,
+    submitActivated: false as const,
+    privacyScan: "pass" as const,
+    cleanup: "pass" as const,
+  };
+}
+
+test("account-verified evidence writes one exact atomic value-free packet", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-"));
+  try {
+    await writeAccountVerifiedEvidence({ root, acceptance: packet(), sensitiveValues: [] });
+    assert.deepEqual(readdirSync(root), ["acceptance.json"]);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), packet());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("account-verified evidence rejects widened, unverified, and sensitive packets", async () => {
+  const cases = [
+    { ...packet(), independentlyObservedVerifiedState: false },
+    { ...packet(), consumedCandidateCount: 0 },
+    { ...packet(), verificationProof: "credential_sign_in", provider: "gmail-api-v1", consumedCandidateCount: 0 },
+    { ...packet(), submitActivated: true },
+    { ...packet(), rawUrl: "https://private.invalid/token" },
+    { ...packet(), journeyId: "journey_private_account_1234" },
+    { ...packet(), provider: "workday-private-account" },
+  ];
+  for (const value of cases) {
+    const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-denied-"));
+    try {
+      await assert.rejects(
+        writeAccountVerifiedEvidence({
+          root,
+          acceptance: value as never,
+          sensitiveValues: ["https://private.invalid/token", "private_account", "workday"],
+        }),
+      );
+      assert.deepEqual(readdirSync(root), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("account-verified evidence admits the exact credential sign-in proof tuple", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-sign-in-"));
+  try {
+    const acceptance = {
+      ...packet(),
+      verificationProof: "credential_sign_in" as const,
+      provider: "workday-auth" as const,
+      consumedCandidateCount: 0 as const,
+    };
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: ["workday"] });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("account-verified evidence admits the exact observed application-state proof tuple", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-verified-application-state-"));
+  try {
+    const acceptance = {
+      ...packet(),
+      verificationProof: "application_state_observed" as const,
+      provider: "workday-state" as const,
+      consumedCandidateCount: 0 as const,
+    };
+    await writeAccountVerifiedEvidence({ root, acceptance, sensitiveValues: ["workday"] });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "acceptance.json"), "utf8")), acceptance);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

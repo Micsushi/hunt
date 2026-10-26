@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "status": "frozen",
+  "acceptedStage1Base": "87c77e538d8bba378ec93516dbea3f4747beb822",
+  "s2ContractSource": "b3bda9517656f9352cd9fd50cdb1715049b0c378",
+  "s2ContractSourceTree": "e2651d236bf0f2e6c3e73ffd4d1882ee67782886",
+  "contractTreeOids": {
+    "executioner/src/contracts": "d9bc5f9aec6337743296684718dd619db3ae75d1",
+    "executioner/src/contracts/live": "ac3971aae2a1ceb3703b0f8c8f171c884c4059d9",
+    "executioner/src/control/orchestrator/live": "6b38b5dee5a63989719045ef0de22df2a3f50590",
+    "executioner/src/testing/live": "377d167ace83fa4d95798c221f4f776d86f209ac",
+    "executioner/tests/live/contracts": "dfcf85877ebeee1f5201256688691aaba565a1b4",
+    "executioner/tests/live/walking-skeleton": "745b301fcc177e7feeefc1d65eb521a56a3d2292"
+  },
+  "serializedVersions": {
+    "commonWire": {
+      "terminalResult": 4,
+      "mcpResponse": 4,
+      "errorEnvelope": 3,
+      "eventEnvelope": 3,
+      "mcpRequest": 2,
+      "durableJourneyState": 3
+    },
+    "liveContracts": {
+      "targetIdentity": 1,
+      "persistentBrowserSession": 1,
+      "secretHandleMetadata": 1,
+      "mailboxPollResult": 1,
+      "verificationArtifact": 1,
+      "liveCheckpoint": 1,
+      "liveEvidence": 1
+    },
+    "liveClassification": {
+      "atsFamilyClassification": 1,
+      "workdayPageTypeClassification": 1,
+      "uiBehaviorClassification": 1,
+      "questionClassification": 1,
+      "canonicalAnswerTypeClassification": 1,
+      "visibleOptionMapping": 1,
+      "sanitizedStructuralObservation": 1,
+      "sanitizedUnknownCandidate": 1,
+      "reviewedPromotionRecord": 1
+    }
+  },
+  "allowedTargetAdapters": [
+    "windows-dpapi-current-user-v1",
+    "gmail-api-v1"
+  ]
+}

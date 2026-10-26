@@ -6,6 +6,7 @@ Priority chain for all tunables: env var > config file > hardcoded default.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -69,10 +70,14 @@ def load() -> dict[str, Any]:
         return validate(json.loads(path.read_text(encoding="utf-8")))
 
 
+def revision(data: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
 def save(data: dict[str, Any]) -> None:
     path = get_path()
     with _lock:
-        content = json.dumps(validate(data), indent=2, ensure_ascii=False) + "\n"
+        content = json.dumps(validate(data), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
         fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -86,10 +91,12 @@ def save(data: dict[str, Any]) -> None:
                 os.unlink(temporary)
 
 
-def patch(updates: dict[str, Any]) -> dict[str, Any]:
+def patch(updates: dict[str, Any], expected_revision: str | None = None) -> dict[str, Any]:
     """Merge updates into the existing config file and save. Returns the merged config."""
     with _lock:
         current = load()
+        if expected_revision is not None and revision(current) != expected_revision:
+            raise ValueError("C1 settings changed. Reload the saved settings before retrying.")
         current.update(updates)
         save(current)
         return current

@@ -1,4 +1,4 @@
-import { del, get, patch, post } from './client'
+import { ApiError, del, get, patch, post } from './client'
 import { logHumanCommand } from './humanCommandLog'
 import type {
   FletcherQueueItem,
@@ -78,6 +78,38 @@ export function saveSetting(payload: {
     },
   })
   return post('/api/settings', payload)
+}
+
+export interface SettingUpdate {
+  component: ComponentId
+  key: string
+  value: string
+  value_type: string
+  secret: boolean
+  expected: ComponentSetting | null
+}
+
+export function saveSettings(
+  settings: SettingUpdate[],
+): Promise<{ settings: ComponentSetting[]; warnings: string[] }> {
+  void logHumanCommand({
+    action: 'c0.settings.save_batch',
+    buttonId: 'save-component-settings',
+    details: { count: settings.length, keys: settings.map((setting) => setting.key) },
+  })
+  return post('/api/settings/batch', { settings })
+}
+
+export interface C2RuntimeSettings {
+  values: Record<string, string>
+  environment_overrides: Record<string, string>
+}
+
+export async function fetchC2RuntimeSettings(): Promise<C2RuntimeSettings> {
+  const status = await get<{ runtime_settings?: C2RuntimeSettings }>('/api/gateway/c2/status')
+  if (!status.runtime_settings)
+    throw new Error('This C2 service does not report runtime settings yet.')
+  return status.runtime_settings
 }
 
 export function fetchLinkedInAccounts(): Promise<{ accounts: LinkedInAccount[] }> {
@@ -259,7 +291,14 @@ export function tailorResume(params: {
   )
 }
 
-export function enqueueFletcherJob(payload: {
+export class FletcherEnqueueUnconfirmedError extends Error {
+  constructor(public requestId: string) {
+    super('Could not confirm whether the resume run was saved. Check before queueing again.')
+    this.name = 'FletcherEnqueueUnconfirmedError'
+  }
+}
+
+export async function enqueueFletcherJob(payload: {
   jobId?: number
   title?: string
   company?: string
@@ -276,36 +315,65 @@ export function enqueueFletcherJob(payload: {
       hasDescription: Boolean(payload.description),
     },
   })
-  if (payload.resume) {
-    const form = new FormData()
-    form.append('description', payload.description || '')
-    if (payload.jobId) form.append('job_id', String(payload.jobId))
-    if (payload.title) form.append('title', payload.title)
-    if (payload.company) form.append('company', payload.company)
-    if (payload.options) form.append('options', JSON.stringify(payload.options))
-    form.append('resume', payload.resume)
-    return fetch('/api/fletcher/tailor/jobs', {
-      method: 'POST',
-      credentials: 'include',
-      body: form,
-    }).then(async (r) => {
-      if (!r.ok) {
-        const text = await r.text().catch(() => r.statusText)
-        throw new Error(text || r.statusText)
-      }
-      return r.json()
+  const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')
+  const options = { ...payload.options, enqueue_request_id: requestId }
+  try {
+    if (payload.resume) {
+      const form = new FormData()
+      form.append('description', payload.description || '')
+      if (payload.jobId) form.append('job_id', String(payload.jobId))
+      if (payload.title) form.append('title', payload.title)
+      if (payload.company) form.append('company', payload.company)
+      form.append('options', JSON.stringify(options))
+      form.append('resume', payload.resume)
+      return await fetch('/api/fletcher/tailor/jobs', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      }).then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => null)
+          throw new ApiError(
+            r.status,
+            typeof body?.detail === 'string' ? body.detail : `Request failed (${r.status})`,
+          )
+        }
+        return r.json()
+      })
+    }
+    return await post<FletcherQueueItem>('/api/fletcher/tailor/jobs', {
+      ...payload,
+      options,
+      job_id: payload.jobId,
     })
+  } catch (error) {
+    if (error instanceof ApiError && [400, 401, 403, 404, 413, 415, 422].includes(error.status)) {
+      throw error
+    }
+    try {
+      const saved = await findFletcherEnqueue(requestId)
+      if (saved) return saved
+    } catch {
+      // An unavailable status check cannot establish whether the enqueue committed.
+    }
+    throw new FletcherEnqueueUnconfirmedError(requestId)
   }
-  return post<FletcherQueueItem>('/api/fletcher/tailor/jobs', {
-    ...payload,
-    job_id: payload.jobId,
-  })
 }
 
 export function fetchFletcherJobs(limit = 100): Promise<{ jobs: FletcherQueueItem[] }> {
   return get<{ jobs: FletcherQueueItem[] }>(
     `/api/fletcher/tailor/jobs?limit=${encodeURIComponent(String(limit))}`,
   )
+}
+
+export async function findFletcherEnqueue(
+  requestId: string,
+): Promise<FletcherQueueItem | undefined> {
+  const { jobs } = await fetchFletcherJobs(500)
+  const matches = jobs.filter((job) => job.input?.options?.enqueue_request_id === requestId)
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 export type FletcherBatchArtifact =
@@ -405,6 +473,7 @@ export interface ClearGeneratedResumesResult {
 export function clearGeneratedResumes(payload: {
   includeAdHoc?: boolean
   deleteArtifacts?: boolean
+  retryOnly?: boolean
 }): Promise<ClearGeneratedResumesResult> {
   void logHumanCommand({
     action: 'c2.fletcher.clear_generated_resumes',
@@ -412,11 +481,13 @@ export function clearGeneratedResumes(payload: {
     details: {
       includeAdHoc: payload.includeAdHoc ?? false,
       deleteArtifacts: payload.deleteArtifacts ?? true,
+      retryOnly: payload.retryOnly ?? false,
     },
   })
   return post<ClearGeneratedResumesResult>('/api/fletcher/resumes/clear', {
     include_ad_hoc: payload.includeAdHoc ?? false,
     delete_artifacts: payload.deleteArtifacts ?? true,
+    retry_only: payload.retryOnly ?? false,
   })
 }
 
@@ -460,6 +531,7 @@ export function revertFletcherReviewVersion(
 }
 
 export interface C1Config {
+  revision: string
   config_file: string
   config_file_exists: boolean
   watchlist: string[]
@@ -489,9 +561,12 @@ export interface C1Config {
   enrichment_alert_cooldown_minutes: number
 }
 
-export type C1ConfigUpdates = Partial<Omit<C1Config, 'config_file' | 'config_file_exists'>>
+export type C1ConfigUpdates = Partial<
+  Omit<C1Config, 'config_file' | 'config_file_exists' | 'revision'>
+>
 
 export interface ConfigSaveResult {
+  revision: string
   saved: boolean
   config_file: string
   updated_keys: string[]
@@ -502,7 +577,9 @@ export function fetchC1Config(): Promise<C1Config> {
   return get<C1Config>('/api/gateway/c1/config')
 }
 
-export function saveC1Config(updates: C1ConfigUpdates): Promise<ConfigSaveResult> {
+export function saveC1Config(
+  updates: C1ConfigUpdates & { expected_revision: string },
+): Promise<ConfigSaveResult> {
   return patch<ConfigSaveResult>('/api/gateway/c1/config', updates)
 }
 

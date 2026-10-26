@@ -21,7 +21,7 @@
 }
 
 .refreshBtn {
-  height: 32px;
+  height: 44px;
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -68,6 +68,9 @@
 }
 .authBad .authDot {
   background: var(--danger);
+}
+.authUnknown .authDot {
+  background: var(--muted);
 }
 
 .authSub {
@@ -352,9 +355,25 @@
   text-decoration: none;
 }
 
-.loading,
-.error {
+.loading {
   padding: 40px;
   text-align: center;
   color: var(--muted);
+}
+
+.error {
+  padding: 12px 16px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+
+@media (max-width: 760px) {
+  .statRow {
+    flex-wrap: wrap;
+  }
+  .statCell {
+    flex: 1 0 25%;
+    min-width: 0;
+  }
 }

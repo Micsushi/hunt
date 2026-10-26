@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from .models import ResumeDocument
 
@@ -50,6 +50,21 @@ class ResumeReviewVersion(BaseModel):
     compiled_revision: int = 0
     compiled_document_revision: int = 0
     compile_status: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_retained_edit_revision(cls, values):
+        if isinstance(values, dict) and "edit_revision" in values:
+            values = dict(values)
+            values["document_revision"] = max(
+                values.get("document_revision", 0), values.pop("edit_revision")
+            )
+        return values
+
+    @computed_field
+    @property
+    def edit_revision(self) -> int:
+        return self.document_revision
 
 
 class ResumeReviewPackage(BaseModel):

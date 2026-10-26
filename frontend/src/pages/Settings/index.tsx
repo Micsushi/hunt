@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchC1Config,
+  fetchC2RuntimeSettings,
+  saveSettings,
+  type SettingUpdate,
   fetchSettings,
   saveC1Config,
   saveSetting,
@@ -54,19 +57,117 @@ function settingListValue(
   )
 }
 
+// Refresh clean fields while retaining edits made after a save started.
+function useDraftValue<T>(saved: T, reset = 0) {
+  const [value, setValue] = useState(saved)
+  const [previous, setPrevious] = useState({ saved, reset })
+  if (previous.saved !== saved || previous.reset !== reset) {
+    setPrevious({ saved, reset })
+    if (value === previous.saved || previous.reset !== reset) setValue(saved)
+  }
+  return [value, setValue] as const
+}
+
+function useMounted() {
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  return mounted
+}
+
+function changedSettings(
+  settings: ComponentSetting[],
+  entries: Array<[string, string, string?, boolean?]>,
+  defaults: Record<string, string> = {},
+): SettingUpdate[] {
+  return entries
+    .filter(([key, value, , secret]) =>
+      secret
+        ? Boolean(value.trim())
+        : value !== (getSettingValue(settings, key) ?? defaults[key] ?? ''),
+    )
+    .map(([key, value, value_type = 'text', secret = false]) => ({
+      component: 'c2',
+      key,
+      value,
+      value_type,
+      secret,
+      expected: getSetting(settings, key) ?? null,
+    }))
+}
+
+function useBatchSave(
+  setSettings: React.Dispatch<React.SetStateAction<ComponentSetting[] | null>>,
+) {
+  const qc = useQueryClient()
+  const showToast = useUiStore((s) => s.showToast)
+  const mounted = useMounted()
+  const inFlight = useRef(false)
+  const [syncRetry, setSyncRetry] = useState<SettingUpdate[]>([])
+  const [syncWarnings, setSyncWarnings] = useState<string[]>([])
+  const mutation = useMutation({
+    mutationFn: saveSettings,
+    onSuccess: (result, submitted) => {
+      if (!mounted.current) return
+      setSettings((previous) => [
+        ...(previous ?? []).filter(
+          (row) => !result.settings.some((saved) => saved.key === row.key),
+        ),
+        ...result.settings,
+      ])
+      if (submitted.some((row) => row.key.startsWith('option_a_'))) {
+        setSyncWarnings(result.warnings)
+        setSyncRetry(
+          result.warnings.length
+            ? submitted
+                .filter((row) => row.key.startsWith('option_a_'))
+                .map((row) => ({ ...row, expected: getSetting(result.settings, row.key) ?? null }))
+            : [],
+        )
+      }
+      void qc.invalidateQueries({ queryKey: ['component-settings', 'c2'] })
+      void qc.invalidateQueries({ queryKey: ['c2-runtime-settings'] })
+      showToast(
+        result.warnings.length ? 'Settings saved; template sync needs retry.' : 'Settings saved',
+        result.warnings.length ? 'error' : 'ok',
+      )
+    },
+  })
+  async function save(updates: SettingUpdate[]) {
+    if (inFlight.current || !updates.length) return null
+    inFlight.current = true
+    try {
+      return await mutation.mutateAsync(updates)
+    } catch {
+      return null
+    } finally {
+      inFlight.current = false
+    }
+  }
+  return { mutation, save, syncRetry, syncWarnings }
+}
+
 // ---- sub-panels ------------------------------------------------------------
 
 function DiscoveryFilters({
   cfg,
   onSave,
   saving,
+  error,
+  onReload,
 }: {
   cfg: C1Config
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
+  error: string | null
+  onReload: () => void
 }) {
-  const [watchlist, setWatchlist] = useState(() => listToText(cfg.watchlist))
-  const [blacklist, setBlacklist] = useState(() => listToText(cfg.title_blacklist))
+  const [watchlist, setWatchlist] = useDraftValue(listToText(cfg.watchlist))
+  const [blacklist, setBlacklist] = useDraftValue(listToText(cfg.title_blacklist))
 
   return (
     <div className={styles.panel}>
@@ -94,7 +195,17 @@ function DiscoveryFilters({
           rows={10}
         />
       </label>
+      {error && (
+        <p className={styles.errorMsg} role="alert">
+          {error} Your draft is preserved.
+        </p>
+      )}
       <div className={styles.footer}>
+        {error && (
+          <button className={styles.btn} disabled={saving} onClick={onReload}>
+            Discard C1 drafts and reload
+          </button>
+        )}
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
@@ -116,36 +227,43 @@ function SearchConfig({
   cfg,
   onSave,
   saving,
+  error,
+  onReload,
 }: {
   cfg: C1Config
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
+  error: string | null
+  onReload: () => void
 }) {
-  const configuredRoles = cfg.targeting_configured
-    ? (cfg.target_job_titles ?? {})
-    : (cfg.search_terms ?? {})
-  const [experienceLevels, setExperienceLevels] = useState(
-    () => new Set(cfg.experience_levels ?? []),
+  const configuredRoles = useMemo(
+    () => (cfg.targeting_configured ? (cfg.target_job_titles ?? {}) : (cfg.search_terms ?? {})),
+    [cfg.targeting_configured, cfg.target_job_titles, cfg.search_terms],
   )
-  const [lanes, setLanes] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      Object.keys(configuredRoles).map((k) => [k, listToText(configuredRoles[k])]),
+  const [experienceLevels, setExperienceLevels] = useDraftValue(
+    useMemo(() => new Set(cfg.experience_levels ?? []), [cfg.experience_levels]),
+  )
+  const [lanes, setLanes] = useDraftValue<Record<string, string>>(
+    useMemo(
+      () =>
+        Object.fromEntries(
+          Object.keys(configuredRoles).map((k) => [k, listToText(configuredRoles[k])]),
+        ),
+      [configuredRoles],
     ),
   )
   const laneNames = Object.keys(lanes)
-  const [newLane, setNewLane] = useState('')
-  const [countries, setCountries] = useState(() =>
-    listToText(cfg.discovery_countries ?? ['Canada']),
-  )
-  const [indeedCountry, setIndeedCountry] = useState(cfg.country_indeed ?? 'Canada')
-  const [employmentTypes, setEmploymentTypes] = useState(() =>
+  const [newLane, setNewLane] = useDraftValue('')
+  const [countries, setCountries] = useDraftValue(listToText(cfg.discovery_countries ?? ['Canada']))
+  const [indeedCountry, setIndeedCountry] = useDraftValue(cfg.country_indeed ?? 'Canada')
+  const [employmentTypes, setEmploymentTypes] = useDraftValue(
     listToText(cfg.employment_types ?? []),
   )
-  const [experienced, setExperienced] = useState(cfg.include_experienced_roles ?? false)
-  const [remoteOnly, setRemoteOnly] = useState(cfg.remote_only ?? false)
-  const [locations, setLocations] = useState(() => listToText(cfg.locations))
-  const [linkedinOn, setLinkedinOn] = useState(() => cfg.sites.includes('linkedin'))
-  const [indeedOn, setIndeedOn] = useState(() => cfg.sites.includes('indeed'))
+  const [experienced, setExperienced] = useDraftValue(cfg.include_experienced_roles ?? false)
+  const [remoteOnly, setRemoteOnly] = useDraftValue(cfg.remote_only ?? false)
+  const [locations, setLocations] = useDraftValue(listToText(cfg.locations))
+  const [linkedinOn, setLinkedinOn] = useDraftValue(cfg.sites.includes('linkedin'))
+  const [indeedOn, setIndeedOn] = useDraftValue(cfg.sites.includes('indeed'))
 
   function updateLane(name: string, val: string) {
     setLanes((prev) => ({ ...prev, [name]: val }))
@@ -301,7 +419,17 @@ function SearchConfig({
           Indeed
         </label>
       </div>
+      {error && (
+        <p className={styles.errorMsg} role="alert">
+          {error} Your draft is preserved.
+        </p>
+      )}
       <div className={styles.footer}>
+        {error && (
+          <button className={styles.btn} disabled={saving} onClick={onReload}>
+            Discard C1 drafts and reload
+          </button>
+        )}
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
@@ -343,19 +471,23 @@ function RunSettings({
   cfg,
   onSave,
   saving,
+  error,
+  onReload,
 }: {
   cfg: C1Config
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
+  error: string | null
+  onReload: () => void
 }) {
-  const [intervalSec, setIntervalSec] = useState(String(cfg.run_interval_seconds))
-  const [resultsWanted, setResultsWanted] = useState(String(cfg.results_wanted))
-  const [hoursOld, setHoursOld] = useState(String(cfg.hours_old))
-  const [maxWorkers, setMaxWorkers] = useState(String(cfg.max_workers))
-  const [enrichAfterScrape, setEnrichAfterScrape] = useState(cfg.enrich_after_scrape)
-  const [batchLimit, setBatchLimit] = useState(String(cfg.enrichment_batch_limit))
-  const [timeoutMs, setTimeoutMs] = useState(String(cfg.enrichment_timeout_ms))
-  const [maxAttempts, setMaxAttempts] = useState(String(cfg.enrichment_max_attempts))
+  const [intervalSec, setIntervalSec] = useDraftValue(String(cfg.run_interval_seconds))
+  const [resultsWanted, setResultsWanted] = useDraftValue(String(cfg.results_wanted))
+  const [hoursOld, setHoursOld] = useDraftValue(String(cfg.hours_old))
+  const [maxWorkers, setMaxWorkers] = useDraftValue(String(cfg.max_workers))
+  const [enrichAfterScrape, setEnrichAfterScrape] = useDraftValue(cfg.enrich_after_scrape)
+  const [batchLimit, setBatchLimit] = useDraftValue(String(cfg.enrichment_batch_limit))
+  const [timeoutMs, setTimeoutMs] = useDraftValue(String(cfg.enrichment_timeout_ms))
+  const [maxAttempts, setMaxAttempts] = useDraftValue(String(cfg.enrichment_max_attempts))
 
   return (
     <div className={styles.panel}>
@@ -442,7 +574,17 @@ function RunSettings({
         />
         Auto-enrich after each scrape
       </label>
+      {error && (
+        <p className={styles.errorMsg} role="alert">
+          {error} Your draft is preserved.
+        </p>
+      )}
       <div className={styles.footer}>
+        {error && (
+          <button className={styles.btn} disabled={saving} onClick={onReload}>
+            Discard C1 drafts and reload
+          </button>
+        )}
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
@@ -470,13 +612,19 @@ function AlertSettings({
   cfg,
   onSave,
   saving,
+  error,
+  onReload,
 }: {
   cfg: C1Config
   onSave: (u: C1ConfigUpdates) => void
   saving: boolean
+  error: string | null
+  onReload: () => void
 }) {
-  const [failureRate, setFailureRate] = useState(String(cfg.enrichment_alert_failure_rate_percent))
-  const [cooldownMin, setCooldownMin] = useState(String(cfg.enrichment_alert_cooldown_minutes))
+  const [failureRate, setFailureRate] = useDraftValue(
+    String(cfg.enrichment_alert_failure_rate_percent),
+  )
+  const [cooldownMin, setCooldownMin] = useDraftValue(String(cfg.enrichment_alert_cooldown_minutes))
 
   return (
     <div className={styles.panel}>
@@ -506,7 +654,17 @@ function AlertSettings({
           />
         </label>
       </div>
+      {error && (
+        <p className={styles.errorMsg} role="alert">
+          {error} Your draft is preserved.
+        </p>
+      )}
       <div className={styles.footer}>
+        {error && (
+          <button className={styles.btn} disabled={saving} onClick={onReload}>
+            Discard C1 drafts and reload
+          </button>
+        )}
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={saving}
@@ -605,7 +763,6 @@ function AppNotificationSettings() {
 
 const C2_LLM_PROVIDER_KEY = 'llm_provider'
 const C2_LLM_MODEL_KEY = 'llm_model'
-const C2_LLM_TIMEOUT_SEC_KEY = 'llm_timeout_sec'
 const C2_CLOUD_CONFIRM_KEY = 'cloud_llm_confirm'
 const C2_OLLAMA_HOST_KEY = 'ollama_host'
 const C2_OLLAMA_MODEL_KEY = 'ollama_model'
@@ -620,267 +777,373 @@ const C2_ANTHROPIC_API_KEY = 'anthropic_api_key'
 const C2_GEMINI_API_KEY = 'gemini_api_key'
 
 function C2ProviderRuntimeSettings() {
-  const showToast = useUiStore((s) => s.showToast)
-  const qc = useQueryClient()
-  const { data } = useQuery({
+  const query = useQuery({
     queryKey: ['component-settings', 'c2', 'runtime'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
-
-  const [provider, setProvider] = useState('ollama')
-  const [model, setModel] = useState('')
-  const [timeoutSec, setTimeoutSec] = useState('300')
-  const [cloudConfirm, setCloudConfirm] = useState(false)
-  const [ollamaHost, setOllamaHost] = useState('http://127.0.0.1:11434')
-  const [ollamaModel, setOllamaModel] = useState('gemma4:e4b')
-  const [ollamaTimeoutSec, setOllamaTimeoutSec] = useState('300')
-  const [ollamaKeepAlive, setOllamaKeepAlive] = useState('-1')
-  const [rewriteParallelism, setRewriteParallelism] = useState('5')
-  const [rewriteMinAvailableMb, setRewriteMinAvailableMb] = useState('4096')
-  const [rewriteMaxMemoryPct, setRewriteMaxMemoryPct] = useState('85')
+  const runtime = useQuery({
+    queryKey: ['c2-runtime-settings'],
+    queryFn: fetchC2RuntimeSettings,
+    staleTime: 30_000,
+    retry: false,
+  })
+  const [settings, setSettings] = useState<ComponentSetting[] | null>(null)
+  if (settings === null && query.data) setSettings(query.data.settings)
+  const [reset, setReset] = useState(0)
+  const mounted = useMounted()
+  const { mutation, save } = useBatchSave(setSettings)
+  const [provider, setProvider] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_LLM_PROVIDER_KEY) ?? '',
+    reset,
+  )
+  const [model, setModel] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_LLM_MODEL_KEY) ?? '',
+    reset,
+  )
+  const [cloudConfirm, setCloudConfirm] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_CLOUD_CONFIRM_KEY) ?? '',
+    reset,
+  )
+  const [ollamaHost, setOllamaHost] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_OLLAMA_HOST_KEY) ?? '',
+    reset,
+  )
+  const [ollamaModel, setOllamaModel] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_OLLAMA_MODEL_KEY) ?? '',
+    reset,
+  )
+  const [ollamaTimeoutSec, setOllamaTimeoutSec] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_OLLAMA_TIMEOUT_SEC_KEY) ?? '',
+    reset,
+  )
+  const [ollamaKeepAlive, setOllamaKeepAlive] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_OLLAMA_KEEP_ALIVE_KEY) ?? '',
+    reset,
+  )
+  const [rewriteParallelism, setRewriteParallelism] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_BULLET_REWRITE_PARALLELISM_KEY) ?? '',
+    reset,
+  )
+  const [rewriteMinAvailableMb, setRewriteMinAvailableMb] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_BULLET_REWRITE_MIN_AVAILABLE_MB_KEY) ?? '',
+    reset,
+  )
+  const [rewriteMaxMemoryPct, setRewriteMaxMemoryPct] = useDraftValue(
+    getSettingValue(settings ?? undefined, C2_BULLET_REWRITE_MAX_MEMORY_PCT_KEY) ?? '',
+    reset,
+  )
   const [openaiKey, setOpenaiKey] = useState('')
+  const openaiStored = Boolean(getSetting(settings ?? undefined, C2_OPENAI_API_KEY)?.has_value)
   const [openrouterKey, setOpenrouterKey] = useState('')
+  const openrouterStored = Boolean(
+    getSetting(settings ?? undefined, C2_OPENROUTER_API_KEY)?.has_value,
+  )
   const [anthropicKey, setAnthropicKey] = useState('')
+  const anthropicStored = Boolean(
+    getSetting(settings ?? undefined, C2_ANTHROPIC_API_KEY)?.has_value,
+  )
   const [geminiKey, setGeminiKey] = useState('')
-
-  const settings = data?.settings
-  const openaiStored = Boolean(getSetting(settings, C2_OPENAI_API_KEY)?.has_value)
-  const openrouterStored = Boolean(getSetting(settings, C2_OPENROUTER_API_KEY)?.has_value)
-  const anthropicStored = Boolean(getSetting(settings, C2_ANTHROPIC_API_KEY)?.has_value)
-  const geminiStored = Boolean(getSetting(settings, C2_GEMINI_API_KEY)?.has_value)
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setProvider(getSettingValue(settings, C2_LLM_PROVIDER_KEY) ?? 'ollama')
-    setModel(getSettingValue(settings, C2_LLM_MODEL_KEY) ?? '')
-    setTimeoutSec(getSettingValue(settings, C2_LLM_TIMEOUT_SEC_KEY) ?? '300')
-    setCloudConfirm(settingEnabled(getSettingValue(settings, C2_CLOUD_CONFIRM_KEY)))
-    setOllamaHost(getSettingValue(settings, C2_OLLAMA_HOST_KEY) ?? 'http://127.0.0.1:11434')
-    setOllamaModel(getSettingValue(settings, C2_OLLAMA_MODEL_KEY) ?? 'gemma4:e4b')
-    setOllamaTimeoutSec(getSettingValue(settings, C2_OLLAMA_TIMEOUT_SEC_KEY) ?? '300')
-    setOllamaKeepAlive(getSettingValue(settings, C2_OLLAMA_KEEP_ALIVE_KEY) ?? '-1')
-    setRewriteParallelism(getSettingValue(settings, C2_BULLET_REWRITE_PARALLELISM_KEY) ?? '5')
-    setRewriteMinAvailableMb(
-      getSettingValue(settings, C2_BULLET_REWRITE_MIN_AVAILABLE_MB_KEY) ?? '4096',
-    )
-    setRewriteMaxMemoryPct(getSettingValue(settings, C2_BULLET_REWRITE_MAX_MEMORY_PCT_KEY) ?? '85')
-  }, [settings])
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const textSettings = [
-        [C2_LLM_PROVIDER_KEY, provider],
-        [C2_LLM_MODEL_KEY, model],
-        [C2_LLM_TIMEOUT_SEC_KEY, timeoutSec],
-        [C2_OLLAMA_HOST_KEY, ollamaHost],
-        [C2_OLLAMA_MODEL_KEY, ollamaModel],
-        [C2_OLLAMA_TIMEOUT_SEC_KEY, ollamaTimeoutSec],
-        [C2_OLLAMA_KEEP_ALIVE_KEY, ollamaKeepAlive],
-        [C2_BULLET_REWRITE_PARALLELISM_KEY, rewriteParallelism],
-        [C2_BULLET_REWRITE_MIN_AVAILABLE_MB_KEY, rewriteMinAvailableMb],
-        [C2_BULLET_REWRITE_MAX_MEMORY_PCT_KEY, rewriteMaxMemoryPct],
-      ] as const
-      for (const [key, value] of textSettings) {
-        await saveSetting({ component: 'c2', key, value, value_type: 'text', secret: false })
-      }
-      await saveSetting({
-        component: 'c2',
-        key: C2_CLOUD_CONFIRM_KEY,
-        value: String(cloudConfirm),
-        value_type: 'boolean',
-        secret: false,
-      })
-      const secretSettings = [
-        [C2_OPENAI_API_KEY, openaiKey],
-        [C2_OPENROUTER_API_KEY, openrouterKey],
-        [C2_ANTHROPIC_API_KEY, anthropicKey],
-        [C2_GEMINI_API_KEY, geminiKey],
-      ] as const
-      for (const [key, value] of secretSettings) {
-        if (!value.trim()) continue
-        await saveSetting({ component: 'c2', key, value, value_type: 'text', secret: true })
-      }
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['component-settings', 'c2'] })
-      qc.invalidateQueries({ queryKey: ['component-settings', 'c2', 'runtime'] })
-      setOpenaiKey('')
-      setOpenrouterKey('')
-      setAnthropicKey('')
-      setGeminiKey('')
-      showToast('Saved C2 provider and runtime settings')
-    },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
-  })
+  const geminiStored = Boolean(getSetting(settings ?? undefined, C2_GEMINI_API_KEY)?.has_value)
+  const updates = changedSettings(settings ?? [], [
+    [C2_LLM_PROVIDER_KEY, provider, 'text'],
+    [C2_LLM_MODEL_KEY, model, 'text'],
+    [C2_CLOUD_CONFIRM_KEY, cloudConfirm, 'boolean'],
+    [C2_OLLAMA_HOST_KEY, ollamaHost, 'text'],
+    [C2_OLLAMA_MODEL_KEY, ollamaModel, 'text'],
+    [C2_OLLAMA_TIMEOUT_SEC_KEY, ollamaTimeoutSec, 'text'],
+    [C2_OLLAMA_KEEP_ALIVE_KEY, ollamaKeepAlive, 'text'],
+    [C2_BULLET_REWRITE_PARALLELISM_KEY, rewriteParallelism, 'text'],
+    [C2_BULLET_REWRITE_MIN_AVAILABLE_MB_KEY, rewriteMinAvailableMb, 'text'],
+    [C2_BULLET_REWRITE_MAX_MEMORY_PCT_KEY, rewriteMaxMemoryPct, 'text'],
+    [C2_OPENAI_API_KEY, openaiKey, 'text', true],
+    [C2_OPENROUTER_API_KEY, openrouterKey, 'text', true],
+    [C2_ANTHROPIC_API_KEY, anthropicKey, 'text', true],
+    [C2_GEMINI_API_KEY, geminiKey, 'text', true],
+  ]).filter((item) => !runtime.data?.environment_overrides[item.key])
+  async function submit() {
+    const submitted = updates
+    const result = await save(submitted)
+    if (!result || !mounted.current) return
+    if (submitted.some((item) => item.key === C2_OPENAI_API_KEY))
+      setOpenaiKey((current) =>
+        current === submitted.find((item) => item.key === C2_OPENAI_API_KEY)?.value ? '' : current,
+      )
+    if (submitted.some((item) => item.key === C2_OPENROUTER_API_KEY))
+      setOpenrouterKey((current) =>
+        current === submitted.find((item) => item.key === C2_OPENROUTER_API_KEY)?.value
+          ? ''
+          : current,
+      )
+    if (submitted.some((item) => item.key === C2_ANTHROPIC_API_KEY))
+      setAnthropicKey((current) =>
+        current === submitted.find((item) => item.key === C2_ANTHROPIC_API_KEY)?.value
+          ? ''
+          : current,
+      )
+    if (submitted.some((item) => item.key === C2_GEMINI_API_KEY))
+      setGeminiKey((current) =>
+        current === submitted.find((item) => item.key === C2_GEMINI_API_KEY)?.value ? '' : current,
+      )
+  }
+  async function reload() {
+    const result = await query.refetch()
+    if (!result.data || result.isError || !mounted.current) return
+    setSettings(result.data.settings)
+    setReset((value) => value + 1)
+    setOpenaiKey('')
+    setOpenrouterKey('')
+    setAnthropicKey('')
+    setGeminiKey('')
+    mutation.reset()
+  }
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Model and runtime</h2>
       </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          LLM provider
-          <select
-            className={styles.input}
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-          >
-            <option value="heuristic">heuristic</option>
-            <option value="ollama">ollama</option>
-            <option value="codex">codex oauth</option>
-            <option value="openai">openai</option>
-            <option value="openrouter">openrouter</option>
-            <option value="anthropic">anthropic</option>
-            <option value="gemini">gemini</option>
-          </select>
-        </label>
-        <label className={styles.field}>
-          Provider model override
-          <input
-            className={styles.input}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Generic LLM timeout seconds
-          <input
-            type="number"
-            className={styles.input}
-            value={timeoutSec}
-            min={1}
-            onChange={(e) => setTimeoutSec(e.target.value)}
-          />
-        </label>
-        <label className={styles.checkLabel}>
-          <input
-            type="checkbox"
-            checked={cloudConfirm}
-            onChange={(e) => setCloudConfirm(e.target.checked)}
-          />
-          Allow cloud LLM providers to receive resume and job description text
-        </label>
-      </div>
-      <div className={styles.notice}>
-        Cloud providers stay blocked until this confirmation is enabled. API keys are write-only:
-        saved keys show as present, never as readable text.
-      </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          OpenAI API key {openaiStored ? '(saved)' : ''}
-          <input
-            className={styles.input}
-            type="password"
-            value={openaiKey}
-            onChange={(e) => setOpenaiKey(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          OpenRouter API key {openrouterStored ? '(saved)' : ''}
-          <input
-            className={styles.input}
-            type="password"
-            value={openrouterKey}
-            onChange={(e) => setOpenrouterKey(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Anthropic API key {anthropicStored ? '(saved)' : ''}
-          <input
-            className={styles.input}
-            type="password"
-            value={anthropicKey}
-            onChange={(e) => setAnthropicKey(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Gemini API key {geminiStored ? '(saved)' : ''}
-          <input
-            className={styles.input}
-            type="password"
-            value={geminiKey}
-            onChange={(e) => setGeminiKey(e.target.value)}
-          />
-        </label>
-      </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Ollama host
-          <input
-            className={styles.input}
-            value={ollamaHost}
-            onChange={(e) => setOllamaHost(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Ollama model
-          <input
-            className={styles.input}
-            value={ollamaModel}
-            onChange={(e) => setOllamaModel(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Ollama timeout seconds
-          <input
-            type="number"
-            className={styles.input}
-            value={ollamaTimeoutSec}
-            min={1}
-            onChange={(e) => setOllamaTimeoutSec(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Ollama keep alive
-          <input
-            className={styles.input}
-            value={ollamaKeepAlive}
-            onChange={(e) => setOllamaKeepAlive(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Bullet rewrite parallelism
-          <input
-            type="number"
-            className={styles.input}
-            value={rewriteParallelism}
-            min={1}
-            onChange={(e) => setRewriteParallelism(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Rewrite minimum available memory MB
-          <input
-            type="number"
-            className={styles.input}
-            value={rewriteMinAvailableMb}
-            min={0}
-            onChange={(e) => setRewriteMinAvailableMb(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Rewrite max memory percent
-          <input
-            type="number"
-            className={styles.input}
-            value={rewriteMaxMemoryPct}
-            min={1}
-            max={100}
-            onChange={(e) => setRewriteMaxMemoryPct(e.target.value)}
-          />
-        </label>
-      </div>
-      <div className={styles.footer}>
-        <button
-          className={`${styles.btn} ${styles.btnPrimary}`}
-          disabled={mutation.isPending}
-          onClick={() => mutation.mutate()}
-        >
-          {mutation.isPending ? 'Saving...' : 'Save provider settings'}
+
+      {!settings && (
+        <p role={query.isError ? 'alert' : 'status'}>
+          {query.isError
+            ? 'Could not load saved provider settings.'
+            : 'Loading saved provider settings…'}
+        </p>
+      )}
+      {query.isError && (
+        <button className={styles.btn} onClick={() => void query.refetch()}>
+          Retry saved settings
         </button>
+      )}
+      <div className={styles.notice}>
+        {runtime.data ? (
+          <>
+            Effective provider: {runtime.data.values.llm_provider}. Cloud access:{' '}
+            {runtime.data.values.cloud_llm_confirm === 'true' ? 'allowed' : 'blocked'}.
+            {Object.entries(runtime.data.environment_overrides).map(([key, env]) => (
+              <p key={key}>
+                {key.replace(/_/g, ' ')} is controlled by {env}.
+              </p>
+            ))}
+          </>
+        ) : (
+          <span>
+            {runtime.isError
+              ? 'Could not read the active C2 runtime.'
+              : 'Checking the active C2 runtime…'}
+          </span>
+        )}
+        {runtime.isError && (
+          <button className={styles.btn} onClick={() => void runtime.refetch()}>
+            Retry runtime status
+          </button>
+        )}
+        <p>Blank overrides inherit the service configuration. Only edited fields are saved.</p>
       </div>
+      <fieldset disabled={!settings} style={{ border: 0, padding: 0, minWidth: 0 }}>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            LLM provider
+            <select
+              className={styles.input}
+              value={
+                runtime.data?.environment_overrides.llm_provider
+                  ? runtime.data.values.llm_provider
+                  : provider
+              }
+              disabled={Boolean(runtime.data?.environment_overrides.llm_provider)}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              <option value="">Use service environment/default</option>
+              <option value="heuristic">heuristic</option>
+              <option value="ollama">ollama</option>
+              <option value="codex">codex oauth</option>
+              <option value="openai">openai</option>
+              <option value="openrouter">openrouter</option>
+              <option value="anthropic">anthropic</option>
+              <option value="gemini">gemini</option>
+            </select>
+          </label>
+          <label className={styles.field}>
+            Provider model override
+            <input
+              className={styles.input}
+              value={
+                runtime.data?.environment_overrides.llm_model
+                  ? runtime.data.values.llm_model
+                  : model
+              }
+              disabled={Boolean(runtime.data?.environment_overrides.llm_model)}
+              placeholder={runtime.data?.values.llm_model || 'Provider default'}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Cloud provider permission
+            <select
+              className={styles.input}
+              value={
+                runtime.data?.environment_overrides.cloud_llm_confirm
+                  ? runtime.data.values.cloud_llm_confirm
+                  : cloudConfirm
+              }
+              disabled={Boolean(runtime.data?.environment_overrides.cloud_llm_confirm)}
+              onChange={(e) => setCloudConfirm(e.target.value)}
+            >
+              <option value="">Use service environment/default</option>
+              <option value="true">Allow resume and job text to cloud providers</option>
+              <option value="false">Block cloud providers</option>
+            </select>
+          </label>
+        </div>
+        <div className={styles.notice}>
+          Cloud permission can be set by the service environment. API keys are write-only: saved
+          keys show as present, never as readable text.
+        </div>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            OpenAI API key {openaiStored ? '(saved)' : ''}
+            <input
+              className={styles.input}
+              type="password"
+              value={openaiKey}
+              onChange={(e) => setOpenaiKey(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            OpenRouter API key {openrouterStored ? '(saved)' : ''}
+            <input
+              className={styles.input}
+              type="password"
+              value={openrouterKey}
+              onChange={(e) => setOpenrouterKey(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Anthropic API key {anthropicStored ? '(saved)' : ''}
+            <input
+              className={styles.input}
+              type="password"
+              value={anthropicKey}
+              onChange={(e) => setAnthropicKey(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Gemini API key {geminiStored ? '(saved)' : ''}
+            <input
+              className={styles.input}
+              type="password"
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+            />
+          </label>
+        </div>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Ollama host
+            <input
+              className={styles.input}
+              value={ollamaHost}
+              placeholder={runtime.data?.values.ollama_host || 'Service environment/default'}
+              onChange={(e) => setOllamaHost(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Ollama model
+            <input
+              className={styles.input}
+              value={ollamaModel}
+              placeholder={runtime.data?.values.ollama_model || 'Service environment/default'}
+              onChange={(e) => setOllamaModel(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Ollama timeout seconds
+            <input
+              type="number"
+              className={styles.input}
+              value={ollamaTimeoutSec}
+              placeholder={runtime.data?.values.ollama_timeout_sec || 'Service environment/default'}
+              min={1}
+              onChange={(e) => setOllamaTimeoutSec(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Ollama keep alive
+            <input
+              className={styles.input}
+              value={ollamaKeepAlive}
+              placeholder={runtime.data?.values.ollama_keep_alive || 'Service environment/default'}
+              onChange={(e) => setOllamaKeepAlive(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Bullet rewrite parallelism
+            <input
+              type="number"
+              className={styles.input}
+              value={rewriteParallelism}
+              placeholder={
+                runtime.data?.values.bullet_rewrite_parallelism || 'Service environment/default'
+              }
+              min={1}
+              onChange={(e) => setRewriteParallelism(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite minimum available memory MB
+            <input
+              type="number"
+              className={styles.input}
+              value={rewriteMinAvailableMb}
+              placeholder={
+                runtime.data?.values.bullet_rewrite_min_available_mb ||
+                'Service environment/default'
+              }
+              min={0}
+              onChange={(e) => setRewriteMinAvailableMb(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite max memory percent
+            <input
+              type="number"
+              className={styles.input}
+              value={rewriteMaxMemoryPct}
+              placeholder={
+                runtime.data?.values.bullet_rewrite_max_memory_pct || 'Service environment/default'
+              }
+              min={1}
+              max={100}
+              onChange={(e) => setRewriteMaxMemoryPct(e.target.value)}
+            />
+          </label>
+        </div>
+
+        {mutation.error && (
+          <p className={styles.errorMsg} role="alert">
+            {mutation.error.message} Your draft is preserved.
+          </p>
+        )}
+        <div className={styles.footer}>
+          <button
+            className={`${styles.btn} ${styles.btnPrimary}`}
+            disabled={mutation.isPending || !settings || !updates.length}
+            onClick={() => void submit()}
+          >
+            {mutation.isPending ? 'Saving...' : 'Save provider settings'}
+          </button>
+          <button
+            className={styles.btn}
+            disabled={mutation.isPending}
+            onClick={() => void reload()}
+          >
+            Discard draft and reload
+          </button>
+        </div>
+      </fieldset>
     </div>
   )
 }
@@ -1019,660 +1282,705 @@ const C2_OPTION_A_PROJECT_POSITION_BONUS = '0.08'
 const C2_OPTION_A_BULLET_POSITION_BONUS = '0.08'
 
 function JobMetadataSettings() {
-  const showToast = useUiStore((s) => s.showToast)
-  const qc = useQueryClient()
-
-  const { data } = useQuery({
+  const query = useQuery({
     queryKey: ['component-settings', 'c2', 'job-metadata'],
     queryFn: () => fetchSettings('c2'),
     staleTime: 30_000,
   })
-  const [roleFamilies, setRoleFamilies] = useState('')
-  const [jobLevels, setJobLevels] = useState('')
-  const [targetLanePolicy, setTargetLanePolicy] = useState('')
-  const [unsupportedExamples, setUnsupportedExamples] = useState('')
-  const [blockedKeywords, setBlockedKeywords] = useState('')
-  const [keywordKeepPolicy, setKeywordKeepPolicy] = useState('')
-  const [keywordIgnorePolicy, setKeywordIgnorePolicy] = useState('')
-  const [summaryKeywordPolicy, setSummaryKeywordPolicy] = useState('')
-  const [skillAdditionPolicy, setSkillAdditionPolicy] = useState('')
-  const [summaryGoodExample, setSummaryGoodExample] = useState('')
-  const [summaryBannedPhrases, setSummaryBannedPhrases] = useState('')
-  const [rewriteStrategy, setRewriteStrategy] = useState('')
-  const [rewriteKeywordFitPolicy, setRewriteKeywordFitPolicy] = useState('')
-  const [rewriteBulletPolicy, setRewriteBulletPolicy] = useState('')
-  const [rewriteLengthPolicy, setRewriteLengthPolicy] = useState('')
-  const [rewriteActionKeywordPolicy, setRewriteActionKeywordPolicy] = useState('')
-  const [defaultTargetTitle, setDefaultTargetTitle] = useState('')
-  const [keywordSelectionMaxKeywords, setKeywordSelectionMaxKeywords] = useState('')
-  const [keywordSelectionMinWords, setKeywordSelectionMinWords] = useState('')
-  const [keywordSelectionMaxWords, setKeywordSelectionMaxWords] = useState('')
-  const [jobMetadataPromptMaxChars, setJobMetadataPromptMaxChars] = useState('')
-  const [jobMetadataMinConfidence, setJobMetadataMinConfidence] = useState('')
-  const [skillAdditionLimit, setSkillAdditionLimit] = useState('')
-  const [optionAMinExperience, setOptionAMinExperience] = useState('')
-  const [optionAMaxExperience, setOptionAMaxExperience] = useState('')
-  const [optionAMinProjects, setOptionAMinProjects] = useState('')
-  const [optionAMaxProjects, setOptionAMaxProjects] = useState('')
-  const [optionAMaxExperienceBullets, setOptionAMaxExperienceBullets] = useState('')
-  const [optionAMaxProjectBullets, setOptionAMaxProjectBullets] = useState('')
-  const [optionAExperiencePositionBonus, setOptionAExperiencePositionBonus] = useState('')
-  const [optionAProjectPositionBonus, setOptionAProjectPositionBonus] = useState('')
-  const [optionABulletPositionBonus, setOptionABulletPositionBonus] = useState('')
 
+  const [settings, setSettings] = useState<ComponentSetting[] | null>(null)
+  if (settings === null && query.data) setSettings(query.data.settings)
+  const [reset, setReset] = useState(0)
+  const mounted = useMounted()
   const roleFamilyText = settingListValue(
-    data?.settings,
+    settings ?? undefined,
     JOB_METADATA_ROLE_FAMILIES_KEY,
     DEFAULT_JOB_METADATA_ROLE_FAMILIES,
   )
   const jobLevelText = settingListValue(
-    data?.settings,
+    settings ?? undefined,
     JOB_METADATA_JOB_LEVELS_KEY,
     DEFAULT_JOB_METADATA_JOB_LEVELS,
   )
   const targetLanePolicyText =
-    getSettingValue(data?.settings, C2_TARGET_LANE_POLICY_KEY) ?? C2_TARGET_LANE_POLICY
+    getSettingValue(settings ?? undefined, C2_TARGET_LANE_POLICY_KEY) ?? C2_TARGET_LANE_POLICY
   const unsupportedExamplesText = settingListValue(
-    data?.settings,
+    settings ?? undefined,
     C2_UNSUPPORTED_TARGET_EXAMPLES_KEY,
     C2_UNSUPPORTED_TARGET_EXAMPLES,
   )
   const blockedKeywordText = settingListValue(
-    data?.settings,
+    settings ?? undefined,
     C2_BLOCKED_KEYWORDS_KEY,
     C2_BLOCKED_KEYWORDS,
   )
   const keywordKeepPolicyText =
-    getSettingValue(data?.settings, C2_KEYWORD_KEEP_POLICY_KEY) ?? C2_KEYWORD_KEEP_POLICY
+    getSettingValue(settings ?? undefined, C2_KEYWORD_KEEP_POLICY_KEY) ?? C2_KEYWORD_KEEP_POLICY
   const keywordIgnorePolicyText =
-    getSettingValue(data?.settings, C2_KEYWORD_IGNORE_POLICY_KEY) ?? C2_KEYWORD_IGNORE_POLICY
+    getSettingValue(settings ?? undefined, C2_KEYWORD_IGNORE_POLICY_KEY) ?? C2_KEYWORD_IGNORE_POLICY
   const summaryKeywordPolicyText =
-    getSettingValue(data?.settings, C2_SUMMARY_KEYWORD_POLICY_KEY) ?? C2_SUMMARY_KEYWORD_POLICY
+    getSettingValue(settings ?? undefined, C2_SUMMARY_KEYWORD_POLICY_KEY) ??
+    C2_SUMMARY_KEYWORD_POLICY
   const skillAdditionPolicyText =
-    getSettingValue(data?.settings, C2_SKILL_ADDITION_POLICY_KEY) ?? C2_SKILL_ADDITION_POLICY
+    getSettingValue(settings ?? undefined, C2_SKILL_ADDITION_POLICY_KEY) ?? C2_SKILL_ADDITION_POLICY
   const summaryGoodExampleText =
-    getSettingValue(data?.settings, C2_SUMMARY_GOOD_EXAMPLE_KEY) ?? C2_SUMMARY_GOOD_EXAMPLE
+    getSettingValue(settings ?? undefined, C2_SUMMARY_GOOD_EXAMPLE_KEY) ?? C2_SUMMARY_GOOD_EXAMPLE
   const summaryBannedPhraseText = settingListValue(
-    data?.settings,
+    settings ?? undefined,
     C2_SUMMARY_BANNED_PHRASES_KEY,
     C2_SUMMARY_BANNED_PHRASES,
   )
   const rewriteStrategyText =
-    getSettingValue(data?.settings, C2_REWRITE_STRATEGY_KEY) ?? C2_REWRITE_STRATEGY
+    getSettingValue(settings ?? undefined, C2_REWRITE_STRATEGY_KEY) ?? C2_REWRITE_STRATEGY
   const rewriteKeywordFitPolicyText =
-    getSettingValue(data?.settings, C2_REWRITE_KEYWORD_FIT_POLICY_KEY) ??
+    getSettingValue(settings ?? undefined, C2_REWRITE_KEYWORD_FIT_POLICY_KEY) ??
     C2_REWRITE_KEYWORD_FIT_POLICY
   const rewriteBulletPolicyText =
-    getSettingValue(data?.settings, C2_REWRITE_BULLET_POLICY_KEY) ?? C2_REWRITE_BULLET_POLICY
+    getSettingValue(settings ?? undefined, C2_REWRITE_BULLET_POLICY_KEY) ?? C2_REWRITE_BULLET_POLICY
   const rewriteLengthPolicyText =
-    getSettingValue(data?.settings, C2_REWRITE_LENGTH_POLICY_KEY) ?? C2_REWRITE_LENGTH_POLICY
+    getSettingValue(settings ?? undefined, C2_REWRITE_LENGTH_POLICY_KEY) ?? C2_REWRITE_LENGTH_POLICY
   const rewriteActionKeywordPolicyText =
-    getSettingValue(data?.settings, C2_REWRITE_ACTION_KEYWORD_POLICY_KEY) ??
+    getSettingValue(settings ?? undefined, C2_REWRITE_ACTION_KEYWORD_POLICY_KEY) ??
     C2_REWRITE_ACTION_KEYWORD_POLICY
   const defaultTargetTitleText =
-    getSettingValue(data?.settings, C2_DEFAULT_TARGET_TITLE_KEY) ?? C2_DEFAULT_TARGET_TITLE
+    getSettingValue(settings ?? undefined, C2_DEFAULT_TARGET_TITLE_KEY) ?? C2_DEFAULT_TARGET_TITLE
   const keywordSelectionMaxKeywordsText =
-    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY) ??
     C2_KEYWORD_SELECTION_MAX_KEYWORDS
   const keywordSelectionMinWordsText =
-    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MIN_WORDS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_KEYWORD_SELECTION_MIN_WORDS_KEY) ??
     C2_KEYWORD_SELECTION_MIN_WORDS
   const keywordSelectionMaxWordsText =
-    getSettingValue(data?.settings, C2_KEYWORD_SELECTION_MAX_WORDS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_KEYWORD_SELECTION_MAX_WORDS_KEY) ??
     C2_KEYWORD_SELECTION_MAX_WORDS
   const jobMetadataPromptMaxCharsText =
-    getSettingValue(data?.settings, C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY) ??
     C2_JOB_METADATA_PROMPT_MAX_CHARS
   const jobMetadataMinConfidenceText =
-    getSettingValue(data?.settings, C2_JOB_METADATA_MIN_CONFIDENCE_KEY) ??
+    getSettingValue(settings ?? undefined, C2_JOB_METADATA_MIN_CONFIDENCE_KEY) ??
     C2_JOB_METADATA_MIN_CONFIDENCE
   const skillAdditionLimitText =
-    getSettingValue(data?.settings, C2_SKILL_ADDITION_LIMIT_KEY) ?? C2_SKILL_ADDITION_LIMIT
+    getSettingValue(settings ?? undefined, C2_SKILL_ADDITION_LIMIT_KEY) ?? C2_SKILL_ADDITION_LIMIT
   const optionAMinExperienceText =
-    getSettingValue(data?.settings, C2_OPTION_A_MIN_EXPERIENCE_KEY) ?? C2_OPTION_A_MIN_EXPERIENCE
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MIN_EXPERIENCE_KEY) ??
+    C2_OPTION_A_MIN_EXPERIENCE
   const optionAMaxExperienceText =
-    getSettingValue(data?.settings, C2_OPTION_A_MAX_EXPERIENCE_KEY) ?? C2_OPTION_A_MAX_EXPERIENCE
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MAX_EXPERIENCE_KEY) ??
+    C2_OPTION_A_MAX_EXPERIENCE
   const optionAMinProjectsText =
-    getSettingValue(data?.settings, C2_OPTION_A_MIN_PROJECTS_KEY) ?? C2_OPTION_A_MIN_PROJECTS
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MIN_PROJECTS_KEY) ?? C2_OPTION_A_MIN_PROJECTS
   const optionAMaxProjectsText =
-    getSettingValue(data?.settings, C2_OPTION_A_MAX_PROJECTS_KEY) ?? C2_OPTION_A_MAX_PROJECTS
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MAX_PROJECTS_KEY) ?? C2_OPTION_A_MAX_PROJECTS
   const optionAMaxExperienceBulletsText =
-    getSettingValue(data?.settings, C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY) ??
     C2_OPTION_A_MAX_EXPERIENCE_BULLETS
   const optionAMaxProjectBulletsText =
-    getSettingValue(data?.settings, C2_OPTION_A_MAX_PROJECT_BULLETS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_OPTION_A_MAX_PROJECT_BULLETS_KEY) ??
     C2_OPTION_A_MAX_PROJECT_BULLETS
   const optionAExperiencePositionBonusText =
-    getSettingValue(data?.settings, C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY) ??
     C2_OPTION_A_EXPERIENCE_POSITION_BONUS
   const optionAProjectPositionBonusText =
-    getSettingValue(data?.settings, C2_OPTION_A_PROJECT_POSITION_BONUS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_OPTION_A_PROJECT_POSITION_BONUS_KEY) ??
     C2_OPTION_A_PROJECT_POSITION_BONUS
   const optionABulletPositionBonusText =
-    getSettingValue(data?.settings, C2_OPTION_A_BULLET_POSITION_BONUS_KEY) ??
+    getSettingValue(settings ?? undefined, C2_OPTION_A_BULLET_POSITION_BONUS_KEY) ??
     C2_OPTION_A_BULLET_POSITION_BONUS
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setRoleFamilies(roleFamilyText)
-    setJobLevels(jobLevelText)
-    setTargetLanePolicy(targetLanePolicyText)
-    setUnsupportedExamples(unsupportedExamplesText)
-    setBlockedKeywords(blockedKeywordText)
-    setKeywordKeepPolicy(keywordKeepPolicyText)
-    setKeywordIgnorePolicy(keywordIgnorePolicyText)
-    setSummaryKeywordPolicy(summaryKeywordPolicyText)
-    setSkillAdditionPolicy(skillAdditionPolicyText)
-    setSummaryGoodExample(summaryGoodExampleText)
-    setSummaryBannedPhrases(summaryBannedPhraseText)
-    setRewriteStrategy(rewriteStrategyText)
-    setRewriteKeywordFitPolicy(rewriteKeywordFitPolicyText)
-    setRewriteBulletPolicy(rewriteBulletPolicyText)
-    setRewriteLengthPolicy(rewriteLengthPolicyText)
-    setRewriteActionKeywordPolicy(rewriteActionKeywordPolicyText)
-    setDefaultTargetTitle(defaultTargetTitleText)
-    setKeywordSelectionMaxKeywords(keywordSelectionMaxKeywordsText)
-    setKeywordSelectionMinWords(keywordSelectionMinWordsText)
-    setKeywordSelectionMaxWords(keywordSelectionMaxWordsText)
-    setJobMetadataPromptMaxChars(jobMetadataPromptMaxCharsText)
-    setJobMetadataMinConfidence(jobMetadataMinConfidenceText)
-    setSkillAdditionLimit(skillAdditionLimitText)
-    setOptionAMinExperience(optionAMinExperienceText)
-    setOptionAMaxExperience(optionAMaxExperienceText)
-    setOptionAMinProjects(optionAMinProjectsText)
-    setOptionAMaxProjects(optionAMaxProjectsText)
-    setOptionAMaxExperienceBullets(optionAMaxExperienceBulletsText)
-    setOptionAMaxProjectBullets(optionAMaxProjectBulletsText)
-    setOptionAExperiencePositionBonus(optionAExperiencePositionBonusText)
-    setOptionAProjectPositionBonus(optionAProjectPositionBonusText)
-    setOptionABulletPositionBonus(optionABulletPositionBonusText)
-  }, [
-    roleFamilyText,
-    jobLevelText,
-    targetLanePolicyText,
+  const [roleFamilies, setRoleFamilies] = useDraftValue(roleFamilyText, reset)
+  const [jobLevels, setJobLevels] = useDraftValue(jobLevelText, reset)
+  const [targetLanePolicy, setTargetLanePolicy] = useDraftValue(targetLanePolicyText, reset)
+  const [unsupportedExamples, setUnsupportedExamples] = useDraftValue(
     unsupportedExamplesText,
-    blockedKeywordText,
-    keywordKeepPolicyText,
+    reset,
+  )
+  const [blockedKeywords, setBlockedKeywords] = useDraftValue(blockedKeywordText, reset)
+  const [keywordKeepPolicy, setKeywordKeepPolicy] = useDraftValue(keywordKeepPolicyText, reset)
+  const [keywordIgnorePolicy, setKeywordIgnorePolicy] = useDraftValue(
     keywordIgnorePolicyText,
+    reset,
+  )
+  const [summaryKeywordPolicy, setSummaryKeywordPolicy] = useDraftValue(
     summaryKeywordPolicyText,
+    reset,
+  )
+  const [skillAdditionPolicy, setSkillAdditionPolicy] = useDraftValue(
     skillAdditionPolicyText,
-    summaryGoodExampleText,
+    reset,
+  )
+  const [summaryGoodExample, setSummaryGoodExample] = useDraftValue(summaryGoodExampleText, reset)
+  const [summaryBannedPhrases, setSummaryBannedPhrases] = useDraftValue(
     summaryBannedPhraseText,
-    rewriteStrategyText,
+    reset,
+  )
+  const [rewriteStrategy, setRewriteStrategy] = useDraftValue(rewriteStrategyText, reset)
+  const [rewriteKeywordFitPolicy, setRewriteKeywordFitPolicy] = useDraftValue(
     rewriteKeywordFitPolicyText,
+    reset,
+  )
+  const [rewriteBulletPolicy, setRewriteBulletPolicy] = useDraftValue(
     rewriteBulletPolicyText,
+    reset,
+  )
+  const [rewriteLengthPolicy, setRewriteLengthPolicy] = useDraftValue(
     rewriteLengthPolicyText,
+    reset,
+  )
+  const [rewriteActionKeywordPolicy, setRewriteActionKeywordPolicy] = useDraftValue(
     rewriteActionKeywordPolicyText,
-    defaultTargetTitleText,
+    reset,
+  )
+  const [defaultTargetTitle, setDefaultTargetTitle] = useDraftValue(defaultTargetTitleText, reset)
+  const [keywordSelectionMaxKeywords, setKeywordSelectionMaxKeywords] = useDraftValue(
     keywordSelectionMaxKeywordsText,
+    reset,
+  )
+  const [keywordSelectionMinWords, setKeywordSelectionMinWords] = useDraftValue(
     keywordSelectionMinWordsText,
+    reset,
+  )
+  const [keywordSelectionMaxWords, setKeywordSelectionMaxWords] = useDraftValue(
     keywordSelectionMaxWordsText,
+    reset,
+  )
+  const [jobMetadataPromptMaxChars, setJobMetadataPromptMaxChars] = useDraftValue(
     jobMetadataPromptMaxCharsText,
+    reset,
+  )
+  const [jobMetadataMinConfidence, setJobMetadataMinConfidence] = useDraftValue(
     jobMetadataMinConfidenceText,
-    skillAdditionLimitText,
+    reset,
+  )
+  const [skillAdditionLimit, setSkillAdditionLimit] = useDraftValue(skillAdditionLimitText, reset)
+  const [optionAMinExperience, setOptionAMinExperience] = useDraftValue(
     optionAMinExperienceText,
+    reset,
+  )
+  const [optionAMaxExperience, setOptionAMaxExperience] = useDraftValue(
     optionAMaxExperienceText,
-    optionAMinProjectsText,
-    optionAMaxProjectsText,
+    reset,
+  )
+  const [optionAMinProjects, setOptionAMinProjects] = useDraftValue(optionAMinProjectsText, reset)
+  const [optionAMaxProjects, setOptionAMaxProjects] = useDraftValue(optionAMaxProjectsText, reset)
+  const [optionAMaxExperienceBullets, setOptionAMaxExperienceBullets] = useDraftValue(
     optionAMaxExperienceBulletsText,
+    reset,
+  )
+  const [optionAMaxProjectBullets, setOptionAMaxProjectBullets] = useDraftValue(
     optionAMaxProjectBulletsText,
+    reset,
+  )
+  const [optionAExperiencePositionBonus, setOptionAExperiencePositionBonus] = useDraftValue(
     optionAExperiencePositionBonusText,
+    reset,
+  )
+  const [optionAProjectPositionBonus, setOptionAProjectPositionBonus] = useDraftValue(
     optionAProjectPositionBonusText,
+    reset,
+  )
+  const [optionABulletPositionBonus, setOptionABulletPositionBonus] = useDraftValue(
     optionABulletPositionBonusText,
-  ])
+    reset,
+  )
 
-  const mutation = useMutation({
-    mutationFn: async () => {
-      await saveSetting({
-        component: 'c2',
-        key: JOB_METADATA_ROLE_FAMILIES_KEY,
-        value: JSON.stringify(textToList(roleFamilies)),
-        value_type: 'json',
-        secret: false,
-      })
-      await saveSetting({
-        component: 'c2',
-        key: JOB_METADATA_JOB_LEVELS_KEY,
-        value: JSON.stringify(textToList(jobLevels)),
-        value_type: 'json',
-        secret: false,
-      })
-      const textSettings = [
-        [C2_TARGET_LANE_POLICY_KEY, targetLanePolicy],
-        [C2_KEYWORD_KEEP_POLICY_KEY, keywordKeepPolicy],
-        [C2_KEYWORD_IGNORE_POLICY_KEY, keywordIgnorePolicy],
-        [C2_SUMMARY_KEYWORD_POLICY_KEY, summaryKeywordPolicy],
-        [C2_SKILL_ADDITION_POLICY_KEY, skillAdditionPolicy],
-        [C2_SUMMARY_GOOD_EXAMPLE_KEY, summaryGoodExample],
-        [C2_REWRITE_STRATEGY_KEY, rewriteStrategy],
-        [C2_REWRITE_KEYWORD_FIT_POLICY_KEY, rewriteKeywordFitPolicy],
-        [C2_REWRITE_BULLET_POLICY_KEY, rewriteBulletPolicy],
-        [C2_REWRITE_LENGTH_POLICY_KEY, rewriteLengthPolicy],
-        [C2_REWRITE_ACTION_KEYWORD_POLICY_KEY, rewriteActionKeywordPolicy],
-        [C2_DEFAULT_TARGET_TITLE_KEY, defaultTargetTitle],
-        [C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY, keywordSelectionMaxKeywords],
-        [C2_KEYWORD_SELECTION_MIN_WORDS_KEY, keywordSelectionMinWords],
-        [C2_KEYWORD_SELECTION_MAX_WORDS_KEY, keywordSelectionMaxWords],
-        [C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY, jobMetadataPromptMaxChars],
-        [C2_JOB_METADATA_MIN_CONFIDENCE_KEY, jobMetadataMinConfidence],
-        [C2_SKILL_ADDITION_LIMIT_KEY, skillAdditionLimit],
-        [C2_OPTION_A_MIN_EXPERIENCE_KEY, optionAMinExperience],
-        [C2_OPTION_A_MAX_EXPERIENCE_KEY, optionAMaxExperience],
-        [C2_OPTION_A_MIN_PROJECTS_KEY, optionAMinProjects],
-        [C2_OPTION_A_MAX_PROJECTS_KEY, optionAMaxProjects],
-        [C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY, optionAMaxExperienceBullets],
-        [C2_OPTION_A_MAX_PROJECT_BULLETS_KEY, optionAMaxProjectBullets],
-        [C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY, optionAExperiencePositionBonus],
-        [C2_OPTION_A_PROJECT_POSITION_BONUS_KEY, optionAProjectPositionBonus],
-        [C2_OPTION_A_BULLET_POSITION_BONUS_KEY, optionABulletPositionBonus],
-      ] as const
-      for (const [key, value] of textSettings) {
-        await saveSetting({
-          component: 'c2',
-          key,
-          value,
-          value_type: 'text',
-          secret: false,
-        })
-      }
-      const listSettings = [
-        [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY, unsupportedExamples],
-        [C2_BLOCKED_KEYWORDS_KEY, blockedKeywords],
-        [C2_SUMMARY_BANNED_PHRASES_KEY, summaryBannedPhrases],
-      ] as const
-      for (const [key, value] of listSettings) {
-        await saveSetting({
-          component: 'c2',
-          key,
-          value: JSON.stringify(textToList(value)),
-          value_type: 'json',
-          secret: false,
-        })
-      }
+  const { mutation, save, syncRetry, syncWarnings } = useBatchSave(setSettings)
+  const updates = changedSettings(
+    settings ?? [],
+    [
+      [JOB_METADATA_ROLE_FAMILIES_KEY, JSON.stringify(textToList(roleFamilies)), 'json'],
+      [JOB_METADATA_JOB_LEVELS_KEY, JSON.stringify(textToList(jobLevels)), 'json'],
+      [C2_TARGET_LANE_POLICY_KEY, targetLanePolicy, 'text'],
+      [C2_KEYWORD_KEEP_POLICY_KEY, keywordKeepPolicy, 'text'],
+      [C2_KEYWORD_IGNORE_POLICY_KEY, keywordIgnorePolicy, 'text'],
+      [C2_SUMMARY_KEYWORD_POLICY_KEY, summaryKeywordPolicy, 'text'],
+      [C2_SKILL_ADDITION_POLICY_KEY, skillAdditionPolicy, 'text'],
+      [C2_SUMMARY_GOOD_EXAMPLE_KEY, summaryGoodExample, 'text'],
+      [C2_REWRITE_STRATEGY_KEY, rewriteStrategy, 'text'],
+      [C2_REWRITE_KEYWORD_FIT_POLICY_KEY, rewriteKeywordFitPolicy, 'text'],
+      [C2_REWRITE_BULLET_POLICY_KEY, rewriteBulletPolicy, 'text'],
+      [C2_REWRITE_LENGTH_POLICY_KEY, rewriteLengthPolicy, 'text'],
+      [C2_REWRITE_ACTION_KEYWORD_POLICY_KEY, rewriteActionKeywordPolicy, 'text'],
+      [C2_DEFAULT_TARGET_TITLE_KEY, defaultTargetTitle, 'text'],
+      [C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY, keywordSelectionMaxKeywords, 'text'],
+      [C2_KEYWORD_SELECTION_MIN_WORDS_KEY, keywordSelectionMinWords, 'text'],
+      [C2_KEYWORD_SELECTION_MAX_WORDS_KEY, keywordSelectionMaxWords, 'text'],
+      [C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY, jobMetadataPromptMaxChars, 'text'],
+      [C2_JOB_METADATA_MIN_CONFIDENCE_KEY, jobMetadataMinConfidence, 'text'],
+      [C2_SKILL_ADDITION_LIMIT_KEY, skillAdditionLimit, 'text'],
+      [C2_OPTION_A_MIN_EXPERIENCE_KEY, optionAMinExperience, 'text'],
+      [C2_OPTION_A_MAX_EXPERIENCE_KEY, optionAMaxExperience, 'text'],
+      [C2_OPTION_A_MIN_PROJECTS_KEY, optionAMinProjects, 'text'],
+      [C2_OPTION_A_MAX_PROJECTS_KEY, optionAMaxProjects, 'text'],
+      [C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY, optionAMaxExperienceBullets, 'text'],
+      [C2_OPTION_A_MAX_PROJECT_BULLETS_KEY, optionAMaxProjectBullets, 'text'],
+      [C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY, optionAExperiencePositionBonus, 'text'],
+      [C2_OPTION_A_PROJECT_POSITION_BONUS_KEY, optionAProjectPositionBonus, 'text'],
+      [C2_OPTION_A_BULLET_POSITION_BONUS_KEY, optionABulletPositionBonus, 'text'],
+      [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY, JSON.stringify(textToList(unsupportedExamples)), 'json'],
+      [C2_BLOCKED_KEYWORDS_KEY, JSON.stringify(textToList(blockedKeywords)), 'json'],
+      [C2_SUMMARY_BANNED_PHRASES_KEY, JSON.stringify(textToList(summaryBannedPhrases)), 'json'],
+    ],
+    {
+      [JOB_METADATA_ROLE_FAMILIES_KEY]: JSON.stringify(textToList(roleFamilyText)),
+      [JOB_METADATA_JOB_LEVELS_KEY]: JSON.stringify(textToList(jobLevelText)),
+      [C2_TARGET_LANE_POLICY_KEY]: targetLanePolicyText,
+      [C2_KEYWORD_KEEP_POLICY_KEY]: keywordKeepPolicyText,
+      [C2_KEYWORD_IGNORE_POLICY_KEY]: keywordIgnorePolicyText,
+      [C2_SUMMARY_KEYWORD_POLICY_KEY]: summaryKeywordPolicyText,
+      [C2_SKILL_ADDITION_POLICY_KEY]: skillAdditionPolicyText,
+      [C2_SUMMARY_GOOD_EXAMPLE_KEY]: summaryGoodExampleText,
+      [C2_REWRITE_STRATEGY_KEY]: rewriteStrategyText,
+      [C2_REWRITE_KEYWORD_FIT_POLICY_KEY]: rewriteKeywordFitPolicyText,
+      [C2_REWRITE_BULLET_POLICY_KEY]: rewriteBulletPolicyText,
+      [C2_REWRITE_LENGTH_POLICY_KEY]: rewriteLengthPolicyText,
+      [C2_REWRITE_ACTION_KEYWORD_POLICY_KEY]: rewriteActionKeywordPolicyText,
+      [C2_DEFAULT_TARGET_TITLE_KEY]: defaultTargetTitleText,
+      [C2_KEYWORD_SELECTION_MAX_KEYWORDS_KEY]: keywordSelectionMaxKeywordsText,
+      [C2_KEYWORD_SELECTION_MIN_WORDS_KEY]: keywordSelectionMinWordsText,
+      [C2_KEYWORD_SELECTION_MAX_WORDS_KEY]: keywordSelectionMaxWordsText,
+      [C2_JOB_METADATA_PROMPT_MAX_CHARS_KEY]: jobMetadataPromptMaxCharsText,
+      [C2_JOB_METADATA_MIN_CONFIDENCE_KEY]: jobMetadataMinConfidenceText,
+      [C2_SKILL_ADDITION_LIMIT_KEY]: skillAdditionLimitText,
+      [C2_OPTION_A_MIN_EXPERIENCE_KEY]: optionAMinExperienceText,
+      [C2_OPTION_A_MAX_EXPERIENCE_KEY]: optionAMaxExperienceText,
+      [C2_OPTION_A_MIN_PROJECTS_KEY]: optionAMinProjectsText,
+      [C2_OPTION_A_MAX_PROJECTS_KEY]: optionAMaxProjectsText,
+      [C2_OPTION_A_MAX_EXPERIENCE_BULLETS_KEY]: optionAMaxExperienceBulletsText,
+      [C2_OPTION_A_MAX_PROJECT_BULLETS_KEY]: optionAMaxProjectBulletsText,
+      [C2_OPTION_A_EXPERIENCE_POSITION_BONUS_KEY]: optionAExperiencePositionBonusText,
+      [C2_OPTION_A_PROJECT_POSITION_BONUS_KEY]: optionAProjectPositionBonusText,
+      [C2_OPTION_A_BULLET_POSITION_BONUS_KEY]: optionABulletPositionBonusText,
+      [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY]: JSON.stringify(textToList(unsupportedExamplesText)),
+      [C2_BLOCKED_KEYWORDS_KEY]: JSON.stringify(textToList(blockedKeywordText)),
+      [C2_SUMMARY_BANNED_PHRASES_KEY]: JSON.stringify(textToList(summaryBannedPhraseText)),
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['component-settings', 'c2'] })
-      qc.invalidateQueries({ queryKey: ['component-settings', 'c2', 'job-metadata'] })
-      showToast('Saved C2 job metadata values')
-    },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
-  })
+  )
+  async function reload() {
+    const result = await query.refetch()
+    if (!result.data || result.isError || !mounted.current) return
+    setSettings(result.data.settings)
+    setReset((value) => value + 1)
+    mutation.reset()
+  }
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>C2 job metadata</h2>
       </div>
-      <div className={styles.gridTwo}>
+      {!settings && (
+        <p role={query.isError ? 'alert' : 'status'}>
+          {query.isError
+            ? 'Could not load saved metadata settings.'
+            : 'Loading saved metadata settings…'}
+        </p>
+      )}
+      {query.isError && (
+        <button className={styles.btn} onClick={() => void query.refetch()}>
+          Retry saved metadata
+        </button>
+      )}
+      <fieldset disabled={!settings} style={{ border: 0, padding: 0, minWidth: 0 }}>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Role family values
+            <span className={styles.fieldHint}>
+              Allowed JSON labels for Fletcher metadata prompts and resume routing.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={roleFamilies}
+              onChange={(e) => setRoleFamilies(e.target.value)}
+              rows={8}
+            />
+          </label>
+          <label className={styles.field}>
+            Job level values
+            <span className={styles.fieldHint}>
+              Allowed level labels shared by metadata prompts and downstream C2 records.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={jobLevels}
+              onChange={(e) => setJobLevels(e.target.value)}
+              rows={8}
+            />
+          </label>
+        </div>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Default target title
+            <span className={styles.fieldHint}>
+              Used when Option B has no usable title. Avoid role-specific hardcoded fallbacks.
+            </span>
+            <input
+              className={styles.input}
+              value={defaultTargetTitle}
+              onChange={(e) => setDefaultTargetTitle(e.target.value)}
+            />
+          </label>
+          <label className={styles.field}>
+            Unsupported target examples
+            <span className={styles.fieldHint}>
+              One per line. Used with the target-lane policy for queued jobs.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={unsupportedExamples}
+              onChange={(e) => setUnsupportedExamples(e.target.value)}
+              rows={6}
+            />
+          </label>
+        </div>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Keyword max count
+            <span className={styles.fieldHint}>Maximum keywords returned by extraction.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={keywordSelectionMaxKeywords}
+              onChange={(e) => setKeywordSelectionMaxKeywords(e.target.value)}
+              min={0}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword min words
+            <span className={styles.fieldHint}>Minimum words per extracted keyword.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={keywordSelectionMinWords}
+              onChange={(e) => setKeywordSelectionMinWords(e.target.value)}
+              min={0}
+            />
+          </label>
+          <label className={styles.field}>
+            Keyword max words
+            <span className={styles.fieldHint}>Maximum words per extracted keyword.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={keywordSelectionMaxWords}
+              onChange={(e) => setKeywordSelectionMaxWords(e.target.value)}
+              min={1}
+            />
+          </label>
+          <label className={styles.field}>
+            Metadata prompt max chars
+            <span className={styles.fieldHint}>
+              First job-description characters used for metadata fill.
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={jobMetadataPromptMaxChars}
+              onChange={(e) => setJobMetadataPromptMaxChars(e.target.value)}
+              min={1}
+            />
+          </label>
+          <label className={styles.field}>
+            Minimum confidence
+            <span className={styles.fieldHint}>
+              Confidence threshold used in metadata and prompt policy.
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={jobMetadataMinConfidence}
+              onChange={(e) => setJobMetadataMinConfidence(e.target.value)}
+              min={0}
+              max={1}
+              step={0.1}
+            />
+          </label>
+          <label className={styles.field}>
+            Skill addition limit
+            <span className={styles.fieldHint}>Maximum Technical Skills additions per resume.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={skillAdditionLimit}
+              onChange={(e) => setSkillAdditionLimit(e.target.value)}
+              min={0}
+            />
+          </label>
+        </div>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Option A min jobs
+            <span className={styles.fieldHint}>Lower bound for master resume job buckets.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMinExperience}
+              onChange={(e) => setOptionAMinExperience(e.target.value)}
+              min={0}
+              max={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Option A max jobs
+            <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMaxExperience}
+              onChange={(e) => setOptionAMaxExperience(e.target.value)}
+              min={0}
+              max={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Option A min projects
+            <span className={styles.fieldHint}>Lower bound for master resume project buckets.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMinProjects}
+              onChange={(e) => setOptionAMinProjects(e.target.value)}
+              min={0}
+              max={3}
+            />
+          </label>
+          <label className={styles.field}>
+            Option A max projects
+            <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMaxProjects}
+              onChange={(e) => setOptionAMaxProjects(e.target.value)}
+              min={0}
+              max={3}
+            />
+          </label>
+          <label className={styles.field}>
+            Job bullet cap
+            <span className={styles.fieldHint}>Max selected bullets per experience bucket.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMaxExperienceBullets}
+              onChange={(e) => setOptionAMaxExperienceBullets(e.target.value)}
+              min={1}
+            />
+          </label>
+          <label className={styles.field}>
+            Project bullet cap
+            <span className={styles.fieldHint}>Max selected bullets per project bucket.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAMaxProjectBullets}
+              onChange={(e) => setOptionAMaxProjectBullets(e.target.value)}
+              min={1}
+            />
+          </label>
+          <label className={styles.field}>
+            Job position bonus
+            <span className={styles.fieldHint}>Retention boost for earlier jobs.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAExperiencePositionBonus}
+              onChange={(e) => setOptionAExperiencePositionBonus(e.target.value)}
+              min={0}
+              step={0.01}
+            />
+          </label>
+          <label className={styles.field}>
+            Bullet position bonus
+            <span className={styles.fieldHint}>
+              Retention boost for earlier bullets in a bucket.
+            </span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionABulletPositionBonus}
+              onChange={(e) => setOptionABulletPositionBonus(e.target.value)}
+              min={0}
+              step={0.01}
+            />
+          </label>
+          <label className={styles.field}>
+            Project position bonus
+            <span className={styles.fieldHint}>Retention boost for earlier projects.</span>
+            <input
+              type="number"
+              className={styles.input}
+              value={optionAProjectPositionBonus}
+              onChange={(e) => setOptionAProjectPositionBonus(e.target.value)}
+              min={0}
+              step={0.01}
+            />
+          </label>
+        </div>
         <label className={styles.field}>
-          Role family values
+          Target-lane policy
           <span className={styles.fieldHint}>
-            Allowed JSON labels for Fletcher metadata prompts and resume routing.
+            Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
           </span>
           <textarea
             className={styles.textarea}
-            value={roleFamilies}
-            onChange={(e) => setRoleFamilies(e.target.value)}
-            rows={8}
-          />
-        </label>
-        <label className={styles.field}>
-          Job level values
-          <span className={styles.fieldHint}>
-            Allowed level labels shared by metadata prompts and downstream C2 records.
-          </span>
-          <textarea
-            className={styles.textarea}
-            value={jobLevels}
-            onChange={(e) => setJobLevels(e.target.value)}
-            rows={8}
-          />
-        </label>
-      </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Default target title
-          <span className={styles.fieldHint}>Used when a pasted job description has no title.</span>
-          <input
-            className={styles.input}
-            value={defaultTargetTitle}
-            onChange={(e) => setDefaultTargetTitle(e.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          Unsupported target examples
-          <span className={styles.fieldHint}>
-            One per line. Used with the target-lane policy for queued jobs.
-          </span>
-          <textarea
-            className={styles.textarea}
-            value={unsupportedExamples}
-            onChange={(e) => setUnsupportedExamples(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Keyword max count
-          <span className={styles.fieldHint}>Maximum keywords returned by extraction.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={keywordSelectionMaxKeywords}
-            onChange={(e) => setKeywordSelectionMaxKeywords(e.target.value)}
-            min={0}
-          />
-        </label>
-        <label className={styles.field}>
-          Keyword min words
-          <span className={styles.fieldHint}>Minimum words per extracted keyword.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={keywordSelectionMinWords}
-            onChange={(e) => setKeywordSelectionMinWords(e.target.value)}
-            min={0}
-          />
-        </label>
-        <label className={styles.field}>
-          Keyword max words
-          <span className={styles.fieldHint}>Maximum words per extracted keyword.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={keywordSelectionMaxWords}
-            onChange={(e) => setKeywordSelectionMaxWords(e.target.value)}
-            min={1}
-          />
-        </label>
-        <label className={styles.field}>
-          Metadata prompt max chars
-          <span className={styles.fieldHint}>
-            First job-description characters used for metadata fill.
-          </span>
-          <input
-            type="number"
-            className={styles.input}
-            value={jobMetadataPromptMaxChars}
-            onChange={(e) => setJobMetadataPromptMaxChars(e.target.value)}
-            min={1}
-          />
-        </label>
-        <label className={styles.field}>
-          Minimum confidence
-          <span className={styles.fieldHint}>
-            Confidence threshold used in metadata and prompt policy.
-          </span>
-          <input
-            type="number"
-            className={styles.input}
-            value={jobMetadataMinConfidence}
-            onChange={(e) => setJobMetadataMinConfidence(e.target.value)}
-            min={0}
-            max={1}
-            step={0.1}
-          />
-        </label>
-        <label className={styles.field}>
-          Skill addition limit
-          <span className={styles.fieldHint}>Maximum Technical Skills additions per resume.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={skillAdditionLimit}
-            onChange={(e) => setSkillAdditionLimit(e.target.value)}
-            min={0}
-          />
-        </label>
-      </div>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Option A min jobs
-          <span className={styles.fieldHint}>Lower bound for master resume job buckets.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMinExperience}
-            onChange={(e) => setOptionAMinExperience(e.target.value)}
-            min={0}
-            max={4}
-          />
-        </label>
-        <label className={styles.field}>
-          Option A max jobs
-          <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMaxExperience}
-            onChange={(e) => setOptionAMaxExperience(e.target.value)}
-            min={0}
-            max={4}
-          />
-        </label>
-        <label className={styles.field}>
-          Option A min projects
-          <span className={styles.fieldHint}>Lower bound for master resume project buckets.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMinProjects}
-            onChange={(e) => setOptionAMinProjects(e.target.value)}
-            min={0}
-            max={3}
-          />
-        </label>
-        <label className={styles.field}>
-          Option A max projects
-          <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMaxProjects}
-            onChange={(e) => setOptionAMaxProjects(e.target.value)}
-            min={0}
-            max={3}
-          />
-        </label>
-        <label className={styles.field}>
-          Job bullet cap
-          <span className={styles.fieldHint}>Max selected bullets per experience bucket.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMaxExperienceBullets}
-            onChange={(e) => setOptionAMaxExperienceBullets(e.target.value)}
-            min={1}
-          />
-        </label>
-        <label className={styles.field}>
-          Project bullet cap
-          <span className={styles.fieldHint}>Max selected bullets per project bucket.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAMaxProjectBullets}
-            onChange={(e) => setOptionAMaxProjectBullets(e.target.value)}
-            min={1}
-          />
-        </label>
-        <label className={styles.field}>
-          Job position bonus
-          <span className={styles.fieldHint}>Retention boost for earlier jobs.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAExperiencePositionBonus}
-            onChange={(e) => setOptionAExperiencePositionBonus(e.target.value)}
-            min={0}
-            step={0.01}
-          />
-        </label>
-        <label className={styles.field}>
-          Bullet position bonus
-          <span className={styles.fieldHint}>Retention boost for earlier bullets in a bucket.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionABulletPositionBonus}
-            onChange={(e) => setOptionABulletPositionBonus(e.target.value)}
-            min={0}
-            step={0.01}
-          />
-        </label>
-        <label className={styles.field}>
-          Project position bonus
-          <span className={styles.fieldHint}>Retention boost for earlier projects.</span>
-          <input
-            type="number"
-            className={styles.input}
-            value={optionAProjectPositionBonus}
-            onChange={(e) => setOptionAProjectPositionBonus(e.target.value)}
-            min={0}
-            step={0.01}
-          />
-        </label>
-      </div>
-      <label className={styles.field}>
-        Target-lane policy
-        <span className={styles.fieldHint}>
-          Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={targetLanePolicy}
-          onChange={(e) => setTargetLanePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword keep policy
-        <textarea
-          className={styles.textarea}
-          value={keywordKeepPolicy}
-          onChange={(e) => setKeywordKeepPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Keyword ignore policy
-        <textarea
-          className={styles.textarea}
-          value={keywordIgnorePolicy}
-          onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary keyword policy
-        <textarea
-          className={styles.textarea}
-          value={summaryKeywordPolicy}
-          onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Skill addition policy
-        <textarea
-          className={styles.textarea}
-          value={skillAdditionPolicy}
-          onChange={(e) => setSkillAdditionPolicy(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Summary good example
-        <textarea
-          className={styles.textarea}
-          value={summaryGoodExample}
-          onChange={(e) => setSummaryGoodExample(e.target.value)}
-          rows={3}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Summary banned phrases
-          <textarea
-            className={styles.textarea}
-            value={summaryBannedPhrases}
-            onChange={(e) => setSummaryBannedPhrases(e.target.value)}
-            rows={6}
-          />
-        </label>
-        <label className={styles.field}>
-          Blocked keywords
-          <textarea
-            className={styles.textarea}
-            value={blockedKeywords}
-            onChange={(e) => setBlockedKeywords(e.target.value)}
-            rows={6}
-          />
-        </label>
-      </div>
-      <label className={styles.field}>
-        Rewrite strategy
-        <span className={styles.fieldHint}>
-          Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
-        </span>
-        <textarea
-          className={styles.textarea}
-          value={rewriteStrategy}
-          onChange={(e) => setRewriteStrategy(e.target.value)}
-          rows={8}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite keyword fit policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteKeywordFitPolicy}
-          onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <label className={styles.field}>
-        Rewrite bullet policy
-        <textarea
-          className={styles.textarea}
-          value={rewriteBulletPolicy}
-          onChange={(e) => setRewriteBulletPolicy(e.target.value)}
-          rows={7}
-        />
-      </label>
-      <div className={styles.gridTwo}>
-        <label className={styles.field}>
-          Rewrite length policy
-          <span className={styles.fieldHint}>
-            Use {'{max_length_percent}'} where the configured percentage should appear.
-          </span>
-          <textarea
-            className={styles.textarea}
-            value={rewriteLengthPolicy}
-            onChange={(e) => setRewriteLengthPolicy(e.target.value)}
+            value={targetLanePolicy}
+            onChange={(e) => setTargetLanePolicy(e.target.value)}
             rows={4}
           />
         </label>
         <label className={styles.field}>
-          Rewrite action keyword policy
+          Keyword keep policy
           <textarea
             className={styles.textarea}
-            value={rewriteActionKeywordPolicy}
-            onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
-            rows={6}
+            value={keywordKeepPolicy}
+            onChange={(e) => setKeywordKeepPolicy(e.target.value)}
+            rows={4}
           />
         </label>
-      </div>
-      <div className={styles.footer}>
-        <button
-          className={`${styles.btn} ${styles.btnPrimary}`}
-          disabled={mutation.isPending}
-          onClick={() => mutation.mutate()}
-        >
-          {mutation.isPending ? 'Saving...' : 'Save metadata values'}
-        </button>
-      </div>
+        <label className={styles.field}>
+          Keyword ignore policy
+          <textarea
+            className={styles.textarea}
+            value={keywordIgnorePolicy}
+            onChange={(e) => setKeywordIgnorePolicy(e.target.value)}
+            rows={4}
+          />
+        </label>
+        <label className={styles.field}>
+          Summary keyword policy
+          <textarea
+            className={styles.textarea}
+            value={summaryKeywordPolicy}
+            onChange={(e) => setSummaryKeywordPolicy(e.target.value)}
+            rows={4}
+          />
+        </label>
+        <label className={styles.field}>
+          Skill addition policy
+          <textarea
+            className={styles.textarea}
+            value={skillAdditionPolicy}
+            onChange={(e) => setSkillAdditionPolicy(e.target.value)}
+            rows={4}
+          />
+        </label>
+        <label className={styles.field}>
+          Summary good example
+          <textarea
+            className={styles.textarea}
+            value={summaryGoodExample}
+            onChange={(e) => setSummaryGoodExample(e.target.value)}
+            rows={3}
+          />
+        </label>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Summary banned phrases
+            <textarea
+              className={styles.textarea}
+              value={summaryBannedPhrases}
+              onChange={(e) => setSummaryBannedPhrases(e.target.value)}
+              rows={6}
+            />
+          </label>
+          <label className={styles.field}>
+            Blocked keywords
+            <textarea
+              className={styles.textarea}
+              value={blockedKeywords}
+              onChange={(e) => setBlockedKeywords(e.target.value)}
+              rows={6}
+            />
+          </label>
+        </div>
+        <label className={styles.field}>
+          Rewrite strategy
+          <span className={styles.fieldHint}>
+            Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
+          </span>
+          <textarea
+            className={styles.textarea}
+            value={rewriteStrategy}
+            onChange={(e) => setRewriteStrategy(e.target.value)}
+            rows={8}
+          />
+        </label>
+        <label className={styles.field}>
+          Rewrite keyword fit policy
+          <textarea
+            className={styles.textarea}
+            value={rewriteKeywordFitPolicy}
+            onChange={(e) => setRewriteKeywordFitPolicy(e.target.value)}
+            rows={7}
+          />
+        </label>
+        <label className={styles.field}>
+          Rewrite bullet policy
+          <textarea
+            className={styles.textarea}
+            value={rewriteBulletPolicy}
+            onChange={(e) => setRewriteBulletPolicy(e.target.value)}
+            rows={7}
+          />
+        </label>
+        <div className={styles.gridTwo}>
+          <label className={styles.field}>
+            Rewrite length policy
+            <span className={styles.fieldHint}>
+              Use {'{max_length_percent}'} where the configured percentage should appear.
+            </span>
+            <textarea
+              className={styles.textarea}
+              value={rewriteLengthPolicy}
+              onChange={(e) => setRewriteLengthPolicy(e.target.value)}
+              rows={4}
+            />
+          </label>
+          <label className={styles.field}>
+            Rewrite action keyword policy
+            <textarea
+              className={styles.textarea}
+              value={rewriteActionKeywordPolicy}
+              onChange={(e) => setRewriteActionKeywordPolicy(e.target.value)}
+              rows={6}
+            />
+          </label>
+        </div>
+
+        {mutation.error && (
+          <p className={styles.errorMsg} role="alert">
+            {mutation.error.message} Your draft is preserved.
+          </p>
+        )}
+        {!!syncWarnings.length && (
+          <div role="alert" className={styles.errorMsg}>
+            {syncWarnings.join(' ')}
+            <button
+              className={styles.btn}
+              disabled={mutation.isPending}
+              onClick={() => void save(syncRetry)}
+            >
+              Retry template sync
+            </button>
+          </div>
+        )}
+        <div className={styles.footer}>
+          <button
+            className={`${styles.btn} ${styles.btnPrimary}`}
+            disabled={mutation.isPending || !settings || !updates.length}
+            onClick={() => void save(updates)}
+          >
+            {mutation.isPending ? 'Saving...' : 'Save metadata values'}
+          </button>
+          <button
+            className={styles.btn}
+            disabled={mutation.isPending}
+            onClick={() => void reload()}
+          >
+            Discard draft and reload
+          </button>
+        </div>
+      </fieldset>
     </div>
   )
 }
@@ -1690,6 +1998,11 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
 export function SettingsPage() {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
+  const mounted = useMounted()
+  const saving = useRef(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [errorSection, setErrorSection] = useState<string | null>(null)
+  const [configReset, setConfigReset] = useState(0)
   const [activeTab, setActiveTab] = useState<SettingsTab>('c2')
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [testingDiscord, setTestingDiscord] = useState(false)
@@ -1715,23 +2028,36 @@ export function SettingsPage() {
     data: cfg,
     isLoading,
     error,
+    refetch,
   } = useQuery({
     queryKey: ['c1-config'],
     queryFn: fetchC1Config,
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    retry: false,
   })
 
   const mutation = useMutation({
     mutationFn: saveC1Config,
-    onSuccess: () => {
-      showToast('C1 settings saved. Restart C1 and its scheduler to apply changes.')
-      qc.invalidateQueries({ queryKey: ['c1-config'] })
+    onSuccess: (res) => {
+      if (!mounted.current) return
+      showToast(`Saved: ${res.updated_keys.join(', ')}`)
+      qc.setQueryData<C1Config>(['c1-config'], (previous) =>
+        previous ? { ...previous, ...res.config, revision: res.revision } : previous,
+      )
     },
-    onError: (e) => showToast(e instanceof Error ? e.message : 'Save failed', 'error'),
-    onSettled: () => setSavingSection(null),
+    onError: (e) => {
+      if (mounted.current) setSaveError(e.message)
+    },
+    onSettled: () => {
+      saving.current = false
+      if (mounted.current) setSavingSection(null)
+    },
   })
 
   function save(section: string, updates: C1ConfigUpdates) {
+    if (saving.current || !cfg) return
+    setErrorSection(section)
     for (const [key, value] of Object.entries(updates)) {
       if (typeof value !== 'number') continue
       const minimum = key.startsWith('enrichment_alert_')
@@ -1750,8 +2076,21 @@ export function SettingsPage() {
         return
       }
     }
+    if (!cfg.revision) {
+      setSaveError('C1 must be updated to support checked settings saves. Your draft is preserved.')
+      return
+    }
+    saving.current = true
+    setSaveError(null)
     setSavingSection(section)
-    mutation.mutate(updates)
+    mutation.mutate({ ...updates, expected_revision: cfg.revision })
+  }
+
+  async function reloadConfig() {
+    const result = await refetch()
+    if (!result.data || result.isError || !mounted.current) return
+    setConfigReset((value) => value + 1)
+    setSaveError(null)
   }
 
   const c1Content = (() => {
@@ -1762,10 +2101,15 @@ export function SettingsPage() {
         </div>
       )
     }
-    if (error || !cfg) {
+    if (!cfg) {
       return (
         <div className={styles.panel}>
-          <p className={styles.errorMsg}>Could not load C1 config. Is the C1 service running?</p>
+          <p className={styles.errorMsg} role="alert">
+            Could not load C1 config. Your settings have not been changed.
+          </p>
+          <button className={styles.btn} onClick={() => void refetch()}>
+            Retry C1 settings
+          </button>
         </div>
       )
     }
@@ -1776,19 +2120,31 @@ export function SettingsPage() {
           its existing settings.
         </div>
         <DiscoveryFilters
+          error={errorSection === 'filters' ? saveError : null}
+          onReload={() => void reloadConfig()}
           cfg={cfg}
-          saving={savingSection === 'filters'}
+          saving={mutation.isPending && savingSection === 'filters'}
           onSave={(u) => save('filters', u)}
         />
         <SearchConfig
+          error={errorSection === 'search' ? saveError : null}
+          onReload={() => void reloadConfig()}
           cfg={cfg}
-          saving={savingSection === 'search'}
+          saving={mutation.isPending && savingSection === 'search'}
           onSave={(u) => save('search', u)}
         />
-        <RunSettings cfg={cfg} saving={savingSection === 'run'} onSave={(u) => save('run', u)} />
-        <AlertSettings
+        <RunSettings
+          error={errorSection === 'run' ? saveError : null}
+          onReload={() => void reloadConfig()}
           cfg={cfg}
-          saving={savingSection === 'alerts'}
+          saving={mutation.isPending && savingSection === 'run'}
+          onSave={(u) => save('run', u)}
+        />
+        <AlertSettings
+          error={errorSection === 'alerts' ? saveError : null}
+          onReload={() => void reloadConfig()}
+          cfg={cfg}
+          saving={mutation.isPending && savingSection === 'alerts'}
           onSave={(u) => save('alerts', u)}
         />
       </>
@@ -1830,18 +2186,25 @@ export function SettingsPage() {
         ))}
       </div>
 
-      <section hidden={activeTab !== 'c1'}>{c1Content}</section>
+      <div hidden={activeTab !== 'c1'}>
+        {error && cfg && (
+          <p role="alert" className={styles.errorMsg}>
+            Could not refresh C1 settings. Your draft is preserved.
+          </p>
+        )}
+        <div key={configReset}>{c1Content}</div>
+      </div>
 
-      <section hidden={activeTab !== 'c2'}>
+      <div hidden={activeTab !== 'c2'}>
         <C2ProviderRuntimeSettings />
         <AppNotificationSettings />
         <details className={styles.panel}>
           <summary className={styles.sectionSummary}>Advanced tailoring rules</summary>
           <JobMetadataSettings />
         </details>
-      </section>
+      </div>
 
-      <section hidden={activeTab !== 'integrations'}>{integrationsContent}</section>
+      <div hidden={activeTab !== 'integrations'}>{integrationsContent}</div>
     </div>
   )
 }

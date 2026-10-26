@@ -1,0 +1,5957 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { chromium, type Locator } from "playwright";
+
+import {
+  PlaywrightWorkdayProfilePage,
+  completeWorkdayProfilePage,
+  type ProfileFieldPlan,
+  type WorkdayProfilePagePort,
+} from "../../../../src/ats/workday/application/profile/index.ts";
+import { retainedProfileTextSha256 } from
+  "../../../../src/ats/workday/application/profile/catalog.ts";
+import { admitProfileFieldLearningEvidence, createProfileFieldLearningCapture } from
+  "../../../../src/live/evidence/profile-field-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../../src/contracts/application-execution-policy.ts";
+
+const fixture = await readFile(
+  new URL("./fixtures/profile-contact.html", import.meta.url),
+  "utf8",
+);
+
+const field = (
+  fieldId: string,
+  questionType: ProfileFieldPlan["questionType"],
+  answerType: ProfileFieldPlan["answerType"],
+  value: string,
+  visibleOption?: string,
+): ProfileFieldPlan => ({
+  fieldId,
+  questionType,
+  answerType,
+  allowedOptions: visibleOption === undefined ? [] : [visibleOption],
+  answer: {
+    kind: "answered",
+    value,
+    provenance: "owner_provided",
+    lane: "live_owner_fact",
+  },
+  ...(visibleOption === undefined
+    ? {}
+    : {
+        optionMapping: {
+          canonicalValue: value,
+          visibleOption,
+          provenance: "visible_option" as const,
+        },
+      }),
+});
+
+test("disappearing prior popups do not block education discovery or selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(700);
+  try {
+    for (const discover of [true, false]) {
+      await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+        <div data-automation-id="formField-fieldOfStudy"><label>Field of Study</label>
+          <input id="education-1--fieldOfStudy"><div id="selected"></div>
+        </div></main><div id="previous" role="listbox"><div role="option">Old popup</div></div>
+        <script>
+          document.querySelector('input').onclick = () => {
+            if (document.querySelector('#studies')) return;
+            document.body.insertAdjacentHTML('beforeend', '<div id="studies" role="listbox"><div role="option">Computer Science</div></div>');
+            document.querySelector('#studies').onclick = () => {
+              document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">Computer Science</span>';
+              document.querySelector('#studies').remove();
+            };
+          };
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') document.querySelector('#studies')?.remove();
+          });
+        </script>`);
+      let removed = false;
+      const removePrior = async () => {
+        if (removed) return;
+        removed = true;
+        await page.locator('#previous').evaluate(element => element.remove());
+      };
+      const wrap = (locator: Locator): Locator => new Proxy(locator, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (property === "nth") return (index: number) => wrap(target.nth(index));
+          if (property === "isVisible") return async () => {
+            const visible = await target.isVisible();
+            if (visible) await removePrior();
+            return visible;
+          };
+          if (property === "elementHandles") return async () => {
+            const handles = await target.elementHandles();
+            await removePrior();
+            return handles;
+          };
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const observedPage = new Proxy(page, {
+        get(target, property) {
+          if (property === "locator") return (...args: Parameters<typeof page.locator>) => {
+            const locator = target.locator(...args);
+            return ['[role="listbox"]', '[role="listbox"]:visible'].includes(args[0]) ? wrap(locator) : locator;
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const adapter = new PlaywrightWorkdayProfilePage(observedPage, {
+        pageType: "profile", timeoutMs: 500, inspectMissingOptions: discover,
+      });
+      const snapshot = await adapter.inspect(AbortSignal.any([]));
+      const study = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study")!;
+      assert.ok(study);
+      if (discover) {
+        assert.deepEqual(study.allowedOptions, ["Computer Science"]);
+        assert.equal(study.readback, null);
+      } else {
+        await adapter.commit({ controlId: study.controlId, uiBehavior: study.uiBehavior, value: JSON.stringify(["Computer Science"]) }, AbortSignal.any([]));
+        assert.equal(adapter.interaction(study.controlId)?.backingValueCommitted, true);
+      }
+      assert.equal(removed, true);
+    }
+  } finally { await browser.close(); }
+});
+
+test("scalar readback avoids repeated empty catalog discovery in either field order", async (t) => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const probes: number[] = [];
+  try {
+    for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-prefix"><label for="name--legalName--title">Prefix</label>
+          <button type="button" id="name--legalName--title" aria-controls="titles" aria-haspopup="listbox" aria-expanded="false">Select One</button>
+          <div id="titles" role="listbox" hidden><div role="option">Mr.</div><div role="option">Ms.</div></div>
+        </div>
+        <div data-automation-id="formField-firstName"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName"></div>
+        <div data-automation-id="formField-middleName"><label for="name--legalName--middleName">Middle Name</label><input id="name--legalName--middleName"></div>
+        <div data-automation-id="formField-lastName"><label for="name--legalName--lastName">Last Name</label><input id="name--legalName--lastName"></div>
+      </main><script>(() => {
+        globalThis.emptyOpens = 0;
+        const button = document.querySelector('button'), popup = document.querySelector('#titles');
+        button.onclick = () => {
+          if (button.textContent === 'Select One') globalThis.emptyOpens++;
+          popup.hidden = false; button.setAttribute('aria-expanded', 'true');
+        };
+        popup.querySelectorAll('[role="option"]').forEach(option => option.onclick = () => {
+          button.textContent = option.textContent; popup.hidden = true; button.setAttribute('aria-expanded', 'false');
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') { popup.hidden = true; button.setAttribute('aria-expanded', 'false'); }
+        });
+      })();</script>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+      const result = await completeWorkdayProfilePage({ mode, pageType: "profile", repeatables: [], fields: [
+        field("identity.given_name", "identity", "text", "Ada"),
+        field("identity.middle_name", "identity", "text", "Test"),
+        field("identity.family_name", "identity", "text", "Lovelace"),
+        field("identity.prefix", "identity", "option", "Ms.", "Ms."),
+      ] }, adapter, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      if (result.kind === "verified") assert.equal(result.verifiedFields.length, 4);
+      assert.deepEqual(await page.locator('input').evaluateAll(elements => elements.map(element =>
+        element instanceof HTMLInputElement ? element.value : null)), ["Ada", "Test", "Lovelace"]);
+      assert.equal(await page.locator('button').innerText(), "Ms.");
+      probes.push(await page.evaluate(() => Reflect.get(globalThis, "emptyOpens")));
+    }
+    t.diagnostic(`Empty menu openings: original order ${probes[0]}, choice-first order ${probes[1]}`);
+    assert.ok(probes.every(count => count <= 2), JSON.stringify(probes));
+  } finally { await browser.close(); }
+});
+
+test("required-field reads preserve disabled, read-only and marker semantics", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const [attributes, marker, expected] of [
+      ["required", "", true],
+      ['aria-required="true"', "", true],
+      ['aria-label="First Name Required"', "", true],
+      ['aria-label="First Name Not Required"', "", false],
+      ["required disabled", "*", false],
+      ['required aria-disabled="true"', "*", false],
+      ["required readonly", "*", false],
+      ["", "*", true],
+      ["", '<abbr title="Required"></abbr>', true],
+    ] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-name"><label>First Name${marker}
+          <input id="name--legalName--firstName" ${attributes}>
+        </label></div></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      const snapshot = await adapter.inspect(new AbortController().signal);
+      assert.equal(snapshot.controls.find(({ fieldId }) =>
+        fieldId === "identity.given_name")?.required, expected, `${attributes} ${marker}`);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Playwright adapter owns repeatables on the My Experience root", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <section data-automation-id="workExperienceSection">
+            <div data-row-id="experience-1">
+              <label>Company<input data-automation-id="workExperience-1--company"
+                value="Analytical Engines"></label>
+            </div>
+          </section>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.rows[0]?.section, "experience");
+    assert.equal(snapshot.rows[0]?.controls[0]?.fieldId, "experience.company");
+    assert.equal(snapshot.rows[0]?.controls[0]?.readback, "Analytical Engines");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("indexed Workday dates bind month and year inputs instead of legacy date containers", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <input id="workExperience-4--jobTitle" required>
+          <input id="workExperience-4--companyName" required>
+          <div id="workExperience-4--startDate">
+            <input id="workExperience-4--startDate-dateSectionMonth-input"
+              role="spinbutton" required>
+            <input id="workExperience-4--startDate-dateSectionYear-input"
+              role="spinbutton" required>
+          </div>
+          <div id="workExperience-4--endDate">
+            <input id="workExperience-4--endDate-dateSectionMonth-input"
+              role="spinbutton" required>
+            <input id="workExperience-4--endDate-dateSectionYear-input"
+              role="spinbutton" required>
+          </div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const experience = snapshot.rows.find(({ section }) => section === "experience");
+    assert.deepEqual(experience?.controls.map(({ fieldId, uiBehavior }) => [
+      fieldId,
+      uiBehavior,
+    ]), [
+      ["experience.company", "text"],
+      ["experience.title", "text"],
+      ["experience.start_month", "month"],
+      ["experience.start_year", "year"],
+      ["experience.end_month", "month"],
+      ["experience.end_year", "year"],
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Workday date entry selects each visible segment before typing into its tiny input", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <style>.segment { display: inline-block; position: relative; width: 60px; height: 24px; }
+        input { position: absolute; width: 1px; transform: scale(0.01); z-index: -1000; }</style>
+      ${["Month", "Year"].map(part => `<div class="segment" tabindex="-1"
+          id="workExperience-4--startDate-dateSection${part}"
+          onclick="window.selected = this.querySelector('input'); window.selected.focus()">
+          ${part}<input id="workExperience-4--startDate-dateSection${part}-input"
+            role="spinbutton" onfocus="if (window.selected && window.selected !== this) window.selected.focus()">
+        </div>`).join("")}
+      <script>window.selected = document.querySelector('input');</script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    for (const control of initial.rows[0]!.controls) {
+      await adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior,
+        value: control.uiBehavior === "month" ? "1" : "2000" }, AbortSignal.any([]));
+      assert.equal(adapter.interaction(control.controlId)?.backingValueCommitted, true);
+    }
+    assert.equal(await page.locator('[id$="Month-input"]').inputValue(), "1");
+    assert.equal(await page.locator('[id$="Year-input"]').inputValue(), "2000");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("repeatable month-year dates commit both planned parts before blur validation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <style>.segment { display: inline-block; position: relative; width: 60px; height: 24px; }
+        .segment input { position: absolute; width: 1px; transform: scale(0.01); z-index: -1000; }</style>
+      <input id="workExperience-4--companyName" required>
+      <input id="workExperience-4--jobTitle" required>
+      <div data-automation-id="dateInputWrapper" onfocusout="if (!this.contains(event.relatedTarget)) {
+        const inputs = [...this.querySelectorAll('input')];
+        if (inputs.some(input => !input.value)) { window.invalidExits++; inputs.forEach(input => input.value = ''); }
+      }">
+      ${["Month", "Year"].map(part => `<div class="segment" tabindex="-1"
+          id="workExperience-4--startDate-dateSection${part}"
+          onclick="window.selected = this.querySelector('input'); window.selected.focus()">
+          ${part}<input id="workExperience-4--startDate-dateSection${part}-input" required
+            role="spinbutton" onfocus="if (window.selected && window.selected !== this) window.selected.focus()">
+        </div>`).join("")}</div>
+      <script>window.invalidExits = 0; window.selected = document.querySelector('.segment input');</script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() => (window as unknown as { invalidExits: number }).invalidExits), 0);
+    assert.equal(await page.locator('[id$="Month-input"]').inputValue(), "1");
+    assert.equal(await page.locator('[id$="Year-input"]').inputValue(), "2000");
+  } finally { await browser.close(); }
+});
+
+test("Workday month commit accepts the spinbutton's unpadded numeric readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <input id="workExperience-4--startDate-dateSectionMonth-input"
+            role="spinbutton" required
+            onblur="this.value = this.value === '' ? '' : String(Number(this.value))">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    const month = initial.rows[0]!.controls[0]!;
+
+    await adapter.commit({
+      controlId: month.controlId,
+      uiBehavior: "month",
+      value: "09",
+    }, AbortSignal.any([]));
+
+    assert.equal(adapter.interaction(month.controlId)?.backingValueCommitted, true);
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).rows[0]!.controls[0]!.readback, "9");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Playwright adapter proves reviewed text, phone, date, and active-listbox variants", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(fixture);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    const byField = new Map(initial.controls.map((item) => [item.fieldId, item]));
+    assert.equal(byField.get("identity.given_name")?.uiBehavior, "text");
+    assert.equal(byField.get("address.country")?.uiVariant, "workday_search_select_v1");
+    assert.equal(byField.get("phone.number")?.uiBehavior, "phone");
+    assert.equal(initial.rows.find(({ section }) => section === "experience")
+      ?.controls.find(({ fieldId }) => fieldId === "experience.start_date")
+      ?.uiBehavior, "date");
+
+    await adapter.commit({
+      controlId: byField.get("identity.given_name")!.controlId,
+      uiBehavior: "text",
+      value: "Ada",
+    }, AbortSignal.any([]));
+    await adapter.commit({
+      controlId: byField.get("address.country")!.controlId,
+      uiBehavior: "search_select",
+      value: "Canada",
+    }, AbortSignal.any([]));
+    await adapter.commit({
+      controlId: byField.get("phone.number")!.controlId,
+      uiBehavior: "phone",
+      value: "+1 555 0100",
+    }, AbortSignal.any([]));
+
+    const actual = await adapter.inspect(AbortSignal.any([]));
+    const committed = new Map(actual.controls.map((item) => [item.fieldId, item.readback]));
+    assert.equal(committed.get("identity.given_name"), "Ada");
+    assert.equal(committed.get("address.country"), "Canada");
+    assert.equal(committed.get("phone.number"), "+1 555 0100");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("v2 semantic ids bind exact profile controls and accessible required wording", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-country">
+            <button id="country--country" name="country" aria-haspopup="listbox"
+              aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+            <input>
+          </div>
+          <label>First Name*<input id="name--legalName--firstName"
+            name="legalName--firstName" required></label>
+          <label>Last Name*<input id="name--legalName--lastName"
+            name="legalName--lastName" required></label>
+          <label><input id="name--preferredCheck" name="preferredCheck"
+            type="checkbox">I have a preferred name</label>
+          <label>Middle Name<input id="name--legalName--middleName" name="middleName"></label>
+          <label>Address Line 1<input id="address--addressLine1" name="addressLine1"></label>
+          <label>Address Line 2<input id="address--addressLine2" name="addressLine2"></label>
+          <label>City<input id="address--city" name="city"></label>
+          <button id="address--countryRegion" name="countryRegion" aria-haspopup="listbox"
+            aria-label="Province or Territory Not Required">Select One</button>
+          <label>Postal Code<input id="address--postalCode" name="postalCode"></label>
+          <label>Email*<input id="emailAddress--emailAddress" required></label>
+          <button id="phoneNumber--phoneType" name="phoneType" aria-haspopup="listbox"
+            aria-label="Phone Device Type Mobile Required" aria-valuetext="Mobile">Mobile</button>
+          <label data-automation-id="formField">Country Phone Code*
+            <span data-automation-id="selectedItem">Canada (+1)</span>
+            <input id="phoneNumber--countryPhoneCode" role="combobox"
+              aria-controls="phone-codes" required>
+          </label>
+          <div id="phone-codes" role="listbox" hidden>
+            <div role="option">Canada (+1)</div>
+          </div>
+          <label>Phone Number*<input id="phoneNumber--phoneNumber"
+            name="phoneNumber" required></label>
+          <label>Phone Extension<input id="phoneNumber--extension" name="extension"></label>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const controls = new Map(snapshot.controls.map((control) => [control.fieldId, control]));
+
+    assert.deepEqual([...controls.keys()], [
+      "identity.given_name",
+      "identity.middle_name",
+      "identity.family_name",
+      "identity.has_preferred_name",
+      "address.line1",
+      "address.line2",
+      "address.city",
+      "address.country",
+      "address.region",
+      "address.postal_code",
+      "contact.email",
+      "phone.device_type",
+      "phone.country_code",
+      "phone.number",
+      "phone.extension",
+    ]);
+    assert.equal(controls.get("address.country")?.required, true);
+    assert.equal(controls.get("address.country")?.readback, "Canada");
+    assert.equal(controls.get("address.region")?.required, false);
+    assert.equal(controls.get("contact.email")?.required, true);
+    assert.equal(controls.get("phone.device_type")?.required, true);
+    assert.equal(controls.get("phone.country_code")?.uiBehavior, "search_select");
+    assert.equal(controls.get("phone.country_code")?.readback, "Canada (+1)");
+    assert.equal(controls.get("phone.number")?.uiBehavior, "phone");
+
+    await adapter.commit({
+      controlId: controls.get("identity.has_preferred_name")!.controlId,
+      uiBehavior: "checkbox",
+      value: "true",
+    }, AbortSignal.any([]));
+
+    await adapter.commit({
+      controlId: controls.get("identity.given_name")!.controlId,
+      uiBehavior: "text",
+      value: "Ada",
+    }, AbortSignal.any([]));
+    await adapter.commit({
+      controlId: controls.get("phone.number")!.controlId,
+      uiBehavior: "phone",
+      value: "5550100",
+    }, AbortSignal.any([]));
+
+    const readback = new Map((await adapter.inspect(AbortSignal.any([]))).controls
+      .map((control) => [control.fieldId, control.readback]));
+    assert.equal(readback.get("identity.given_name"), "Ada");
+    assert.equal(readback.get("phone.country_code"), "Canada (+1)");
+    assert.equal(readback.get("phone.number"), "5550100");
+    assert.equal(readback.get("identity.has_preferred_name"), "true");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("reports the exact catalog identity for ambiguous visible scalar controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <input id="skills--skills"><input id="skills--skills">
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    await assert.rejects(() => adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    assert.deepEqual(adapter.inspectionFailure()?.bindingIds, ["skills.values"]);
+    assert.equal(adapter.inspectionFailure()?.phase, "scalar");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("reports the exact catalog identity when control observation loses its target", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <label>LinkedIn<input id="socialNetworkAccounts--linkedInAccount"></label>
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const linkedIn = snapshot.controls.find(({ fieldId }) => fieldId === "social.linkedin")!;
+    await page.locator('[id="socialNetworkAccounts--linkedInAccount"]')
+      .evaluate((element) => element.remove());
+
+    await assert.rejects(
+      () => adapter.observeControl(linkedIn.controlId, AbortSignal.any([])),
+      /profile inspection failed/u,
+    );
+    assert.deepEqual(adapter.inspectionFailure()?.bindingIds, ["social.linkedin"]);
+    assert.deepEqual(adapter.inspectionFailure()?.bindingPaths, ["profile.control.observation"]);
+    assert.equal(adapter.inspectionFailure()?.phase, "unknown_controls");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("observes an empty Workday skills prompt without opening it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <main data-automation-id="applyFlowMyExperiencePage">
+        <label>Type to Add Skills
+          <input id="skills--skills"
+            onfocus="this.setAttribute('aria-invalid', 'true')">
+        </label>
+      </main>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const skills = snapshot.controls.find(({ fieldId }) => fieldId === "skills.values")!;
+
+    const observed = await adapter.observeControl(skills.controlId, AbortSignal.any([]));
+
+    assert.equal(observed.optionCatalogState, "unknown");
+    assert.deepEqual(observed.visibleOptionIds, []);
+    assert.equal(await page.locator('[id="skills--skills"]').getAttribute("aria-invalid"), null);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("associated Workday labels override aria labels containing selected values", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <label for="source--source">How Did You Hear About Us?</label>
+          <button id="source--source" type="button" data-automation-id="sourcePrompt"
+            aria-haspopup="listbox" aria-label="How Did You Hear About Us? Select One Required">
+            Select One
+          </button>
+          <label for="country--country">Country</label>
+          <button id="country--country" aria-haspopup="listbox"
+            aria-label="Country Canada Required" aria-valuetext="Canada">Canada</button>
+          <label for="address--countryRegion">Province or Territory</label>
+          <button id="address--countryRegion" aria-haspopup="listbox"
+            aria-label="Province or Territory Alberta Not Required"
+            aria-valuetext="Alberta">Alberta</button>
+          <label for="phoneNumber--phoneType">Phone Device Type</label>
+          <button id="phoneNumber--phoneType" aria-haspopup="listbox"
+            aria-label="Phone Device Type Mobile Required"
+            aria-valuetext="Mobile">Mobile</button>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const controls = await adapter.inspect(AbortSignal.any([]));
+    for (const [fieldId, label] of [
+      ["source.how_did_you_hear", "How Did You Hear About Us?"],
+      ["address.country", "Country"],
+      ["address.region", "Province or Territory"],
+      ["phone.device_type", "Phone Device Type"],
+    ] as const) {
+      const control = controls.controls.find((candidate) => candidate.fieldId === fieldId);
+      assert.ok(control !== undefined);
+      const observed = await adapter.observeControl(
+        control.controlId,
+        AbortSignal.any([]),
+        false,
+      );
+      assert.equal(observed.sanitizedLabelSha256, retainedProfileTextSha256(label));
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search-select refuses an unrelated visible listbox without an ownership link", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input role="combobox" data-automation-id="addressSection_countryRegion">
+          <div role="listbox"><div role="option">Canada</div></div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const country = snapshot.controls.find(({ fieldId }) => fieldId === "address.country")!;
+
+    await assert.rejects(
+      adapter.commit({
+        controlId: country.controlId,
+        uiBehavior: "search_select",
+        value: "Canada",
+      }, AbortSignal.any([])),
+      /listbox ownership/iu,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("exact owner inputs commit the reviewed source button leaf and previous-worker radio", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox" hidden>
+            <div role="option" data-automation-id="promptCategory">Company Website</div>
+            <div role="option" data-automation-id="promptLeafNode"
+              data-value="company-website">Company Website</div>
+          </div>
+          <div data-automation-id="formField-previousWorker">
+            <span data-automation-id="required">*</span>
+            <fieldset role="radiogroup">
+              <legend>Have you previously worked for this organization? If Yes, please answer the questions below. If No, please continue to the next page.</legend>
+              <input id="previous-yes" type="radio"
+                name="candidateIsPreviousWorker" value="true"><label for="previous-yes">Yes</label>
+              <input id="previous-no" type="radio"
+                name="candidateIsPreviousWorker" value="false"><label for="previous-no">No</label>
+            </fieldset>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            listbox.hidden = false;
+            source.setAttribute('aria-expanded', 'true');
+          });
+          document.querySelector('[data-automation-id="promptLeafNode"]')
+            .addEventListener('click', event => {
+              source.setAttribute('data-selected-label', event.currentTarget.textContent.trim());
+              source.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const before = await adapter.inspect(AbortSignal.any([]));
+    const source = before.controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+    const previousWorker = before.controls.find(
+      ({ fieldId }) => fieldId === "employment.previously_worked_for_organization",
+    )!;
+    assert.equal(previousWorker.required, true);
+    assert.equal(before.controls.some(({ fieldId }) => fieldId.startsWith("unknown.")), false);
+
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [
+        field(
+          "source.how_did_you_hear",
+          "application_source",
+          "option",
+          "company-website",
+          "Company Website",
+        ),
+        field(
+          "employment.previously_worked_for_organization",
+          "prior_employment",
+          "option",
+          "false",
+          "No",
+        ),
+      ],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[data-automation-id="sourcePrompt"]')
+      .getAttribute("data-selected-label"), "Company Website");
+    assert.equal(await page.locator('#previous-no').isChecked(), true);
+    assert.deepEqual(adapter.interaction(source.controlId), {
+      popupBound: true,
+      optionFocused: false,
+      optionActivated: true,
+      popupClosed: true,
+      backingValueCommitted: true,
+      validationCleared: true,
+      visibleOptionCount: 1,
+      selectedOptionOrdinal: 1,
+    });
+    assert.deepEqual(adapter.interaction(previousWorker.controlId), {
+      popupBound: null,
+      optionFocused: null,
+      optionActivated: true,
+      popupClosed: null,
+      backingValueCommitted: true,
+      validationCleared: true,
+      visibleOptionCount: 2,
+      selectedOptionOrdinal: 2,
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
+test("source selection binds valid HTML ids outside CSS identifier syntax", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const popupId of ["9source-options", ":source.options:", 'source"options']) {
+      await page.setContent(`
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" data-automation-id="sourcePrompt"
+            aria-haspopup="listbox" aria-expanded="false">Select One</button>
+          <div role="listbox" hidden><div role="option">Company Website</div></div>
+        </main>
+      `);
+      await page.evaluate((id) => {
+        const control = document.querySelector("button")!;
+        const popup = document.querySelector<HTMLElement>('[role="listbox"]')!;
+        popup.id = id;
+        control.setAttribute("aria-controls", id);
+        control.addEventListener("click", () => {
+          popup.hidden = false;
+          control.setAttribute("aria-expanded", "true");
+        });
+        popup.firstElementChild!.addEventListener("click", () => {
+          control.setAttribute("data-selected-label", "Company Website");
+          control.setAttribute("aria-expanded", "false");
+          popup.hidden = true;
+        });
+      }, popupId);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+      const control = (await adapter.inspect(AbortSignal.any([]))).controls[0]!;
+      await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Company Website" }, AbortSignal.any([]));
+      assert.equal((await adapter.inspect(AbortSignal.any([]))).controls[0]!.readback, "Company Website");
+      assert.equal(adapter.interaction(control.controlId)?.backingValueCommitted, true);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Integer source select maps LinkedIn to its unique corporate-page leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" aria-label="How Did You Hear About Us? Select One Required"
+              aria-haspopup="listbox" name="source" id="source--source">Select One</button>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('#source--source');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            source.setAttribute('aria-controls', 'source-options');
+            const listbox = document.createElement('div');
+            listbox.id = 'source-options';
+            listbox.setAttribute('role', 'listbox');
+            listbox.innerHTML = '<div>LinkedIn corporate page</div>';
+            document.body.append(listbox);
+            listbox.firstElementChild.addEventListener('click', event => {
+              source.textContent = event.currentTarget.textContent.trim();
+              source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
+              source.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+            });
+          }, { once: true });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 500,
+    });
+    assert.deepEqual(
+      (await adapter.inspect(AbortSignal.any([]))).controls.map(
+        ({ fieldId, uiBehavior, required }) => ({ fieldId, uiBehavior, required }),
+      ),
+      [{ fieldId: "source.how_did_you_hear", uiBehavior: "search_select", required: true }],
+    );
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "linkedin",
+        "LinkedIn",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    const after = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify({
+      result,
+      after,
+      interaction: adapter.interaction(after.controls[0]!.controlId),
+    }));
+    assert.equal(await page.locator('#source--source').innerText(), "LinkedIn corporate page");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("source control binds through the exact Workday form-field container without sourcePrompt", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" role="combobox" aria-required="true"
+              aria-controls="source-options" aria-valuetext="Company Website">
+              Company Website
+            </button>
+          </div>
+          <div id="source-options" role="listbox" hidden></div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required, readback }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+      readback,
+    })), [{
+      fieldId: "source.how_did_you_hear",
+      uiBehavior: "search_select",
+      required: true,
+      readback: "Company Website",
+    }]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("source-specific native action controls are never bound or activated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const unsafeControls = [
+      '<button id="source--default-submit" role="combobox" aria-required="true">Select One</button>',
+      '<button type="submit" id="source--submit" role="combobox" aria-required="true">Select One</button>',
+      '<input type="submit" id="source--input-submit" role="combobox" aria-required="true">',
+      '<input type="image" id="source--image" role="combobox" aria-required="true">',
+      '<input type="reset" id="source--reset" role="combobox" aria-required="true">',
+    ];
+    for (const unsafeControl of unsafeControls) {
+      await page.setContent(`
+        <body data-hunt-profile-page-type="profile">
+          <main data-automation-id="applyFlowMyInfoPage">
+            <form id="application-form">
+              <div data-automation-id="formField-source--unsafe">${unsafeControl}</div>
+            </form>
+          </main>
+          <script>
+            globalThis.submitCount = 0;
+            globalThis.resetCount = 0;
+            document.querySelector('#application-form').addEventListener('submit', (event) => {
+              event.preventDefault();
+              globalThis.submitCount += 1;
+            });
+            document.querySelector('#application-form').addEventListener('reset', () => {
+              globalThis.resetCount += 1;
+            });
+          </script>
+        </body>
+      `);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      let sourceBound = false;
+      try {
+        sourceBound = (await adapter.inspect(AbortSignal.any([]))).controls.some(
+          ({ fieldId }) => fieldId === "source.how_did_you_hear",
+        );
+      } catch (error) {
+        assert.match(String(error), /unknown required control identity denied/iu);
+      }
+      assert.equal(sourceBound, false);
+      assert.deepEqual(await page.evaluate(() => ({
+        reset: (globalThis as { resetCount?: number }).resetCount,
+        submit: (globalThis as { submitCount?: number }).submitCount,
+      })), { reset: 0, submit: 0 });
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("the source selector may expand but never commits an exact category row", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox">
+            <div role="option" data-automation-id="promptCategory">Company Website</div>
+          </div>
+        </main>
+        <script>
+          globalThis.optionClicks = 0;
+          document.querySelector('[role="option"]').addEventListener('click', () => {
+            globalThis.optionClicks += 1;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: source.controlId,
+      uiBehavior: "search_select",
+      value: "Company Website",
+    }, AbortSignal.any([])), /selectable leaf/iu);
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { optionClicks: number }).optionClicks
+    ), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical source aria-valuetext prefill is already correct and never reopened", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-valuetext="Company Website"
+            data-automation-id="sourcePrompt">Company Website</button>
+          <div id="source-options" role="listbox" hidden></div>
+        </main>
+        <script>
+          globalThis.sourceClicks = 0;
+          document.querySelector('[data-automation-id="sourcePrompt"]')
+            .addEventListener('click', () => { globalThis.sourceClicks += 1; });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "Company Website",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { sourceClicks: number }).sourceClicks
+    ), 0);
+    assert.equal(adapter.interaction(source.controlId), undefined);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical source waits for its delayed owned listbox leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            const listbox = document.createElement('div');
+            listbox.id = 'source-options';
+            listbox.setAttribute('role', 'listbox');
+            document.body.append(listbox);
+            setTimeout(() => {
+              listbox.innerHTML = '<div role="option" data-automation-id="promptLeafNode">Company Website</div>';
+              listbox.firstElementChild.addEventListener('click', event => {
+                source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
+                source.setAttribute('aria-expanded', 'false');
+                listbox.hidden = true;
+              });
+            }, 40);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 1_000,
+    });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "Company Website",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[data-automation-id="sourcePrompt"]')
+      .getAttribute("aria-valuetext"), "Company Website");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select matches the exact accessible option label when rendered text has adornment", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden>
+            <div role="option" aria-label="Mobile">Mobile Selected</div>
+          </div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            popup.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          popup.addEventListener('click', ({ target }) => {
+            if (!(target instanceof Element) || target.getAttribute('role') !== 'option') return;
+            control.textContent = target.getAttribute('aria-label');
+            control.setAttribute('aria-valuetext', target.getAttribute('aria-label'));
+            control.setAttribute('aria-expanded', 'false');
+            popup.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Mobile",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select commits an exact Workday prompt leaf without an option role", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden>
+            <div data-automation-id="promptOption">Mobile</div>
+          </div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            popup.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          popup.addEventListener('click', ({ target }) => {
+            if (!(target instanceof Element) || target.getAttribute('data-automation-id') !== 'promptOption') return;
+            control.textContent = target.textContent;
+            control.setAttribute('aria-valuetext', target.textContent);
+            control.setAttribute('aria-expanded', 'false');
+            popup.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Mobile",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select commits one exact visible text leaf inside its owned popup", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden><div class="phone-choice">Mobile</div></div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            popup.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          popup.addEventListener('click', ({ target }) => {
+            if (!(target instanceof Element) || !target.classList.contains('phone-choice')) return;
+            control.textContent = target.textContent;
+            control.setAttribute('aria-valuetext', target.textContent);
+            control.setAttribute('aria-expanded', 'false');
+            popup.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Mobile",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select uses exact keyboard typeahead when an owned popup exposes no DOM leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          let typed = '';
+          control.addEventListener('click', () => {
+            control.focus();
+            popup.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          control.addEventListener('keydown', (event) => {
+            const { key } = event;
+            if (key.length === 1) typed += key;
+            if (key === 'Enter' && typed === 'Mobile') {
+              event.preventDefault();
+              control.textContent = 'Mobile';
+              control.setAttribute('aria-valuetext', 'Mobile');
+              control.setAttribute('aria-expanded', 'false');
+              popup.hidden = true;
+            }
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Mobile",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select clicks the exact active descendant established by typeahead", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            control.focus();
+            popup.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          control.addEventListener('keydown', ({ key }) => {
+            if (key !== 'M') return;
+            const option = document.createElement('div');
+            option.id = 'active-mobile';
+            option.setAttribute('aria-label', 'Mobile');
+            option.textContent = 'Mobile Selected';
+            option.addEventListener('click', () => {
+              control.textContent = 'Mobile';
+              control.setAttribute('aria-valuetext', 'Mobile');
+              control.setAttribute('aria-expanded', 'false');
+              popup.hidden = true;
+            });
+            popup.append(option);
+            control.setAttribute('aria-activedescendant', option.id);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "Mobile",
+    }, AbortSignal.any([]));
+
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Adient flat source list maps recruiter to its unique Direct Sourcing leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" id="source--source" aria-required="true"
+              aria-haspopup="listbox" aria-controls="source-options" aria-expanded="false">Select One</button>
+          </div>
+        </main>
+        <div id="source-options" role="listbox" hidden>
+          <div>Direct Mail</div><div>Direct Sourcing</div><div>Employee Referral</div>
+        </div>
+        <script>
+          const source = document.querySelector('#source--source');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true'); listbox.hidden = false;
+          });
+          listbox.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.textContent !== 'Direct Sourcing') return;
+            source.textContent = target.textContent; source.setAttribute('aria-valuetext', target.textContent);
+            source.setAttribute('aria-expanded', 'false'); listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 250 });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "recruiter",
+        "recruiter",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator("#source--source").innerText(), "Direct Sourcing");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Integer flat source list maps recruiter to its retained Recruiter Outreach leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button type="button" id="source--source" aria-required="true"
+              aria-haspopup="listbox" aria-controls="source-options" aria-expanded="false">Select One</button>
+          </div>
+        </main>
+        <div id="source-options" role="listbox" hidden>
+          <div>Open House</div><div>Recruiter Outreach</div><div>Walk In</div>
+        </div>
+        <script>
+          const source = document.querySelector('#source--source');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true'); listbox.hidden = false;
+          });
+          listbox.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.textContent !== 'Recruiter Outreach') return;
+            source.textContent = target.textContent; source.setAttribute('aria-valuetext', target.textContent);
+            source.setAttribute('aria-expanded', 'false'); listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 250 });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "recruiter",
+        "recruiter",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator("#source--source").innerText(), "Recruiter Outreach");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select activates the option-row ancestor of a numeric active descendant id", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-types" aria-expanded="false">Select One</button>
+        <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+      </main><script>
+        const control = document.querySelector('#phoneNumber--phoneType');
+        const popup = document.querySelector('#phone-types');
+        control.addEventListener('click', () => { control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true'); });
+        control.addEventListener('keydown', ({ key }) => {
+          if (key !== 'M' || document.getElementById('6be1eff3a16c105407814908815d70fd')) return;
+          const row = document.createElement('div'); row.setAttribute('role', 'option');
+          const label = document.createElement('span'); label.id = '6be1eff3a16c105407814908815d70fd'; label.textContent = 'Mobile';
+          row.append(label); row.addEventListener('click', ({ target }) => {
+            if (target !== row) return;
+            control.textContent = 'Mobile'; control.setAttribute('aria-valuetext', 'Mobile');
+            control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+          });
+          popup.append(row); control.setAttribute('aria-activedescendant', label.id);
+        });
+      </script></body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally { await browser.close(); }
+});
+
+test("v2 phone type commits an activated exact row with Enter", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-types" aria-expanded="false">Select One</button>
+        <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+      </main><script>
+        const control = document.querySelector('#phoneNumber--phoneType');
+        const popup = document.querySelector('#phone-types');
+        let active;
+        control.addEventListener('click', () => { control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true'); });
+        control.addEventListener('keydown', ({ key }) => {
+          if (key === 'M' && !active) {
+            active = document.createElement('div'); active.id = 'active-mobile';
+            active.setAttribute('role', 'option'); active.setAttribute('aria-label', 'Mobile');
+            active.textContent = 'Mobile'; active.tabIndex = -1;
+            active.addEventListener('click', () => active.focus());
+            active.addEventListener('keydown', ({ key: optionKey }) => {
+              if (optionKey !== 'Enter') return;
+              control.textContent = 'Mobile'; control.setAttribute('aria-valuetext', 'Mobile');
+              control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+            });
+            popup.append(active); control.setAttribute('aria-activedescendant', active.id);
+          }
+        });
+      </script></body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally { await browser.close(); }
+});
+
+test("v2 phone type maps the canonical Mobile answer to a tenant CELL option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-types" aria-expanded="false">Select One</button>
+        <div id="phone-types" role="listbox" hidden>
+          <div role="option">BUSN</div><div role="option" id="cell-option">CELL</div>
+        </div>
+      </main><script>
+        const control = document.querySelector('#phoneNumber--phoneType');
+        const popup = document.querySelector('#phone-types');
+        control.addEventListener('click', () => {
+          control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+        });
+        document.querySelector('#cell-option').addEventListener('click', () => {
+          control.textContent = 'CELL'; control.setAttribute('aria-valuetext', 'CELL');
+          control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+        });
+      </script></body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit(
+      { controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" },
+      AbortSignal.any([]),
+    );
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "CELL");
+  } finally { await browser.close(); }
+});
+
+test("v2 phone type dismisses a Workday popup that remains open after CELL activates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-types" aria-expanded="false">Select One</button>
+        <div id="phone-types" role="listbox" hidden>
+          <div role="option">BUSN</div><div role="option" id="cell-option">CELL</div>
+        </div>
+      </main><script>
+        const control = document.querySelector('#phoneNumber--phoneType');
+        const popup = document.querySelector('#phone-types');
+        control.addEventListener('click', () => {
+          control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+        });
+        document.querySelector('#cell-option').addEventListener('click', () => {
+          control.textContent = 'CELL'; control.setAttribute('aria-valuetext', 'CELL');
+        });
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+          }
+        });
+      </script></body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 250 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit(
+      { controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" },
+      AbortSignal.any([]),
+    );
+    assert.equal(await page.locator("#phone-types").isVisible(), false);
+    assert.equal(adapter.interaction(control.controlId)?.popupClosed, true);
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "CELL");
+  } finally { await browser.close(); }
+});
+
+test("search select rescans and clicks an exact option virtualized after typeahead", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+          });
+          control.addEventListener('keydown', ({ key }) => {
+            if (key !== 'M' || popup.querySelector('[role=option]')) return;
+            const option = document.createElement('div');
+            option.setAttribute('role', 'option'); option.textContent = 'Mobile';
+            option.addEventListener('click', () => {
+              control.textContent = 'Mobile'; control.setAttribute('aria-valuetext', 'Mobile');
+              control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+            });
+            popup.append(option);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1_000 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("search select reconciles an exact nested leaf revealed by the focused row", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+            aria-controls="phone-types" aria-expanded="false">Select One</button>
+          <div id="phone-types" role="listbox" hidden><span>Virtualized choices</span></div>
+        </main>
+        <script>
+          const control = document.querySelector('#phoneNumber--phoneType');
+          const popup = document.querySelector('#phone-types');
+          control.addEventListener('click', () => {
+            control.focus(); popup.hidden = false; control.setAttribute('aria-expanded', 'true');
+          });
+          control.addEventListener('keydown', ({ key }) => {
+            if (key !== 'M' || document.querySelector('#active-mobile')) return;
+            const active = document.createElement('div');
+            active.id = 'active-mobile'; active.setAttribute('aria-label', 'Mobile');
+            active.textContent = 'Mobile Selected';
+            active.addEventListener('click', () => {
+              const leaf = document.createElement('div');
+              leaf.setAttribute('role', 'option'); leaf.textContent = 'Mobile';
+              leaf.addEventListener('click', () => {
+                control.textContent = 'Mobile'; control.setAttribute('aria-valuetext', 'Mobile');
+                control.setAttribute('aria-expanded', 'false'); popup.hidden = true;
+              });
+              popup.append(leaf);
+            });
+            popup.append(active); control.setAttribute('aria-activedescendant', active.id);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500 });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.controls.find(({ fieldId }) => fieldId === "phone.device_type")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Mobile" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "phone.device_type")?.readback, "Mobile");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unfamiliar previous-worker radio preserves Workday's visible required legend suffix", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-previousWorker">
+            <fieldset role="radiogroup">
+              <legend>Have you worked with us before?*</legend>
+              <input id="previous-yes" type="radio"
+                name="candidateIsPreviousWorker"><label for="previous-yes">Yes</label>
+              <input id="previous-no" type="radio"
+                name="candidateIsPreviousWorker"><label for="previous-no">No</label>
+            </fieldset>
+          </div>
+        </main>
+      </body>
+    `);
+    const control = (await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "unknown.required.1",
+    );
+    assert.equal(control?.required, true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("canonical source closes a committed Workday popup with Escape", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox" hidden>
+            <div role="option" data-automation-id="promptLeafNode">Company Website</div>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          globalThis.escapeCount = 0;
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            listbox.hidden = false;
+          });
+          listbox.firstElementChild.addEventListener('click', event => {
+            source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
+          });
+          document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape') return;
+            globalThis.escapeCount += 1;
+            source.setAttribute('aria-expanded', 'false');
+            listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "company-website",
+        "Company Website",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { escapeCount: number }).escapeCount
+    ), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("the source selector expands the uniquely matching category before selecting its leaf", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox">
+            <div role="option" data-automation-id="promptCategory">Career Site</div>
+            <div role="option" data-automation-id="promptCategory">Referral</div>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          globalThis.categoryClicks = 0;
+          listbox.firstElementChild.addEventListener('click', () => {
+            globalThis.categoryClicks += 1;
+            listbox.innerHTML = '<div role="option" data-automation-id="promptLeafNode">Career Site: BMO Careers (Canada)</div>';
+            listbox.firstElementChild.addEventListener('click', event => {
+              source.setAttribute('aria-valuetext', event.currentTarget.textContent.trim());
+              source.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+            });
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "career-site-bmo-careers-canada",
+        "Career Site: BMO Careers (Canada)",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.evaluate(() =>
+      (globalThis as typeof globalThis & { categoryClicks: number }).categoryClicks
+    ), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("BMO source button binds its listbox after opening and commits a flat option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source--source">
+            <button aria-haspopup="listbox" type="button"
+              aria-label="How Did You Hear About Us? Select One Required"
+              name="source" id="source--source">Select One</button>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('#source--source');
+          source.addEventListener('click', () => {
+            source.setAttribute('aria-expanded', 'true');
+            source.setAttribute('aria-controls', 'source-options');
+            const listbox = document.createElement('ul');
+            listbox.id = 'source-options';
+            listbox.setAttribute('role', 'listbox');
+            listbox.innerHTML = '<li role="option">Career Site: BMO Careers (Canada)</li>';
+            document.body.append(listbox);
+            listbox.firstElementChild.addEventListener('click', event => {
+              source.textContent = event.currentTarget.textContent.trim();
+              source.removeAttribute('aria-expanded');
+              source.removeAttribute('aria-controls');
+              listbox.hidden = true;
+            });
+          }, { once: true });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "career-site-bmo-careers-canada",
+        "Career Site: BMO Careers (Canada)",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('#source--source').innerText(),
+      "Career Site: BMO Careers (Canada)");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a roleless source search input remains a known application-source control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <input id="source--source" placeholder="Search" aria-required="true">
+          </div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(
+      page,
+      { pageType: "profile" },
+    ).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(
+      snapshot.controls.map(({ fieldId, uiBehavior }) => ({ fieldId, uiBehavior })),
+      [{ fieldId: "source.how_did_you_hear", uiBehavior: "search_select" }],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a roleless source search input opens its Workday prompt and commits an exact option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <div data-automation-id="multiSelectContainer">
+              <input id="source--source" placeholder="Search" aria-required="true">
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg><path></path></svg></span>
+              </div>
+              <div id="selected-source"></div>
+            </div>
+          </div>
+        </main>
+        <div id="source-prompt" role="listbox" hidden>
+          <div role="option">LinkedIn</div>
+        </div>
+        <script>
+          const input = document.querySelector('#source--source');
+          const prompt = document.querySelector('#source-prompt');
+          let promptMode = false;
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => {
+              promptMode = true;
+              input.value = '';
+            });
+          input.addEventListener('input', () => {
+            prompt.hidden = !(promptMode && input.value === 'LinkedIn');
+          });
+          prompt.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('#selected-source').append(pill);
+            input.value = '';
+            prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "search_select",
+      value: "LinkedIn",
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls.find(
+        ({ fieldId }) => fieldId === "source.how_did_you_hear",
+      )?.readback,
+      "LinkedIn",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Intermountain source binds its retained nested catalog and ignores unrelated options", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <div data-automation-id="monikerSearchBox">
+                  <input id="source--source" data-automation-id="searchBox"
+                    placeholder="Search" aria-required="true">
+                  <div id="selected-source"></div>
+                </div>
+                <div data-automation-id="promptSelectionLabel"></div>
+                <div data-automation-id="promptAriaInstruction"></div>
+                <span data-automation-id="promptSearchButton">
+                  <svg role="presentation" style="display:block;width:20px;height:20px">
+                    <rect width="20" height="20"></rect>
+                  </svg>
+                </span>
+              </div>
+            </div>
+          </div>
+        </main>
+        <div id="phone-options" role="listbox">
+          <div role="option">Canada (+1)</div>
+        </div>
+        <div id="source-catalog" data-automation-id="activeListContainer"
+          role="listbox" tabindex="-1" hidden></div>
+        <script>
+          const input = document.querySelector('#source--source');
+          const catalog = document.querySelector('#source-catalog');
+          const renderCategories = () => {
+            catalog.innerHTML = '<div role="option">Career Event</div>' +
+              '<div role="option">Direct Source</div>';
+            catalog.hidden = false;
+          };
+          const promptButton = document.querySelector('[data-automation-id="promptSearchButton"]');
+          promptButton.__reactFiber$retained = {
+            memoizedProps: { onClick: () => {} },
+            return: {
+              memoizedProps: {
+                onPromptIconClick: () => {},
+                onSelectInputClick: () => setTimeout(renderCategories, 150),
+              },
+              return: null,
+            },
+          };
+          catalog.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            if (target.textContent === 'Direct Source') {
+              catalog.innerHTML = '<div role="option">I know someone at the company</div>' +
+                '<div role="option">Recruiter</div>';
+              catalog.focus();
+              return;
+            }
+            if (target.textContent !== 'Recruiter') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('#selected-source').append(pill);
+            input.value = '';
+            catalog.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 500,
+    });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [field(
+        "source.how_did_you_hear",
+        "application_source",
+        "option",
+        "recruiter",
+        "Recruiter",
+      )],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls.find(
+        ({ fieldId }) => fieldId === "source.how_did_you_hear",
+      )?.readback,
+      "Recruiter",
+    );
+    assert.equal(await page.locator('#phone-options [role="option"]').innerText(), "Canada (+1)");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("prefilled Intermountain source observation does not reopen an unowned catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <style>
+          [data-automation-id="monikerSearchBox"] { position: relative; width: 300px; height: 40px; }
+          #source--source { width: 300px; height: 40px; }
+          [data-automation-id="selectedItem"] {
+            position: absolute; inset: 0; z-index: 2; background: white;
+          }
+        </style>
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div data-automation-id="formField-source">
+            <label for="source--source">How Did You Hear About Us?</label>
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <div data-automation-id="monikerSearchBox">
+                  <input id="source--source" data-automation-id="searchBox"
+                    placeholder="Search" aria-required="true">
+                  <div data-automation-id="selectedItem">Recruiter</div>
+                </div>
+                <span data-automation-id="promptSearchButton"></span>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => {
+              const first = document.createElement('div');
+              first.setAttribute('role', 'listbox');
+              first.innerHTML = '<div role="option">Career Event</div>';
+              const second = document.createElement('div');
+              second.setAttribute('role', 'listbox');
+              second.innerHTML = '<div role="option">Direct Source</div>';
+              document.body.append(first, second);
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 100,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    );
+    assert.notEqual(control, undefined);
+
+    const observation = await adapter.observeControl(
+      control!.controlId,
+      AbortSignal.any([]),
+      true,
+    );
+
+    assert.equal(observation.backingState, "set");
+    assert.equal(observation.validationState, "clear");
+    assert.equal(observation.optionCatalogState, "unknown");
+    assert.deepEqual(observation.visibleOptionIds, []);
+    assert.equal(await page.locator('[role="listbox"]').count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a highlighted source leaf without backing selection is never a commit", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="source-options" aria-expanded="false"
+            data-automation-id="sourcePrompt">Select One</button>
+          <div id="source-options" role="listbox" hidden>
+            <div id="source-highlight" role="option"
+              data-automation-id="promptLeafNode">Company Website</div>
+          </div>
+        </main>
+        <script>
+          const source = document.querySelector('[data-automation-id="sourcePrompt"]');
+          const listbox = document.querySelector('#source-options');
+          source.addEventListener('click', () => {
+            listbox.hidden = false;
+            source.setAttribute('aria-expanded', 'true');
+          });
+          document.querySelector('#source-highlight').addEventListener('click', event => {
+            source.setAttribute('aria-activedescendant', event.currentTarget.id);
+            source.setAttribute('aria-expanded', 'false');
+            listbox.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "source.how_did_you_hear",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: source.controlId,
+      uiBehavior: "search_select",
+      value: "Company Website",
+    }, AbortSignal.any([])), /backing value did not commit/u);
+    assert.deepEqual(adapter.interaction(source.controlId), {
+      popupBound: true,
+      optionFocused: false,
+      optionActivated: true,
+      popupClosed: true,
+      backingValueCommitted: false,
+      validationCleared: true,
+      visibleOptionCount: 1,
+      selectedOptionOrdinal: 1,
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown visible required controls block before a reviewed control is mutated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required data-automation-id="unreviewedRequiredControl">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        mode: "live",
+        pageType: "profile",
+fields: [field("identity.given_name", "identity", "text", "Ada")],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiBehavior: "text",
+        uiVariant: "workday_unknown_required_v1",
+      },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown checkbox identity survives generated ID replacement", async () => {
+  const browser = await chromium.launch({headless: true});
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<body data-hunt-profile-page-type="profile">
+      <main data-automation-id="applyFlowMyInfoPage">
+        <label><input id="generated-before" type="checkbox" data-automation-id="stable-opt-in">Contact preference</label>
+        <script>
+          document.querySelector('input').addEventListener('change', event => {
+            const replacement = event.target.cloneNode(true);
+            replacement.id = 'generated-after';
+            replacement.checked = event.target.checked;
+            event.target.replaceWith(replacement);
+          });
+        </script>
+      </main></body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {pageType: "profile"});
+    const before = await adapter.inspect(AbortSignal.any([]));
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    // Optional unknown checkboxes are preserved unless explicitly requested.
+    assert.equal(await page.locator('input').isChecked(), false);
+    await adapter.commit({ controlId: before.controls[0]!.controlId,
+      uiBehavior: "checkbox", value: "true" }, AbortSignal.any([]));
+    const after = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(after.controls[0]!.fieldId, before.controls[0]!.fieldId);
+    assert.equal(after.controls[0]!.readback, "true");
+    assert.equal(await page.locator('#generated-after').count(), 1);
+    await page.locator('main').evaluate(main => {
+      const other = main.querySelector('input')!.cloneNode(true) as HTMLInputElement;
+      other.id = 'another-field';
+      main.append(other);
+    });
+    const repeated = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(repeated.controls.length, 2);
+    assert.equal(new Set(repeated.controls.map(c => c.fieldId)).size, 2);
+  } finally { await browser.close(); }
+});
+
+for (const known of [false, true]) test(`button listbox discovery excludes its empty placeholder (${known ? "identity suffix" : "unknown question"})`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const id = known ? "name--legalName--social" : "custom-select";
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-legalName--social">
+          <label for="${id}">Suffix</label>
+          <button id="${id}" aria-haspopup="listbox" aria-controls="choices" type="button">Select One</button>
+          <ul id="choices" role="listbox" hidden>
+            <li role="option" data-value="" aria-selected="true">Select One</li>
+            <li role="option" data-value="senior">Sr.</li>
+          </ul>
+        </div>
+        <script>
+          const button = document.querySelector('button');
+          const choices = document.querySelector('ul');
+          button.onclick = () => { choices.hidden = false; button.setAttribute('aria-expanded','true'); };
+          document.addEventListener('keydown', event => {
+            if(event.key === 'Escape') { choices.hidden = true; button.setAttribute('aria-expanded','false'); }
+          });
+          for(const option of choices.children) option.onclick = () => {
+            button.textContent = option.textContent;
+            button.value = option.dataset.value;
+            choices.hidden = true;
+            button.setAttribute('aria-expanded','false');
+          };
+        </script>
+      </main></body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {pageType: "profile", inspectMissingOptions: true});
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]!.fieldId, known ? "identity.suffix" : "unknown.optional.1");
+    assert.deepEqual(snapshot.controls[0]!.allowedOptions, ["Sr."]);
+    assert.equal(await page.locator('button').innerText(), "Select One");
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('button').innerText(), "Sr.");
+  } finally { await browser.close(); }
+});
+
+test("indexed website controls share URL semantics and distinct row identities", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          ${["webAddress-4", "webAddress-5", "website-6", "websites-7"].map(id => `
+            <div data-automation-id="formField-url"><label for="${id}--url">URL*</label>
+              <input id="${id}--url" name="url" type="text" ${id === "webAddress-4" ? 'value="https://example.com/portfolio"' : ''} required>
+            </div>`).join("")}
+          <label for="unmapped">Another required answer</label><input id="unmapped" required>
+        </main>
+      </body>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(initial.rows.length, 4);
+    assert.deepEqual(initial.controls.map(c => c.fieldId), ["unknown.required.1"]);
+    assert.ok(initial.rows.every(r => r.section === "websites" && r.controls.length === 1 &&
+      r.controls[0]!.fieldId === "website.url"));
+    assert.equal(new Set(initial.rows.map(r => r.rowId)).size, 4);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    if (result.kind !== "verified") return;
+    const websites = result.effectivePlan.repeatables.find(r => r.section === "websites")!;
+    assert.equal(websites.rows.length, 4);
+    assert.ok(websites.rows.every(r => r.fields.every(f =>
+      f.questionType === "website" && f.answerType === "url")));
+    for (const input of await page.locator('input[name="url"]').all()) {
+      assert.ok(/^https?:\/\//u.test(await input.inputValue()));
+    }
+    const urls = await page.locator('input[name="url"]').evaluateAll(inputs =>
+      inputs.map(input => (input as HTMLInputElement).value));
+    assert.equal(urls[0], "https://example.com/portfolio");
+    assert.equal(new Set(urls).size, 4);
+  } finally { await browser.close(); }
+});
+
+test("learns and fills a generic Workday Website repeatable row", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <section data-automation-id="websitesSection">
+            <div data-automation-id="website-1">
+              <label>Website
+                <input data-automation-id="website-1--website">
+              </label>
+            </div>
+            <button type="button" data-automation-id="addWebsite">Add</button>
+          </section>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [],
+      repeatables: [{
+        section: "websites",
+        rows: [{
+          rowKey: "website-1",
+          fields: [field(
+            "website.url",
+            "website",
+            "url",
+            "https://portfolio.example.com",
+          )],
+        }],
+      }],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(
+      await page.locator('[data-automation-id="website-1--website"]').inputValue(),
+      "https://portfolio.example.com",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("custom ARIA required controls block before a reviewed field is mutated", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <div role="checkbox" aria-required="true"
+            data-automation-id="tenantConsent" tabindex="0">Consent</div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        mode: "live",
+        pageType: "profile",
+fields: [field("identity.given_name", "identity", "text", "Ada")],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiBehavior: "checkbox",
+        uiVariant: "workday_unknown_required_v1",
+      },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "",
+    );
+    const unknown = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId.startsWith("unknown.required."),
+    );
+    assert.equal(unknown?.uiBehavior, "checkbox");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("inventories unknown active form controls by structural UI type without retaining values", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required type="date" data-automation-id="tenantStartDate" value="2026-08-11">
+          <input type="tel" data-automation-id="tenantPhone" value="555-0100">
+          <input type="checkbox" data-automation-id="tenantCheckbox" checked>
+          <input required type="file" data-automation-id="tenantDocument">
+          <button type="button" role="combobox" aria-required="true"
+            aria-controls="tenant-options" data-automation-id="tenantSelect">Select One</button>
+          <div id="tenant-options" role="listbox" hidden></div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required, readback }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+      readback,
+    })), [
+      { fieldId: "unknown.required.1", uiBehavior: "date", required: true, readback: "2026-08-11" },
+      { fieldId: "unknown.optional.2", uiBehavior: "phone", required: false, readback: "555-0100" },
+      { fieldId: "unknown.optional.3", uiBehavior: "checkbox", required: false, readback: "true" },
+      { fieldId: "unknown.required.4", uiBehavior: "file", required: true, readback: null },
+      { fieldId: "unknown.required.5", uiBehavior: "search_select", required: true, readback: null },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unfamiliar radio questions remain one group with observed options and verified default evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-radio-fallback-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span>
+        <fieldset role="radiogroup"><legend>Unfamiliar compound employment question?</legend>
+          <input id="previous-yes" type="radio" name="candidateIsPreviousWorker" value="true">
+          <label for="previous-yes">Yes</label>
+          <input id="previous-no" type="radio" name="candidateIsPreviousWorker" value="false">
+          <label for="previous-no">No</label>
+        </fieldset>
+      </div></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [], repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]?.fieldId, "unknown.required.1");
+    assert.equal(snapshot.controls[0]?.uiBehavior, "radio_group");
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Yes", "No"]);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('#previous-no').isChecked(), true);
+    assert.equal(await page.locator('#previous-yes').isChecked(), false);
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields.length, 1);
+    assert.equal(evidence.fields[0].questionCategory, "unknown");
+    assert.equal(evidence.fields[0].terminalDisposition, "verified");
+    assert.equal(evidence.fields[0].metadataReconciliation, "unresolved");
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+for (const [linkedInLabel, native] of [
+  ["Linkedin:", false],
+  ["Please provide the URL to your LinkedIn profile.", false],
+  ["Please provide a link to your LinkedIn profile:", true],
+  ["Adresse de votre profil professionnel", true],
+] as const) test(`social question binding ${linkedInLabel} shares the existing URL answer format`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-native-social-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      ${native ? '<div data-automation-id="formField-linkedInAccount">' : ""}
+      <label for="socialNetworkAccounts--linkedInAccount">${linkedInLabel}</label>
+      <input id="socialNetworkAccounts--linkedInAccount" ${native ? 'name="linkedInAccount"' : ""}>
+      ${native ? "</div>" : ""}
+      <label for="socialNetworkAccounts--twitterAccount">X:</label>
+      <input id="socialNetworkAccounts--twitterAccount">
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [], repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(capture.page.metadataReconciliationFailure?.(), undefined);
+    if (result.kind === "verified") {
+      assert.deepEqual(result.effectivePlan.fields.map(({ fieldId, questionType, answerType }) =>
+        [fieldId, questionType, answerType]), [
+        ["social.linkedin", "social_network", "url"], ["social.twitter", "social_network", "text"],
+      ]);
+    }
+    assert.equal(await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').inputValue(),
+      "https://www.linkedin.com/in/hunt-test-owner-review");
+    assert.equal(await page.locator('[id="socialNetworkAccounts--twitterAccount"]').inputValue(),
+      "https://twitter.com/hunt_test_26");
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.ok(capture.write());
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.doesNotThrow(() => admitProfileFieldLearningEvidence(evidence));
+    const linkedin = evidence.fields.find((record: { fieldIdentity: string }) => record.fieldIdentity === "profile.social.linkedin");
+    assert.equal(linkedin.binderStrategy, native ? "native_social_account" : "catalog_selector_exact");
+    assert.equal(linkedin.metadataReconciliation, "matched");
+    // Keep the actual observed-label digest, not a fabricated canonical label.
+    assert.equal(linkedin.sanitizedLabelSha256, retainedProfileTextSha256(linkedInLabel.replace(/:$/u, "")));
+    if (native) {
+      const control = (await adapter.inspect(signal)).controls.find(item => item.fieldId === "social.linkedin")!;
+      await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').evaluate(element => element.setAttribute("name", "unrelated"));
+      await assert.rejects(() => adapter.observeControl(control.controlId, signal));
+      assert.ok((await adapter.inspect(signal)).controls.some(item => item.fieldId.startsWith("unknown.")));
+      await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').evaluate(element => element.setAttribute("name", "linkedInAccount"));
+      await page.locator('[data-automation-id="formField-linkedInAccount"]').evaluate(element => element.setAttribute("data-automation-id", "formField-other"));
+      assert.ok((await adapter.inspect(signal)).controls.some(item => item.fieldId.startsWith("unknown.")));
+      linkedin.fieldIdentity = "profile.identity.given_name";
+      assert.throws(() => admitProfileFieldLearningEvidence(evidence));
+    }
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("native country controls retain search semantics across regional label variants", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-native-country-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-country">
+        <button id="country--country" name="country" aria-haspopup="listbox"
+          aria-label="Country/Region Canada Required" aria-valuetext="Canada"
+          aria-controls="countries">Canada</button>
+        <div id="countries" role="listbox" hidden><div role="option">Canada</div></div>
+      </div>
+      <div data-automation-id="formField-countryPhoneCode">
+        <label for="phoneNumber--countryPhoneCode">Country/Region Phone Code*</label>
+        <div data-automation-id="multiSelectContainer">
+          <span data-automation-id="selectedItem">Canada (+1)</span>
+          <input id="phoneNumber--countryPhoneCode" aria-required="true" aria-controls="codes">
+        </div>
+        <div id="codes" role="listbox" hidden><div role="option">Canada (+1)</div></div>
+      </div>
+      <script>
+        for (const control of document.querySelectorAll('[aria-controls]')) {
+          control.addEventListener('click', () => {
+            document.getElementById(control.getAttribute('aria-controls')).hidden = false;
+          });
+          control.addEventListener('keydown', event => {
+            if (event.key === 'Escape') document.getElementById(control.getAttribute('aria-controls')).hidden = true;
+          });
+        }
+      </script>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("address.country", "address", "option", "Canada", "Canada"),
+        field("phone.country_code", "phone", "option", "Canada (+1)", "Canada (+1)")],
+      repeatables: [] };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior }) => [fieldId, uiBehavior]), [
+      ["address.country", "search_select"], ["phone.country_code", "search_select"],
+    ]);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.ok(capture.write());
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.doesNotThrow(() => admitProfileFieldLearningEvidence(evidence));
+    assert.ok(evidence.fields.every((record: { binderStrategy: string; metadataReconciliation: string }) =>
+      record.binderStrategy === "native_country_control" && record.metadataReconciliation === "matched"));
+    const phone = snapshot.controls.find(control => control.fieldId === "phone.country_code")!;
+    await page.locator('[data-automation-id="formField-countryPhoneCode"]').evaluate(element =>
+      element.setAttribute("data-automation-id", "formField-unrelated"));
+    await assert.rejects(() => adapter.observeControl(phone.controlId, signal));
+    evidence.fields[0].fieldIdentity = "profile.identity.given_name";
+    assert.throws(() => admitProfileFieldLearningEvidence(evidence));
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("unfamiliar scalar labels use observed UI and editable defaults without claiming known meaning", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-label-fallback-test-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <label for="name--legalName--firstName">First Name</label>
+      <input id="name--legalName--firstName" required>
+      <label for="socialNetworkAccounts--linkedInAccount">Public profile link for review</label>
+      <input id="socialNetworkAccounts--linkedInAccount" type="url">
+      <label for="socialNetworkAccounts--twitterAccount">Describe your preferred contact channel</label>
+      <textarea id="socialNetworkAccounts--twitterAccount" required minlength="4" maxlength="20"></textarea>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = new AbortController().signal;
+    const plan = {
+      mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("identity.given_name", "identity", "text", "Alex"),
+        field("social.linkedin", "social_network", "url", "https://example.com/old-meaning")],
+      repeatables: [],
+    };
+    let observation = 0;
+    const capture = createProfileFieldLearningCapture({
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    });
+    const snapshot = await capture.page.inspect(signal);
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior }) => [fieldId, uiBehavior]), [
+      ["identity.given_name", "text"], ["unknown.optional.1", "url"], ["unknown.required.2", "textarea"],
+    ]);
+    assert.equal(capture.page.metadataReconciliationFailure?.(), undefined);
+    const result = await completeWorkdayProfilePage(plan, capture.page, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[id="name--legalName--firstName"]').inputValue(), "Alex");
+    const url = await page.locator('[id="socialNetworkAccounts--linkedInAccount"]').inputValue();
+    assert.ok(url.startsWith("https://"));
+    assert.notEqual(url, "https://example.com/old-meaning");
+    assert.equal(await page.locator('textarea').evaluate(element =>
+      element instanceof HTMLTextAreaElement && element.checkValidity()), true);
+    if (result.kind === "verified") {
+      const generated = result.effectivePlan.fields.filter(({ fieldId }) => fieldId.startsWith("unknown."));
+      assert.equal(generated.length, 2);
+      assert.ok(generated.every(({ questionType, answer }) => questionType === "unknown" &&
+        answer.kind === "answered" && answer.lane === "synthetic_test_default"));
+    }
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    const unknowns = evidence.fields.filter((item: { questionCategory: string }) => item.questionCategory === "unknown");
+    assert.equal(unknowns.length, 2);
+    assert.ok(unknowns.every((item: { metadataReconciliation: string; terminalDisposition: string }) =>
+      item.metadataReconciliation === "unresolved" && item.terminalDisposition === "verified"));
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("unrelated text fields do not increase phone type popup discovery", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const popupCounts: number[] = [];
+    for (const includeText of [false, true]) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        ${includeText ? `<label>First Name<input id="name--legalName--firstName"></label>
+          <label>Last Name<input id="name--legalName--lastName"></label>
+          <label>City<input id="address--city"></label>` : ""}
+        <label for="phoneNumber--phoneType">Phone Device Type</label>
+        <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
+          aria-controls="phone-options" aria-expanded="false" aria-required="true">Select One</button>
+        <div id="phone-options" role="listbox" hidden><div role="option">Mobile</div></div>
+        <script>
+          (() => {
+          const control = document.getElementById('phoneNumber--phoneType');
+          const options = document.getElementById('phone-options');
+          window.opens = 0;
+          control.onclick = () => { window.opens++; options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+          const close = () => { options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+          document.onkeydown = event => { if (event.key === 'Escape') close(); };
+          options.firstElementChild.onclick = () => { control.textContent = 'Mobile'; close(); };
+          })();
+        </script></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, {
+        pageType: "profile", inspectMissingOptions: true, timeoutMs: 500,
+      });
+      const result = await completeWorkdayProfilePage({
+        mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
+        fields: [
+          ...(includeText ? [field("identity.given_name", "identity", "text", "Ada"),
+            field("identity.family_name", "identity", "text", "Lovelace"),
+            field("address.city", "address", "text", "London")] : []),
+          field("phone.device_type", "phone", "option", "Mobile", "Mobile"),
+        ],
+      }, adapter, AbortSignal.any([]));
+      assert.equal(result.kind, "verified", JSON.stringify(result));
+      assert.equal(await page.locator('[id="phoneNumber--phoneType"]').textContent(), "Mobile");
+      if (includeText) assert.equal(await page.locator('[id="address--city"]').inputValue(), "London");
+      popupCounts.push(await page.evaluate(() => Reflect.get(window, "opens") as number));
+    }
+    assert.equal(popupCounts[1], popupCounts[0]);
+  } finally { await browser.close(); }
+});
+
+test("large choice menus reselect the exact saved option without keyboard fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <label for="tenant-choice">Language</label>
+      <button id="tenant-choice" type="button" role="combobox" aria-required="true"
+        aria-controls="tenant-options" aria-expanded="false">Choice 0</button>
+      <div id="tenant-options" role="listbox" hidden>
+        ${Array.from({ length: 267 }, (_, index) => `<div role="option">Choice ${index}</div>`).join('')}
+      </div><script>
+      const control = document.getElementById('tenant-choice');
+      const options = document.getElementById('tenant-options');
+      window.keyboardSelections = 0;
+      control.onclick = () => { options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+      const select = value => { control.textContent = value; options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+      options.querySelectorAll('[role="option"]').forEach(option => option.onclick = () => select(option.textContent));
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { options.hidden = true; control.setAttribute('aria-expanded', 'false'); }
+        if (event.key === 'Enter' && !options.hidden) { window.keyboardSelections++; select('Choice 1'); }
+      });
+      </script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true, timeoutMs: 500,
+    });
+    const signal = AbortSignal.any([]);
+    const selected = (await adapter.inspect(signal)).controls[0]!;
+    for (const value of ["Choice 0", "Choice 266"]) {
+      await adapter.commit({ controlId: selected.controlId, uiBehavior: selected.uiBehavior, value }, signal);
+      assert.equal((await adapter.inspect(signal)).controls[0]?.readback, value);
+      assert.equal(adapter.interaction(selected.controlId)?.visibleOptionCount, 267);
+    }
+    assert.equal(await page.evaluate(() => Reflect.get(window, "keyboardSelections")), 0);
+  } finally { await browser.close(); }
+});
+
+test("empty optional three-part dates are observed without generating partial dates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage"><div data-automation-id="formField-issuedDate"><label>Issued Date</label>
+      <div id="issued" role="group" data-automation-id="dateInputWrapper">${['Month', 'Day', 'Year'].map(part => `<div id="issued-dateSection${part}"><input id="issued-dateSection${part}-input" role="spinbutton" data-automation-id="dateSection${part}-input" aria-label="${part}" value=""></div>`).join('')}</div>
+      </div></main><script>globalThis.edits = 0; document.addEventListener('input', () => globalThis.edits++);</script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal, false);
+    assert.deepEqual(snapshot.controls.map(control => control.uiBehavior), ['month', 'number', 'year']);
+    assert.ok(snapshot.controls.every(control => control.uiVariant === 'workday_empty_optional_date_segment_v1'));
+    const result = await completeWorkdayProfilePage({ mode: 'synthetic_test_non_submittable', pageType: 'profile', fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(result.kind, 'verified', JSON.stringify(result));
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, 'edits')), 0);
+    await page.locator('input').first().fill('1');
+    assert.ok((await adapter.inspect(signal, false)).controls.every(control => control.uiVariant !== 'workday_empty_optional_date_segment_v1'));
+    await page.locator('input').first().fill('');
+    await page.locator('input').last().evaluate(element => element.setAttribute('aria-required', 'true'));
+    assert.ok((await adapter.inspect(signal, false)).controls.every(control => control.uiVariant !== 'workday_empty_optional_date_segment_v1'));
+  } finally { await browser.close(); }
+});
+
+test("Workday structural prompts discover choices without ARIA while ordinary inputs remain text", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-certification"><label for="certification-7--certification">Certification</label>
+        <div id="owned-widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+          <input id="certification-7--certification" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
+          <span data-automation-id="promptAriaInstruction">0 items selected</span>
+          <div role="listbox" id="choices" data-associated-widget="owned-widget" hidden><div role="option">Example certificate</div></div>
+          <div id="selected"></div>
+        </div>
+      </div>
+      <input id="ordinary" required>
+      <div id="other-widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+        <input id="mismatched" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
+      </div>
+      </main>
+
+      <script>
+        const input = document.getElementById('certification-7--certification');
+        const choices = document.getElementById('choices');
+        input.onclick = () => { choices.hidden = false; input.setAttribute('aria-expanded', 'true'); input.setAttribute('data-automation-id', 'searchBox'); };
+        document.addEventListener('keydown', event => { if(event.key === 'Escape') { choices.hidden = true; input.setAttribute('aria-expanded', 'false'); } });
+        choices.onclick = () => { document.getElementById('selected').innerHTML = '<span data-automation-id="selectedItem">Example certificate</span>'; choices.hidden = true; input.value = ''; input.setAttribute('aria-expanded', 'false'); };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    const choice = snapshot.controls.find(control => control.label === "Certification")!;
+    assert.equal(choice.uiBehavior, "search_select");
+    assert.deepEqual(choice.allowedOptions, ["Example certificate"]);
+    assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.fieldId, choice.fieldId);
+    assert.equal(snapshot.controls.filter(control => control.uiBehavior === "text").length, 2);
+    await page.locator('#ordinary').fill('ordinary');
+    await page.locator('#mismatched').fill('ordinary');
+    const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.readback, "Example certificate");
+    await page.locator('#owned-widget').evaluate(element => {
+      const replacement = element.cloneNode(true) as HTMLElement;
+      replacement.id = "remounted-widget";
+      replacement.querySelector('input')!.setAttribute('data-uxi-multiselect-id', replacement.id);
+      replacement.querySelector('#choices')!.setAttribute('data-associated-widget', replacement.id);
+      element.replaceWith(replacement);
+    });
+    const remounted = (await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification");
+    assert.equal(remounted?.fieldId, choice.fieldId);
+    assert.equal(remounted?.readback, "Example certificate");
+    await page.locator('[data-automation-id="selectedItem"]').evaluate(element => {
+      element.setAttribute('role', 'option');
+      element.setAttribute('aria-label', 'Example certificate, press delete to clear value.');
+    });
+    const retained = await adapter.inspect(signal);
+    assert.deepEqual(retained.controls.find(control => control.label === 'Certification')?.allowedOptions, ['Example certificate']);
+    await page.evaluate(() => {
+      Reflect.set(window, 'savedChoiceEffects', 0);
+      document.querySelector('#certification-7--certification')!.addEventListener('click', () => {
+        Reflect.set(window, 'savedChoiceEffects', Number(Reflect.get(window, 'savedChoiceEffects')) + 1);
+      });
+    });
+    const savedChoice = retained.controls.find(control => control.label === 'Certification')!;
+    await adapter.commit({ controlId: savedChoice.controlId, uiBehavior: 'search_select', value: 'Example certificate' }, signal);
+    assert.equal(await page.evaluate(() => Reflect.get(window, 'savedChoiceEffects')), 0);
+    const untouched = await completeWorkdayProfilePage({ mode: 'synthetic_test_non_submittable', pageType: 'profile', fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(untouched.kind, 'verified', JSON.stringify(untouched));
+  } finally { await browser.close(); }
+});
+
+test("unknown questions discover closed choice options before generating an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<aside role="listbox"><div role="option">Unrelated answer</div></aside>
+      <main data-automation-id="applyFlowMyInfoPage">
+      <label for="tenant-choice">Unfamiliar tenant question</label>
+      <button id="tenant-choice" type="button" role="combobox" aria-required="true"
+        aria-controls="tenant-options" aria-expanded="false">Select One</button>
+      <div id="tenant-options" role="listbox" hidden>
+        <div role="option">Alpha</div><div role="option">Beta</div>
+      </div>
+      <script>
+        const control = document.getElementById('tenant-choice');
+        const options = document.getElementById('tenant-options');
+        window.opens = 0;
+        control.onclick = () => { window.opens++; options.hidden = false; control.setAttribute('aria-expanded', 'true'); };
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') { options.hidden = true; control.setAttribute('aria-expanded', 'false'); }
+        });
+        options.querySelectorAll('[role="option"]').forEach(option => {
+          option.onclick = () => { control.textContent = option.textContent; options.hidden = true; control.setAttribute('aria-expanded', 'false'); };
+        });
+      </script></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+    });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    assert.equal(snapshot.controls[0]?.fieldId, "unknown.required.1");
+    assert.equal(snapshot.controls[0]?.uiBehavior, "search_select");
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, ["Alpha", "Beta"]);
+    assert.equal(await page.locator('#tenant-choice').innerText(), "Select One");
+    assert.equal(await page.locator('#tenant-options').isVisible(), false);
+    const opens = await page.evaluate(() => Reflect.get(window, "opens"));
+    await adapter.inspect(signal, false);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "opens")), opens);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.ok(["Alpha", "Beta"].includes(await page.locator('#tenant-choice').innerText()));
+    const committedOpens = await page.evaluate(() => Reflect.get(window, "opens"));
+    const committed = await adapter.inspect(signal);
+    await adapter.inspect(signal);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "opens")), committedOpens);
+    assert.deepEqual(committed.controls[0]?.allowedOptions, [committed.controls[0]?.readback]);
+    // A dependency can invalidate a retained value before clearing its label.
+    await page.locator('#tenant-choice').evaluate(element => element.setAttribute('aria-invalid', 'true'));
+    const invalid = await adapter.inspect(signal);
+    assert.deepEqual(invalid.controls[0]?.allowedOptions, ["Alpha", "Beta"]);
+    assert.ok(await page.evaluate(() => Reflect.get(window, "opens")) > committedOpens);
+    // Cleared dependent choices must discover the new catalog, not reuse one.
+    await page.evaluate(() => {
+      const control = document.getElementById('tenant-choice')!;
+      control.removeAttribute('aria-invalid');
+      control.textContent = 'Select One';
+      document.querySelectorAll('#tenant-options [role="option"]').forEach((option, index) => {
+        option.textContent = index === 0 ? 'Gamma' : 'Delta';
+      });
+    });
+    const changed = await adapter.inspect(signal);
+    assert.equal(changed.controls[0]?.readback, null);
+    assert.deepEqual(changed.controls[0]?.allowedOptions, ["Gamma", "Delta"]);
+  } finally { await browser.close(); }
+});
+
+for (const searchOnEnter of [false, true]) test(`empty multi-select ${searchOnEnter ? "defers submitted search until an answer is chosen" : "discovers type-ahead suggestions"} without committing its draft`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" required role="combobox" ${searchOnEnter ? 'enterkeyhint="search"' : ''} aria-expanded="false">
+          <div id="selected"></div>
+        </div>
+      </div></main>
+      <div id="choices" role="listbox" data-automation-id="activeListContainer" hidden><div role="option">Analysis</div></div>
+      <aside role="listbox" data-automation-id="activeListContainer"><div role="option">Unrelated answer</div></aside>
+      <script>
+        const input = document.getElementById('skills--skills');
+        const choices = document.getElementById('choices');
+        const selected = document.getElementById('selected');
+        input.oninput = () => {
+          choices.hidden = ${searchOnEnter} || !input.value;
+          input.setAttribute('aria-expanded', String(!choices.hidden));
+        };
+        function commit(value) {
+          const token = document.createElement('div');
+          token.dataset.automationId = 'selectedItem'; token.textContent = value;
+          selected.append(token); input.value = ''; choices.hidden = true;
+          input.setAttribute('aria-expanded', 'false');
+        }
+        input.onkeydown = event => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            if (${searchOnEnter}) { choices.hidden = false; input.setAttribute('aria-expanded', 'true'); }
+            else commit(input.value);
+          }
+          if (event.key === 'Escape') { choices.hidden = true; input.setAttribute('aria-expanded', 'false'); }
+        };
+        choices.onclick = () => commit('Analysis');
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+    });
+    const signal = AbortSignal.any([]);
+    const snapshot = await adapter.inspect(signal);
+    assert.deepEqual(snapshot.controls[0]?.allowedOptions, searchOnEnter ? undefined : ["Analysis"]);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('#choices').isVisible(), false);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile",
+      fields: searchOnEnter ? [field("skills.values", "skill", "multi_select", '["Analysis"]', '["Analysis"]')] : [],
+      repeatables: [],
+    }, adapter, signal);
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Analysis"]);
+    if (result.kind === "verified" && !searchOnEnter) assert.equal(result.verifiedFields[0]?.lane, "synthetic_test_default");
+  } finally { await browser.close(); }
+});
+
+for (const exactCopies of [0, 1, 2]) test(`skill catalog prefers ${exactCopies} exact matches before qualified aliases despite row movement`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" hidden>
+        <div role="option">Python IDLE</div><div role="option">Python (Programming Language)</div>
+        ${'<div role="option">Python</div>'.repeat(exactCopies)}
+      </div><script>
+        const input = document.querySelector('input');
+        const choices = document.getElementById('choices');
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+        choices.querySelectorAll('[role="option"]').forEach(option => {
+          const leaf = document.createElement('div'); leaf.dataset.automationId = 'promptLeafNode';
+          leaf.textContent = option.textContent; option.replaceChildren(leaf);
+          const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+          checkbox.onclick = event => event.stopPropagation(); leaf.prepend(checkbox);
+          option.onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = option.textContent; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        });
+        const originalGetAttribute = Element.prototype.getAttribute;
+        let moved = false;
+        Element.prototype.getAttribute = function(name) {
+          const result = originalGetAttribute.call(this, name);
+          if (!moved && name === 'aria-selected' && this.parentElement === choices) {
+            moved = true;
+            choices.prepend(choices.lastElementChild);
+          }
+          return result;
+        };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1000 });
+    const signal = AbortSignal.any([]);
+    const control = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    const commit = adapter.commit({ controlId: control.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    await commit;
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 1);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback,
+      exactCopies > 0 ? "Python" : "Python (Programming Language)");
+  } finally { await browser.close(); }
+});
+
+test("skill search finds virtualized options and queries qualified equivalents", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search" aria-controls="choices">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" style="height:32px;overflow:auto" hidden></div>
+      <script>
+        const input = document.querySelector('input'), choices = document.getElementById('choices');
+        const render = () => {
+          const label = input.value.includes('programming language') ? 'C++ Programming Language'
+            : input.value === 'C' && choices.scrollTop > 20 ? 'C' : 'C++ STL';
+          choices.innerHTML = '<div style="height:80px"><div role="option">' + label + '</div></div>';
+          choices.querySelector('[role="option"]').onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = label; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        };
+        choices.onscroll = render;
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; choices.scrollTop = 0; render(); }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 600 });
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", '["C","C++"]', '["C","C++"]')], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["C", "C++ Programming Language"]);
+  } finally { await browser.close(); }
+});
+
+test("skill catalog qualifiers survive selection, handler verification, and learning readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const root = await mkdtemp(join(tmpdir(), "hunt-qualified-skill-"));
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search">
+          <div id="selected"></div></div>
+      </div></main><div role="listbox" id="choices" hidden>
+        <div role="option">Python IDLE</div><div role="option">Python (Programming Language)</div>
+      </div><script>
+        const input = document.querySelector('input');
+        const choices = document.getElementById('choices');
+        input.oninput = () => { choices.hidden = !input.value; };
+        input.onkeydown = event => {
+          if (event.key === 'Enter') { event.preventDefault(); choices.hidden = false; }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+        choices.querySelectorAll('[role="option"]').forEach(option => {
+          option.onclick = () => {
+            const token = document.createElement('span'); token.dataset.automationId = 'selectedItem';
+            token.textContent = option.textContent; document.getElementById('selected').append(token);
+            input.value = ''; choices.hidden = true;
+          };
+        });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 500, inspectMissingOptions: true });
+    const plan = { mode: "synthetic_test_non_submittable" as const, pageType: "profile" as const,
+      fields: [field("skills.values", "skill", "multi_select", '["Python"]', '["Python"]')], repeatables: [] };
+    let observation = 0;
+    const captureOptions = {
+      page: adapter, plan, root, sensitiveValues: [], executionPolicy: liveApplicationExecutionPolicy(plan.mode),
+      observeControl: async (control, signal) => ({
+        observation: await adapter.observeControl(control.controlId, signal),
+        binding: { operationId: `operation_${(++observation).toString(16).padStart(32, "0")}`,
+          attempt: 1, stateObservedAck: true },
+      }),
+    } satisfies Parameters<typeof createProfileFieldLearningCapture>[0];
+    const capture = createProfileFieldLearningCapture(captureOptions);
+    const result = await completeWorkdayProfilePage(plan, capture.page, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Python (Programming Language)"]);
+    capture.bindMutationBatch({ operationId: `operation_${"f".repeat(32)}`, attempt: 1 });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
+    assert.equal(evidence.fields[0].terminalDisposition, "verified");
+    assert.equal(evidence.fields[0].mechanics.persistentReadback, "verified_after_rescan");
+    const skills = JSON.stringify(["Python", "Java", "R", "SQL", "C", "C++", "Go", "Rust", "Ruby"]);
+    const savedPlan = { ...plan, fields: [field("skills.values", "skill", "multi_select", skills, skills)] };
+    const savedCapture = createProfileFieldLearningCapture({
+      ...captureOptions, plan: savedPlan, fileName: "profile-field-learning-02.json",
+    });
+    const replay = await completeWorkdayProfilePage(savedPlan, savedCapture.page, AbortSignal.any([]));
+    assert.equal(replay.kind, "verified", JSON.stringify(replay));
+    assert.match(savedCapture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const savedEvidence = JSON.parse(await readFile(join(root, "profile-field-learning-02.json"), "utf8"));
+    assert.equal(savedEvidence.fields[0].prefillDisposition, "already_correct");
+    assert.equal(savedEvidence.fields[0].terminalDisposition, "verified_without_mutation");
+    assert.equal(savedEvidence.fields[0].driverAttempt, "none");
+  } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("multi-select inspection does not commit free-entry tags despite a search keyboard hint", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Skills</h4><div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" enterkeyhint="search" aria-controls="choices">
+          <ul role="listbox" data-automation-id="selectedItemList"></ul>
+        </div>
+        <div id="choices" role="listbox" data-automation-id="activeListContainer" hidden><div role="option">No Items.</div></div>
+      </div></main><script>
+        const input = document.querySelector('input');
+        const choices = document.querySelector('#choices');
+        input.onclick = () => { choices.hidden = false; };
+        input.onkeydown = event => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const token = document.createElement('li');
+            token.setAttribute('role', 'option'); token.dataset.automationId = 'selectedItem';
+            token.textContent = input.value; document.querySelector('ul').append(token);
+            input.value = ''; choices.hidden = true;
+          }
+          if (event.key === 'Escape') choices.hidden = true;
+        };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true, timeoutMs: 500 });
+    const signal = AbortSignal.any([]);
+    const skill = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    assert.equal(skill.readback, null);
+    assert.equal(skill.allowedOptions, undefined);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('input').inputValue(), "");
+    await adapter.commit({ controlId: skill.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback, "Python");
+    assert.deepEqual(await page.locator('[data-automation-id="selectedItem"]').allTextContents(), ["Python"]);
+  } finally { await browser.close(); }
+});
+
+test("unknown UI inventory preserves textarea constraints and excludes disabled choices", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <textarea id="tenant-note" required minlength="4" maxlength="20"></textarea>
+      <select id="tenant-choice" required>
+        <option disabled selected>Select One</option><option disabled>Unavailable</option>
+        <optgroup label="Closed" disabled><option>Also unavailable</option></optgroup>
+        <option>Available</option>
+      </select></main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const note = snapshot.controls.find(control => control.uiBehavior === "textarea");
+    assert.equal(note?.constraints?.minLength, 4);
+    assert.equal(note?.constraints?.maxLength, 20);
+    assert.deepEqual(snapshot.controls.find(control => control.uiBehavior === "select")?.allowedOptions, ["Available"]);
+    const choice = snapshot.controls.find(control => control.uiBehavior === "select")!;
+    const observed = await adapter.observeControl(choice.controlId, AbortSignal.any([]));
+    assert.deepEqual(observed.visibleOptionIds, [`option_sha256_${retainedProfileTextSha256("Available")}`]);
+  } finally { await browser.close(); }
+});
+
+test("inventories optional custom ARIA and contenteditable controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div role="checkbox" aria-checked="false"
+            data-automation-id="tenantOptionalConsent" tabindex="0">Consent</div>
+          <div role="radiogroup" data-automation-id="tenantOptionalGroup">Choices</div>
+          <div role="radio" aria-checked="false"
+            data-automation-id="tenantOptionalRadio" tabindex="0">Choice</div>
+          <div contenteditable="true" data-automation-id="tenantOptionalNote">Note</div>
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+    })), [
+      { fieldId: "unknown.optional.1", uiBehavior: "checkbox", required: false },
+      { fieldId: "unknown.optional.2", uiBehavior: "radio_group", required: false },
+      { fieldId: "unknown.optional.3", uiBehavior: "text", required: false },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("synthetic traversal commits required ARIA, contenteditable, plural, and constrained controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <div role="checkbox" aria-required="true" aria-checked="false"
+            data-automation-id="tenantConsent">Agree</div>
+          <label for="tenant-fluent">I am fluent in this language.</label>
+          <input id="tenant-fluent" type="checkbox" data-automation-id="tenantFluent">
+          <div role="radiogroup" aria-required="true" aria-label="Status"
+            data-automation-id="tenantStatus">
+            <div role="radio" aria-label="Alpha" aria-checked="false">Alpha</div>
+            <div role="radio" aria-label="Beta" aria-checked="false">Beta</div>
+          </div>
+          <div contenteditable="true" aria-required="true"
+            data-automation-id="tenantNarrative"></div>
+          <select required multiple data-automation-id="tenantNativeMultiple">
+            <option>One</option><option>Two</option>
+          </select>
+          <div role="listbox" aria-required="true" aria-multiselectable="true"
+            data-automation-id="tenantAriaMultiple">
+            <div role="option" aria-selected="false">Red</div>
+            <div role="option" aria-selected="false">Blue</div>
+          </div>
+          <input required type="email" maxlength="8" pattern="[^@]+@[^@]+"
+            data-automation-id="tenantEmail">
+          <input required type="number" min="5" max="8"
+            data-automation-id="tenantNumber">
+          <input required maxlength="4" pattern="[A-Z][a-z]+"
+            data-automation-id="tenantPattern">
+          <input required type="file" accept=".pdf" data-max-file-size="1024"
+            data-automation-id="tenantRequiredDocument">
+        </main>
+        <script>
+          document.querySelector('[role="checkbox"]').addEventListener('click', (event) => {
+            event.currentTarget.setAttribute('aria-checked', 'true');
+          });
+          document.querySelectorAll('[role="radio"]').forEach((radio) => {
+            radio.addEventListener('click', (event) => {
+              document.querySelectorAll('[role="radio"]').forEach((item) =>
+                item.setAttribute('aria-checked', String(item === event.currentTarget))
+              );
+            });
+          });
+          document.querySelectorAll('[role="listbox"] [role="option"]').forEach((option) => {
+            option.addEventListener('click', (event) => {
+              event.currentTarget.setAttribute('aria-selected', 'true');
+            });
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable",
+      pageType: "profile",
+      fields: [],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('[role="checkbox"]').getAttribute("aria-checked"), "true");
+    assert.equal(await page.locator('#tenant-fluent').isChecked(), true);
+    assert.equal(await page.locator('[role="radio"][aria-checked="true"]').count(), 1);
+    assert.notEqual((await page.locator('[contenteditable="true"]').textContent())?.trim(), "");
+    assert.equal(await page.locator("select option:checked").count(), 1);
+    assert.equal(await page.locator('[role="listbox"] [role="option"][aria-selected="true"]').count(), 1);
+    assert.match(await page.locator('[type="email"]').inputValue(), /^[^@\s]+@[^@\s]+$/u);
+    assert.equal(await page.locator('[type="number"]').inputValue(), "5");
+    assert.match(await page.locator('[data-automation-id="tenantPattern"]').inputValue(), /^[A-Z][a-z]+$/u);
+    assert.equal(await page.locator('[type="file"]').evaluate((element) =>
+      (element as HTMLInputElement).files?.[0]?.name), "synthetic-owner-review.pdf");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("recognizes optional Adient social account controls by stable Workday ids", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <label for="socialNetworkAccounts--linkedInAccount">LinkedIn</label>
+          <input id="socialNetworkAccounts--linkedInAccount">
+          <label for="socialNetworkAccounts--facebookAccount">Facebook</label>
+          <input id="socialNetworkAccounts--facebookAccount">
+          <label for="socialNetworkAccounts--twitterAccount">Twitter</label>
+          <input id="socialNetworkAccounts--twitterAccount">
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior, required }) => ({
+      fieldId,
+      uiBehavior,
+      required,
+    })), [
+      { fieldId: "social.linkedin", uiBehavior: "text", required: false },
+      { fieldId: "social.facebook", uiBehavior: "text", required: false },
+      { fieldId: "social.twitter", uiBehavior: "text", required: false },
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a combined page excludes only the exact Resume-owned file control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required type="file" data-automation-id="file-upload-input-ref">
+          <input required type="file" data-automation-id="tenant-required-document">
+        </main>
+      </body>
+    `);
+    const snapshot = await new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+    }).inspect(AbortSignal.any([]));
+
+    assert.deepEqual(snapshot.controls.map(({ fieldId }) => fieldId), [
+      "unknown.required.1",
+    ]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown required control identities survive DOM reordering without retaining labels", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="tenantQuestionAlpha">
+          <input required data-automation-id="tenantQuestionBeta">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const first = (await adapter.inspect(AbortSignal.any([]))).controls.map(
+      ({ fieldId }) => fieldId,
+    );
+    await page.locator('[data-automation-id="tenantQuestionBeta"]').evaluate(
+      (element) => element.parentElement?.prepend(element),
+    );
+    const second = (await adapter.inspect(AbortSignal.any([]))).controls.map(
+      ({ fieldId }) => fieldId,
+    );
+
+    assert.deepEqual(second, [first[1], first[0]]);
+    assert.equal(JSON.stringify([...first, ...second]).includes("tenantQuestion"), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("known choice snapshots supply observed options for protected fallback traversal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <fieldset><legend>Have you worked here before? *</legend>
+        <label><input type="radio" name="candidateIsPreviousWorker" value="Yes" required>Yes</label>
+        <label><input type="radio" name="candidateIsPreviousWorker" value="No" required>No</label>
+      </fieldset>
+      <button id="phoneNumber--phoneType" aria-required="true" aria-haspopup="listbox" aria-controls="phone-types">Select One</button>
+      <div id="phone-types" role="listbox" hidden><div role="option">Mobile</div><div role="option">Home</div></div>
+    </main><script>
+      const button = document.querySelector('button');
+      const popup = document.querySelector('[role="listbox"]');
+      button.onclick = () => { popup.hidden = false; };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      popup.onclick = event => {
+        button.textContent = event.target.textContent;
+        button.setAttribute('aria-valuetext', event.target.textContent);
+        popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const initial = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(initial.controls.find(({fieldId}) => fieldId === "phone.device_type")?.allowedOptions, ["Mobile", "Home"]);
+    assert.equal(await page.locator('button').innerText(), "Select One");
+    assert.equal(await page.locator('input:checked').count(), 0);
+    const result = await completeWorkdayProfilePage({
+      mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [],
+    }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(await page.locator('input[value="No"]').isChecked(), true);
+    assert.equal(await page.locator('button').innerText(), "Mobile");
+    if (result.kind === "verified") {
+      assert.equal(result.verifiedFields.every(field => field.lane === "synthetic_test_default"), true);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("education option discovery searches owned catalogs without committing a selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden><div role="option">Other University</div></div>
+      </div>
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" aria-controls="study-options" required>
+        <div id="study-options" role="listbox" hidden><div role="option">Other Studies</div></div>
+      </div>
+    </main><script>
+      document.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
+        const popup = document.getElementById(input.getAttribute('aria-controls'));
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => { popup.hidden = false; }, 100);
+        if (event.key === 'Escape') popup.hidden = true;
+      }));
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const controls = snapshot.rows.flatMap(({ controls }) => controls);
+    assert.deepEqual(controls.find(({ fieldId }) => fieldId === "education.school")?.allowedOptions, ["Other University"]);
+    assert.deepEqual(controls.find(({ fieldId }) => fieldId === "education.field_of_study")?.allowedOptions, ["Other Studies"]);
+    assert.deepEqual(await page.locator('input').evaluateAll(inputs =>
+      inputs.map(input => input instanceof HTMLInputElement ? input.value : null)), ["", ""]);
+    assert.equal(await page.locator('[role="listbox"]:visible').count(), 0);
+  } finally { await browser.close(); }
+});
+
+test("empty education portal closes before discovering the next control", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Education</h4>
+      <div data-automation-id="formField-school"><label>School*</label>
+        <input id="education-1--school" enterkeyhint="search" required>
+      </div>
+      <div data-automation-id="formField-degree"><label>Degree</label>
+        <button id="education-1--degree" aria-controls="degrees">Select One</button>
+        <div id="degrees" role="listbox" hidden><div role="option">Bachelors</div></div>
+      </div>
+    </main>
+    <div id="portal" data-automation-id="activeListContainer" role="listbox" hidden
+      style="position:fixed;inset:100px 0 0;z-index:10"><div role="option">No Items.</div></div>
+    <script>
+      const school = document.getElementById('education-1--school');
+      const portal = document.getElementById('portal');
+      school.onclick = () => { portal.hidden = false; };
+      document.querySelector('h4').onclick = () => { portal.hidden = true; };
+      document.getElementById('education-1--degree').onclick = () => {
+        document.getElementById('degrees').hidden = false;
+      };
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') document.getElementById('degrees').hidden = true;
+      });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true, timeoutMs: 700,
+    });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.rows.flatMap(row => row.controls)
+      .find(control => control.fieldId === "education.degree")?.allowedOptions, ["Bachelors"]);
+    assert.equal(await page.locator('#portal').isVisible(), false);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
+test("single-choice search discovers real answers and waits for submitted results without cancelling them", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School*</label>
+        <input id="education-1--school" enterkeyhint="search" required>
+        <div id="selected"></div>
+      </div>
+    </main><div id="schools" role="listbox" hidden></div><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('schools');
+      let searchTimer;
+      input.oninput = () => { clearTimeout(searchTimer); popup.hidden = true; };
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No Items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter') searchTimer = setTimeout(() => {
+          popup.hidden = false;
+          popup.innerHTML = input.value === 'a' || input.value === 'Alpha University'
+            ? '<div role="option"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Alpha University</span></div></div>'
+            : '<div role="option">No Items.</div>';
+        }, 2500);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Alpha University') throw Error('Status is not an answer');
+        document.getElementById('selected').innerHTML = '<span data-automation-id="selectedItem">Alpha University</span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Alpha University"]);
+    assert.equal(school.readback, null);
+    assert.equal(await page.locator('input').inputValue(), "");
+    await adapter.commit({ controlId: school.controlId, uiBehavior: school.uiBehavior, value: "Alpha University" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+  } finally { await browser.close(); }
+});
+
+test("education school reconciles canonical saved tokens with presentation mirrors", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" required>
+        <div data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span><button data-automation-id="DELETE_charm">Remove Other</button></div>
+        <div data-automation-id="selectedItem">Other</div>
+      </div>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.equal(school.readback, "Other");
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    assert.equal(await page.locator('input').inputValue(), "");
+  } finally { await browser.close(); }
+});
+
+test("education school ignores empty catalog status and searches before committing", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden></div>
+        <div id="selection"></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('school-options');
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => {
+          popup.hidden = false; popup.innerHTML = '<div role="option">Other</div>';
+        }, 100);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Other') throw new Error('status is not selectable');
+        document.getElementById('selection').innerHTML = '<span data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span></span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Other"]);
+    assert.equal(school.readback, null);
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    const observed = await adapter.observeControl(school.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(await page.locator('#school-options').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test("education prompt reconciles an interrupted click after closing a selection saved on dismissal", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" required>
+        <div id="selected-study"></div>
+        <div role="listbox" hidden><div data-automation-id="promptLeafNode">Accounting</div></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.querySelector('[role="listbox"]');
+      let pending = false;
+      input.onclick = () => { popup.hidden = false; };
+      popup.onclick = () => { pending = true; };
+      document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        if (pending) document.getElementById('selected-study').innerHTML = '<span data-automation-id="selectedItem">Accounting</span>';
+        popup.hidden = true; input.value = '';
+      });
+    </script>`);
+    let interruptedClicks = 0;
+    const wrap = (locator: Locator): Locator => new Proxy(locator, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === "click") return async (options?: Parameters<Locator["click"]>[0]) => {
+          await target.click(options);
+          if (await target.getAttribute("data-automation-id") === "promptLeafNode") {
+            interruptedClicks += 1;
+            throw new Error("selection target remounted after activation");
+          }
+        };
+        if (["locator", "nth", "first", "last"].includes(String(property))) {
+          return (...args: unknown[]) => wrap(Reflect.apply(value, target, args) as Locator);
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const interruptedPage = new Proxy(page, {
+      get(target, property) {
+        if (property === "locator") return (...args: Parameters<typeof page.locator>) => wrap(target.locator(...args));
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const adapter = new PlaywrightWorkdayProfilePage(interruptedPage, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const study = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study")!;
+    await adapter.commit({ controlId: study.controlId, uiBehavior: "multi_select", value: '["Accounting"]' }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(study.controlId)?.backingValueCommitted, true);
+    assert.equal(interruptedClicks, 1);
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test("education discovers a newly opened portal catalog and dismisses it without selecting", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h2>My Experience</h2>
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study*</label>
+        <input id="education-1--fieldOfStudy" required>
+      </div>
+    </main>
+    <div data-automation-id="activeListContainer" role="listbox"><div role="option">Unrelated</div></div>
+    <script>
+      const input = document.querySelector('input');
+      window.studyOpenCount = 0;
+      input.onclick = () => setTimeout(() => {
+        window.studyOpenCount += 1;
+        const popup = document.createElement('div');
+        popup.id = 'study-portal'; popup.setAttribute('data-automation-id', 'activeListContainer');
+        popup.setAttribute('role', 'listbox');
+        popup.innerHTML = '<div role="option"><input type="radio">Accounting</div>';
+        document.body.append(popup);
+      }, 100);
+      document.querySelector('h2').onclick = () => document.getElementById('study-portal')?.remove();
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.rows.flatMap(row => row.controls).find(control =>
+      control.fieldId === "education.field_of_study")?.allowedOptions, ["Accounting"]);
+    assert.equal(await page.locator('#study-portal').count(), 0);
+    assert.equal(await page.locator('input').inputValue(), "");
+    const readback = await adapter.inspect(AbortSignal.any([]), false);
+    assert.equal(readback.rows[0]?.controls[0]?.readback, null);
+    assert.equal(await page.evaluate(() => Reflect.get(window, 'studyOpenCount')), 1);
+    assert.equal(await page.locator('#study-portal').count(), 0);
+  } finally { await browser.close(); }
+});
+
+test("option discovery retains required validation revealed by blur without inventing an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const events: { event: string; details: Readonly<Record<string, unknown>> }[] = [];
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-controls="source-options" aria-required="true">
+      </div>
+      <div id="source-options" role="listbox" hidden><div role="option">Private answer option</div></div>
+    </main><script>
+      const input = document.querySelector('input'), popup = document.querySelector('[role="listbox"]');
+      input.onclick = () => { popup.hidden = false; };
+      input.onblur = () => { input.setAttribute('aria-invalid', 'true'); };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile", inspectMissingOptions: true,
+      trace: (event, details) => { events.push({ event, details: { ...details } }); },
+    });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const source = snapshot.controls.find(control => control.fieldId === "source.how_did_you_hear")!;
+    assert.equal(source.required, true);
+    assert.equal(source.readback, null);
+    assert.equal(await page.locator('input').getAttribute('aria-invalid'), 'true');
+    assert.equal(JSON.stringify(events).includes("Private answer option"), false);
+    assert.equal(events.some(({ event }) => event === "profile_option_observation_completed"), true);
+  } finally { await browser.close(); }
+});
+
+test("source option observation waits for its delayed owned catalog without selecting", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-controls="source-options" aria-required="true">
+      </div>
+      <div id="source-options" role="listbox" hidden><div role="option">Website</div></div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.querySelector('[role="listbox"]');
+      input.onclick = () => setTimeout(() => { popup.hidden = false; }, 150);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test("multi-select selection binds its delayed portal without selecting an unrelated option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <h4>Skills</h4><div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer">
+          <input id="skills--skills" enterkeyhint="search"><div id="selected-skills"></div>
+        </div>
+      </div></main>
+      <div id="unrelated" role="listbox" data-automation-id="activeListContainer"><div role="option">Python</div></div>
+      <div id="skills-options" role="listbox" data-automation-id="activeListContainer" hidden>
+        <div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">Python</span></div></div>
+      </div><script>
+        const input = document.querySelector('input');
+        const popup = document.querySelector('#skills-options');
+        input.onclick = () => { setTimeout(() => { popup.hidden = false; }, 500); };
+        popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+          document.querySelector('#selected-skills').innerHTML = '<div data-automation-id="selectedItem">Python</div>';
+          input.value = ''; popup.hidden = true;
+        };
+        document.querySelector('#unrelated').onclick = () => { globalThis.unrelatedClicked = true; };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 2000 });
+    const signal = new AbortController().signal;
+    const control = (await adapter.inspect(signal)).controls.find(({ fieldId }) => fieldId === "skills.values")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    const filled = (await adapter.inspect(signal)).controls.find(({ fieldId }) => fieldId === "skills.values")!;
+    assert.equal(filled.readback, "Python");
+    assert.equal(await page.locator('#unrelated').isVisible(), true);
+    assert.notEqual(await page.evaluate(() => (globalThis as typeof globalThis & { unrelatedClicked?: boolean }).unrelatedClicked), true);
+  } finally { await browser.close(); }
+});
+
+for (const matches of [true, false]) test(`single prompt waits for delayed owned token and ${matches ? "accepts matching" : "rejects wrong"} value`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-certificate"><label for="certificate">Certificate</label>
+        <div id="widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+          <input id="certificate" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="widget"><div id="selected"></div>
+        </div></div></main><script>
+      globalThis.commitAttempts = 0;
+      document.querySelector('input').onkeydown = event => {
+        if(event.key !== 'Enter') return;
+        event.preventDefault(); globalThis.commitAttempts++;
+        setTimeout(() => { document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">${matches ? "Example certificate" : "Wrong certificate"}</span>'; document.querySelector('input').value = ''; }, 600);
+      };</script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1200 });
+    const signal = AbortSignal.any([]);
+    const control = (await adapter.inspect(signal, false)).controls[0]!;
+    const commit = adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example certificate" }, signal);
+    if (matches) await commit;
+    else await assert.rejects(commit, /free-entry selection did not commit/u);
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, "commitAttempts")), 1);
+    assert.equal((await adapter.inspect(signal, false)).controls[0]?.readback, matches ? "Example certificate" : "Wrong certificate");
+  } finally { await browser.close(); }
+});
+
+for (const mode of ["free-entry", "catalog", "detached-option"]) test(`multi-select waits for delayed ${mode} commitment before retrying`, async () => {
+  const freeEntry = mode !== "catalog";
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-skills">
+        <label for="skills--skills">Type to Add Skills</label>
+        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search"><div id="selected"></div></div>
+      </div></main><div id="choices" role="listbox" hidden><div role="option">Python</div></div>
+      ${mode === "detached-option" ? '<style>@keyframes moving { from { transform:translateX(0) } to { transform:translateX(50px) } } #choices [role="option"] { animation:moving .1s infinite alternate }</style>' : ''}
+      <script>
+        const input = document.querySelector('input');
+        const choices = document.querySelector('#choices');
+        globalThis.commitAttempts = 0;
+        function commit() {
+          globalThis.commitAttempts++;
+          setTimeout(() => {
+            document.querySelector('#selected').innerHTML = '<ul role="listbox" data-automation-id="selectedItemList"><li role="option" data-automation-id="selectedItem">Python</li></ul>';
+            input.value = ''; choices.hidden = true;
+            if (${mode === "detached-option"}) choices.remove();
+          }, 600);
+        }
+        input.onkeydown = event => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          if (${mode === "detached-option"}) choices.hidden = false;
+          if (${freeEntry}) commit(); else choices.hidden = false;
+        };
+        choices.onclick = commit;
+        document.querySelector('#selected').onclick = () => { throw new Error('committed tags are not choices'); };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 1500 });
+    const signal = AbortSignal.any([]);
+    const skill = (await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")!;
+    await adapter.commit({ controlId: skill.controlId, uiBehavior: "multi_select", value: '["Python"]' }, signal);
+    assert.equal((await adapter.inspect(signal)).controls.find(control => control.fieldId === "skills.values")?.readback, "Python");
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, "commitAttempts")), 1);
+  } finally { await browser.close(); }
+});
+
+test("source selection binds its newly opened portal without selecting an unrelated option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true"><div id="selected-source"></div>
+      </div></main>
+      <div role="listbox" data-automation-id="activeListContainer"><div role="option">Website</div></div>
+      <div id="source-options" role="listbox" data-automation-id="activeListContainer" hidden>
+        <div role="option" data-automation-id="menuItem" style="width:500px"><div data-automation-id="promptLeafNode" style="width:100px"><span data-automation-id="promptOption">Website</span></div></div>
+      </div><script>
+        const input = document.querySelector('input');
+        const popup = document.querySelector('#source-options');
+        input.onclick = () => { popup.hidden = false; };
+        popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+          document.querySelector('#selected-source').innerHTML = '<div data-automation-id="selectedItem">Website</div>';
+          input.value = ''; popup.hidden = true;
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Website" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Website");
+    assert.equal(await page.locator('[role="listbox"]').first().isVisible(), true);
+  } finally { await browser.close(); }
+});
+
+test("committed dynamic choice observation does not reopen its catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-countryRegion">
+        <button id="address--countryRegion" aria-haspopup="listbox" aria-controls="regions">Alberta</button>
+        <div id="regions" role="listbox" hidden><div role="option">Alberta</div><div role="option">Ontario</div></div>
+      </div></main><script>
+        globalThis.opens = 0;
+        document.querySelector('button').onclick = () => { globalThis.opens++; document.querySelector('#regions').hidden = false; };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelector('#regions').hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls[0]!;
+    const observed = await adapter.observeControl(control.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(observed.validationState, "clear");
+    assert.equal(observed.optionCatalogState, "unknown");
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & { opens: number }).opens), 0);
+    await page.locator('button').evaluate(element => { element.textContent = 'Select One'; });
+    const empty = await adapter.observeControl(control.controlId, AbortSignal.any([]));
+    assert.equal(empty.backingState, "unset");
+    assert.equal(empty.visibleOptionIds.length, 2);
+    assert.equal(await page.evaluate(() => (globalThis as typeof globalThis & { opens: number }).opens), 1);
+  } finally { await browser.close(); }
+});
+
+test("a matching saved source proves controlled backing without clicking its covered input", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source" style="position:relative"><label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true" style="width:300px;height:30px">
+        <div data-automation-id="selectedItem" style="position:absolute;inset:0;background:white">Example Careers</div>
+      </div></main><script>
+        const input = document.querySelector('input');
+        input.__reactFiber$test = { memoizedProps: { selectedValues: [{id:'site',text:'Example Careers'}] }, return: {memoizedProps: null} };
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", timeoutMs: 100 });
+    const source = (await adapter.inspect(AbortSignal.any([]))).controls.find(({fieldId}) => fieldId === "source.how_did_you_hear")!;
+    await adapter.commit({ controlId: source.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
+    assert.equal(adapter.interaction(source.controlId)?.backingValueCommitted, true);
+    assert.equal(adapter.interaction(source.controlId)?.optionActivated, false);
+    for (const selectedValues of [[], [{id:'',text:'Example Careers'}], [{id:'site',text:'Other'}],
+      [{id:'one',text:'Example Careers'}, {id:'two',text:'Example Careers'}]]) {
+      await page.locator('input').evaluate((element, selectedValues) => {
+        (element as unknown as Record<string, unknown>).__reactFiber$test = {memoizedProps: {selectedValues}};
+      }, selectedValues);
+      await assert.rejects(adapter.commit({ controlId: source.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([])));
+      assert.equal(adapter.interaction(source.controlId)?.backingValueCommitted, false);
+    }
+  } finally { await browser.close(); }
+});
+
+test("source discovery skips an empty category without committing its heading", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source"><label for="source--source">How Did You Hear About Us?</label>
+      <input id="source--source" aria-required="true"><div id="selected"></div></div></main>
+      <div id="back"></div><div id="popup" role="listbox" data-automation-id="activeListContainer" hidden></div>
+      <script>
+        const input = document.querySelector('input'), popup = document.querySelector('#popup'), back = document.querySelector('#back');
+        const open = () => {
+          popup.hidden = false; back.innerHTML = '';
+          popup.innerHTML = ['Agency', 'Website'].map(label => '<div role="option"><div data-automation-id="promptLeafNode">' + label + '<svg role="presentation"></svg></div></div>').join('');
+          popup.querySelectorAll('[data-automation-id="promptLeafNode"]').forEach((node, index) => node.onclick = () => {
+            popup.innerHTML = '<div role="option" id="category-back">' + node.textContent + '</div>' +
+              (index === 0 ? '' : '<div role="option"><span data-automation-id="promptOption">Example Careers</span></div>');
+            popup.firstChild.onclick = open;
+            if (index === 1) popup.lastChild.onclick = () => {
+              document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">Example Careers</div>';
+              popup.hidden = true; back.innerHTML = '';
+            };
+          });
+        };
+        input.onclick = open;
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') { popup.hidden = true; back.innerHTML = ''; } });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, ["Example Careers"]);
+    assert.equal(await page.locator('#selected').innerText(), "");
+    assert.equal(await page.locator('#popup').isVisible(), false);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: "Example Careers" }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, "Example Careers");
+  } finally { await browser.close(); }
+});
+
+for (const discoverFirst of [true, false]) {
+for (const categoryLabel of ["Career Websites", "Company Careers Page", "Agency", "Advertisements"]) {
+test(`source discovery ${discoverFirst} exposes a leaf below ${categoryLabel} rather than its category`, async () => {
+  const answerLabel = categoryLabel === "Agency" ? "Agency" : "Example Careers";
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source"><label for="source--source">How Did You Hear About Us?</label>
+      <input id="source--source" aria-required="true" data-uxi-multiselect-id="source-widget"><div id="selected"></div></div></main>
+      <div id="busy" data-automation-id="responsiveMonikerPrompt" data-associated-widget="source-widget" aria-busy="false"></div>
+      <div id="popup" role="listbox" data-automation-id="activeListContainer" hidden></div>
+      <script>
+        const input = document.querySelector('input'); const popup = document.querySelector('#popup');
+        input.onclick = () => {
+          popup.hidden = false;
+          popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><span data-automation-id="promptOption">${categoryLabel}</span><svg role="presentation"></svg></div></div>';
+          popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+            popup.innerHTML = '';
+            document.querySelector('#busy').setAttribute('aria-busy', 'true');
+            setTimeout(() => {
+              document.querySelector('#busy').setAttribute('aria-busy', 'false');
+              popup.innerHTML = '<div role="option" data-automation-id="menuItem"><div data-automation-id="promptLeafNode"><input type="radio"><span data-automation-id="promptOption">${answerLabel}</span></div></div>';
+              popup.querySelector('[data-automation-id="promptLeafNode"]').onclick = () => {
+                document.querySelector('#selected').innerHTML = '<div data-automation-id="selectedItem">${answerLabel}</div>';
+                input.value = ''; popup.hidden = true;
+              };
+            }, 700);
+          };
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]), discoverFirst)).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, discoverFirst ? [answerLabel] : undefined);
+    assert.equal(await page.locator('#selected').innerText(), "");
+    assert.equal(await page.locator('#popup').isVisible(), false);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: "search_select", value: answerLabel }, AbortSignal.any([]));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.readback, answerLabel);
+  } finally { await browser.close(); }
+});
+}
+
+}
+
+test("source observation binds only its newly visible unfocused portal catalog", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" aria-required="true">
+      </div>
+    </main>
+    <div data-automation-id="activeListContainer" role="listbox"><div role="option">Canada (+1)</div></div>
+    <div id="source-options" data-automation-id="activeListContainer" role="listbox" style="min-height:20px" hidden><div role="option">Website</div></div>
+    <script>
+      const popup = document.querySelector('#source-options');
+      document.querySelector('input').onclick = () => {
+        popup.hidden = false; popup.innerHTML = '';
+        setTimeout(() => { popup.innerHTML = '<div role="option"><div data-automation-id="promptOption">Website</div></div>'; }, 150);
+      };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('#source-options').isVisible(), false);
+    assert.equal(await page.locator('[role="listbox"]').first().isVisible(), true);
+    await page.locator('#source-options').evaluate(element => {
+      const duplicate = element.cloneNode(true) as HTMLElement;
+      duplicate.id = "duplicate-source-options";
+      element.after(duplicate);
+      document.querySelector('input')!.addEventListener('click', () => { duplicate.hidden = false; });
+    });
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /profile inspection failed/u);
+    assert.equal(await page.locator('input').inputValue(), "");
+    await page.locator('#duplicate-source-options').evaluate(element => element.remove());
+    await page.locator('input').evaluate(element => {
+      element.onclick = () => {
+        const popup = document.querySelector<HTMLElement>('#source-options')!;
+        popup.innerHTML = '<div role="option">Website</div><div role="option">Website</div>';
+        popup.hidden = false;
+      };
+    });
+    const duplicateLabels = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(duplicateLabels.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+  } finally { await browser.close(); }
+});
+
+test("flat source discovery tolerates duplicate labels but never selects an ambiguous answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <button type="button" id="source--source" aria-haspopup="listbox" aria-controls="sources">Select One</button>
+      </div></main>
+      <ul id="sources" role="listbox" tabindex="-1" hidden>
+        <li role="option" data-value="one">Facebook</li>
+        <li role="option" data-value="two">Facebook</li>
+        <li role="option" data-value="three">LinkedIn</li>
+      </ul><script>
+        const button = document.querySelector('button'), popup = document.querySelector('ul');
+        button.onclick = () => { popup.hidden = false; popup.focus(); };
+        const select = option => { button.textContent = option.textContent; popup.hidden = true; };
+        popup.querySelectorAll('li').forEach(option => option.onclick = () => select(option));
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') popup.hidden = true;
+          if (event.key === 'Enter' && !popup.hidden) select(popup.querySelector('li'));
+        });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")!;
+    assert.deepEqual(control.allowedOptions, ["Facebook", "LinkedIn"]);
+    await adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior, value: "LinkedIn" }, AbortSignal.any([]));
+    await assert.rejects(adapter.commit({ controlId: control.controlId, uiBehavior: control.uiBehavior, value: "Facebook" }, AbortSignal.any([])), /selectable leaf is ambiguous/u);
+    assert.equal(await page.locator('button').innerText(), "LinkedIn");
+  } finally { await browser.close(); }
+});
+
+for (const opener of ["native", "component", "icon-component"] as const) {
+test(`source option observation opens its roleless ${opener} prompt without committing an answer`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-source">
+        <label for="source--source">How Did You Hear About Us?</label>
+        <input id="source--source" data-automation-id="searchBox" aria-required="true">
+        <span data-automation-id="promptSearchButton">Open</span>
+      </div>
+      <div role="listbox" tabindex="-1" hidden><div role="option">Website</div></div>
+    </main><script>
+      const popup = document.querySelector('[role="listbox"]');
+      const open = () => setTimeout(() => { popup.hidden = false; popup.focus(); }, 150);
+      const button = document.querySelector('span');
+      button.onclick = ${opener === "native"} ? open : () => {};
+      button.__reactFiber$retained = {
+        memoizedProps: {
+          onSelectInputClick: ${opener === "component"} ? open : () => {},
+          ...(${opener === "icon-component"} ? { onPromptIconClick: open } : {})
+        }, return: null
+      };
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') popup.hidden = true; });
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.deepEqual(snapshot.controls.find(({ fieldId }) => fieldId === "source.how_did_you_hear")?.allowedOptions, ["Website"]);
+    assert.equal(await page.locator('input').inputValue(), "");
+    assert.equal(await page.locator('[role="listbox"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+}
+
+test("only zero-sized anonymous text companions of known choices are excluded", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+      <div data-automation-id="formField-country">
+        <button id="country--country" aria-haspopup="listbox">Canada</button>
+        <input type="text" style="width:0;height:0;padding:0;border:1px solid">
+      </div>
+    </main>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    assert.equal(await page.locator('input').isVisible(), true);
+    assert.deepEqual((await adapter.inspect(AbortSignal.any([]))).controls.map(({fieldId}) => fieldId), ["address.country"]);
+    await page.locator('input').evaluate(element => element.style.width = "100px");
+    await assert.rejects(adapter.inspect(AbortSignal.any([])), /unknown required control identity denied/u);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("unknown required controls without a unique machine identity fail before mutation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required>
+          <input required>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    await assert.rejects(
+      adapter.inspect(AbortSignal.any([])),
+      /unknown required control identity denied/u,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("required controls outside the admitted profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <aside><input required data-automation-id="workdayChromeRequiredControl"></aside>
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="workdayChromeRequiredControl"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("disabled required controls inside the profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required disabled data-automation-id="nativeDisabledRequired">
+          <input required aria-disabled="true" data-automation-id="ariaDisabledRequired">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("native readonly required controls inside the profile container do not block it", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required readonly value="Ada" data-automation-id="preferredNameSection_preferredName">
+          <input required readonly value="owner@example.invalid" data-automation-id="prepopulatedEmail">
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("identity.given_name", "identity", "text", "Ada")],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="preferredNameSection_preferredName"]').inputValue(),
+      "Ada",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a required control enabled after an earlier commit blocks the next mutation", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyInfoPage">
+          <input required data-automation-id="legalNameSection_firstName">
+          <input required data-automation-id="legalNameSection_lastName">
+          <input required disabled data-automation-id="conditionalRequired">
+        </main>
+        <script>
+          document.querySelector('[data-automation-id="legalNameSection_firstName"]')
+            .addEventListener("input", () => {
+              document.querySelector('[data-automation-id="conditionalRequired"]')
+                .removeAttribute("disabled");
+            });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+
+    assert.deepEqual(
+      await completeWorkdayProfilePage({
+        mode: "live",
+        pageType: "profile",
+fields: [
+          field("identity.given_name", "identity", "text", "Ada"),
+          field("identity.family_name", "identity", "text", "Lovelace"),
+        ],
+        repeatables: [],
+      }, adapter, AbortSignal.any([])),
+      {
+        kind: "blocked",
+        code: "answer_type_unknown",
+        fieldId: "unknown.required.1",
+        uiBehavior: "text",
+        uiVariant: "workday_unknown_required_v1",
+      },
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(),
+      "Ada",
+    );
+    assert.equal(
+      await page.locator('[data-automation-id="legalNameSection_lastName"]').inputValue(),
+      "",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("repeatable question variants bind one handler from the observed UI type", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const [attributes, behavior] of [["", "text"], ['role="combobox"', "search_select"]] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+        <section data-automation-id="educationSection"><div data-row-id="education-1">
+          <label>School<input data-automation-id="education-1--school" ${attributes}></label>
+        </div></section></main>`);
+      const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+      const snapshot = await adapter.inspect(AbortSignal.any([]));
+      const schools = snapshot.rows.flatMap(row => row.controls)
+        .filter(control => control.fieldId === "education.school");
+      assert.equal(schools.length, 1);
+      assert.equal(schools[0]?.uiBehavior, behavior);
+    }
+  } finally { await browser.close(); }
+});
+
+test("real adapter and handler reconcile every profile section without owned duplicates", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(fixture);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const experience = [
+      field("experience.company", "experience", "text", "Analytical Engines"),
+      field("experience.title", "experience", "text", "Programmer"),
+      field("experience.start_date", "experience", "date", "2021-03-01"),
+    ];
+    const portErrors: string[] = [];
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [
+        field("identity.given_name", "identity", "text", "Ada"),
+        field("identity.family_name", "identity", "text", "Lovelace"),
+        field("address.line1", "address", "text", "123 Example Street"),
+        field("address.city", "address", "text", "Calgary"),
+        field("address.country", "address", "option", "CA", "Canada"),
+        field("address.postal_code", "address", "text", "T2P 1J9"),
+        field("phone.country_code", "phone", "option", "CA-1", "Canada (+1)"),
+        field("phone.number", "phone", "phone", "+1 555 0100"),
+      ],
+      repeatables: [
+        { section: "experience", rows: [{ rowKey: "experience-1", fields: experience }] },
+        { section: "education", rows: [{ rowKey: "education-1", fields: [
+          field("education.school", "education", "text", "University of London"),
+          field("education.degree", "education", "single_select", "mathematics", "Mathematics"),
+          field("education.end_date", "education", "date", "1835-06-01"),
+        ] }] },
+        { section: "skills", rows: [{ rowKey: "skill-1", fields: [
+          field("skills.name", "skill", "option", "typescript", "TypeScript"),
+        ] }] },
+      ],
+    }, traced(adapter, portErrors), AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify({ result, portErrors }));
+    if (result.kind === "verified") assert.equal(result.ownedDuplicateRows, 0);
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.rows.some(({ rowId }) => rowId === "education-empty"), false);
+    assert.equal(snapshot.rows.filter(({ section }) => section === "skills").length, 1);
+    assert.equal(snapshot.rows.find(({ section }) => section === "skills")
+      ?.controls[0]?.readback, "TypeScript");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience native degree select commits the unique exact tenant label", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <label for="education-1--degree">Degree Required</label>
+          <select id="education-1--degree" required>
+            <option value="">Select One</option>
+            <option value="high-school">(High School Diploma/GED (11 years))</option>
+            <option value="bachelors">(Bachelor's Degree (16 years))</option>
+          </select>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).rows
+      .flatMap(({ controls }) => controls)
+      .find(({ fieldId }) => fieldId === "education.degree")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "select",
+      value: "(Bachelor's Degree (16 years))",
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).rows
+        .flatMap(({ controls }) => controls)
+        .find(({ fieldId }) => fieldId === "education.degree")?.readback,
+      "(Bachelor's Degree (16 years))",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience unowned degree popup commits one exact field-local option", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-education-degree">
+            <button id="education-1--degree" aria-haspopup="listbox"
+              aria-expanded="false" aria-required="true">Select One</button>
+            <div id="degree-options" hidden>
+              <div role="option">(High School Diploma/GED (11 years))</div>
+              <div role="option">(Bachelor's Degree (±16 years))</div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const control = document.querySelector('#education-1--degree');
+          const options = document.querySelector('#degree-options');
+          control.addEventListener('click', () => {
+            options.hidden = false;
+            control.setAttribute('aria-expanded', 'true');
+          });
+          options.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            control.textContent = target.textContent;
+            control.setAttribute('aria-expanded', 'false');
+            options.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).rows
+      .flatMap(({ controls }) => controls)
+      .find(({ fieldId }) => fieldId === "education.degree")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "select",
+      value: "(Bachelor's Degree (±16 years))",
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).rows
+        .flatMap(({ controls }) => controls)
+        .find(({ fieldId }) => fieldId === "education.degree")?.readback,
+      "(Bachelor's Degree (±16 years))",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience multi-select commits every exact visible skill without comma splitting", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              aria-expanded="false" placeholder="Search">
+            <div id="selected-skills"></div>
+            <div id="skills-options" role="listbox" hidden>
+              <div role="option">C++</div>
+              <div role="option">REST API</div>
+              <div role="option">TypeScript</div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.getElementById("selected-skills");
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const pill = document.createElement("div");
+            pill.setAttribute("data-automation-id", "selectedItem");
+            pill.textContent = option.textContent;
+            selected.append(pill);
+            input.value = "";
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const options = JSON.stringify(["C++", "REST API", "TypeScript"]);
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified");
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["C++", "REST API", "TypeScript"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience bounds a large optional owner skill set to one derived site-valid fact", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              aria-expanded="false" placeholder="Search">
+            <div id="selected-skills"></div>
+            <div id="skills-options" role="listbox" hidden><div role="option">Skill 01</div></div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const pill = document.createElement("div");
+            pill.setAttribute("data-automation-id", "selectedItem");
+            pill.textContent = option.textContent;
+            document.getElementById("selected-skills").append(pill);
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const options = JSON.stringify(Array.from({ length: 9 }, (_, index) =>
+      `Skill ${String(index + 1).padStart(2, "0")}`
+    ));
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    if (result.kind !== "verified") return;
+    const effective = result.effectivePlan.fields[0]!;
+    assert.equal(effective.answer.kind, "answered");
+    if (effective.answer.kind !== "answered") return;
+    assert.equal(effective.answer.provenance, "journey_derived");
+    assert.equal(effective.answer.lane, "live_owner_fact");
+    assert.equal(effective.answer.value, '["Skill 01"]');
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Skill 01"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience trusts a collapsed selected-item over its presentation-only accessibility summary", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+                aria-expanded="false" placeholder="Search">
+              <ul data-automation-id="selectedItemList" hidden></ul>
+              <div id="visible-selected-items"></div>
+              <div id="skills-options" role="listbox" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          const visibleSelected = document.getElementById("visible-selected-items");
+          window.skillOptionActivations = 0;
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            window.skillOptionActivations += 1;
+            const item = document.createElement("li");
+            item.setAttribute("data-automation-id", "selectedItem");
+            item.setAttribute("role", "option");
+            item.innerHTML = '<p data-automation-id="promptOption">Python</p>';
+            selected.replaceChildren(item);
+            selected.hidden = true;
+            const mirror = document.createElement("div");
+            mirror.setAttribute("data-automation-id", "selectedItem");
+            mirror.textContent = "PythonPython";
+            visibleSelected.replaceChildren(mirror);
+            input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const plan = {
+      mode: "live" as const,
+      pageType: "profile" as const,
+      fields: [field(
+        "skills.values", "skill", "multi_select", '["Python"]', '["Python"]',
+      )],
+      repeatables: [],
+    };
+
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(await page.evaluate(() =>
+      (window as unknown as { readonly skillOptionActivations: number })
+        .skillOptionActivations
+    ), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience owns a remounted skill by its production list-item wrapper", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const traces: Array<{ readonly event: string; readonly details?: object }> = [];
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+                aria-expanded="false" placeholder="Search">
+              <ul data-automation-id="selectedItemList"></ul>
+              <div id="presentation-mirror"></div>
+              <div id="skills-options" role="listbox" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          const mirrorHost = document.getElementById("presentation-mirror");
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const owner = document.createElement("li");
+            owner.setAttribute("data-uxi-widget-type", "selectinputlistitem");
+            owner.setAttribute("data-uxi-multiselect-id", "skills--uid1");
+            owner.setAttribute("data-uxi-selectinputlistitem-index", "");
+            owner.innerHTML = '<div data-automation-id="selectedItem">' +
+              '<p data-automation-id="promptOption">Python</p></div>';
+            selected.replaceChildren(owner);
+            input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+            setTimeout(() => {
+              const mirror = document.createElement("div");
+              mirror.setAttribute("data-automation-id", "selectedItem");
+              mirror.innerHTML = '<p data-automation-id="promptOption">Python Presentation</p>';
+              mirrorHost.replaceChildren(mirror);
+            }, 10);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      trace: (event, details) => traces.push({ event, details }),
+    });
+    const plan = {
+      mode: "live" as const,
+      pageType: "profile" as const,
+      fields: [field(
+        "skills.values", "skill", "multi_select", '["Python"]', '["Python"]',
+      )],
+      repeatables: [],
+    };
+
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+    assert.equal(traces.some(({ event, details }) =>
+      event === "profile_multi_select_readback_ownership" &&
+      JSON.stringify(details) === JSON.stringify({
+        selectedItemCount: 2,
+        productionOwnerCount: 1,
+        productionOwnedSelectedItemCount: 1,
+        unownedSelectedItemCount: 1,
+        canonicalItemCount: 1,
+        fallbackItemCount: 0,
+        chosenItemCount: 1,
+        chosenUniqueCount: 1,
+        usedProductionOwners: true,
+      })
+    ), true, JSON.stringify(traces));
+    assert.equal(JSON.stringify(traces).includes("Python"), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience excludes a selected skill delete affordance from committed readback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+                aria-expanded="false" placeholder="Search">
+              <ul data-automation-id="selectedItemList"></ul>
+              <div id="skills-options" role="listbox" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const listbox = document.getElementById("skills-options");
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          input.addEventListener("click", () => {
+            listbox.hidden = false;
+            input.setAttribute("aria-expanded", "true");
+          });
+          listbox.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            const item = document.createElement("li");
+            item.setAttribute("data-automation-id", "selectedItem");
+            item.setAttribute("role", "presentation");
+            item.innerHTML = '<span data-automation-id="promptOption">Python' +
+              '<button type="button" data-automation-id="DELETE_charm">Python</button></span>';
+            selected.replaceChildren(item);
+            input.value = "";
+            input.setAttribute("aria-valuetext", "1 item selected, PythonPython");
+            listbox.hidden = true;
+            input.setAttribute("aria-expanded", "false");
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const plan = {
+      mode: "live" as const,
+      pageType: "profile" as const,
+      fields: [field(
+        "skills.values", "skill", "multi_select", '["Python"]', '["Python"]',
+      )],
+      repeatables: [],
+    };
+
+    assert.equal(
+      (await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]))).kind,
+      "verified",
+    );
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience reconciles a committed skill after its prompt activation target remounts", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+              <ul data-automation-id="selectedItemList" hidden></ul>
+            </div>
+            <div data-automation-id="errorMessage">Choose a skill</div>
+            <div data-automation-id="formField-nested">
+              <div data-automation-id="errorMessage">Nested field error</div>
+            </div>
+          </div>
+        </main>
+        <div id="skills-options" role="listbox" hidden>
+          <div role="option"><input type="radio" disabled>Python</div>
+        </div>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          const options = document.querySelector('#skills-options');
+          const selected = document.querySelector('[data-automation-id="selectedItemList"]');
+          window.skillSearches = 0;
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('input', () => {
+            if (prompt.value !== 'Python') return;
+            window.skillSearches += 1;
+            options.hidden = false;
+            setTimeout(() => {
+              const item = document.createElement('li');
+              item.setAttribute('data-automation-id', 'selectedItem');
+              item.innerHTML = '<p data-automation-id="promptOption">Python</p>';
+              selected.replaceChildren(item);
+              selected.hidden = true;
+              prompt.value = '';
+              prompt.hidden = true;
+              options.hidden = true;
+            }, 50);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 90_000,
+    });
+    const options = JSON.stringify(["Python"]);
+    const plan = {
+      mode: "live",
+      pageType: "profile",
+      fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    } as const;
+    const blocked = await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]));
+
+    assert.notEqual(blocked.kind, "verified", JSON.stringify(blocked));
+    assert.equal(await page.evaluate(() =>
+      (window as unknown as { readonly skillSearches: number }).skillSearches
+    ), 1);
+    await page.locator(
+      '[data-automation-id="formField-skills"] > [data-automation-id="errorMessage"]',
+    ).evaluate((element) => {
+      (element as HTMLElement).hidden = true;
+    });
+    const started = performance.now();
+    const result = await completeWorkdayProfilePage(plan, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal(performance.now() - started < 10_000, true);
+    assert.equal(await page.evaluate(() =>
+      (window as unknown as { readonly skillSearches: number }).skillSearches
+    ), 1);
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).controls
+        .find(({ fieldId }) => fieldId === "skills.values")?.readback,
+      "Python",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience validation ownership is atomic across direct and nested remount churn", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div id="skills-owner" data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <ul data-automation-id="selectedItemList" hidden>
+                <li data-automation-id="selectedItem">
+                  <p data-automation-id="promptOption">Python</p>
+                </li>
+              </ul>
+            </div>
+            <div id="direct-error" data-automation-id="errorMessage">Direct error</div>
+            <div id="nested-owner" data-automation-id="formField-nested">
+              <div id="nested-error" data-automation-id="errorMessage">Nested error</div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const originalQuerySelectorAll = Element.prototype.querySelectorAll;
+          let validationChurnArmed = false;
+          Element.prototype.querySelectorAll = function(selector) {
+            const result = originalQuerySelectorAll.call(this, selector);
+            if (validationChurnArmed && this.id === 'skills-owner' &&
+                selector.includes('errorMessage')) {
+              validationChurnArmed = false;
+              queueMicrotask(() => {
+                const owner = document.getElementById('skills-owner');
+                const direct = document.getElementById('direct-error');
+                const nestedOwner = document.getElementById('nested-owner');
+                const directClone = direct.cloneNode(true);
+                const nestedClone = nestedOwner.cloneNode(true);
+                direct.replaceWith(directClone);
+                nestedOwner.replaceWith(nestedClone);
+                owner.prepend(nestedClone);
+                owner.append(directClone);
+              });
+            }
+            return result;
+          };
+          window.configureValidationChurn = (directHidden, nestedHidden) => {
+            const owner = document.getElementById('skills-owner');
+            const direct = document.getElementById('direct-error');
+            const nestedOwner = document.getElementById('nested-owner');
+            direct.hidden = directHidden;
+            document.getElementById('nested-error').hidden = nestedHidden;
+            owner.append(direct, nestedOwner);
+            validationChurnArmed = true;
+          };
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const configure = async (directHidden: boolean, nestedHidden: boolean) =>
+      await page.evaluate(([direct, nested]) => {
+        (window as unknown as {
+          configureValidationChurn: (directHidden: boolean, nestedHidden: boolean) => void;
+        }).configureValidationChurn(direct, nested);
+      }, [directHidden, nestedHidden] as const);
+
+    await configure(false, true);
+    const blocked = (await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "skills.values");
+    assert.equal(blocked?.required, true);
+    assert.equal(blocked?.readback, null);
+
+    await configure(true, false);
+    const accepted = (await adapter.inspect(AbortSignal.any([]))).controls
+      .find(({ fieldId }) => fieldId === "skills.values");
+    assert.equal(accepted?.required, false);
+    assert.equal(accepted?.readback, "Python");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience field of study opens its prompt and commits an exact option token", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-education-fieldOfStudy">
+            <div data-automation-id="multiSelectContainer">
+              <input id="education-1--fieldOfStudy" placeholder="Search">
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg><path></path></svg></span>
+              </div>
+              <div id="selected"></div>
+            </div>
+          </div>
+        </main>
+        <div id="prompt" role="listbox" hidden>
+          <div role="option">Computer Science</div>
+        </div>
+        <script>
+          const input = document.querySelector('#education-1--fieldOfStudy');
+          const prompt = document.querySelector('#prompt');
+          let promptMode = false;
+          document.querySelector('[data-automation-id="responsiveMonikerPrompt"] svg')
+            .addEventListener('click', () => { promptMode = true; input.value = ''; });
+          input.addEventListener('input', () => {
+            prompt.hidden = !(promptMode && input.value === 'Computer Science');
+          });
+          prompt.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('#selected').append(pill);
+            input.value = '';
+            prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).rows
+      .flatMap(({ controls }) => controls)
+      .find(({ fieldId }) => fieldId === "education.field_of_study")!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Computer Science"]',
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).rows
+        .flatMap(({ controls }) => controls)
+        .find(({ fieldId }) => fieldId === "education.field_of_study")?.readback,
+      "Computer Science",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("My Experience waits for submitted multi-select results without cancelling the pending search", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search" enterkeyhint="search">
+              <div id="selected"></div>
+            </div>
+          </div>
+        </main>
+        <div id="results" role="listbox" hidden></div>
+        <script>
+          const input = document.querySelector('#skills--skills');
+          const results = document.querySelector('#results');
+          let searchTimer;
+          input.addEventListener('input', () => { clearTimeout(searchTimer); results.hidden = true; });
+          input.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            searchTimer = setTimeout(() => {
+              results.hidden = false;
+              results.innerHTML = '<div role="option"><input type="checkbox" role="checkbox">JavaScript</div>';
+            }, 1200);
+          });
+          results.addEventListener('click', event => {
+            const checkbox = event.target.closest('[role="checkbox"]');
+            if (!checkbox) return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = 'JavaScript';
+            document.querySelector('#selected').append(pill);
+            input.value = '';
+            results.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const options = JSON.stringify(["JavaScript"]);
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["JavaScript"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+for (const initialDelay of [0, 150]) for (const discover of [false, true]) test(`My Experience traverses its owned field-of-study scope before ${discover ? "discovering answers" : "committing its radio"} (initial delay ${initialDelay})`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-education-fieldOfStudy">
+            <div data-automation-id="multiSelectContainer">
+              <input id="education-1--fieldOfStudy" placeholder="Search">
+              <div id="selected"></div>
+            </div>
+            <div id="catalog" data-automation-id="activeListContainer" role="listbox"></div>
+          </div>
+        </main>
+        <script>
+          const input = document.querySelector('#education-1--fieldOfStudy');
+          const catalog = document.querySelector('#catalog');
+          const labels = ['Accounting', 'Business', 'Computer and Information Science'];
+          let scopeSelected = false;
+          let catalogOpen = false;
+          let activeIndex = 0;
+          const renderScope = () => {
+            catalog.innerHTML = '';
+            for (const label of ['Partial List (First 500 Entries)', 'All']) {
+              const option = document.createElement('div');
+              option.setAttribute('role', 'option');
+              option.textContent = label;
+              option.addEventListener('click', () => {
+                scopeSelected = true;
+                catalog.innerHTML = '';
+                setTimeout(() => { if (catalogOpen) renderCatalog(); }, 150);
+              });
+              catalog.append(option);
+            }
+          };
+          const renderCatalog = () => {
+            catalog.innerHTML = '';
+            const option = document.createElement('div');
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', 'true');
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.setAttribute('role', 'radio');
+            const label = document.createElement('span');
+            label.textContent = labels[activeIndex];
+            radio.addEventListener('click', () => {
+              const pill = document.createElement('div');
+              pill.setAttribute('data-automation-id', 'selectedItem');
+              pill.textContent = labels[activeIndex];
+              document.querySelector('#selected').append(pill);
+              input.value = '';
+              catalog.innerHTML = '';
+            });
+            option.append(radio, label);
+            catalog.append(option);
+          };
+          input.addEventListener('click', () => {
+            catalogOpen = !catalogOpen;
+            if (!catalogOpen) { catalog.innerHTML = ''; return; }
+            if (scopeSelected) renderCatalog();
+            else setTimeout(() => { if (catalogOpen) renderScope(); }, ${initialDelay});
+          });
+          input.addEventListener('input', () => {
+            if (!scopeSelected) return;
+            activeIndex = input.value === 'Computer Science' ? 2 : 0;
+            renderCatalog();
+          });
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+              if (${initialDelay} > 0 && scopeSelected) return;
+              scopeSelected = false;
+              catalogOpen = false;
+              catalog.innerHTML = '';
+              return;
+            }
+            if (!scopeSelected || event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            activeIndex = Math.min(activeIndex + 1, labels.length - 1);
+            renderCatalog();
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: discover });
+    const control = (await adapter.inspect(AbortSignal.any([]))).rows
+      .flatMap(({ controls }) => controls)
+      .find(({ fieldId }) => fieldId === "education.field_of_study")!;
+
+    if (discover) {
+      assert.deepEqual(control.allowedOptions, ["Accounting"]);
+      assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+      assert.equal(await page.locator('#education-1--fieldOfStudy').inputValue(), "");
+      assert.equal(await page.locator('#catalog [role="option"]').count(), 0);
+    }
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: JSON.stringify([discover ? control.allowedOptions![0] : "Computer Science"]),
+    }, AbortSignal.any([]));
+
+    assert.equal(
+      (await adapter.inspect(AbortSignal.any([]))).rows
+        .flatMap(({ controls }) => controls)
+        .find(({ fieldId }) => fieldId === "education.field_of_study")?.readback,
+      discover ? "Accounting" : "Computer and Information Science",
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("field-of-study discovery uses its bounded busy catalog without selecting an answer", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-education-fieldOfStudy">
+        <input id="education-1--fieldOfStudy" data-uxi-multiselect-id="study-catalog">
+      </div></main>
+      <div id="prompt" data-automation-id="responsiveMonikerPrompt" data-associated-widget="study-catalog" hidden></div>
+      <script>
+        const input = document.querySelector('input'), prompt = document.getElementById('prompt');
+        input.onclick = () => {
+          prompt.hidden = false;
+          prompt.innerHTML = '<div role="listbox"><div role="option">Partial List (First 500 Entries)</div><div role="option">All</div></div>';
+          prompt.querySelectorAll('[role="option"]')[1].onclick = () => {
+            document.body.dataset.unboundedCatalogOpened = 'true';
+            prompt.setAttribute('aria-busy', 'true'); prompt.textContent = 'Loading';
+          };
+          prompt.querySelectorAll('[role="option"]')[0].onclick = () => {
+            prompt.setAttribute('aria-busy', 'true'); prompt.textContent = 'Loading';
+            setTimeout(() => {
+              prompt.removeAttribute('aria-busy');
+              prompt.innerHTML = '<div role="listbox"><div role="option"><input type="radio">Accounting</div></div>';
+            }, 6000);
+          };
+        };
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') prompt.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const control = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.field_of_study");
+    assert.deepEqual(control?.allowedOptions, ["Accounting"]);
+    assert.equal(await page.locator('body').getAttribute('data-unbounded-catalog-opened'), null);
+    assert.equal(await page.locator('input[type="radio"]:checked').count(), 0);
+    assert.equal(await page.locator('#prompt').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test("My Experience multi-select owns a local Workday prompt without aria-controls", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <button data-automation-id="promptIcon" type="button">Open</button>
+              <div id="selected-skills"></div>
+              <div id="skills-options" hidden>
+                <div role="option">Python</div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const input = document.getElementById("skills--skills");
+          const options = document.getElementById("skills-options");
+          const selected = document.getElementById("selected-skills");
+          const commit = (label) => {
+            const pill = document.createElement("div");
+            pill.setAttribute("data-automation-id", "selectedItem");
+            pill.textContent = label;
+            selected.append(pill);
+            input.value = "";
+            options.hidden = true;
+          };
+          document.querySelector('[data-automation-id="promptIcon"]')
+            .addEventListener("click", () => options.hidden = false);
+          input.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && input.value.trim() !== "") {
+              event.preventDefault();
+              commit(input.value);
+            }
+          });
+          options.addEventListener("click", (event) => {
+            const option = event.target.closest('[role="option"]');
+            if (!option) return;
+            commit(option.textContent);
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const options = JSON.stringify(["Python"]);
+    const result = await completeWorkdayProfilePage({
+      mode: "live",
+      pageType: "profile",
+fields: [field("skills.values", "skill", "multi_select", options, options)],
+      repeatables: [],
+    }, adapter, AbortSignal.any([]));
+
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Python"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("retained nested Workday Skills readback follows its formField owner after prompt selection", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <input id="skills--skills" placeholder="Search">
+              </div>
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+              <div id="selected-skills"></div>
+            </div>
+          </div>
+        </main>
+        <div id="skills-options" hidden><div role="option">Python</div></div>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          const options = document.querySelector('#skills-options');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('input', () => options.hidden = prompt.value !== 'Python');
+          options.addEventListener('click', ({ target }) => {
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'option') return;
+            const pill = document.createElement('div');
+            pill.setAttribute('data-automation-id', 'selectedItem');
+            pill.textContent = target.textContent;
+            document.querySelector('#selected-skills').append(pill);
+            prompt.value = '';
+            prompt.hidden = true;
+            options.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+
+    await adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Python"]',
+    }, AbortSignal.any([]));
+
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Python"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a failed optional Workday multi-select search leaves no blocking draft text", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search">
+              <span data-automation-id="promptSearchButton"><svg></svg></span>
+            </div>
+            <div id="skills-error" role="alert" hidden>Choose a valid skill</div>
+          </div>
+        </main>
+        <script>
+          const skill = document.querySelector('#skills--skills');
+          const error = document.querySelector('#skills-error');
+          let resetArmed = false;
+          skill.addEventListener('keydown', (event) => {
+            if (['Enter', 'Tab', ','].includes(event.key)) {
+              skill.setAttribute('aria-invalid', 'true');
+              error.hidden = false;
+            }
+          });
+          skill.addEventListener('input', () => {
+            if (skill.value === ' ') resetArmed = true;
+            if (resetArmed && skill.value === '') {
+              skill.removeAttribute('aria-invalid');
+              error.hidden = true;
+            }
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 100,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])));
+
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.notEqual(await page.locator('#skills--skills').getAttribute('aria-invalid'), "true");
+    assert.equal(await page.locator('#skills-error').isVisible(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a missing Skills result uses one bounded search budget instead of three operation timeouts", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExperiencePage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <input id="skills--skills" placeholder="Search"
+                aria-controls="skills-listbox" aria-expanded="true">
+            </div>
+            <div id="skills-listbox" role="listbox"></div>
+          </div>
+        </main>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 20_000,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+    const startedAt = Date.now();
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])), /missing or ambiguous/u);
+
+    assert.ok(Date.now() - startedAt < 8_000);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an empty Workday skills prompt fails without retrying a remounted prompt input", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <input id="skills--skills" placeholder="Search">
+              </div>
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('keydown', event => {
+            if (event.key === 'Enter') prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 1_500,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+    const startedAt = Date.now();
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Unlisted Skill"]',
+    }, AbortSignal.any([])), /option is unavailable/u);
+
+    assert.ok(Date.now() - startedAt < 2_500);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a hidden Skills prompt does not spend an operation timeout on delimiter retries", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <body data-hunt-profile-page-type="profile">
+        <main data-automation-id="applyFlowMyExpPage">
+          <div data-automation-id="formField-skills">
+            <div data-automation-id="multiSelectContainer">
+              <div data-automation-id="multiselectInputContainer">
+                <input id="skills--skills" placeholder="Search">
+              </div>
+              <div data-automation-id="responsiveMonikerPrompt">
+                <span data-automation-id="promptSearchButton"><svg></svg></span>
+                <input data-automation-id="searchBox" hidden>
+                <div data-automation-id="selectedItem"><p data-automation-id="promptOption">Python</p></div>
+                <div data-automation-id="selectedItem"><p data-automation-id="promptOption">C</p></div>
+              </div>
+            </div>
+          </div>
+        </main>
+        <script>
+          const prompt = document.querySelector('[data-automation-id="searchBox"]');
+          document.querySelector('[data-automation-id="promptSearchButton"]')
+            .addEventListener('click', () => prompt.hidden = false);
+          prompt.addEventListener('keydown', event => {
+            if (event.key === 'Enter') prompt.hidden = true;
+          });
+        </script>
+      </body>
+    `);
+    const adapter = new PlaywrightWorkdayProfilePage(page, {
+      pageType: "profile",
+      timeoutMs: 20_000,
+    });
+    const control = (await adapter.inspect(AbortSignal.any([]))).controls.find(
+      ({ fieldId }) => fieldId === "skills.values",
+    )!;
+    const startedAt = Date.now();
+
+    await assert.rejects(() => adapter.commit({
+      controlId: control.controlId,
+      uiBehavior: "multi_select",
+      value: '["Python","C","C++"]',
+    }, AbortSignal.any([])), /option is unavailable/u);
+
+    assert.ok(Date.now() - startedAt < 5_000);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.deepEqual(
+      await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
+      ["Python", "C"],
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("captures distinct per-frame owner-control relationships as digests", async () => {
+  const frameOne = new StructuralFrame([
+    new StructuralElement("formField", "owner-one", [
+      new StructuralElement("button", "control-one", []),
+      new StructuralElement("input", "control-two", []),
+    ]),
+  ]);
+  const frameTwo = new StructuralFrame([
+    new StructuralElement("formField", "owner-two", [
+      new StructuralElement("button", "control-three", []),
+    ]),
+  ]);
+  const adapter = new PlaywrightWorkdayProfilePage(new StructuralPage([frameOne, frameTwo]) as never, {
+    pageType: "profile",
+  });
+
+  await assert.rejects(() => adapter.inspect(new AbortController().signal));
+
+  const facts = adapter.inspectionFacts();
+  assert.equal(facts?.frameCount, 2);
+  assert.deepEqual(facts?.frameDomOwnerCandidateCounts, [1, 1]);
+  assert.deepEqual(facts?.frameControlCandidateCounts, [2, 1]);
+  assert.equal(facts?.frameOwnerControlTupleDigests.length, 3);
+  assert.equal(new Set(facts?.frameOwnerControlTupleDigests).size, 3);
+  assert.equal(facts?.frameOwnerControlRelationshipDigests.length, 2);
+  assert.notEqual(
+    facts?.frameOwnerControlRelationshipDigests[0],
+    facts?.frameOwnerControlRelationshipDigests[1],
+  );
+  for (const digest of facts?.frameOwnerControlTupleDigests ?? []) {
+    assert.match(digest, /^[0-9a-f]{64}$/u);
+  }
+  assert.doesNotMatch(JSON.stringify(facts), /owner-one|control-one|control-two|control-three/iu);
+});
+
+class StructuralElement {
+  readonly tagName: string;
+  readonly id: string;
+  private readonly controls: readonly StructuralElement[];
+
+  constructor(
+    tagName: string,
+    id: string,
+    controls: readonly StructuralElement[],
+  ) {
+    this.tagName = tagName;
+    this.id = id;
+    this.controls = controls;
+  }
+
+  getAttribute(name: string): string | null {
+    return name === "data-automation-id" ? this.id : name === "role" ? "button" : null;
+  }
+
+  querySelectorAll(): readonly StructuralElement[] {
+    return this.controls;
+  }
+}
+
+class StructuralLocator {
+  private readonly elements: readonly StructuralElement[];
+  private readonly visible: boolean;
+
+  constructor(elements: readonly StructuralElement[], visible = true) {
+    this.elements = elements;
+    this.visible = visible;
+  }
+
+  async count(): Promise<number> { return this.elements.length; }
+  nth(index: number): StructuralLocator { return new StructuralLocator([this.elements[index]!], this.visible); }
+  async isVisible(): Promise<boolean> { return this.visible && this.elements.length === 1; }
+  async getAttribute(name: string): Promise<string | null> {
+    return this.elements[0]?.getAttribute(name) ?? "wrong";
+  }
+  async evaluateAll<T>(callback: (elements: readonly StructuralElement[], arg: string) => T, arg: string): Promise<T> {
+    return callback(this.elements, arg);
+  }
+}
+
+class StructuralFrame {
+  private readonly owners: readonly StructuralElement[];
+
+  constructor(owners: readonly StructuralElement[]) {
+    this.owners = owners;
+  }
+
+  locator(selector: string): StructuralLocator {
+    if (selector.includes("applyFlow")) return new StructuralLocator([new StructuralElement("main", "root", [])]);
+    if (selector.includes("formField")) return new StructuralLocator(this.owners);
+    return new StructuralLocator(this.owners.flatMap((owner) => owner.querySelectorAll()));
+  }
+}
+
+class StructuralPage {
+  private readonly pageFrames: readonly StructuralFrame[];
+
+  constructor(pageFrames: readonly StructuralFrame[]) {
+    this.pageFrames = pageFrames;
+  }
+
+  frames(): readonly StructuralFrame[] { return this.pageFrames; }
+  locator(selector: string): StructuralLocator {
+    if (selector === "body") return new StructuralLocator([]);
+    return this.pageFrames[0]!.locator(selector);
+  }
+}
+
+function traced(
+  port: WorkdayProfilePagePort,
+  errors: string[],
+): WorkdayProfilePagePort {
+  return new Proxy(port, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== "function") return value;
+      if (property === "interaction") return (...args: unknown[]) =>
+        Reflect.apply(value, target, args);
+      return async (...args: unknown[]) => {
+        try {
+          return await Reflect.apply(value, target, args);
+        } catch (error) {
+          errors.push(`${String(property)}:${error instanceof Error ? error.message : "unknown"}`);
+          throw error;
+        }
+      };
+    },
+  });
+}
+
+for (const discovery of ["icon", "search", "category"]) test(`unfamiliar Workday prompt discovers by ${discovery} without submitting an answer`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<aside role="listbox"><div role="option">Unrelated option</div></aside>
+      <main data-automation-id="applyFlowMyExperiencePage"><h2>Experience</h2>
+        <div data-automation-id="formField-certificate"><label for="certificate">Certificate</label>
+          <div id="widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+            <input id="certificate" required enterkeyhint="search" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="widget">
+            <span data-automation-id="promptIcon">Open choices</span><div id="selected"></div>
+          </div>
+        </div>
+      </main>
+      <div data-automation-id="responsiveMonikerPrompt" hidden><div role="listbox" data-automation-id="activeListContainer"><div role="option">Example certificate</div></div></div>
+      <script>
+        window.searchCommits = 0;
+        const popup = document.querySelector('[data-automation-id="responsiveMonikerPrompt"]');
+        if('${discovery}' === 'category') {
+          popup.querySelector('[role="listbox"]').innerHTML = '<div role="option"><div data-automation-id="promptLeafNode"><svg role="presentation"></svg>Issuer category</div></div>';
+          popup.onclick = () => { popup.querySelector('[role="listbox"]').innerHTML = '<div role="option"><div data-automation-id="promptLeafNode"><input type="radio">Example certificate</div></div>'; };
+        }
+        document.querySelector('[data-automation-id="promptIcon"]').onclick = () => { if('${discovery}' !== 'search') popup.hidden = false; };
+        document.querySelector('input').oninput = () => { if('${discovery}' === 'search') popup.hidden = document.querySelector('input').value === ''; };
+        document.querySelector('input').onkeydown = event => {
+          if(event.key === 'Enter') { window.searchCommits++; document.querySelector('#selected').innerHTML = '<span data-automation-id="selectedItem">Accidental answer</span>'; }
+        };
+        document.addEventListener('keydown', event => { if(event.key === 'Escape') popup.hidden = true; });
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const choice = snapshot.controls.find(control => control.label === "Certificate");
+    assert.deepEqual(choice?.allowedOptions, ["Example certificate"]);
+    assert.equal(choice?.readback, null);
+    assert.equal(await page.evaluate(() => Reflect.get(window, "searchCommits")), 0);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(), 0);
+    assert.equal(await page.locator('aside').isVisible(), true);
+  } finally { await browser.close(); }
+});
+for (const lostResponse of [false, true]) test(`hidden required Workday attachment retains identity with ${lostResponse ? "lost" : "normal"} upload response`, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const locatorPrototype = Object.getPrototypeOf(page.locator("input")) as Locator;
+  const setInputFiles = locatorPrototype.setInputFiles;
+  let uploads = 0;
+  locatorPrototype.setInputFiles = async function(this: Locator, ...args: Parameters<Locator["setInputFiles"]>) {
+    uploads++;
+    await setInputFiles.apply(this, args);
+    if (lostResponse) throw new Error("fixture upload response lost after effect");
+  };
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
+      <div data-automation-id="formField-" data-fkit-id="certificate-1--attachments">
+        <label>Attachments*</label><button>Select files</button>
+        <input style="display:none" type="file" data-automation-id="file-upload-input-ref">
+      </div>
+      <div data-automation-id="formField-" data-fkit-id="resumeAttachments--attachments">
+        <label>Resume</label><button>Select resume</button>
+        <input style="display:none" type="file" data-automation-id="file-upload-input-ref">
+      </div>
+      </main><script>
+        const attachment = document.querySelector('[data-fkit-id="certificate-1--attachments"]');
+        attachment.querySelector('input').onchange = () => setTimeout(() => {
+          const item = document.createElement('div'); item.dataset.automationId = 'file-upload-item';
+          item.innerHTML = '<span data-automation-id="file-upload-item-name">synthetic-owner-review.pdf</span><span data-automation-id="file-upload-successful">Uploaded</span>'; attachment.append(item);
+          attachment.querySelector('input').value = '';
+        }, 100);
+      </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    assert.equal(snapshot.controls.length, 1);
+    assert.equal(snapshot.controls[0]?.uiBehavior, "file");
+    assert.equal(snapshot.controls[0]?.required, true);
+    const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, AbortSignal.any([]));
+    assert.equal(result.kind, "verified", JSON.stringify(result));
+    assert.equal((await adapter.inspect(AbortSignal.any([]))).controls[0]?.readback, "synthetic-owner-review.pdf");
+    const again = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, AbortSignal.any([]));
+    assert.equal(again.kind, "verified", JSON.stringify(again));
+    assert.equal(await page.locator('[data-automation-id="file-upload-item"]').count(), 1);
+    assert.equal(await page.locator('[data-fkit-id="resumeAttachments--attachments"] input').evaluate(element => (element as HTMLInputElement).files?.length), 0);
+    assert.equal(uploads, 1);
+  } finally {
+    locatorPrototype.setInputFiles = setInputFiles;
+    await browser.close();
+  }
+});
+
+test("school discovery restores a sole auto-selected search result before fill", async () => {
+  const browser = await chromium.launch({headless:true}); const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage"><div data-automation-id="formField-school">
+      <label>School or University*</label><input id="education-1--school" required aria-controls="school-options">
+      <div id="school-options" role="listbox" hidden><div role="option">No Items.</div></div><div id="selected"></div>
+    </div></main><script>
+      const input=document.querySelector('input'),popup=document.querySelector('[role=listbox]');
+      input.onclick=()=>{popup.hidden=false;};
+      input.onkeydown=e=>{if(e.key==='Escape')popup.hidden=true;if(e.key==='Enter'&&input.value==='Other'){
+        document.querySelector('#selected').innerHTML='<div data-automation-id="selectedItem"><span data-automation-id="promptOption">Other - Not Listed</span><button data-automation-id="DELETE_charm">Remove</button></div>';
+        input.value='';popup.hidden=true;
+        document.querySelector('button').onclick=()=>document.querySelector('#selected').replaceChildren();
+      }};
+    </script>`);
+    const adapter=new PlaywrightWorkdayProfilePage(page,{pageType:"profile",inspectMissingOptions:true,timeoutMs:1000});
+    const school=(await adapter.inspect(AbortSignal.any([]))).rows.flatMap(row=>row.controls).find(c=>c.fieldId==='education.school')!;
+    assert.deepEqual(school.allowedOptions,['Other - Not Listed']);
+    assert.equal(school.readback,null);
+    assert.equal(await page.locator('[data-automation-id="selectedItem"]').count(),0);
+    assert.equal(await page.locator('input').inputValue(),'');
+  } finally {await browser.close();}
+});
+
+test("school commit accepts exact saved value after a lost popup-close acknowledgement", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
+      <div data-automation-id="formField-school"><label>School or University*</label>
+        <input id="education-1--school" aria-controls="school-options" required>
+        <div id="school-options" role="listbox" hidden></div>
+        <div id="selection"></div>
+      </div>
+    </main><script>
+      const input = document.querySelector('input');
+      const popup = document.getElementById('school-options');
+      input.onclick = () => { popup.hidden = false; popup.innerHTML = '<div role="option">No items.</div>'; };
+      input.onkeydown = event => {
+        if (event.key === 'Escape') popup.hidden = true;
+        if (event.key === 'Enter' && input.value === 'Other') setTimeout(() => {
+          popup.hidden = false; popup.innerHTML = '<div role="option">Other</div>';
+        }, 100);
+      };
+      popup.onclick = event => {
+        if (event.target.textContent !== 'Other') throw new Error('status is not selectable');
+        document.getElementById('selection').innerHTML = '<span data-automation-id="selectedItem"><span data-automation-id="promptOption">Other</span></span>';
+        input.value = ''; popup.hidden = true;
+      };
+    </script>`);
+    const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile", inspectMissingOptions: true });
+    const snapshot = await adapter.inspect(AbortSignal.any([]));
+    const school = snapshot.rows.flatMap(row => row.controls).find(control => control.fieldId === "education.school")!;
+    assert.deepEqual(school.allowedOptions, ["Other"]);
+    assert.equal(school.readback, null);
+    const originalPress = page.keyboard.press.bind(page.keyboard);
+    let faultInjected = false;
+    page.keyboard.press = async (...args: Parameters<typeof page.keyboard.press>) => {
+      await originalPress(...args);
+      if (!faultInjected && args[0] === "Escape" && await page.locator('[data-automation-id="selectedItem"]').count() === 1) {
+        faultInjected = true;
+        throw new Error("Synthetic lost popup-close acknowledgement");
+      }
+    };
+    await adapter.commit({ controlId: school.controlId, uiBehavior: "search_select", value: "Other" }, AbortSignal.any([]));
+    assert.equal(faultInjected, true);
+    assert.equal(adapter.interaction(school.controlId)?.backingValueCommitted, true);
+    const observed = await adapter.observeControl(school.controlId, AbortSignal.any([]));
+    assert.equal(observed.backingState, "set");
+    assert.equal(await page.locator('#school-options').isVisible(), false);
+  } finally { await browser.close(); }
+});

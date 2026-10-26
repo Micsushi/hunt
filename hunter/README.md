@@ -3,7 +3,7 @@
 The **`hunter` Python package** is **C1 (Hunter)**: discovery, enrichment, and C1 operational logging.
 
 Layout under this directory:
-- **Runtime modules**: `hunter/*.py` (**`scraper.py`** = C1 discovery entrypoint only, historical name; **`enrich_*.py`**, **`db.py`**, …)
+- **Runtime modules**: `hunter/*.py` (**`scraper.py`** = C1 discovery entrypoint only, historical name; **`enrich_*.py`**, **`db.py`**, â€¦)
 - **C1 tests**: `hunter/tests/`
 - **Manual test helpers**: `hunter/devtools/`
 

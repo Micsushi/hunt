@@ -184,11 +184,11 @@ def test_bmo_policy_upgrade_preserves_history_and_suppresses_existing_copy(monke
 
 
 def test_slovak_postcode_does_not_make_sk_a_canadian_province():
-    assert not is_canadian_location("Žilina, SK, 010 01 +2 more")
+    assert not is_canadian_location("Å½ilina, SK, 010 01 +2 more")
     assert not is_canadian_location("Bratislava, SK, 81101")
     assert is_canadian_location("Regina, SK, S4P 0S3")
     assert is_canadian_location("Regina, SK, CA")
-    assert is_canadian_location("Žilina, SK, 010 01; Toronto, ON, Canada")
+    assert is_canadian_location("Å½ilina, SK, 010 01; Toronto, ON, Canada")
 
 
 def test_policy_upgrade_refreshes_old_geography_without_requeueing_history(monkeypatch, tmp_path):
@@ -196,7 +196,7 @@ def test_policy_upgrade_refreshes_old_geography_without_requeueing_history(monke
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "policy-upgrade.db"))
     db.init_db(maintenance=False)
     candidate = job("https://example.test/slovakia", "https://example.test/slovakia")
-    candidate.update(location="Žilina, SK, 010 01", source="employer_greenhouse")
+    candidate.update(location="Å½ilina, SK, 010 01", source="employer_greenhouse")
     _, job_id = db.add_job(candidate)
     with db.get_connection() as conn:
         conn.execute(
@@ -394,7 +394,7 @@ def test_geography_does_not_treat_ordinary_words_as_provinces():
         "Newfoundland",
         "Prince Edward Island",
         "Toronto, ON, CA",
-        "Montréal, QC, CA",
+        "MontrÃ©al, QC, CA",
         "Charlottetown, PE, CA",
         "St. John's, NL, CA",
     ):

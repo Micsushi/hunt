@@ -6,7 +6,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from hunter.service_auth import require_service_token
 from hunter.service_request_id import ServiceRequestIDMiddleware
@@ -77,9 +77,12 @@ class CompanyPreviewRequest(BaseModel):
 
 
 class ConfigPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_revision: str | None = None
+
     @model_validator(mode="before")
     @classmethod
-    def validate_settings(cls, data):
+    def validate_settings_input(cls, data):
         from hunter.user_config import validate
 
         validate(data)
@@ -116,6 +119,35 @@ class ConfigPatchRequest(BaseModel):
     enrichment_max_attempts: int | None = None
     enrichment_alert_failure_rate_percent: int | None = None
     enrichment_alert_cooldown_minutes: int | None = None
+
+    @model_validator(mode="after")
+    def validate_settings(self):
+        for key in self.model_fields_set - {"expected_revision"}:
+            value = getattr(self, key)
+            if value is None:
+                raise ValueError(f"{key} cannot be null")
+            if isinstance(value, list) and any(not item.strip() for item in value):
+                raise ValueError(f"{key} cannot contain blank entries")
+        if (
+            self.enrichment_alert_failure_rate_percent is not None
+            and self.enrichment_alert_failure_rate_percent > 100
+        ):
+            raise ValueError("failure rate must be between 1 and 100")
+        if self.sites is not None and (
+            not self.sites or any(site not in {"linkedin", "indeed"} for site in self.sites)
+        ):
+            raise ValueError("Select at least one supported job board")
+        if self.locations is not None and not self.locations:
+            raise ValueError("Enter at least one location")
+        if self.search_terms is not None and (
+            not any(self.search_terms.values())
+            or any(
+                not key.strip() or any(not value.strip() for value in values)
+                for key, values in self.search_terms.items()
+            )
+        ):
+            raise ValueError("Enter at least one nonblank search query")
+        return self
 
 
 class C3OutcomeRequest(BaseModel):
@@ -299,6 +331,7 @@ def get_config():
     return {
         **effective,
         **saved,
+        "revision": _uc.revision(_uc.load()),
         "effective": effective,
         "restart_required": any(effective[key] != value for key, value in saved.items()),
     }
@@ -308,16 +341,20 @@ def get_config():
 def patch_config(req: ConfigPatchRequest):
     from hunter import user_config as _uc
 
-    updates = req.model_dump(exclude_unset=True)
+    updates = req.model_dump(exclude_unset=True, exclude={"expected_revision"})
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided")
-    merged = _uc.patch(updates)
+    try:
+        merged = _uc.patch(updates, req.expected_revision)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     cfg_path = _uc.get_path()
     return {
         "saved": True,
         "config_file": str(cfg_path),
         "updated_keys": list(updates.keys()),
         "config": merged,
+        "revision": _uc.revision(merged),
     }
 
 

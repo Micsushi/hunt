@@ -234,9 +234,64 @@
   color: var(--muted);
   padding: 8px 0;
 }
+.panelFeedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.panelFailure {
+  color: var(--danger);
+}
+.panelRetry {
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.panelRetry[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: wait;
+}
+.panelRetry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .loading,
 .error {
   padding: 40px;
   text-align: center;
   color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .chartsRow3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .chartsRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .panel {
+    min-width: 0;
+    padding: 14px;
+  }
+  .statGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

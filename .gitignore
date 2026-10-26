@@ -12,6 +12,10 @@ hunt.db
 .env
 .env.server2-smoke
 secrets/
+!executioner/src/secrets/
+!executioner/src/secrets/**
+!executioner/tests/secrets/
+!executioner/tests/secrets/**
 client_secret_*.json
 *oauth-client*.json
 *gmail*credentials*.json

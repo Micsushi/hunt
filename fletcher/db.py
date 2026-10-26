@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import uuid
@@ -78,9 +79,9 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     tex_path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    is_latest_generated BOOLEAN DEFAULT 0,
-    is_latest_useful BOOLEAN DEFAULT 0,
-    is_selected_for_c3 BOOLEAN DEFAULT 0
+    is_latest_generated BOOLEAN DEFAULT FALSE,
+    is_latest_useful BOOLEAN DEFAULT FALSE,
+    is_selected_for_c3 BOOLEAN DEFAULT FALSE
 )
 """
 
@@ -142,6 +143,14 @@ def init_resume_db(db_path: str | Path | None = None) -> None:
                 cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
         cursor.execute(RESUME_ATTEMPTS_TABLE_SQL)
         cursor.execute(RESUME_VERSIONS_TABLE_SQL)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS resume_cleanup_pending (
+                runtime_root TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                PRIMARY KEY (runtime_root, kind, target)
+            )
+        """)
         cursor.execute(FLETCHER_JOBS_TABLE_SQL)
         ra_existing = {row[1] for row in cursor.execute("PRAGMA table_info(resume_attempts)")}
         for column_name, column_def in RESUME_ATTEMPT_EXTRA_COLUMNS.items():
@@ -446,7 +455,14 @@ def delete_fletcher_job(queue_item_id: str, db_path: str | Path | None = None) -
         raise ValueError("Only finished Fletcher jobs can be deleted.")
     conn = get_connection(db_path)
     try:
-        conn.execute("DELETE FROM fletcher_jobs WHERE queue_item_id = ?", (queue_item_id,))
+        deleted = conn.execute(
+            "DELETE FROM fletcher_jobs WHERE queue_item_id = ? "
+            "AND status NOT IN ('queued', 'running', 'cancel_requested')",
+            (queue_item_id,),
+        )
+        if not deleted.rowcount:
+            get_fletcher_job(queue_item_id, db_path=db_path)
+            raise ValueError("Only finished Fletcher jobs can be deleted.")
         conn.commit()
         return job
     finally:
@@ -461,45 +477,123 @@ def _runtime_child_dir(path_value: str | None, runtime_root: Path) -> Path | Non
         root = runtime_root.resolve()
     except (OSError, RuntimeError):
         return None
-    if path == root or root not in path.parents:
+    directory = path if path.is_dir() else path.parent
+    if directory == root or root not in directory.parents:
         return None
-    return path if path.is_dir() else path.parent
+    relative = directory.relative_to(root).parts
+    if len(relative) < 2 or relative[0] not in {"attempts", "ad_hoc"}:
+        return None
+    if relative[0] == "attempts" and len(relative) == 2 and relative[1].isdigit():
+        return None
+    if relative[:2] in {("ad_hoc", "queue_logs"), ("ad_hoc", "queue_uploads")}:
+        return None
+    return directory
 
 
-def _remove_runtime_dirs(paths: set[Path]) -> tuple[int, list[str]]:
-    removed = 0
-    errors: list[str] = []
-    for path in sorted(paths, key=lambda item: len(item.parts), reverse=True):
-        if not path.exists():
-            continue
+def _retry_resume_cleanup(runtime_root: Path, *, delete_artifacts: bool, db_path=None) -> dict:
+    from .resume.review_io import atomic_json, publication_lock
+
+    root = runtime_root.resolve()
+    result = {"artifact_dirs_removed": 0, "review_index_entries_deleted": 0, "artifact_errors": []}
+    # Use the review publisher's lock so pruning cannot overwrite a newly registered review.
+    with publication_lock(root):
+        conn = get_connection(db_path)
         try:
-            shutil.rmtree(path)
-            removed += 1
-        except OSError as exc:
-            errors.append(f"{path}: {exc}")
-    return removed, errors
+            rows = conn.execute(
+                "SELECT kind, target FROM resume_cleanup_pending WHERE runtime_root = ?",
+                (str(root),),
+            ).fetchall()
+            for row in rows:
+                kind, target = row["kind"], row["target"]
+                if kind != "review" and not delete_artifacts:
+                    continue
+                try:
+                    path = Path(target)
+                    if kind == "directory":
+                        if _runtime_child_dir(str(path / ".cleanup-check"), root) != path:
+                            raise ValueError("Cleanup path is outside a generated resume folder.")
+                        if path.exists():
+                            shutil.rmtree(path)
+                            result["artifact_dirs_removed"] += 1
+                    elif kind == "log":
+                        if (
+                            path.resolve() != path
+                            or path.parent != root / "ad_hoc" / "queue_logs"
+                            or path.suffix != ".log"
+                        ):
+                            raise ValueError("Cleanup path is outside the queue log folder.")
+                        path.unlink(missing_ok=True)
+                    elif kind == "review":
+                        index_path = root / "review_index.json"
+                        index = (
+                            json.loads(index_path.read_text(encoding="utf-8"))
+                            if index_path.exists()
+                            else {}
+                        )
+                        if not isinstance(index, dict):
+                            raise ValueError(
+                                "Saved resume reviews could not be read. Retry cleanup after recovery."
+                            )
+                        if target in index:
+                            del index[target]
+                            atomic_json(index_path, index)
+                            result["review_index_entries_deleted"] += 1
+                    else:
+                        raise ValueError("Unknown saved cleanup operation.")
+                except (OSError, ValueError, RuntimeError) as exc:
+                    result["artifact_errors"].append(f"{target}: {exc}")
+                    continue
+                conn.execute(
+                    "DELETE FROM resume_cleanup_pending WHERE runtime_root = ? AND kind = ? AND target = ?",
+                    (str(root), kind, target),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    return result
 
 
 def clear_generated_resumes(
     *,
     include_ad_hoc: bool = False,
     delete_artifacts: bool = True,
+    retry_only: bool = False,
     db_path: str | Path | None = None,
 ) -> dict:
     """Clear generated resume DB state and artifacts.
 
     By default this clears job-linked resume attempts/versions and Option A
     Fletcher history. Ad-hoc Option B runs are kept unless include_ad_hoc is
-    true. Queued/running/cancel-requested rows are never removed.
+    true. Active preparation blocks clearing so its records and artifacts stay intact.
     """
     init_resume_db(db_path)
     init_fletcher_queue_db(db_path)
-    runtime_root = resolve_runtime_root()
+    runtime_root = resolve_runtime_root().resolve()
     dirs_to_delete: set[Path] = set()
-    active_skipped = 0
+    logs_to_delete: set[Path] = set()
 
     conn = get_connection(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if os.getenv("HUNT_DB_URL", "").strip():
+            conn.execute("LOCK TABLE fletcher_jobs IN SHARE ROW EXCLUSIVE MODE")
+        job_rows = conn.execute("SELECT * FROM fletcher_jobs").fetchall()
+        if any(row["status"] in {"queued", "running", "cancel_requested"} for row in job_rows):
+            raise ValueError(
+                "Wait for resume preparation to finish or cancel it before clearing resumes."
+            )
+        if retry_only:
+            conn.commit()
+            return {
+                "resume_attempts_deleted": 0,
+                "fletcher_jobs_deleted": 0,
+                "active_fletcher_jobs_skipped": 0,
+                "include_ad_hoc": include_ad_hoc,
+                "delete_artifacts": delete_artifacts,
+                **_retry_resume_cleanup(
+                    runtime_root, delete_artifacts=delete_artifacts, db_path=db_path
+                ),
+            }
         attempt_where = "1 = 1" if include_ad_hoc else "job_id IS NOT NULL"
         attempt_rows = conn.execute(
             f"""
@@ -524,14 +618,9 @@ def clear_generated_resumes(
                 if path is not None:
                     dirs_to_delete.add(path)
 
-        job_rows = conn.execute("SELECT * FROM fletcher_jobs").fetchall()
         fletcher_ids: list[str] = []
         review_ids: set[str] = set()
         for row in job_rows:
-            status = str(row["status"] or "")
-            if status in {"queued", "running", "cancel_requested"}:
-                active_skipped += 1
-                continue
             input_payload = _decode_json(row["input_json"], {})
             has_job_id = (
                 input_payload.get("job_id") is not None or input_payload.get("jobId") is not None
@@ -545,9 +634,39 @@ def clear_generated_resumes(
             result_payload = _decode_json(row["result_json"], {})
             if result_payload.get("review_id"):
                 review_ids.add(str(result_payload["review_id"]))
-            log_dir = _runtime_child_dir(row["log_path"], runtime_root)
-            if log_dir is not None:
-                dirs_to_delete.add(log_dir)
+            log_path = (runtime_root / "ad_hoc" / "queue_logs" / f"{qid}.log").resolve()
+            log_root = (runtime_root / "ad_hoc" / "queue_logs").resolve()
+            if (
+                row["log_path"]
+                and Path(row["log_path"]).resolve() == log_path
+                and log_path.parent == log_root
+                and runtime_root.resolve() in log_root.parents
+            ):
+                logs_to_delete.add(log_path)
+
+        if review_ids:
+            index_path = runtime_root / "review_index.json"
+            index = (
+                json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+            )
+            if not isinstance(index, dict):
+                raise ValueError(
+                    "Saved resume reviews could not be read. Retry cleanup after recovery."
+                )
+            for rid in review_ids:
+                path = _runtime_child_dir(index.get(rid), runtime_root)
+                if path is not None:
+                    dirs_to_delete.add(path)
+        pending = [("review", rid) for rid in review_ids]
+        if delete_artifacts:
+            pending += [("directory", str(path)) for path in dirs_to_delete]
+            pending += [("log", str(path)) for path in logs_to_delete]
+        for kind, target in pending:
+            conn.execute(
+                "INSERT INTO resume_cleanup_pending (runtime_root, kind, target) VALUES (?, ?, ?) "
+                "ON CONFLICT (runtime_root, kind, target) DO NOTHING",
+                (str(runtime_root), kind, target),
+            )
 
         if attempt_ids:
             placeholders = ", ".join("?" for _ in attempt_ids)
@@ -600,36 +719,13 @@ def clear_generated_resumes(
     finally:
         conn.close()
 
-    review_index_removed = 0
-    index_path = runtime_root / "review_index.json"
-    if review_ids and index_path.exists():
-        try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-            if isinstance(index, dict):
-                for rid in list(review_ids):
-                    raw = index.pop(rid, None)
-                    path = _runtime_child_dir(raw, runtime_root)
-                    if path is not None:
-                        dirs_to_delete.add(path)
-                        review_index_removed += 1
-                index_path.write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    artifact_dirs_removed = 0
-    artifact_errors: list[str] = []
-    if delete_artifacts:
-        artifact_dirs_removed, artifact_errors = _remove_runtime_dirs(dirs_to_delete)
-
     return {
         "resume_attempts_deleted": len(attempt_ids),
         "fletcher_jobs_deleted": len(fletcher_ids),
-        "review_index_entries_deleted": review_index_removed,
-        "artifact_dirs_removed": artifact_dirs_removed,
-        "artifact_errors": artifact_errors,
-        "active_fletcher_jobs_skipped": active_skipped,
+        "active_fletcher_jobs_skipped": 0,
         "include_ad_hoc": include_ad_hoc,
         "delete_artifacts": delete_artifacts,
+        **_retry_resume_cleanup(runtime_root, delete_artifacts=delete_artifacts, db_path=db_path),
     }
 
 
@@ -747,6 +843,8 @@ def _job_is_ready_for_c3(job: dict) -> bool:
     auto_apply_eligible = int(job.get("auto_apply_eligible") or 0)
     return (
         enrichment_status in {"done", "done_verified"}
+        and str(job.get("status") or "").strip().lower() not in {"applied", "canceled", "cancelled"}
+        and not job.get("discovery_suppressed_reason")
         and apply_type == "external_apply"
         and auto_apply_eligible == 1
         and priority == 0
@@ -1278,12 +1376,16 @@ def list_jobs_ready_for_resume(
             if not rows:
                 break
             for row in rows:
-                scanned += 1
                 r = dict(row)
                 if r.get("discovery_suppressed_reason") or str(
                     r.get("status") or ""
-                ).strip().lower() in {"applied", "canceled", "cancelled"}:
+                ).strip().lower() in {
+                    "applied",
+                    "canceled",
+                    "cancelled",
+                }:
                     continue
+                scanned += 1
                 if should_skip_resume_regeneration(
                     conn, job_id=int(r["id"]), description=r.get("description")
                 ):

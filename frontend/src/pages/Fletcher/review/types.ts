@@ -59,6 +59,7 @@ export interface ResumeReviewVersion {
   document_revision: number
   compiled_revision: number
   compiled_document_revision: number
+  edit_revision: number
   compile_status?: string | null
 }
 

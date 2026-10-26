@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { useSummary } from '@/hooks/useSummary'
 import {
   fetchBreakdown,
@@ -60,7 +60,7 @@ const SOURCE_COLORS: Record<string, string> = {
 
 function ServiceStrip() {
   const navigate = useNavigate()
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['system-status'],
     queryFn: fetchSystemStatus,
     refetchInterval: 30_000,
@@ -79,22 +79,26 @@ function ServiceStrip() {
     },
     {
       key: 'c3',
-      label: 'C3 v3 planned',
+      label: 'Applications',
       ok: false,
-      path: '/',
+      path: '/executioner',
     },
   ]
 
   return (
     <div className={styles.serviceStrip}>
       {items.map((item) => {
-        const state = !data ? 'unknown' : item.ok ? 'ok' : 'error'
+        const state = item.key === 'c3' || isError || !data ? 'unknown' : item.ok ? 'ok' : 'error'
         return (
           <button
             key={item.key}
             className={`${styles.servicePill} ${styles[`service_${state}`]}`}
             onClick={() => navigate(item.path)}
-            title={`${item.label}: ${state}`}
+            title={
+              item.key === 'c3'
+                ? 'Open the application queue; its current connection is checked there.'
+                : `${item.label}: ${state}`
+            }
           >
             <span className={`${styles.serviceDot} ${styles[`dot_${state}`]}`} />
             {item.label}
@@ -105,15 +109,93 @@ function ServiceStrip() {
   )
 }
 
+function PanelFeedback({ name, query }: { name: string; query: UseQueryResult }) {
+  const { data, isPending, isFetching, isError, refetch } = query
+  const message = isFetching
+    ? data === undefined
+      ? `Loading ${name}...`
+      : `Refreshing ${name}... Showing last loaded data.`
+    : isError
+      ? data === undefined
+        ? `Could not load ${name}.`
+        : `Could not refresh ${name}. Showing last loaded data.`
+      : isPending
+        ? `Waiting to load ${name}.`
+        : ''
+  return (
+    <div className={styles.panelFeedback}>
+      <span role="status" className={isError && !isFetching ? styles.panelFailure : undefined}>
+        {message}
+      </span>
+      <button
+        type="button"
+        className={styles.panelRetry}
+        aria-disabled={isFetching}
+        onClick={() => {
+          if (!isFetching) void refetch({ cancelRefetch: false })
+        }}
+      >
+        {isError ? `Retry ${name}` : `Refresh ${name}`}
+      </button>
+    </div>
+  )
+}
+
+function SearchCoverage({ event }: { event?: { value: string } | null }) {
+  let message = 'Search coverage unknown. Saved-job counts do not confirm source availability.'
+  try {
+    const recorded = JSON.parse(event?.value ?? 'null')
+    const {
+      search_tasks: total,
+      failed_tasks: failed,
+      partial_tasks: partial = 0,
+      interrupted,
+      scraped_total: leads,
+    } = recorded?.details ?? {}
+    if (interrupted)
+      message = 'The last C1 search stopped before completing. Saved jobs have been kept.'
+    else if (recorded?.code === 'scrape_failed')
+      message = 'The last recorded C1 search failed. Saved jobs have been kept.'
+    else if (
+      recorded?.code === 'scrape_finished' &&
+      Number.isInteger(total) &&
+      total > 0 &&
+      Number.isInteger(failed) &&
+      failed >= 0 &&
+      failed <= total
+    ) {
+      message =
+        failed === total
+          ? `The last recorded C1 search was unavailable: all ${total} queries failed.`
+          : failed > 0
+            ? `The last recorded C1 search had partial coverage: ${failed} of ${total} queries failed.`
+            : partial > 0
+              ? `The last recorded C1 search has incomplete coverage for ${partial} of ${total} queries.`
+              : leads === 0
+                ? `The last recorded C1 search returned no matching leads from ${total} configured queries.`
+                : `The last recorded C1 search completed ${total} configured queries without reported failures.`
+    }
+  } catch {
+    /* Older or malformed records do not establish coverage. */
+  }
+  return (
+    <div className={styles.panelFeedback}>
+      <p role="status">{message} Other discovery sources are not verified here.</p>
+      <Link to="/logs">Check search activity</Link>
+    </div>
+  )
+}
+
 function BreakdownChart() {
   const navigate = useNavigate()
   const [field, setField] = useState('enrichment_status')
-  const { data, isError, error } = useQuery({
+  const query = useQuery({
     queryKey: ['breakdown', field],
     queryFn: () => fetchBreakdown(field),
     staleTime: 60_000,
   })
 
+  const { data } = query
   const chartData = (data?.data ?? []).slice(0, 10).map((row) => ({
     ...row,
     displayLabel:
@@ -143,11 +225,8 @@ function BreakdownChart() {
           ))}
         </div>
       </div>
-      {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
-          Error: {(error as Error)?.message ?? 'failed to load'}
-        </p>
-      ) : chartData.length === 0 ? (
+      <PanelFeedback name="jobs breakdown" query={query} />
+      {data === undefined ? null : chartData.length === 0 ? (
         <p className={styles.empty}>No data</p>
       ) : (
         <ResponsiveContainer width="100%" height={220}>
@@ -198,12 +277,13 @@ function BreakdownChart() {
 
 function TimelineChart() {
   const [days, setDays] = useState(30)
-  const { data, isError, error } = useQuery({
+  const query = useQuery({
     queryKey: ['timeline', days],
     queryFn: () => fetchTimeline(days),
     staleTime: 60_000,
   })
 
+  const { data } = query
   const raw = data?.data ?? []
   const dayMap: Record<string, Record<string, number>> = {}
   for (const r of raw) {
@@ -232,11 +312,8 @@ function TimelineChart() {
           ))}
         </div>
       </div>
-      {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
-          Error: {(error as Error)?.message ?? 'failed to load'}
-        </p>
-      ) : chartData.length === 0 ? (
+      <PanelFeedback name="timeline" query={query} />
+      {data === undefined ? null : chartData.length === 0 ? (
         <p className={styles.empty}>No data for this window</p>
       ) : (
         <ResponsiveContainer width="100%" height={200}>
@@ -289,23 +366,21 @@ function fmt(hours: number | null): string {
 }
 
 function DailyDigestPanel() {
-  const { data, isError } = useQuery({
+  const query = useQuery({
     queryKey: ['daily-digest'],
     queryFn: fetchDailyDigest,
     staleTime: 60_000,
     refetchInterval: 120_000,
   })
+  const { data } = query
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Daily digest</h2>
         <span className={styles.meta}>{data?.date ?? 'today'}</span>
       </div>
-      {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
-          Failed to load
-        </p>
-      ) : (
+      <PanelFeedback name="daily digest" query={query} />
+      {data && (
         <div className={styles.statGrid}>
           <div className={styles.statBox}>
             <span className={styles.statVal}>{data?.scraped_today ?? '-'}</span>
@@ -352,12 +427,13 @@ function DailyDigestPanel() {
 }
 
 function PipelineVelocityPanel() {
-  const { data, isError } = useQuery({
+  const query = useQuery({
     queryKey: ['velocity'],
     queryFn: fetchVelocity,
     staleTime: 60_000,
     refetchInterval: 120_000,
   })
+  const { data } = query
   const delta = data?.delta ?? 0
   const arrow = delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
   const arrowColor = delta > 0 ? 'var(--good)' : delta < 0 ? 'var(--danger)' : 'var(--muted)'
@@ -367,11 +443,8 @@ function PipelineVelocityPanel() {
         <h2 className={styles.panelTitle}>Pipeline velocity</h2>
         <span className={styles.meta}>vs previous 24h</span>
       </div>
-      {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
-          Failed to load
-        </p>
-      ) : (
+      <PanelFeedback name="pipeline velocity" query={query} />
+      {data && (
         <div className={styles.statGrid}>
           <div className={styles.statBox}>
             <span className={styles.statVal}>{data?.jobs_per_hour ?? '-'}</span>
@@ -400,24 +473,22 @@ function PipelineVelocityPanel() {
 }
 
 function QueueAgePanel() {
-  const { data, isError } = useQuery({
+  const query = useQuery({
     queryKey: ['queue-age'],
     queryFn: fetchQueueAge,
     staleTime: 60_000,
     refetchInterval: 120_000,
   })
+  const { data } = query
   const over24Pct = data && data.count > 0 ? Math.round((data.over_24h / data.count) * 100) : 0
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Queue age</h2>
-        <span className={styles.meta}>{data?.count ?? 0} pending</span>
+        <span className={styles.meta}>{data?.count ?? '-'} pending</span>
       </div>
-      {isError ? (
-        <p className={styles.empty} style={{ color: 'var(--danger)' }}>
-          Failed to load
-        </p>
-      ) : (
+      <PanelFeedback name="queue age" query={query} />
+      {data && (
         <div className={styles.statGrid}>
           <div className={styles.statBox}>
             <span className={styles.statVal}>{fmt(data?.oldest_hours ?? null)}</span>
@@ -453,10 +524,18 @@ function QueueAgePanel() {
 
 export function HomePage() {
   const navigate = useNavigate()
-  const { data: summary, isLoading, error } = useSummary()
+  const query = useSummary()
+  const { data: summary } = query
 
-  if (isLoading) return <div className={styles.loading}>Loading…</div>
-  if (error || !summary) return <div className={styles.error}>Failed to load summary.</div>
+  if (!summary)
+    return (
+      <div className={styles.page}>
+        <section className={styles.hero}>
+          <h1 className={styles.heroTitle}>Overview</h1>
+        </section>
+        <PanelFeedback name="overview" query={query} />
+      </div>
+    )
 
   const detailCounts = summary.detail_quality_counts ?? {
     enriched:
@@ -469,7 +548,8 @@ export function HomePage() {
   const done = detailCounts.enriched
   const partial = detailCounts.partial
   const failed = detailCounts.failed
-  const authOk = summary.auth?.linkedin?.available !== false
+  const authAvailable = summary.auth?.linkedin?.available
+  const authOk = authAvailable === true
 
   return (
     <div className={styles.page}>
@@ -477,7 +557,9 @@ export function HomePage() {
         <h1 className={styles.heroTitle}>Overview</h1>
       </section>
 
+      <PanelFeedback name="overview" query={query} />
       <ServiceStrip />
+      <SearchCoverage event={summary.events?.hunt_last_scrape_end} />
 
       <section className={styles.cards}>
         <Card
@@ -516,9 +598,9 @@ export function HomePage() {
         />
         <Card
           label="LinkedIn auth"
-          value={authOk ? 'Ready' : 'Login needed'}
+          value={authOk ? 'Ready' : authAvailable === false ? 'Login needed' : 'Unknown'}
           onClick={() => navigate('/logs')}
-          danger={!authOk}
+          danger={authAvailable === false}
         />
       </section>
 

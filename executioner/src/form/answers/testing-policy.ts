@@ -1,0 +1,92 @@
+import { resolveQuestion } from "../questions/catalog.ts";
+
+const normalized = (value: string): string => value.normalize("NFKC")
+  .toLocaleLowerCase("en-US")
+  .replace(/[^\p{L}\p{N}]+/gu, " ")
+  .trim();
+
+const employeeIdQuestion = /\b(?:employee|associate|worker|workday|personnel) (?:id|identification|identifier|number)\b/u;
+
+const birthDateQuestion = /\b(?:date of birth|birth date|birthdate|birthday|dob)\b/u;
+
+export type TestingQuestionSemanticType =
+  | "qualification_requirement"
+  | "employee_referral"
+  | "prior_employment"
+  | "sponsorship_requirement"
+  | "demographic"
+  | "compensation"
+  | "authorization"
+  | "consent"
+  | "availability"
+  | "identity"
+  | "employment"
+  | "unknown";
+
+export function testingQuestionSemanticType(label: string): TestingQuestionSemanticType {
+  const question = resolveQuestion(label);
+  if (question.kind === "resolved" && question.id === "workday-question-weekly-hours") {
+    return "availability";
+  }
+  const value = normalized(label);
+  if (birthDateQuestion.test(value) || employeeIdQuestion.test(value)) return "identity";
+  if (/\b(?:referred|referral)\b.*\b(?:associate|employee)\b/u.test(value)) {
+    return "employee_referral";
+  }
+  if (
+    /\b(?:previously|ever|prior|formerly)\b.*\b(?:worked|employed|employment)\b/u.test(value) ||
+    /\bprevious employment\b/u.test(value)
+  ) return "prior_employment";
+  if (/\b(?:sponsor|sponsorship|visa)\b/u.test(value)) return "sponsorship_requirement";
+  if (
+    /\b(?:meet|satisfy)\b.*\b(?:qualification|qualifications|requirement|requirements)\b/u.test(value) ||
+    /\b(?:can|able|ability|physically)\b.*\bperform\b.*\bessential functions?\b/u.test(value) ||
+    /\bat least 18 years?\b/u.test(value) ||
+    /\b18 years? of age\b.*\b(?:older|minimum|requirement)\b/u.test(value) ||
+    /\b(?:have|possess)\b.*\b(?:required|minimum)\b.*\b(?:experience|education|license|licenses|certification|certifications|skill|skills)\b/u.test(value)
+  ) return "qualification_requirement";
+  if (/\b(?:gender|sex|race|ethnicity|hispanic|latino|veteran|military|disability|disabled)\b/u.test(value)) {
+    return "demographic";
+  }
+  if (/\b(?:salary|compensation|pay|hourly rate|hourly wage)\b/u.test(value)) return "compensation";
+  if (/\b(?:authorized|authorised)\b.*\bwork\b/u.test(value)) return "authorization";
+  if (/\b(?:consent|agree|acknowledge)\b/u.test(value)) return "consent";
+  if (/\b(?:start date|available to start|availability|notice period)\b/u.test(value)) return "availability";
+  if (/\b(?:name|language)\b/u.test(value)) return "identity";
+  if (/\b(?:employed|employment|associate|relative|relatives)\b/u.test(value)) return "employment";
+  return "unknown";
+}
+
+export function semanticSyntheticTestDefault(label: string): boolean | string | undefined {
+  const value = normalized(label);
+  // Some employers describe numeric constraints only in the question text.
+  // This is a synthetic fallback, never a replacement for an owner answer.
+  const digitCount = /\b(\d{1,2}) digits? (?:number|identifier|id|code)\b/u.exec(value);
+  if (digitCount !== null) {
+    const count = Number(digitCount[1]);
+    if (count >= 1 && count <= 32) return "1".repeat(count);
+  }
+  if (employeeIdQuestion.test(value)) return "1";
+  if (birthDateQuestion.test(value) && /\bmmdd\b/u.test(value)) return "0101";
+  const trailingDigits = /\blast (\d{1,2}|four) digits?\b/u.exec(value);
+  if (trailingDigits !== null && /\b(?:ssn|social security|identification|identifier)\b/u.test(value)) {
+    const count = trailingDigits[1] === "four" ? 4 : Number(trailingDigits[1]);
+    if (count >= 1 && count <= 12) return "1".repeat(count);
+  }
+  if (/\b(?:do|are) you currently (?:work at|employed (?:by|with))\b/u.test(value)) return false;
+  const type = testingQuestionSemanticType(label);
+  if (type === "compensation") return "1";
+  if (type === "qualification_requirement") return true;
+  if (type === "employee_referral" || type === "prior_employment") return false;
+  if (type === "identity" && normalized(label) === "language") return "English";
+  return undefined;
+}
+
+const syntheticBirthAgeYears = 30;
+
+export function syntheticTestDate(label: string, today: string): string {
+  if (!birthDateQuestion.test(normalized(label))) return today;
+  // A stable adult test date, never an asserted owner fact. January 1 also
+  // avoids producing an invalid leap-day date when subtracting years.
+  return `${String(Number(today.slice(0, 4)) - syntheticBirthAgeYears).padStart(4, "0")}-01-01`;
+}

@@ -16,6 +16,7 @@ from .config import (
     resolve_base_resume_path,
 )
 from .db import (
+    _job_is_ready_for_c3,
     get_apply_context,
     get_job_context,
     init_resume_db,
@@ -974,19 +975,3 @@ def _run_pipeline(
     }
     write_json(attempt_dir / "result.json", result)
     return result
-
-
-def _job_is_ready_for_c3(job: dict) -> bool:
-    enrichment_status = (job.get("enrichment_status") or "").strip().lower()
-    apply_type = (job.get("apply_type") or "").strip().lower()
-    apply_url = (job.get("apply_url") or "").strip()
-    priority = int(job.get("priority") or 0)
-    auto_apply_eligible = int(job.get("auto_apply_eligible") or 0)
-
-    return (
-        enrichment_status in {"done", "done_verified"}
-        and apply_type == "external_apply"
-        and auto_apply_eligible == 1
-        and priority == 0
-        and bool(apply_url)
-    )

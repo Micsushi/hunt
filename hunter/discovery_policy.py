@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from hunter import config
 from hunter.config import TITLE_BLACKLIST, WATCHLIST
 from hunter.search_lanes import canonicalize_title_text, matching_search_lane
 
@@ -55,9 +56,9 @@ NEW_GRAD_TITLE = re.compile(
 CANADA_LOCATION = re.compile(
     r"\b(?:canada|ontario|quebec|alberta|british columbia|manitoba|"
     r"saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island|"
-    r"yukon|northwest territories|nunavut|toronto|vancouver|montreal|montréal|"
+    r"yukon|northwest territories|nunavut|toronto|vancouver|montreal|montrÃ©al|"
     r"ottawa|calgary|edmonton|winnipeg|halifax|waterloo|kitchener|"
-    r"st[.]? john['’]?s|charlottetown|summerside|corner brook)\b",
+    r"st[.]? john['â€™]?s|charlottetown|summerside|corner brook)\b",
     re.IGNORECASE,
 )
 
@@ -251,6 +252,29 @@ def is_canadian_location(location: object) -> bool:
 def geography_suppression(location: object) -> str | None:
     from hunter.config import DISCOVERY_COUNTRIES
 
+    allowed = [
+        part.strip() for part in config.DISCOVERY_ALLOWED_GEOGRAPHIES.split(",") if part.strip()
+    ]
+    if allowed:
+        if "*" in allowed:
+            return None
+        normalized = normalize_text(location)
+        for geography in allowed:
+            if normalize_text(geography) == "canada":
+                if is_canadian_location(location):
+                    return None
+            elif (
+                normalize_text(geography) and f" {normalize_text(geography)} " in f" {normalized} "
+            ):
+                return None
+        if normalize_text(location) in {"", "remote", "worldwide", "remote worldwide", "anywhere"}:
+            return "geography_unverified"
+        return (
+            "outside_canada"
+            if [normalize_text(part) for part in allowed] == ["canada"]
+            else "outside_allowed_geographies"
+        )
+
     if not DISCOVERY_COUNTRIES:
         return None
     aliases = {
@@ -364,7 +388,7 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         normalize_company(value) for value in COMPANY_BLOCKLIST
     }:
         reason = "company_blocklist"
-    elif stage == "experienced_excluded":
+    elif stage == "experienced_excluded" and not config.DISCOVERY_ALLOW_EXPERIENCED:
         reason = "experienced_title"
     elif geography_reason := geography_suppression(job.get("location")):
         reason = geography_reason
@@ -378,7 +402,11 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         normalize_employment_type(value) for value in str(job.get("employment_type")).split(";")
     } & {normalize_employment_type(value) for value in EMPLOYMENT_TYPES}:
         reason = "employment_type_excluded"
-    elif job.get("category") == "other" or occupation_code_only or food_qa:
+    elif (
+        (job.get("category") == "other" and not config.DISCOVERY_ALLOW_ALL_LANES)
+        or occupation_code_only
+        or food_qa
+    ):
         reason = "outside_search_lanes"
     elif job.get("apply_type") == "easy_apply":
         reason = "easy_apply_ineligible"

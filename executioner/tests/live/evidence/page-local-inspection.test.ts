@@ -1,0 +1,200 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { chromium } from "playwright";
+
+import { createPageLocalInspection } from
+  "../../../src/live/evidence/page-local-inspection.ts";
+
+test("page-local inspection retains Workday checkbox ownership and React evidence", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "workday-checkbox-inspection-"));
+  try {
+    await page.setContent(`<!doctype html><html><body>
+      <div data-automation-id="formField-disabilityStatus">
+        <label>Please check one of the boxes below:<span data-automation-id="required">*</span></label>
+        <fieldset data-automation-id="disabilityStatus-CheckboxGroup"
+          aria-required="true" aria-owns="disability-help">
+          <label><input type="checkbox" aria-label="Yes" checked>Yes</label>
+          <label><input type="checkbox" aria-label="No">No</label>
+          <label><input type="checkbox" aria-label="I do not want to answer">I do not want to answer</label>
+        </fieldset>
+      </div>
+      <div id="disability-help" role="note">Self-identification help</div>
+      <section data-automation-id="applyFlowReviewPage">
+        <p style="font-weight:400">Private address line<br>Private city</p>
+      </section>
+      <script>
+        const group = document.querySelector('[data-automation-id="disabilityStatus-CheckboxGroup"]');
+        Object.defineProperty(group, '__reactProps$retainedOwner', {
+          enumerable: true,
+          value: {
+            onSelect: option => option,
+            onRemove: option => option,
+            options: [
+              { id: 'yes', label: 'Yes', required: true },
+              { id: 'no', label: 'No', required: true },
+              { id: 'decline', label: 'I do not want to answer', required: true },
+            ],
+          },
+        });
+      </script>
+    </body></html>`);
+    const inspection = createPageLocalInspection(evidenceRoot);
+    await inspection.prepare(page);
+    await page.locator('input[aria-label="No"]').focus();
+    await page.locator("fieldset").evaluate((element) =>
+      element.setAttribute("aria-invalid", "false")
+    );
+    await inspection.capture(page);
+
+    const evidence = JSON.parse(readFileSync(
+      join(evidenceRoot, "page-local-inspection.json"),
+      "utf8",
+    )) as {
+      readonly evidenceRevision: string;
+      readonly reviewTextNodes: readonly { summaryTextSha256: string; tag: string; childTags: string[] }[];
+      readonly ariaSnapshotSha256: readonly string[];
+      readonly checkboxGroups: readonly {
+        readonly ownerAutomationId: string | null;
+        readonly labelSha256: string;
+        readonly group: {
+          readonly automationId: string | null;
+          readonly role: string | null;
+          readonly requiredMarker: boolean;
+          readonly aria: Readonly<Record<string, string | null>>;
+          readonly visible: boolean;
+          readonly bounds: Readonly<Record<string, number>>;
+          readonly inputCount: number;
+          readonly checkedCount: number;
+          readonly reactLayers: readonly {
+            readonly handlers: readonly { readonly name: string; readonly arity: number }[];
+          }[];
+        };
+        readonly inputs: readonly {
+          readonly optionLabelSha256: string;
+          readonly checked: boolean;
+          readonly active: boolean;
+        }[];
+        readonly ownedPortals: readonly {
+          readonly id: string;
+          readonly present: boolean;
+          readonly tag?: string;
+          readonly role?: string | null;
+          readonly automationId?: string | null;
+          readonly visible?: boolean;
+          readonly bounds?: Readonly<Record<string, number>>;
+          readonly descendantCount?: number;
+        }[];
+      }[];
+      readonly mutations: readonly { readonly attribute?: string | null }[];
+    };
+    assert.equal(evidence.evidenceRevision, "s2-page-local-inspection-v3");
+    assert.deepEqual(evidence.reviewTextNodes.map(({ summaryTextSha256, tag, childTags }) => ({
+      summaryTextSha256, tag, childTags,
+    })), [
+      { summaryTextSha256: hash("Private address line"), tag: "p", childTags: ["br"] },
+      { summaryTextSha256: hash("Private city"), tag: "p", childTags: ["br"] },
+    ]);
+    assert.equal(evidence.ariaSnapshotSha256.length, 1);
+    assert.equal(evidence.checkboxGroups.length, 1);
+    const group = evidence.checkboxGroups[0]!;
+    assert.equal(group.ownerAutomationId, "formField-disabilityStatus");
+    assert.equal(group.labelSha256, hash("Please check one of the boxes below:*"));
+    assert.deepEqual(group.group, {
+      kind: "exclusive",
+      automationId: "disabilityStatus-CheckboxGroup",
+      role: null,
+      requiredMarker: true,
+      aria: {
+        labelSha256: null,
+        labelledby: null,
+        describedby: null,
+        controls: null,
+        owns: "disability-help",
+        invalid: "false",
+        required: "true",
+      },
+      visible: true,
+      bounds: group.group.bounds,
+      inputCount: 3,
+      checkedCount: 1,
+      reactLayers: group.group.reactLayers,
+    });
+    assert.deepEqual(group.inputs.map(({ optionLabelSha256, checked, active }) => ({
+      optionLabelSha256, checked, active,
+    })), [
+      { optionLabelSha256: hash("Yes"), checked: true, active: false },
+      { optionLabelSha256: hash("No"), checked: false, active: true },
+      { optionLabelSha256: hash("I do not want to answer"), checked: false, active: false },
+    ]);
+    assert.deepEqual(group.ownedPortals, [{
+      id: "disability-help",
+      present: true,
+      tag: "div",
+      role: "note",
+      automationId: null,
+      visible: true,
+      bounds: group.ownedPortals[0]!.bounds,
+      descendantCount: 0,
+    }]);
+    assert.ok(group.group.reactLayers.some(({ handlers }) =>
+      handlers.some(({ name, arity }) => name === "onSelect" && arity === 1)
+    ));
+    assert.ok(evidence.mutations.some(({ attribute }) => attribute === "aria-invalid"));
+    const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
+    assert.doesNotMatch(serialized, /Please check|I do not want|Self-identification help|Private address|Private city/u);
+    assert.deepEqual(
+      readFileSync(join(evidenceRoot, "monitor-visible.png")).subarray(0, 8),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    assert.equal(existsSync(join(evidenceRoot, "external-monitor.png")), false);
+  } finally {
+    await browser.close();
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
+test("failed request diagnostics distinguish origins without retaining private URLs", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const evidenceRoot = mkdtempSync(join(tmpdir(), "workday-network-inspection-"));
+  try {
+    await page.route("https://application.example/", route => route.fulfill({
+      contentType: "text/html", body: "<html><body>Application</body></html>",
+    }));
+    await page.goto("https://application.example/");
+    const inspection = createPageLocalInspection(evidenceRoot);
+    await inspection.prepare(page);
+    await page.route("**/private-person?token=private-token", route => route.abort("namenotresolved"));
+    await page.evaluate(async () => {
+      for (const origin of [location.origin, "https://telemetry.example"]) {
+        await fetch(`${origin}/private-person?token=private-token`).catch(() => undefined);
+      }
+    });
+    await inspection.capture(page);
+    const serialized = readFileSync(join(evidenceRoot, "page-local-inspection.json"), "utf8");
+    const evidence = JSON.parse(serialized);
+    assert.deepEqual(evidence.requestFailures, [
+      { resourceType: "fetch", failureClass: "dns", sameOrigin: true,
+        originSha256: hash("https://application.example") },
+      { resourceType: "fetch", failureClass: "dns", sameOrigin: false,
+        originSha256: hash("https://telemetry.example") },
+    ]);
+    assert.doesNotMatch(serialized, /private-person|private-token|application\.example|telemetry\.example/u);
+  } finally {
+    await browser.close();
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
+function hash(value: string): string {
+  return createHash("sha256").update(
+    value.normalize("NFC").replace(/\s+/gu, " ").trim(),
+  ).digest("hex");
+}

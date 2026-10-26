@@ -1,0 +1,165 @@
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { assertCurrentProcessIsOnIsolatedDesktop } from "../../src/browser/playwright-live/private/windows-isolated-desktop-attestation.ts";
+import { readStage2ExternalMonitorObserverBinding } from
+  "../../src/live/evidence/external-monitor-authority.ts";
+import {
+  createStage2ExternalMonitorRuntime,
+  currentProcessStartedAt,
+} from "../../src/live/evidence/external-monitor-runtime.ts";
+
+const [mode, outputPath, ...values] = process.argv.slice(2);
+if (typeof outputPath !== "string") throw new TypeError("probe output missing");
+
+if (mode === "argv") {
+  await writeFile(outputPath, JSON.stringify(values), "utf8");
+} else if (mode === "attest") {
+  await assertCurrentProcessIsOnIsolatedDesktop();
+  await writeFile(outputPath, "ok", "utf8");
+} else if (
+  mode === "identity" || mode === "cleanup-terminal" ||
+  mode === "cleanup-terminal-primary"
+) {
+  const configIndex = values.indexOf("--config");
+  if (configIndex >= 0) {
+    const config = JSON.parse(await readFile(values[configIndex + 1]!, "utf8")) as {
+      readonly journeyId: string;
+      readonly target: { readonly handleId: string };
+      readonly roots: { readonly runtime: { readonly path: string } };
+    };
+    const profilePath = join(
+      config.roots.runtime.path,
+      "browser-profiles",
+      config.journeyId,
+      config.target.handleId,
+    );
+    await mkdir(profilePath, { recursive: true });
+    await writeFile(join(profilePath, "owned-browser-residue"), "closed", "utf8");
+  }
+  if (mode === "cleanup-terminal") {
+    const evidenceRoot = argument(values, "--evidence-root");
+    await writeFile(join(evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "pre_review_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: "journey_abcdefghijklmnop",
+        status: "failed",
+        completedPages: 3,
+        errorCode: "browser_effect_uncertain",
+      },
+      cleanupErrorCode: "browser_profile_cleanup_failed",
+    }), "utf8");
+  }
+  if (mode === "cleanup-terminal-primary") {
+    const evidenceRoot = argument(values, "--evidence-root");
+    const configPath = argument(values, "--config");
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      readonly journeyId: string;
+      readonly target: { readonly handleId: string };
+    };
+    const configSha256 = createHash("sha256").update(await readFile(configPath)).digest("hex");
+    await writeFile(join(evidenceRoot, "review-acceptance.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-review-acceptance-v1",
+      sourceRevision: "a".repeat(40),
+      configSha256,
+      contractRevision: "s2-owner-inputs-v1",
+      revisionId: "revision_abcdefghijklmnop",
+      approvalId: "approval_abcdefghijklmnop",
+      journeyId: config.journeyId,
+      targetHandleId: config.target.handleId,
+      checkpoint: "review",
+      status: "passed",
+      reviewProof: "independently_verified",
+      submitPresent: true,
+      submitActivated: false,
+      privacyScan: "pass",
+    }), "utf8");
+    await writeFile(join(evidenceRoot, "terminal-artifact.json"), JSON.stringify({
+      schemaVersion: 1,
+      evidenceRevision: "s2-terminal-artifact-v1",
+      resultCode: "cleanup_failed",
+      terminal: {
+        schemaVersion: 4,
+        journeyId: config.journeyId,
+        status: "failed",
+        completedPages: 3,
+        errorCode: "browser_profile_cleanup_failed",
+      },
+      cleanupErrorCode: "browser_profile_cleanup_failed",
+    }), "utf8");
+  }
+  await writeFile(outputPath, JSON.stringify({ pid: process.pid }), "utf8");
+} else if (mode === "environment") {
+  await writeFile(outputPath, process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE ?? "missing", "utf8");
+} else if (mode === "monitor-binding") {
+  const configPath = argument(values, "--config");
+  const evidenceRoot = argument(values, "--evidence-root");
+  const configBytes = await readFile(configPath);
+  const config = JSON.parse(configBytes.toString("utf8")) as {
+    readonly journeyId: string;
+    readonly target: {
+      readonly handleId: string;
+      readonly host: string;
+      readonly tenant: string;
+      readonly posting: string;
+    };
+    readonly roots: { readonly runtime: { readonly path: string } };
+  };
+  const nonce = process.env.HUNT_C3_PROCESS_LIVE_NONCE;
+  const issuedAt = process.env.HUNT_C3_PROCESS_ISSUED_AT;
+  if (nonce === undefined || issuedAt === undefined) throw new TypeError("probe process binding missing");
+  const desktopBinding = JSON.parse(await readFile(
+    join(config.roots.runtime.path, "isolated-desktop.json"),
+    "utf8",
+  )) as { readonly browserProfilePath?: unknown };
+  const monitor = createStage2ExternalMonitorRuntime({
+    runtimeRoot: config.roots.runtime.path,
+    evidenceRoot,
+    journeyId: config.journeyId,
+    targetHandleId: config.target.handleId,
+    sourceRevision: "a".repeat(40),
+    configSha256: createHash("sha256").update(configBytes).digest("hex"),
+    host: config.target.host,
+    tenant: config.target.tenant,
+    posting: config.target.posting,
+    processLiveNonceSha256: createHash("sha256").update(Buffer.from(nonce, "base64")).digest("hex"),
+    processIssuedAt: issuedAt,
+    processOwnerPid: process.pid,
+    processOwnerStartedAt: currentProcessStartedAt(),
+    observer: readStage2ExternalMonitorObserverBinding(config.roots.runtime.path, {
+      journeyId: config.journeyId,
+      targetHandleId: config.target.handleId,
+    }),
+  });
+  monitor.close();
+  await writeFile(outputPath, JSON.stringify({
+    constructed: true,
+    profileNestedUnderRuntime: typeof desktopBinding.browserProfilePath === "string" &&
+      desktopBinding.browserProfilePath.startsWith(`${config.roots.runtime.path}\\browser-profiles\\`),
+  }), "utf8");
+} else if (mode === "linger") {
+  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await writeFile(outputPath, JSON.stringify({
+    runnerPid: process.pid,
+    descendantPid: descendant.pid,
+  }), "utf8");
+  await new Promise(() => undefined);
+} else {
+  throw new TypeError("probe mode invalid");
+}
+
+function argument(values: readonly string[], name: string): string {
+  const index = values.indexOf(name);
+  const value = values[index + 1];
+  if (index < 0 || value === undefined) throw new TypeError("probe argument missing");
+  return value;
+}

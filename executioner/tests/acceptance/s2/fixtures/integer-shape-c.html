@@ -1,0 +1,34 @@
+<!doctype html>
+<html data-hunt-page-id="integer-shape-c" data-hunt-submit-activated="false">
+  <body data-hunt-application-page="questionnaire">
+    <main data-automation-id="applyFlowSelfIdentifyPage">
+      <div data-automation-id="formField-language">
+        <label for="self-identify-language">Language</label>
+        <select id="self-identify-language">
+          <option value="">Select One</option>
+          <option>English</option>
+          <option>Spanish</option>
+        </select>
+      </div>
+      <div data-automation-id="formField-name">
+        <label for="self-identify-name">Name</label>
+        <input id="self-identify-name" type="text">
+      </div>
+      <div data-automation-id="formField-date">
+        <label for="self-identify-date">Date</label>
+        <input id="self-identify-date" type="date">
+      </div>
+      <div data-automation-id="formField-disabilityStatus">
+        <fieldset>
+          <legend>Please check one of the boxes below</legend>
+          <label><input type="radio" name="disability-status" value="yes">Yes, I have a disability, or have had one in the past</label>
+          <label><input type="radio" name="disability-status" value="no">No, I do not have a disability and have not had one in the past</label>
+          <label><input type="radio" name="disability-status" value="decline">I do not want to answer</label>
+        </fieldset>
+      </div>
+      <div data-automation-id="formField-unresolved" data-hunt-unresolved="true">
+        <input id="unresolved-adjacent-control" type="text">
+      </div>
+    </main>
+  </body>
+</html>

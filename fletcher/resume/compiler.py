@@ -38,7 +38,10 @@ def compile_tex(
     )
     pdf_path = output_dir / f"{tex_path.stem}.pdf"
     successful = (
-        result["status"] == "completed" and result["returncode"] == 0 and pdf_path.is_file()
+        result["status"] == "completed"
+        and result["returncode"] == 0
+        and pdf_path.is_file()
+        and pdf_path.stat().st_size > 0
     )
     page_count = None
     if successful:
@@ -83,7 +86,10 @@ def get_pdf_page_count(
     # LaTeX flow are simple enough that counting page objects is a useful last
     # resort when external tooling is unavailable.
     try:
-        data = Path(pdf_path).read_bytes()
+        with Path(pdf_path).open("rb") as stream:
+            data = stream.read(16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024 or b"/ObjStm" in data:
+            return None
     except OSError:
         return None
     page_objects = len(re.findall(rb"/Type\s*/Page\b", data))

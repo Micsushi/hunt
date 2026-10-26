@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useLogs } from '@/hooks/useLogs'
 import { timeAgo } from '@/utils/time'
 import styles from './Logs.module.css'
@@ -56,7 +57,7 @@ export function LogsPage() {
   const [since, setSince] = useState('24h')
   const [limit, setLimit] = useState(100)
   const [autoRefresh, setAutoRefresh] = useState(false)
-  const { data, isLoading, error, dataUpdatedAt, refetch } = useLogs(
+  const { data, isFetching, error, dataUpdatedAt, refetch } = useLogs(
     { service: tab, levels, since, limit },
     autoRefresh ? 15_000 : false,
   )
@@ -65,15 +66,14 @@ export function LogsPage() {
     setLevels((prev) => (prev.includes(level) ? prev.filter((v) => v !== level) : [...prev, level]))
   }
 
-  if (isLoading) return <div className={styles.loading}>Loading…</div>
-  if (error || !data) return <div className={styles.error}>Failed to load logs.</div>
-
-  const { summary, activity } = data
-  const li = summary.auth?.linkedin ?? {}
-  const authOk = li.available !== false
+  const summary = data?.summary
+  const activity = data?.activity
+  const li = summary?.auth?.linkedin
+  const authOk = li?.available === true
+  const authMissing = li?.available !== true && li?.available !== false
   const done =
-    (summary.counts_by_status['done'] ?? 0) + (summary.counts_by_status['done_verified'] ?? 0)
-  const failed = summary.detail_quality_counts?.failed ?? summary.counts_by_status['failed'] ?? 0
+    (summary?.counts_by_status['done'] ?? 0) + (summary?.counts_by_status['done_verified'] ?? 0)
+  const failed = summary?.detail_quality_counts?.failed ?? summary?.counts_by_status['failed'] ?? 0
 
   return (
     <div className={styles.page}>
@@ -85,25 +85,32 @@ export function LogsPage() {
             {dataUpdatedAt ? ` · updated ${new Date(dataUpdatedAt).toLocaleTimeString()}` : ''}
           </p>
         </div>
-        <button className={styles.refreshBtn} onClick={() => refetch()}>
-          Refresh
+        <button className={styles.refreshBtn} aria-disabled={isFetching} onClick={() => {
+          if (!isFetching) void refetch({ cancelRefetch: false })
+        }}>
+          {isFetching ? 'Refreshing…' : error ? 'Retry logs' : 'Refresh'}
         </button>
       </div>
 
+      {error && <p className={styles.error} role="alert">
+        {data ? 'Could not refresh logs. Showing the last loaded results. Retry logs to check current progress.' : 'Failed to load logs. Retry logs to check progress.'}
+      </p>}
+      {!data && !error && <p role="status">Loading…</p>}
+      {data && summary && activity && <>
       {/* Auth banner */}
-      <div className={`${styles.authBanner} ${authOk ? styles.authOk : styles.authBad}`}>
+      <div className={`${styles.authBanner} ${authMissing ? styles.authUnknown : authOk ? styles.authOk : styles.authBad}`}>
         <span className={styles.authDot} />
         <div>
-          <strong>{authOk ? 'LinkedIn auth ready' : 'LinkedIn auth needs refresh'}</strong>
+          <strong>{authMissing ? 'LinkedIn access unknown' : authOk ? 'LinkedIn access ready' : 'LinkedIn needs reconnection'}</strong>
           {!authOk && (
             <p className={styles.authSub}>
-              Run: <code>DISPLAY=:98 ./hunter.sh auth-save --channel chrome</code>
+              <Link to="/ops">Manage LinkedIn connection</Link>
             </p>
           )}
-          {li.updated_at && (
+          {li?.updated_at && (
             <p className={styles.authSub}>Last updated: {timeAgo(li.updated_at)}</p>
           )}
-          {li.last_error && <p className={styles.authErr}>Last error: {li.last_error}</p>}
+          {li?.last_error && <p className={styles.authErr}>Last error: {li.last_error}</p>}
         </div>
       </div>
 
@@ -268,6 +275,7 @@ export function LogsPage() {
           </div>
         </div>
       )}
+      </>}
     </div>
   )
 }

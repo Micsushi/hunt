@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Lock, RLock
 
 from ..config import resolve_runtime_root
 from ..db import get_connection
 from .compiler import compile_tex
 from .models import ResumeDocument
 from .renderer import render_resume_tex
+from .review_io import atomic_json, publication_lock
 from .review_models import (
     ResumeReviewPackage,
     ResumeReviewVersionName,
@@ -20,17 +21,11 @@ from .review_models import (
 )
 
 INDEX_NAME = "review_index.json"
-_REVIEW_LOCKS: dict[str, RLock] = {}
-_REVIEW_LOCKS_GUARD = Lock()
 VERSION_FILENAME_PARTS = {
     ResumeReviewVersionName.STARTING: "starting",
     ResumeReviewVersionName.NO_SUMMARY: "no_summary",
     ResumeReviewVersionName.WITH_SUMMARY: "summary",
 }
-
-
-class RevisionConflictError(ValueError):
-    """The caller attempted to mutate a review from an obsolete revision."""
 
 
 def _runtime_root() -> Path:
@@ -55,7 +50,7 @@ def _read_index() -> dict[str, str]:
 
 
 def _write_index(index: dict[str, str]) -> None:
-    _index_path().write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_json(_index_path(), index)
 
 
 def _safe_attempt_dir(attempt_dir: str | Path) -> Path:
@@ -72,35 +67,13 @@ def _safe_review_id(review_id: str) -> str:
     return review_id
 
 
-def _review_lock(review_id: str) -> RLock:
-    rid = _safe_review_id(review_id)
-    with _REVIEW_LOCKS_GUARD:
-        return _REVIEW_LOCKS.setdefault(rid, RLock())
-
-
-def _check_expected_revision(version_state, expected_revision: int | None) -> None:
-    if expected_revision is None:
-        return
-    if (
-        isinstance(expected_revision, bool)
-        or not isinstance(expected_revision, int)
-        or expected_revision < 0
-    ):
-        raise ValueError("expected_revision must be a non-negative integer.")
-    current_revision = int(version_state.document_revision or 0)
-    if expected_revision != current_revision:
-        raise RevisionConflictError(
-            f"Review changed since revision {expected_revision}; current revision is "
-            f"{current_revision}. Reload before saving or compiling."
-        )
-
-
 def register_review(attempt_dir: str | Path, review_id: str | None = None) -> str:
     attempt = _safe_attempt_dir(attempt_dir)
     rid = _safe_review_id(review_id or build_review_id(attempt))
-    index = _read_index()
-    index[rid] = str(attempt)
-    _write_index(index)
+    with publication_lock(_runtime_root()):
+        index = _read_index()
+        index[rid] = str(attempt)
+        _write_index(index)
     return rid
 
 
@@ -117,19 +90,8 @@ def write_review_package(attempt_dir: str | Path, package: ResumeReviewPackage) 
     attempt.mkdir(parents=True, exist_ok=True)
     register_review(attempt, package.review_id)
     path = attempt / "review_package.json"
-    path.write_text(json.dumps(model_to_dict(package), indent=2), encoding="utf-8")
-    for name, version in package.versions.items():
-        vdir = attempt / "versions" / str(name.value if hasattr(name, "value") else name)
-        vdir.mkdir(parents=True, exist_ok=True)
-        (vdir / "original.json").write_text(
-            json.dumps(model_to_dict(version.original), indent=2), encoding="utf-8"
-        )
-        (vdir / "generated.json").write_text(
-            json.dumps(model_to_dict(version.generated), indent=2), encoding="utf-8"
-        )
-        (vdir / "current.json").write_text(
-            json.dumps(model_to_dict(version.current), indent=2), encoding="utf-8"
-        )
+    with publication_lock(attempt):
+        atomic_json(path, model_to_dict(package))
     return str(path)
 
 
@@ -151,6 +113,13 @@ def _version_dir(review_id: str, version: str | ResumeReviewVersionName) -> Path
     return attempt_dir_for_review(review_id) / "versions" / _version_name(version).value
 
 
+class ReviewConflictError(ValueError):
+    pass
+
+
+RevisionConflictError = ReviewConflictError
+
+
 def save_current_document(
     review_id: str,
     version: str | ResumeReviewVersionName,
@@ -158,79 +127,86 @@ def save_current_document(
     *,
     expected_revision: int | None = None,
 ) -> ResumeReviewPackage:
-    vname = _version_name(version)
-    with _review_lock(review_id):
-        return _save_current_document_locked(
-            review_id,
-            vname,
-            doc,
-            expected_revision=expected_revision,
-        )
-
-
-def _save_current_document_locked(
-    review_id: str,
-    version: ResumeReviewVersionName,
-    doc: ResumeDocument,
-    *,
-    expected_revision: int | None,
-    package: ResumeReviewPackage | None = None,
-) -> ResumeReviewPackage:
-    package = package or load_review_package(review_id)
-    version_state = package.versions[version]
-    _check_expected_revision(version_state, expected_revision)
-    vdir = _version_dir(review_id, version)
-    vdir.mkdir(parents=True, exist_ok=True)
-    (vdir / "current.json").write_text(json.dumps(model_to_dict(doc), indent=2), encoding="utf-8")
-    version_state.current = doc
-    version_state.document_revision = int(version_state.document_revision or 0) + 1
-    version_state.dirty = True
-    write_review_package(attempt_dir_for_review(review_id), package)
-    return package
-
-
-def load_current_document(review_id: str, version: str | ResumeReviewVersionName) -> ResumeDocument:
-    path = _version_dir(review_id, version) / "current.json"
-    if not path.exists():
-        raise FileNotFoundError("Current resume document missing.")
-    return model_validate(ResumeDocument, json.loads(path.read_text(encoding="utf-8")))
-
-
-def compile_current_document(
-    review_id: str,
-    version: str | ResumeReviewVersionName,
-    *,
-    expected_revision: int | None = None,
-) -> ResumeReviewPackage:
-    vname = _version_name(version)
-    with _review_lock(review_id):
+    attempt = attempt_dir_for_review(review_id)
+    with publication_lock(attempt):
         package = load_review_package(review_id)
-        version_state = package.versions[vname]
-        _check_expected_revision(version_state, expected_revision)
-        source_revision = int(version_state.document_revision or 0)
-        doc = load_current_document(review_id, vname)
-        next_revision = int(version_state.compiled_revision or 0) + 1
-        vdir = _version_dir(review_id, vname)
-        rev_dir = vdir / "revisions" / f"{next_revision:04d}"
-        rev_dir.mkdir(parents=True, exist_ok=True)
-        tex_path = rev_dir / "output.tex"
-        tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
-        result = compile_tex(tex_path)
-        version_state.compile_status = str(result.get("compile_status") or "")
-        if result.get("compile_status") == "ok":
-            version_state.compiled_revision = next_revision
-            version_state.compiled_document_revision = source_revision
-            version_state.dirty = False
-            version_state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
-            version_state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
-        write_review_package(attempt_dir_for_review(review_id), package)
-        if result.get("compile_status") == "ok":
-            _update_job_selected_resume(package, review_id, vname)
+        state = package.versions[_version_name(version)]
+        if expected_revision is not None and state.document_revision != expected_revision:
+            if model_to_dict(state.current) == model_to_dict(doc):
+                return package
+            raise ReviewConflictError(
+                f"This resume changed elsewhere; current revision is {state.document_revision}. Your draft is preserved; review the saved version before retrying."
+            )
+        state.current = doc
+        state.dirty = True
+        state.document_revision += 1
+        atomic_json(attempt / "review_package.json", model_to_dict(package))
         return package
 
 
+def load_current_document(review_id: str, version: str | ResumeReviewVersionName) -> ResumeDocument:
+    return load_review_package(review_id).versions[_version_name(version)].current
+
+
+def compile_current_document(
+    review_id: str, version: str | ResumeReviewVersionName, *, expected_revision: int | None = None
+) -> ResumeReviewPackage:
+    package = load_review_package(review_id)
+    vname = _version_name(version)
+    if (
+        expected_revision is not None
+        and package.versions[vname].document_revision != expected_revision
+    ):
+        raise ReviewConflictError(
+            f"Resume changed; current revision is {package.versions[vname].document_revision}."
+        )
+    snapshot = model_to_dict(package.versions[vname])
+    doc = package.versions[vname].current
+    attempt = attempt_dir_for_review(review_id)
+    vdir = _version_dir(review_id, vname)
+    vdir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=vdir, prefix=".compile-") as staging:
+        tex_path = Path(staging) / "output.tex"
+        tex_path.write_text(render_resume_tex(doc), encoding="utf-8")
+        result = compile_tex(tex_path)
+        with publication_lock(attempt):
+            current = load_review_package(review_id)
+            state = current.versions[vname]
+            if model_to_dict(state) != snapshot:
+                raise ValueError(
+                    "Resume changed during compilation; compile the saved version again."
+                )
+            state.compile_status = str(result.get("compile_status") or "")
+            if state.compile_status == "ok":
+                pdf_path = tex_path.with_suffix(".pdf")
+                if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
+                    raise ValueError("Compiler did not produce a non-empty PDF.")
+                revisions = vdir / "revisions"
+                revisions.mkdir(exist_ok=True)
+                next_revision = state.compiled_revision + 1
+                # Never overwrite a revision left by an interrupted publication.
+                while (revisions / f"{next_revision:04d}").exists():
+                    next_revision += 1
+                published = revisions / f"{next_revision:04d}"
+                Path(staging).rename(published)
+                state.compiled_revision = next_revision
+                state.compiled_document_revision = state.document_revision
+                state.dirty = False
+                state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
+                state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
+            atomic_json(attempt / "review_package.json", model_to_dict(current))
+            if state.compile_status == "ok":
+                _update_job_selected_resume(
+                    current, vname, published / "output.pdf", published / "output.tex"
+                )
+            return current
+
+
 def _update_job_selected_resume(
-    package: ResumeReviewPackage, review_id: str, version: ResumeReviewVersionName
+    package: ResumeReviewPackage,
+    version: ResumeReviewVersionName,
+    pdf_path: Path,
+    tex_path: Path,
 ) -> None:
     if version == ResumeReviewVersionName.STARTING:
         return
@@ -238,8 +214,6 @@ def _update_job_selected_resume(
     if job_id is None:
         return
     try:
-        pdf_path = artifact_path_for_review(review_id, version, "pdf")
-        tex_path = artifact_path_for_review(review_id, version, "tex")
         conn = get_connection(None)
         try:
             conn.execute(
@@ -267,30 +241,23 @@ def revert_current_document(
     *,
     expected_revision: int | None = None,
 ) -> ResumeReviewPackage:
+    package = load_review_package(review_id)
     vname = _version_name(version)
-    with _review_lock(review_id):
-        package = load_review_package(review_id)
-        version_state = package.versions[vname]
-        if target == "original":
-            doc = version_state.original
-        elif target == "generated":
-            doc = version_state.generated
-        else:
-            raise ValueError("target must be original or generated")
-        return _save_current_document_locked(
-            review_id,
-            vname,
-            doc,
-            expected_revision=expected_revision,
-            package=package,
-        )
+    version_state = package.versions[vname]
+    if target == "original":
+        doc = version_state.original
+    elif target == "generated":
+        doc = version_state.generated
+    else:
+        raise ValueError("target must be original or generated")
+    return save_current_document(review_id, vname, doc, expected_revision=expected_revision)
 
 
 def artifact_path_for_review(
     review_id: str, version: str | ResumeReviewVersionName, artifact_kind: str
 ) -> Path:
     vname = _version_name(version)
-    with _review_lock(review_id):
+    with publication_lock(attempt_dir_for_review(review_id)):
         package = load_review_package(review_id)
         state = package.versions[vname]
         vdir = _version_dir(review_id, vname)

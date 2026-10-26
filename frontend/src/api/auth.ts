@@ -7,8 +7,8 @@ export function fetchAuthStatus(): Promise<AuthStatus> {
   return get<AuthStatus>('/auth/me')
 }
 
-export async function login(username: string, password: string): Promise<void> {
-  if (MOCK) return
+export async function login(username: string, password: string): Promise<string> {
+  if (MOCK) return username.trim()
   const form = new URLSearchParams()
   form.set('username', username)
   form.set('password', password)
@@ -20,8 +20,15 @@ export async function login(username: string, password: string): Promise<void> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || 'Login failed')
+    throw new Error(
+      typeof body.detail === 'string' ? body.detail : 'Login failed. Please try again.',
+    )
   }
+  const body = await res.json()
+  if (body.status !== 'ok' || typeof body.username !== 'string' || !body.username.trim()) {
+    throw new Error('Could not confirm sign-in. Please try again.')
+  }
+  return body.username
 }
 
 export function logout(): Promise<void> {

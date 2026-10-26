@@ -1,0 +1,1124 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import {
+  boundedText,
+  browserTargetToken,
+  fieldId,
+  optionId,
+  questionId,
+} from "../../../src/contracts/index.ts";
+import {
+  admitPendingProfileQuestionsEvidence,
+  admitQuestionAnswerLearningEvidence,
+  createQuestionAnswerLearningCapture as createQuestionAnswerLearningCaptureWithPolicy,
+  type QuestionAnswerLearningCapture,
+} from "../../../src/live/evidence/question-answer-learning.ts";
+import { liveApplicationExecutionPolicy } from
+  "../../../src/contracts/application-execution-policy.ts";
+import type { ApplicationFieldObservation } from
+  "../../../src/form/answers/application-types.ts";
+import { createResumeArtifactFixture } from "../../../src/testing/contracts/index.ts";
+
+function createQuestionAnswerLearningCapture(
+  input: Omit<Parameters<typeof createQuestionAnswerLearningCaptureWithPolicy>[0], "executionPolicy">,
+) {
+  return createQuestionAnswerLearningCaptureWithPolicy({
+    ...input,
+    executionPolicy: liveApplicationExecutionPolicy(input.mode),
+  });
+}
+
+test("synthetic attachment learning retains verification and an editable owner replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-upload-learning-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const field = {
+      fieldId: fieldId("field-transcript"), target: browserTargetToken("target-transcript"),
+      label: boundedText("Upload your transcript"), required: true,
+      behavior: "file_upload" as const, options: [], state: "empty" as const,
+    };
+    recordVerified(capture, {
+      questionId: questionId("question-transcript"), field,
+      intent: { kind: "resume_upload", behavior: "file_upload", fieldId: field.fieldId,
+        target: field.target, artifact: createResumeArtifactFixture(), provenance: "resume_verified" },
+      lane: "synthetic_test_default", protectedCategory: null, generatedDefault: true,
+      conditionalReveal: true,
+    }, 1);
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8")));
+    const record = evidence.questions[0]!;
+    assert.equal(record.answerType, "file");
+    assert.equal(record.verificationResult, "verified");
+    assert.equal(record.lane, "synthetic_test_default");
+    const pending = JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8"));
+    assert.equal(pending.pendingProfileQuestions.length, 1);
+    assert.equal(pending.pendingProfileQuestions[0].needsUserValue, true);
+    assert.equal(pending.pendingProfileQuestions[0].testDefault, "resume_artifact_applied");
+    for (const change of [{ answerType: "text" }, { uiType: "textarea" },
+      { replaceWithOwnerAnswer: false }, { chosenAnswer: "unverified attachment" }]) {
+      assert.throws(() => admitQuestionAnswerLearningEvidence({ ...evidence,
+        questions: [{ ...record, ...change }] }));
+    }
+    assert.throws(() => admitQuestionAnswerLearningEvidence({ ...evidence,
+      answerFallbackPolicy: "owner_facts_only" }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("question learning stores observed choices, fallback, provenance, and replacement intent", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+      sensitiveValues: ["Woman"],
+    });
+    recordVerified(capture, {
+      questionId: questionId("observed-question-0123456789abcdef01234567"),
+      field: {
+        fieldId: fieldId("question-gender"),
+        target: browserTargetToken("target-gender"),
+        label: boundedText("Gender"),
+        required: false,
+        behavior: "select",
+        options: [
+          { id: optionId("gender-placeholder"), label: boundedText("Select One") },
+          { id: optionId("gender-first"), label: boundedText("Woman") },
+          { id: optionId("gender-other"), label: boundedText("Other") },
+        ],
+        state: "empty",
+      },
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: fieldId("question-gender"),
+        target: browserTargetToken("target-gender"),
+        optionId: optionId("gender-first"),
+        expectedOption: boundedText("Woman"),
+        provenance: "visible_option",
+      },
+      lane: "synthetic_test_default",
+      protectedCategory: "legal",
+      generatedDefault: false,
+      conditionalReveal: true,
+      semanticQuestionType: "demographic",
+    }, 1);
+
+    const sha256 = capture.write();
+    assert.match(sha256 ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
+      readFileSync(join(root, "question-answer-learning.json"), "utf8"),
+    ));
+    assert.deepEqual(evidence.questions, [{
+      pageId: "questionnaire-page-unspecified",
+      questionId: "observed-question-0123456789abcdef01234567",
+      fieldId: "question-gender",
+      label: "Gender",
+      required: false,
+      uiType: "select",
+      answerType: "single_select",
+      possibleAnswers: ["Select One", "Woman", "Other"],
+      answerState: "answered",
+      lane: "synthetic_test_default",
+      chosenAnswer: "Woman",
+      strategy: "random_visible_option",
+      provenance: "visible_option",
+      replaceWithOwnerAnswer: true,
+      interactionState: "attempted",
+      monitorBinding: binding(1),
+      verificationResult: "verified",
+      failureCode: null,
+      retryable: false,
+      terminalDisposition: "verified",
+      attemptHistory: [{
+        ...binding(1),
+        outcome: "verified",
+        failureCode: null,
+        retryable: false,
+      }],
+    }]);
+    const pending = JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"),
+      "utf8",
+    ));
+    assert.deepEqual(pending.pendingProfileQuestions, [{
+      pageId: "questionnaire-page-unspecified",
+      rowKey: null,
+      questionId: "observed-question-0123456789abcdef01234567",
+      fieldId: "question-gender",
+      exactQuestion: "Gender",
+      required: false,
+      semanticQuestionType: "demographic",
+      answerType: "single_select",
+      controlType: "select",
+      options: ["Select One", "Woman", "Other"],
+      constraints: null,
+      conditionalReveal: true,
+      testDefault: "Woman",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "visible_option",
+      validation: "verified",
+      committedReadback: "Woman",
+    }]);
+    assert.equal(capture.write(), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning retains large choice catalogs in both editable records", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-large-choice-learning-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const labels = Array.from({ length: 250 }, (_, index) => `Nationality ${index}`);
+    recordVerified(capture, {
+      questionId: questionId("question-nationality"),
+      field: {
+        fieldId: fieldId("nationality"), target: browserTargetToken("target-nationality"),
+        label: boundedText("Primary Nationality"), required: false, behavior: "select",
+        options: labels.map((label, index) => ({ id: optionId(`nationality-${index}`), label: boundedText(label) })),
+        state: "empty",
+      },
+      intent: {
+        kind: "choice", behavior: "select", fieldId: fieldId("nationality"),
+        target: browserTargetToken("target-nationality"), optionId: optionId("nationality-249"),
+        expectedOption: boundedText(labels[249]!), provenance: "visible_option",
+      },
+      lane: "synthetic_test_default", protectedCategory: "legal", generatedDefault: false,
+      conditionalReveal: false, semanticQuestionType: "demographic",
+    }, 1);
+    capture.write();
+    const learning = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(join(root, "question-answer-learning.json"), "utf8")));
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")));
+    assert.deepEqual(learning.questions[0]?.possibleAnswers, labels);
+    assert.deepEqual(pending.pendingProfileQuestions[0]?.options, labels);
+    assert.equal(pending.pendingProfileQuestions[0]?.actualOwnerValue, null);
+    assert.equal(pending.pendingProfileQuestions[0]?.testDefault, labels[249]);
+    const oversized = Array.from({ length: 513 }, (_, i) => `Choice ${i}`);
+    assert.throws(() => admitQuestionAnswerLearningEvidence({
+      ...learning, questions: [{ ...learning.questions[0]!, possibleAnswers: oversized }],
+    }));
+    assert.throws(() => admitPendingProfileQuestionsEvidence({
+      ...pending, pendingProfileQuestions: [{ ...pending.pendingProfileQuestions[0]!, options: oversized }],
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning redacts owner text while preserving the question contract", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-owner-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    recordVerified(capture, {
+      questionId: questionId("question-current-employer"),
+      field: {
+        fieldId: fieldId("question-current-employer"),
+        target: browserTargetToken("target-current-employer"),
+        label: boundedText("Current employer"),
+        required: true,
+        behavior: "text",
+        options: [],
+        state: "empty",
+      },
+      intent: {
+        kind: "text",
+        behavior: "text",
+        fieldId: fieldId("question-current-employer"),
+        target: browserTargetToken("target-current-employer"),
+        value: "Private Employer Name",
+        provenance: "owner_provided",
+      },
+      lane: "live_owner_fact",
+      protectedCategory: null,
+      generatedDefault: false,
+    }, 2);
+    capture.write();
+    const text = readFileSync(join(root, "question-answer-learning.json"), "utf8");
+    assert.doesNotMatch(text, /Private Employer Name/u);
+    assert.match(text, /owner_answer_applied/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning admits reviewed opaque operation ids that collide with sensitive suffixes", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-operation-id-"));
+  try {
+    const operationId = operation(22);
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "live",
+      sensitiveValues: [operationId.replace(/^operation_/u, "")],
+    });
+    const value = ownerChoice(22);
+    capture.recordAttempt({ operationId, ...value });
+    capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId, ...value });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
+      readFileSync(join(root, "question-answer-learning.json"), "utf8"),
+    ));
+    assert.equal(evidence.questions[0]?.attemptHistory[0]?.operationId, operationId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning redacts the selected owner choice", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-owner-controls-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    recordVerified(capture, {
+      questionId: questionId("question-private-choice"),
+      field: {
+        fieldId: fieldId("question-private-choice"),
+        target: browserTargetToken("target-private-choice"),
+        label: boundedText("Private choice"),
+        required: true,
+        behavior: "select",
+        options: [
+          { id: optionId("private-choice-yes"), label: boundedText("Yes") },
+          { id: optionId("private-choice-no"), label: boundedText("No") },
+        ],
+        state: "empty",
+      },
+      intent: {
+        kind: "choice",
+        behavior: "select",
+        fieldId: fieldId("question-private-choice"),
+        target: browserTargetToken("target-private-choice"),
+        optionId: optionId("private-choice-yes"),
+        expectedOption: boundedText("Yes"),
+        provenance: "owner_provided",
+      },
+      lane: "live_owner_fact",
+      protectedCategory: null,
+      generatedDefault: false,
+    }, 3);
+    capture.write();
+    const text = readFileSync(join(root, "question-answer-learning.json"), "utf8");
+    const evidence = JSON.parse(text) as {
+      readonly questions: readonly { readonly chosenAnswer: string }[];
+    };
+    assert.equal(evidence.questions[0]?.chosenAnswer, "owner_answer_applied");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning proves explicit unset without applicant values", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-unset-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    capture.recordUnset({
+      questionId: questionId("question-prior-employment"),
+      field: {
+        fieldId: fieldId("question-prior-employment"),
+        target: browserTargetToken("target-prior-employment"),
+        label: boundedText("Previously worked for organization"),
+        required: true,
+        behavior: "radio",
+        options: [],
+        state: "empty",
+      },
+    });
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
+      readFileSync(join(root, "question-answer-learning.json"), "utf8"),
+    ));
+    assert.equal(evidence.browserTransport, "live_browser");
+    assert.equal(evidence.answerFallbackPolicy, "deterministic_site_valid_editable");
+    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.deepEqual(evidence.questions.map(({ answerState, lane, provenance }) => ({
+      answerState,
+      lane,
+      provenance,
+    })), [{ answerState: "unset", lane: null, provenance: null }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning strictly rejects absent, invalid, extra, or synthetic live lanes", () => {
+  const record = {
+    pageId: "questionnaire-page-unspecified",
+    questionId: "question-owner-answer",
+    fieldId: "field-owner-answer",
+    label: "Owner answer",
+    required: true,
+    uiType: "select",
+    answerType: "single_select",
+    possibleAnswers: ["Yes", "No"],
+    answerState: "answered",
+    lane: "live_owner_fact",
+    chosenAnswer: "owner_answer_applied",
+    strategy: "owner_answer",
+    provenance: "owner_provided",
+    replaceWithOwnerAnswer: false,
+    interactionState: "attempted",
+    monitorBinding: binding(4),
+    verificationResult: "verified",
+    failureCode: null,
+    retryable: false,
+    terminalDisposition: "verified",
+    attemptHistory: [{
+      ...binding(4),
+      outcome: "verified",
+      failureCode: null,
+      retryable: false,
+    }],
+  } as const;
+  const base = {
+    schemaVersion: 6 as const,
+    evidenceRevision: "s2-question-answer-learning-v6" as const,
+    page: "questionnaire" as const,
+    ...liveApplicationExecutionPolicy("live"),
+    questions: [record],
+  };
+  const { lane: _lane, ...missingLane } = record;
+  assert.doesNotThrow(() => admitQuestionAnswerLearningEvidence(base));
+  for (const invalid of [
+    { ...base, questions: [missingLane] },
+    { ...base, questions: [{ ...record, lane: "invalid" }] },
+    { ...base, questions: [{ ...record, lane: "synthetic_test_default" }] },
+    { ...base, questions: [{ ...record, extra: true }] },
+    { ...base, questions: [{ ...record, provenance: "reviewed_catalog" }] },
+  ]) assert.throws(() => admitQuestionAnswerLearningEvidence(invalid as never));
+});
+
+test("question learning rejects hostile failure codes and retryable verified attempts", () => {
+  const verified = {
+    pageId: "questionnaire-page-unspecified",
+    questionId: "question-owner-answer",
+    fieldId: "field-owner-answer",
+    label: "Owner answer",
+    required: true,
+    uiType: "select",
+    answerType: "single_select",
+    possibleAnswers: ["Yes", "No"],
+    answerState: "answered",
+    lane: "live_owner_fact",
+    chosenAnswer: "owner_answer_applied",
+    strategy: "owner_answer",
+    provenance: "owner_provided",
+    replaceWithOwnerAnswer: false,
+    interactionState: "attempted",
+    monitorBinding: binding(40),
+    verificationResult: "verified",
+    failureCode: null,
+    retryable: false,
+    terminalDisposition: "verified",
+    attemptHistory: [{
+      ...binding(40),
+      outcome: "verified",
+      failureCode: null,
+      retryable: false,
+    }],
+  } as const;
+  const base = {
+    schemaVersion: 6 as const,
+    evidenceRevision: "s2-question-answer-learning-v6" as const,
+    page: "questionnaire" as const,
+    ...liveApplicationExecutionPolicy("live"),
+    questions: [verified],
+  };
+  const failed = {
+    ...verified,
+    monitorBinding: binding(41),
+    verificationResult: "driver_failed",
+    failureCode: "driver_target_stale",
+    retryable: true,
+    terminalDisposition: "driver_failed",
+    attemptHistory: [{
+      ...binding(41),
+      outcome: "driver_failed",
+      failureCode: "driver_target_stale",
+      retryable: true,
+    }],
+  };
+  const hostileCodes = [{ raw: "private" }, "x".repeat(65), "raw private value!"];
+  for (const failureCode of hostileCodes) {
+    assert.throws(() => admitQuestionAnswerLearningEvidence({
+      ...base,
+      questions: [{
+        ...failed,
+        failureCode,
+        attemptHistory: [{ ...failed.attemptHistory[0], failureCode }],
+      }],
+    } as never));
+  }
+  assert.throws(() => admitQuestionAnswerLearningEvidence({
+    ...base,
+    questions: [{
+      ...verified,
+      retryable: true,
+      attemptHistory: [{ ...verified.attemptHistory[0], retryable: true }],
+    }],
+  } as never));
+});
+
+test("question learning retains sanitized driver failure at occurrence", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-failure-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const value = ownerChoice(5);
+    const operationId = operation(5);
+    capture.recordAttempt({ operationId, ...value });
+    capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+    capture.recordFailure({
+      operationId,
+      code: "driver_target_stale",
+      retryable: true,
+      stage: "driver",
+    });
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(
+      readFileSync(join(root, "question-answer-learning.json"), "utf8"),
+    ));
+    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.deepEqual(evidence.questions.map((record) => ({
+      verificationResult: record.verificationResult,
+      failureCode: record.failureCode,
+      retryable: record.retryable,
+      terminalDisposition: record.terminalDisposition,
+    })), [{
+      verificationResult: "driver_failed",
+      failureCode: "driver_target_stale",
+      retryable: true,
+      terminalDisposition: "driver_failed",
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning retains bounded retry history without accepting a recovered failure run", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-retry-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const value = ownerChoice(6);
+    const first = operation(6);
+    capture.recordAttempt({ operationId: first, ...value });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.recordFailure({
+      operationId: first,
+      code: "driver_target_stale",
+      retryable: true,
+      stage: "driver",
+    });
+    const second = operation(7);
+    capture.recordAttempt({ operationId: second, ...value });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "before_mutation" });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "after_readback" });
+    capture.record({ operationId: second, ...value });
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.deepEqual(evidence.questions[0]?.attemptHistory, [
+      {
+        ...binding(6),
+        outcome: "driver_failed",
+        failureCode: "driver_target_stale",
+        retryable: true,
+      },
+      {
+        ...binding(7),
+        attempt: 2,
+        outcome: "verified",
+        failureCode: null,
+        retryable: false,
+      },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pending owner questions retain native synthetic text constraints", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-constraints-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const field = {
+      fieldId: fieldId("question-constrained-email"),
+      target: browserTargetToken("target-constrained-email"),
+      label: boundedText("Contact address"),
+      required: true,
+      behavior: "text",
+      options: [],
+      state: "empty",
+      constraints: {
+        inputType: "email",
+        min: null,
+        max: null,
+        maxLength: 32,
+        pattern: "[^@]+@[^@]+",
+        readOnly: false,
+      },
+    } satisfies ApplicationFieldObservation;
+    recordVerified(capture, {
+      questionId: questionId("question-constrained-email"),
+      field,
+      intent: {
+        kind: "text",
+        behavior: "text",
+        fieldId: field.fieldId,
+        target: field.target,
+        value: "a@b",
+        provenance: "reviewed_catalog",
+      },
+      lane: "synthetic_test_default",
+      protectedCategory: null,
+      generatedDefault: true,
+    }, 19);
+
+    capture.write();
+    const pending = JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"),
+      "utf8",
+    ));
+    assert.deepEqual(pending.pendingProfileQuestions[0]?.constraints, {
+      inputType: "email",
+      min: null,
+      max: null,
+      step: null,
+      minLength: null,
+      maxLength: 32,
+      pattern: "[^@]+@[^@]+",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning records an idempotent remount restore of a verified answer", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-remount-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const value = {
+      ...ownerChoice(16),
+      lane: "synthetic_test_default" as const,
+      intent: {
+        ...ownerChoice(16).intent,
+        provenance: "visible_option" as const,
+      },
+      generatedDefault: true,
+    };
+    const first = operation(16);
+    capture.recordAttempt({ operationId: first, ...value });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...value });
+
+    assert.throws(() => capture.recordAttempt({
+      operationId: operation(18),
+      ...value,
+      intent: {
+        kind: "choice",
+        behavior: "listbox",
+        fieldId: value.field.fieldId,
+        target: browserTargetToken("target-remounted-owner-16"),
+        optionId: optionId("remounted-owner-no"),
+        expectedOption: boundedText("No"),
+        provenance: "visible_option",
+      },
+      conditionalReveal: true,
+    }), /question answer learning evidence denied/u);
+
+    const restored = operation(17);
+    capture.recordAttempt({
+      operationId: restored,
+      ...value,
+      conditionalReveal: true,
+    });
+    capture.monitorAck({ operationId: restored, attempt: 2, moment: "before_mutation" });
+    capture.monitorAck({ operationId: restored, attempt: 2, moment: "after_readback" });
+    capture.record({ operationId: restored, ...value });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(
+      evidence.questions[0]?.attemptHistory.map(({ outcome }) => outcome),
+      ["verified", "verified"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning promotes a pre-resolution observation into the first attempt", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-observed-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const value = {
+      ...ownerChoice(19),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(19).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    capture.recordObserved({
+      questionId: value.questionId,
+      field: value.field,
+      semanticQuestionType: "unknown",
+    });
+    const operationId = operation(19);
+    capture.recordAttempt({ operationId, ...value });
+    capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId, ...value });
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.questions[0]?.terminalDisposition, "verified");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning permits only an unavailable verified synthetic choice replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-replacement-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const initial = {
+      ...ownerChoice(20),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(20).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(20);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...initial });
+
+    const replacement = {
+      ...initial,
+      field: {
+        ...initial.field,
+        options: Object.freeze([
+          { id: optionId("replacement-alpha"), label: boundedText("Alpha") },
+          { id: optionId("replacement-beta"), label: boundedText("Beta") },
+        ]),
+      },
+      intent: {
+        ...initial.intent,
+        optionId: optionId("replacement-alpha"),
+        expectedOption: boundedText("Alpha"),
+      },
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable" as const,
+    };
+    const second = operation(21);
+    capture.recordAttempt({ operationId: second, ...replacement });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "before_mutation" });
+    capture.monitorAck({ operationId: second, attempt: 2, moment: "after_readback" });
+    capture.record({ operationId: second, ...replacement });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(
+      evidence.questions[0]?.attemptHistory.map(({ outcome }) => outcome),
+      ["verified", "verified"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning denies replacement while the prior synthetic option remains available", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-replacement-denied-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const initial = {
+      ...ownerChoice(22),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(22).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(22);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "before_mutation" });
+    capture.monitorAck({ operationId: first, attempt: 1, moment: "after_readback" });
+    capture.record({ operationId: first, ...initial });
+    assert.throws(() => capture.recordAttempt({
+      operationId: operation(23),
+      ...initial,
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable",
+    }), /question answer learning evidence denied/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning retains verification failure through a terminal retry", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-terminal-retry-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const value = ownerChoice(8);
+    for (const [operationId, attempt, retryable] of [
+      [operation(8), 1, true],
+      [operation(9), 2, false],
+    ] as const) {
+      capture.recordAttempt({ operationId, ...value });
+      capture.monitorAck({ operationId, attempt, moment: "before_mutation" });
+      capture.monitorAck({ operationId, attempt, moment: "after_readback" });
+      capture.recordFailure({
+        operationId,
+        code: "verification_mismatch",
+        retryable,
+        stage: "verification",
+      });
+    }
+    capture.write();
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(evidence.questions[0]?.attemptHistory.map((attempt) => ({
+      outcome: attempt.outcome,
+      failureCode: attempt.failureCode,
+      retryable: attempt.retryable,
+      attempt: attempt.attempt,
+    })), [
+      { outcome: "verification_failed", failureCode: "verification_mismatch", retryable: true, attempt: 1 },
+      { outcome: "verification_failed", failureCode: "verification_mismatch", retryable: false, attempt: 2 },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("question learning admits one page monitor batch for independently verified fields", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-batch-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const batchOperationId = operation(40);
+    capture.monitorBatchAck({
+      operationId: batchOperationId,
+      attempt: 1,
+      moment: "before_mutation",
+    });
+    for (const index of [41, 42]) {
+      const value = ownerChoice(index);
+      const fieldOperationId = operation(index);
+      capture.recordAttempt({ operationId: fieldOperationId, ...value });
+      capture.record({ operationId: fieldOperationId, ...value });
+    }
+    capture.monitorBatchAck({
+      operationId: batchOperationId,
+      attempt: 1,
+      moment: "after_readback",
+    });
+    assert.match(capture.write() ?? "", /^[0-9a-f]{64}$/u);
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"),
+      "utf8",
+    )));
+    assert.equal(evidence.liveProofEligibility, "eligible");
+    assert.equal(evidence.questions.length, 2);
+    assert.deepEqual(
+      evidence.questions.map(({ monitorBinding }) => monitorBinding?.operationId),
+      [batchOperationId, batchOperationId],
+    );
+    assert.deepEqual(
+      evidence.questions.map(({ attemptHistory }) => attemptHistory.length),
+      [1, 1],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one open production batch retains and ACKs same-field synthetic option replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-open-batch-replacement-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    const batchOperationId = operation(50);
+    capture.monitorBatchAck({ operationId: batchOperationId, attempt: 1, moment: "before_mutation" });
+    const initial = {
+      ...ownerChoice(51),
+      lane: "synthetic_test_default" as const,
+      intent: { ...ownerChoice(51).intent, provenance: "visible_option" as const },
+      generatedDefault: true,
+    };
+    const first = operation(51);
+    capture.recordAttempt({ operationId: first, ...initial });
+    capture.record({ operationId: first, ...initial });
+    const replacement = {
+      ...initial,
+      field: {
+        ...initial.field,
+        target: browserTargetToken("target-owner-remounted-51"),
+        options: Object.freeze([
+          { id: optionId("replacement-gamma"), label: boundedText("Gamma") },
+          { id: optionId("replacement-delta"), label: boundedText("Delta") },
+        ]),
+      },
+      intent: {
+        ...initial.intent,
+        target: browserTargetToken("target-owner-remounted-51"),
+        optionId: optionId("replacement-gamma"),
+        expectedOption: boundedText("Gamma"),
+      },
+      conditionalReveal: true,
+      syntheticReplacementReason: "cached_option_unavailable" as const,
+    };
+    const second = operation(52);
+    capture.recordAttempt({ operationId: second, ...replacement });
+    capture.record({ operationId: second, ...replacement });
+    capture.monitorBatchAck({ operationId: batchOperationId, attempt: 1, moment: "after_readback" });
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.equal(evidence.questions.length, 1);
+    assert.equal(evidence.questions[0]?.chosenAnswer, "Gamma");
+    assert.deepEqual(evidence.questions[0]?.attemptHistory.map(({ operationId }) => operationId), [
+      first,
+      second,
+    ]);
+    assert.deepEqual(evidence.questions[0]?.attemptHistory.map(({ attempt }) => attempt), [1, 1]);
+    assert.equal(evidence.questions[0]?.monitorBinding?.operationId, batchOperationId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one run capture retains the same field identity on two questionnaire pages", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-question-learning-pages-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "live" });
+    const value = ownerChoice(60);
+    recordVerified(capture, { ...value, pageId: "questionnaire-page-1" }, 60);
+    recordVerified(capture, { ...value, pageId: "questionnaire-page-2" }, 61);
+    capture.write();
+
+    const evidence = admitQuestionAnswerLearningEvidence(JSON.parse(readFileSync(
+      join(root, "question-answer-learning.json"), "utf8",
+    )));
+    assert.deepEqual(evidence.questions.map(({ pageId, fieldId: id }) => ({ pageId, id })), [
+      { pageId: "questionnaire-page-1", id: "field-owner-60" },
+      { pageId: "questionnaire-page-2", id: "field-owner-60" },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Profile-only pending evidence keeps exact page row and field occurrences", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-only-pending-"));
+  const exactQuestion = `${"Instructions for current employees. ".repeat(18)}Have you previously worked here?`;
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "synthetic_test_non_submittable",
+    });
+    for (const value of [
+      { pageId: "profile-page-1", rowKey: null },
+      { pageId: "profile-page-2", rowKey: "experience-row-1" },
+    ] as const) capture.recordPendingProfile?.({
+      ...value,
+      questionId: questionId("question-profile-unknown-required-1"),
+      fieldId: "unknown.required.1",
+      exactQuestion,
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      options: [],
+      constraints: null,
+      conditionalReveal: false,
+      testDefault: "Synthetic owner review",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "visible_option",
+      validation: "verified",
+      committedReadback: "Synthetic owner review",
+    });
+    assert.equal(capture.write(), null);
+    assert.throws(() => readFileSync(join(root, "question-answer-learning.json")));
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"), "utf8",
+    )));
+    assert.ok(pending.pendingProfileQuestions.every((question) => question.exactQuestion === exactQuestion));
+    assert.deepEqual(pending.pendingProfileQuestions.map(({ pageId, rowKey, fieldId }) => ({
+      pageId,
+      rowKey,
+      fieldId,
+    })), [
+      { pageId: "profile-page-1", rowKey: null, fieldId: "unknown.required.1" },
+      {
+        pageId: "profile-page-2",
+        rowKey: "experience-row-1",
+        fieldId: "unknown.required.1",
+      },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("page-local unknown ordinals retain distinct profile question and UI observations", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-ordinal-reuse-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({ root, mode: "synthetic_test_non_submittable" });
+    const questions = [
+      { exactQuestion: "Have you ever worked with this company?", answerType: "single_select" as const,
+        controlType: "radio" as const, options: ["Yes", "No"] },
+      { exactQuestion: "Certification", answerType: "single_select" as const,
+        controlType: "select" as const, options: ["Certificate A", "Certificate B"] },
+    ];
+    for (const question of questions) capture.recordPendingProfile?.({
+      pageId: "s2-profile", rowKey: null, questionId: "question.profile.unknown.required.1",
+      fieldId: "unknown.required.1", exactQuestion: question.exactQuestion,
+      required: true, semanticQuestionType: "unknown", answerType: question.answerType,
+      controlType: question.controlType, options: question.options, constraints: null,
+      conditionalReveal: false, testDefault: null, actualOwnerValue: null,
+      needsUserValue: true, provenance: null, validation: "not_attempted", committedReadback: null,
+    });
+    capture.write();
+    const result = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")));
+    assert.deepEqual(result.pendingProfileQuestions.map(({ exactQuestion, answerType, controlType, options }) =>
+      ({ exactQuestion, answerType, controlType, options })), questions);
+    assert.ok(result.pendingProfileQuestions.every(q => q.actualOwnerValue === null && q.needsUserValue && q.validation === "not_attempted"));
+    assert.throws(() => admitPendingProfileQuestionsEvidence({ ...result,
+      pendingProfileQuestions: [result.pendingProfileQuestions[0]!, result.pendingProfileQuestions[0]!] }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("generated Profile fallback remains exact evidence when owner-source privacy values overlap", () => {
+  const root = mkdtempSync(join(tmpdir(), "hunt-profile-generated-pending-"));
+  try {
+    const capture = createQuestionAnswerLearningCapture({
+      root,
+      mode: "live",
+      sensitiveValues: ["Deterministic test response"],
+    });
+    capture.recordPendingProfile?.({
+      pageId: "profile-page-1",
+      rowKey: null,
+      questionId: "question.profile.synthetic.required.1",
+      fieldId: "synthetic.required.1",
+      exactQuestion: "Additional required information",
+      required: true,
+      semanticQuestionType: "unknown",
+      answerType: "text",
+      controlType: "text",
+      options: [],
+      constraints: null,
+      conditionalReveal: false,
+      testDefault: "Deterministic test response",
+      actualOwnerValue: null,
+      needsUserValue: true,
+      provenance: "generated_default",
+      validation: "verified",
+      committedReadback: "Deterministic test response",
+    });
+    assert.equal(capture.write(), null);
+    const pending = admitPendingProfileQuestionsEvidence(JSON.parse(readFileSync(
+      join(root, "pending-profile-questions.json"), "utf8",
+    )));
+    assert.equal(pending.pendingProfileQuestions[0]?.testDefault, "Deterministic test response");
+    assert.equal(pending.pendingProfileQuestions[0]?.provenance, "generated_default");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function recordVerified(
+  capture: QuestionAnswerLearningCapture,
+  value: Omit<Parameters<QuestionAnswerLearningCapture["record"]>[0], "operationId">,
+  index: number,
+): void {
+  const operationId = operation(index);
+  capture.recordAttempt({ operationId, ...value });
+  capture.monitorAck({ operationId, attempt: 1, moment: "before_mutation" });
+  capture.monitorAck({ operationId, attempt: 1, moment: "after_readback" });
+  capture.record({ operationId, ...value });
+}
+
+function ownerChoice(index: number): Omit<
+  Parameters<QuestionAnswerLearningCapture["record"]>[0], "operationId"
+> {
+  return {
+    questionId: questionId(`question-owner-${index}`),
+    field: {
+      fieldId: fieldId(`field-owner-${index}`),
+      target: browserTargetToken(`target-owner-${index}`),
+      label: boundedText("Owner answer"),
+      required: true,
+      behavior: "select",
+      options: [
+        { id: optionId("owner-yes"), label: boundedText("Yes") },
+        { id: optionId("owner-no"), label: boundedText("No") },
+      ],
+      state: "empty",
+    },
+    intent: {
+      kind: "choice",
+      behavior: "select",
+      fieldId: fieldId(`field-owner-${index}`),
+      target: browserTargetToken(`target-owner-${index}`),
+      optionId: optionId("owner-yes"),
+      expectedOption: boundedText("Yes"),
+      provenance: "owner_provided",
+    },
+    lane: "live_owner_fact",
+    protectedCategory: "legal",
+    generatedDefault: false,
+  };
+}
+
+function operation(index: number): string {
+  return `operation_question_${String(index).padStart(16, "0")}`;
+}
+
+function binding(index: number): {
+  readonly operationId: string;
+  readonly attempt: number;
+  readonly beforeMutationAck: true;
+  readonly afterReadbackAck: true;
+} {
+  return {
+    operationId: operation(index),
+    attempt: 1,
+    beforeMutationAck: true,
+    afterReadbackAck: true,
+  };
+}

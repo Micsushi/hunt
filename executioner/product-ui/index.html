@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hunt C3</title><link rel="stylesheet" href="./style.css"><script src="./app.js" defer></script></head>
+<body><main>
+  <header class="app-header"><a class="brand" href="#">Hunt <span>C3</span></a><span id="connection" role="status">Connecting</span></header>
+  <nav class="app-nav" aria-label="Workspace"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="settings">Settings</button></nav>
+  <div class="page-heading"><h1 id="page-title">Profile</h1></div>
+  <div id="profile-answer-warning" class="owner-warning" hidden><p>If you saved a profile in an earlier version, review its answers before preparing applications: test defaults may have been saved as yours. Existing answers have been kept.</p><button id="review-profile-answers" type="button" class="secondary">Review profile answers</button></div>
+  <p id="error" role="alert" hidden></p>
+  <div id="connection-error" hidden><p role="alert"></p><button id="retry-connection" type="button" class="secondary">Reconnect</button></div>
+  <button id="recover-storage" class="secondary" hidden>Retry saving progress</button>
+  <form id="pair"><label>Pairing key<input id="token" type="password" autocomplete="off" required></label><button>Connect C3</button></form>
+  <section data-panel="applications" hidden aria-label="New applications">
+    <details id="batch-entry" open><summary>Add application links</summary>
+    <form id="batch"><label for="links">Job links</label><textarea id="links" rows="5" spellcheck="false" placeholder="One job URL per line" required></textarea>
+      <div class="actions"><button id="start">Fill applications</button><label class="compact">At a time<select id="concurrency"><option>1</option><option>3</option><option selected>6</option><option>10</option><option>20</option><option>30</option></select></label></div>
+      <p class="note">Stops before submission.</p>
+    </form>
+    </details>
+  </section>
+  <section id="setup" data-panel="profile" aria-label="Your profile">
+    <div id="profile-error" hidden><p role="alert"></p><button id="retry-profile" type="button" class="secondary">Retry loading profile</button></div>
+    <nav class="section-nav" aria-label="Profile sections"><a href="#contact">Contact</a><a href="#work">Work &amp; education</a><a href="#availability">Availability</a><a href="#eligibility">Eligibility</a><a href="#disclosures">Disclosures</a><a href="#preferences">Resume</a></nav>
+    <form id="profile-form"><fieldset id="contact" class="profile-section"><legend>Contact</legend><div class="profile-grid">
+      <label>First name<input name="given_name" autocomplete="given-name" required></label><label>Last name<input name="family_name" autocomplete="family-name" required></label>
+      <label>Email<input name="email_address" type="email" autocomplete="email" required></label><label>Phone<input name="phone_number" type="tel" autocomplete="tel"></label>
+      <label>Country<input name="country" autocomplete="country-name"></label><label>State or province<input name="region" autocomplete="address-level1"></label>
+      <label>City<input name="city" autocomplete="address-level2"></label><label>Postal code<input name="postal_code" autocomplete="postal-code"></label>
+    </div></fieldset>
+    <div id="answer-fields" class="answer-sections"></div>
+    <fieldset id="preferences" class="profile-section"><legend>Resume &amp; preferences</legend>
+    <label>Default resume (PDF, up to 5 MB)<input id="resume" type="file" accept="application/pdf,.pdf"></label>
+    <label>When an answer is missing<select name="answer_policy"><option value="real">Leave it blank and ask me</option><option value="test">Use test values for this trial</option></select></label>
+    <p id="saved-policy" class="note"></p><details><summary>How these answers are used</summary><p class="note">Saved answers apply across new jobs. Each queued job keeps its original profile and resume. Employer-specific answers and consent stay with that application.</p><p class="note">Unanswered profile fields stay blank. Test mode can suggest values on an application; those suggestions require review and are not saved as your profile answers.</p><p id="profile-usage" class="note"></p></details></fieldset>
+    <div class="save-bar"><div><strong id="draft-state">Saved</strong><span id="profile-status" role="status"></span></div><button>Save profile</button></div>
+    <details><summary>Import an existing C3 profile</summary><label>Prepared profile<input id="profile" type="file" accept="application/json,.json"></label><label>Resume for imported profile<input id="import-resume" type="file" accept="application/pdf,.pdf"></label><button id="import-profile" type="button" class="secondary">Import profile</button></details></form>
+    <form id="account-form"><label>Account email<input id="email" type="email" autocomplete="username" required></label><label>Account password<input id="password" type="password" autocomplete="current-password" required></label><label>Gmail app password for verification (optional)<input id="gmail" type="password" autocomplete="off"></label><button>Use account</button><p class="note">Passwords are cleared when C3 closes.</p></form>
+    <details><summary>Local storage and backup</summary><p class="note">Backups include your personal details and resume, without passwords.</p><p id="storage-path" class="note"></p><div class="actions"><button id="export-backup" type="button" class="secondary">Download backup</button><label>Restore profile backup<input id="backup-file" type="file" accept="application/json,.json"></label><button id="restore-backup" type="button" class="secondary">Restore backup</button></div></details>
+  </section>
+  <section id="settings-panel" data-panel="settings" hidden aria-label="Settings and backup"></section>
+  <section data-panel="applications" hidden aria-label="Application progress"><div class="queue-heading"><h2 id="queue-title" tabindex="-1">Your applications</h2><span id="summary" role="status"></span></div>
+    <div class="queue-filters"><label>Find an application<input id="job-search" type="search" placeholder="Company, job title or link"></label><label>Status<select id="job-filter"><option value="all">All applications</option><option value="attention">Needs attention</option><option value="review">At review</option><option value="active">Queued or running</option><option value="paused">Paused</option><option value="submitted">Submitted</option></select></label></div>
+    <p id="filter-summary" role="status" class="note"></p><p id="empty">Add job links above, or choose “Prepare this job” in the browser extension.</p><p id="no-matches" hidden>No applications match. <button id="clear-filters" type="button" class="secondary">Clear filters</button></p><ol id="jobs"></ol></section>
+  <div id="history" class="actions"><button id="undo" class="secondary" disabled>Undo</button><button id="redo" class="secondary" disabled>Redo</button><span id="notice" role="status"></span></div>
+  <dialog id="submit-dialog"><form method="dialog"><h2>Submit this application?</h2><p id="submit-title"></p><p>This sends your application to the employer and cannot be undone here.</p><label class="check"><input id="reviewed" type="checkbox" required>I reviewed the resume and every answer, including any suggested defaults.</label><div class="actions"><button id="confirm-submit" value="submit">Submit application</button><button value="cancel" class="secondary" formnovalidate>Keep at Review</button></div></form></dialog>
+</main></body></html>

@@ -1,0 +1,81 @@
+<!doctype html>
+<html data-hunt-page-id="integer-resume" data-hunt-submit-activated="false">
+  <body data-hunt-application-page="resume">
+    <main data-automation-id="applyFlowMyExperiencePage">
+      <section id="experience-section">
+        <h2>Work Experience</h2>
+        <button id="work-experience-add" type="button">Add</button>
+        <div class="rows"></div>
+      </section>
+      <section id="education-section">
+        <h2>Education</h2>
+        <button id="education-add" type="button">Add</button>
+        <div class="rows"></div>
+      </section>
+      <section id="skills-section">
+        <h2>Skills</h2>
+        <label for="skills-search">Type to Add Skills</label>
+        <input id="skills-search" type="search" role="combobox" aria-controls="skills-options" aria-expanded="false">
+        <div id="skills-options" role="listbox" hidden>
+          <button type="button" role="option">Systems Integration</button>
+          <button type="button" role="option">Program Management</button>
+        </div>
+        <output id="skills-readback"></output>
+      </section>
+      <section id="resume-section">
+        <h2>Resume/CV</h2>
+        <label for="resume-upload">Upload a file (5MB max)</label>
+        <input id="resume-upload" type="file" accept="application/pdf" data-automation-id="file-upload-input-ref">
+      </section>
+      <section id="websites-section">
+        <h2>Websites</h2>
+        <button id="websites-add" type="button">Add</button>
+        <div class="rows"></div>
+      </section>
+    </main>
+    <script>
+      const addRow = (buttonId, sectionId, kind) => {
+        document.querySelector(buttonId).addEventListener('click', () => {
+          const rows = document.querySelector(sectionId + ' .rows');
+          const row = document.createElement('div');
+          row.dataset.syntheticRow = kind;
+          rows.append(row);
+        });
+      };
+      addRow('#work-experience-add', '#experience-section', 'experience');
+      addRow('#education-add', '#education-section', 'education');
+      addRow('#websites-add', '#websites-section', 'website');
+
+      const skills = document.querySelector('#skills-search');
+      const options = document.querySelector('#skills-options');
+      skills.addEventListener('input', () => {
+        options.hidden = false;
+        skills.setAttribute('aria-expanded', 'true');
+      });
+      options.addEventListener('click', (event) => {
+        const option = event.target.closest('[role="option"]');
+        if (option === null) return;
+        const value = option.textContent.trim();
+        document.querySelector('#skills-readback').value = value;
+        skills.dataset.selectedValue = value;
+        skills.value = '';
+        options.hidden = true;
+        skills.setAttribute('aria-expanded', 'false');
+      });
+
+      document.querySelector('#resume-upload').addEventListener('change', (event) => {
+        document.querySelector('[data-automation-id="file-upload-item"]')?.remove();
+        const item = document.createElement('div');
+        item.dataset.automationId = 'file-upload-item';
+        item.dataset.uploadState = 'success';
+        item.textContent = event.currentTarget.files[0]?.name ?? '';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.dataset.automationId = 'delete-file';
+        remove.setAttribute('aria-label', 'Delete fixture resume');
+        item.append(remove);
+        document.querySelector('#resume-section').append(item);
+      });
+    </script>
+  </body>
+</html>

@@ -461,12 +461,16 @@ def test_fletcher_log_downloads_use_readable_filenames():
     assert "fletcher_queue_${job.queue_item_id}.log" not in fletcher
 
 
-def test_fletcher_option_b_clears_jd_and_keeps_batch_download_controls():
+def test_fletcher_option_b_clears_only_acknowledged_jd_and_keeps_batch_download_controls():
     fletcher = read("frontend/src/pages/Fletcher/index.tsx")
     control = read("frontend/src/api/control.ts")
     store = read("frontend/src/store/ui.ts")
 
-    assert "setJobDetails('')" in fletcher
+    assert "setJobDetails((current) =>" in fletcher
+    assert "current === submitted.description" in fletcher
+    assert "fletcherResumeFile === submitted.resume" in fletcher
+    assert "? ''" in fletcher
+    assert ": current," in fletcher
     assert "Personal details" not in fletcher
     assert "personalDetails" not in fletcher
     assert "fletcherResumeFile" in store

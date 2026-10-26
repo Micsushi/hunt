@@ -1,0 +1,410 @@
+import type {
+  LiveBrowserSessionV1,
+  LivePortResult,
+  PersistentBrowserErrorCode,
+} from "../../../contracts/live/index.ts";
+import type {
+  OwnedAccountPageAccess,
+  OwnedAccountPageAccessRequest,
+  SemanticAccountPageAdapter,
+} from "./account-page-types.ts";
+import { OwnedAccountPageAccessScope } from "./owned-account-page-access.ts";
+import { inspectPinnedTarget } from "./owned-page-inspection.ts";
+import { cancelled, failure } from "./port-results.ts";
+import { sameTarget } from "./target-binding.ts";
+import type {
+  ApprovedTargetBinding,
+  OwnedTargetProbe,
+  PersistentPage,
+  ProfileMarkerV1,
+} from "./types.ts";
+import type {
+  ExternalMonitorPage,
+  ExternalMonitorPort,
+  ExternalMonitorTaxonomy,
+} from "./external-monitor-port.ts";
+import type { PostingNavigationSessionTraceEvent } from "./account-navigation-types.ts";
+import { valueFreeExternalMonitorPage } from "./value-free-external-monitor-page.ts";
+
+export interface AccountPageOwnershipState {
+  readonly page: PersistentPage | undefined;
+  readonly session: LiveBrowserSessionV1 | undefined;
+  readonly approvedTarget: ApprovedTargetBinding | undefined;
+  readonly marker: ProfileMarkerV1 | undefined;
+}
+
+interface OwnedAccountPageCoordinatorOptions {
+  readonly adapter: SemanticAccountPageAdapter | undefined;
+  readonly probe: OwnedTargetProbe;
+  readonly timeoutMs: number;
+  readonly state: () => AccountPageOwnershipState;
+  readonly invalidate: () => Promise<void>;
+  readonly externalMonitor?: Pick<ExternalMonitorPort, "auth">;
+  readonly applicationReadyMonitor?: {
+    readonly page: (page: PersistentPage) => ExternalMonitorPage;
+    readonly taxonomy: (page: PersistentPage) => Promise<ExternalMonitorTaxonomy>;
+  };
+  readonly trace?: (event: PostingNavigationSessionTraceEvent) => void;
+}
+
+export class OwnedAccountPageCoordinator {
+  readonly #options: OwnedAccountPageCoordinatorOptions;
+  readonly #operations = new Set<string>();
+  #active = false;
+  readonly #monitorAttempts = new Map<string, number>();
+  #lastStructuralDiagnostic = "";
+
+  constructor(options: OwnedAccountPageCoordinatorOptions) {
+    this.#options = options;
+  }
+
+  async withAccess(
+    request: OwnedAccountPageAccessRequest,
+    signal: AbortSignal,
+    use: (access: OwnedAccountPageAccess) => Promise<void>,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    if (signal.aborted) return cancelled();
+    if (this.#active || this.#operations.has(request.operationId)) {
+      return failure("browser_operation_replayed");
+    }
+    const state = this.#options.state();
+    const now = Date.parse(request.now);
+    if (!validAdmission(state, this.#options.adapter, request, now)) {
+      return failure("browser_session_missing");
+    }
+    const page = state.page!;
+    const approvedTarget = state.approvedTarget!;
+    const adapter = this.#options.adapter!;
+    const owned = await inspectPinnedTarget(
+      page,
+      this.#options.probe,
+      approvedTarget,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    if (!owned.ok) return owned;
+    if (owned.value.target.kind !== "matched") {
+      return failure("browser_target_invalid");
+    }
+    const beforePage = authMonitorPhase(owned.value.snapshot);
+    if (beforePage === "unknown" && this.#options.externalMonitor !== undefined) {
+      await this.#observeUnknown(page, request, owned.value.snapshot, signal);
+      return failure("browser_target_invalid");
+    }
+    const attempt = (this.#monitorAttempts.get(beforePage) ?? 0) + 1;
+    if (!await this.#monitor(
+      page,
+      beforePage,
+      "before_mutation",
+      request.operationId,
+      attempt,
+      owned.value.snapshot,
+      signal,
+    )) return failure("browser_effect_uncertain");
+    this.#monitorAttempts.set(beforePage, attempt);
+    this.#active = true;
+    this.#operations.add(request.operationId);
+    const scope = new OwnedAccountPageAccessScope(
+      page,
+      adapter,
+      signal,
+      this.#options.timeoutMs,
+      () => this.#revalidate(page, approvedTarget, request, signal),
+      this.#options.invalidate,
+      this.#options.externalMonitor === undefined
+        ? undefined
+        : async () => ({ ok: true, value: undefined }),
+      this.#options.externalMonitor === undefined
+        ? undefined
+        : () => this.#monitorAfterActivation(page, approvedTarget, request, attempt),
+    );
+    let callbackFailed = false;
+    try {
+      await use(scope);
+    } catch {
+      callbackFailed = true;
+    } finally {
+      scope.deactivate();
+      this.#active = false;
+    }
+    if (this.#options.externalMonitor === undefined) {
+      if (callbackFailed || scope.terminalError === "browser_effect_uncertain" ||
+          scope.hasUnverifiedEffect) {
+        await this.#options.invalidate();
+        return failure("browser_effect_uncertain");
+      }
+      if (scope.terminalError === "operation_cancelled") return cancelled();
+      if (scope.terminalError !== undefined) return failure(scope.terminalError);
+      return { ok: true, value: undefined };
+    }
+    if (!scope.effectStarted) {
+      await this.#options.invalidate();
+      return failure("browser_effect_uncertain");
+    }
+    const monitored = scope.activationMonitored || await this.#monitorAfterActivation(
+      page,
+      approvedTarget,
+      request,
+      attempt,
+    ).then((result) => result.ok);
+    if (!monitored || callbackFailed || scope.terminalError === "browser_effect_uncertain" ||
+        scope.hasUnverifiedEffect) {
+      await this.#options.invalidate();
+      return failure("browser_effect_uncertain");
+    }
+    if (scope.terminalError === "operation_cancelled") return cancelled();
+    if (scope.terminalError !== undefined) return failure(scope.terminalError);
+    return { ok: true, value: undefined };
+  }
+
+  async #observeUnknown(
+    page: PersistentPage,
+    request: OwnedAccountPageAccessRequest,
+    snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const attempt = (this.#monitorAttempts.get("unknown:state") ?? 0) + 1;
+    await this.#monitor(
+      page,
+      "unknown",
+      "state_observed",
+      request.operationId,
+      attempt,
+      snapshot,
+      signal,
+    );
+    this.#monitorAttempts.set("unknown:state", attempt);
+  }
+
+  async #monitor(
+    page: PersistentPage,
+    phase: string,
+    moment: string,
+    operationId: OwnedAccountPageAccessRequest["operationId"],
+    attempt: number,
+    snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (this.#options.externalMonitor === undefined) return true;
+    try {
+      const applicationReady = phase === "application_ready" && hasMonitorLocators(page)
+        ? this.#options.applicationReadyMonitor
+        : undefined;
+      await this.#options.externalMonitor.auth(
+        applicationReady?.page(page) ?? valueFreeExternalMonitorPage(page),
+        phase,
+        moment,
+        applicationReady === undefined
+          ? authMonitorTaxonomy(snapshot)
+          : await applicationReady.taxonomy(page),
+        { operationId, attempt },
+        signal,
+      );
+      return true;
+    } catch (error) {
+      if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+        try {
+          process.stderr.write(`${JSON.stringify({
+            accountPostSubmitMonitorDiagnostics: {
+              phase,
+              moment,
+              error: error instanceof Error ? error.message : "unknown",
+            },
+          })}\n`);
+        } catch {}
+      }
+      return false;
+    }
+  }
+
+  async #revalidate(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedAccountPageAccessRequest,
+    signal: AbortSignal,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    const current = this.#options.state();
+    if (
+      current.page !== page ||
+      current.approvedTarget !== approvedTarget ||
+      current.session?.sessionId !== request.sessionId
+    ) return failure("browser_session_invalidated");
+    const inspected = await inspectPinnedTarget(
+      page,
+      this.#options.probe,
+      approvedTarget,
+      request.target,
+      signal,
+      this.#options.timeoutMs,
+    );
+    return inspected.ok && inspected.value.target.kind === "matched"
+      ? { ok: true, value: undefined }
+      : failure("browser_session_invalidated");
+  }
+
+  async #monitorAfterActivation(
+    page: PersistentPage,
+    approvedTarget: ApprovedTargetBinding,
+    request: OwnedAccountPageAccessRequest,
+    attempt: number,
+  ): Promise<LivePortResult<void, PersistentBrowserErrorCode>> {
+    const deadline = Date.now() + this.#options.timeoutMs;
+    let failedMonitorPhase: string | undefined;
+    while (Date.now() <= deadline) {
+      const current = this.#options.state();
+      if (
+        current.page !== page || current.approvedTarget !== approvedTarget ||
+        current.session?.sessionId !== request.sessionId
+      ) {
+        this.#trace("account_post_submit_state_invalidated");
+        return failure("browser_session_invalidated");
+      }
+      this.#trace("account_post_submit_inspection_started");
+      const inspected = await inspectPinnedTarget(
+        page,
+        this.#options.probe,
+        approvedTarget,
+        request.target,
+        new AbortController().signal,
+        this.#options.timeoutMs,
+      );
+      if (!inspected.ok) {
+        this.#trace(`account_post_submit_inspection_failed_${inspected.error.code}`);
+      } else {
+        this.#trace(`account_post_submit_inspection_observed_${inspected.value.target.kind}`);
+      }
+      if (inspected.ok && inspected.value.target.kind === "matched") {
+        const phase = authMonitorPhase(inspected.value.snapshot);
+        if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
+          try {
+            const diagnostic = JSON.stringify({
+              accountPostSubmitStructuralDiagnostics: {
+                phase,
+                traitIds: [...inspected.value.snapshot.traitIds].sort(),
+                controlCount: inspected.value.snapshot.controlCount,
+                requiredControlCount: inspected.value.snapshot.requiredControlCount,
+                optionCount: inspected.value.snapshot.optionCount,
+              },
+            });
+            if (diagnostic !== this.#lastStructuralDiagnostic) {
+              process.stderr.write(`${diagnostic}\n`);
+              this.#lastStructuralDiagnostic = diagnostic;
+            }
+          } catch {}
+        }
+        if (failedMonitorPhase === phase) {
+          if (Date.now() >= deadline) break;
+          await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+          continue;
+        }
+        if (failedMonitorPhase !== undefined) {
+          this.#trace("account_post_submit_monitor_transition_retry");
+        }
+        this.#trace("account_post_submit_monitor_started");
+        const monitored = await this.#monitor(
+          page,
+          phase,
+          "after_readback",
+          request.operationId,
+          attempt,
+          inspected.value.snapshot,
+          new AbortController().signal,
+        );
+        this.#trace(monitored
+          ? "account_post_submit_monitor_succeeded"
+          : "account_post_submit_monitor_failed");
+        if (monitored) return { ok: true, value: undefined };
+        failedMonitorPhase = phase;
+      }
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+    }
+    return failure("browser_effect_uncertain");
+  }
+
+  #trace(event: PostingNavigationSessionTraceEvent): void {
+    try { this.#options.trace?.(event); } catch { /* diagnostics never alter behavior */ }
+  }
+}
+
+function hasMonitorLocators(page: PersistentPage): boolean {
+  return typeof (page as unknown as { readonly locator?: unknown }).locator === "function";
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function validAdmission(
+  state: AccountPageOwnershipState,
+  adapter: SemanticAccountPageAdapter | undefined,
+  request: OwnedAccountPageAccessRequest,
+  now: number,
+): boolean {
+  return adapter !== undefined &&
+    request.schemaVersion === 1 &&
+    state.page !== undefined &&
+    !state.page.isClosed() &&
+    state.session !== undefined &&
+    state.approvedTarget !== undefined &&
+    state.marker !== undefined &&
+    request.journeyId === state.session.journeyId &&
+    request.sessionId === state.session.sessionId &&
+    sameTarget(request.target, state.session.target) &&
+    request.journeyId === state.marker.journeyId &&
+    request.sessionId === state.marker.sessionId &&
+    sameTarget(request.target, state.marker.target) &&
+    Number.isFinite(now) &&
+    now >= Date.parse(state.marker.admittedAt) &&
+    now < Date.parse(state.session.leaseExpiresAt);
+}
+
+export function authMonitorPhase(snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot): string {
+  const traits = new Set(snapshot.traitIds);
+  if (traits.has("structural_trait_challenge_captcha_v1")) return "captcha";
+  if (traits.has("structural_trait_challenge_mfa_v1")) return "mfa";
+  if (traits.has("structural_trait_challenge_access_control_v1")) return "access_control";
+  if (traits.has("structural_trait_page_email_verification_v1")) return "verification_required";
+  if (traits.has("structural_trait_account_password_reset_request_v1")) {
+    return "password_reset_request";
+  }
+  if (traits.has("structural_trait_account_password_reset_email_sent_v1")) {
+    return "password_reset_email_sent";
+  }
+  if (traits.has("structural_trait_account_password_reset_set_v1")) {
+    return "password_reset_set";
+  }
+  if (traits.has("structural_trait_navigation_email_sign_in_choice_v1") &&
+      traits.has("structural_trait_page_account_entry_v1") &&
+      !traits.has("structural_trait_account_sign_in_v1") &&
+      !traits.has("structural_trait_account_create_v1")) {
+    return "email_sign_in_choice";
+  }
+  if (traits.has("structural_trait_page_account_entry_v1")) {
+    return traits.has("structural_trait_account_sign_in_v1") ? "sign_in" : "account_entry";
+  }
+  if (traits.has("structural_trait_page_profile_step_v1") ||
+      traits.has("structural_trait_page_questionnaire_v1") ||
+      traits.has("structural_trait_page_review_step_v1") ||
+      traits.has("structural_trait_page_candidate_home_v1")) return "application_ready";
+  if (traits.has("structural_trait_navigation_email_sign_in_choice_v1")) {
+    return "email_sign_in_choice";
+  }
+  if (traits.has("structural_trait_navigation_apply_choice_v1")) return "apply_choice";
+  if (traits.has("structural_trait_page_job_posting_v1")) return "job_posting";
+  return "unknown";
+}
+
+export function authMonitorTaxonomy(snapshot: import("./types.ts").ValueFreeOwnedPageSnapshot) {
+  return Object.freeze({
+    fieldCount: snapshot.controlCount,
+    requiredFieldCount: snapshot.requiredControlCount,
+    controlTypes: Object.freeze(snapshot.controlCount === 0 ? [] : ["text"]),
+    questionTypes: Object.freeze(snapshot.controlCount === 0 ? [] : ["unknown"]),
+    answerTypes: Object.freeze(snapshot.controlCount === 0 ? [] : ["text"]),
+    validationState: "clear" as const,
+    submitPresent: false,
+    submitActivated: false as const,
+  });
+}

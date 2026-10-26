@@ -12,6 +12,20 @@
   margin-bottom: 6px;
 }
 
+.notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+.notice button {
+  min-height: 44px;
+}
+
 .kbd {
   font: 0.8em var(--font-mono);
   padding: 2px 5px;

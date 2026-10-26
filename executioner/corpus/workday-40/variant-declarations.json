@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "variants": [
+    {
+      "id": "WD-PAGE-AUTH-ACTION-V1",
+      "category": "page",
+      "ownerCategory": "workday-auth-page",
+      "primitiveIds": ["page.auth.action", "page.auth.transition"],
+      "productionModules": ["src/account/entry/adapter.ts", "src/ats/workday/live/account-state.ts"],
+      "dependsOn": ["WD-PAGE-EXTERNAL-STATE-V1"]
+    },
+    {
+      "id": "WD-PAGE-EXTERNAL-STATE-V1",
+      "category": "page",
+      "ownerCategory": "workday-page-detector",
+      "primitiveIds": ["page.external.state"],
+      "productionModules": ["src/ats/workday/live/classifiers.ts"],
+      "dependsOn": []
+    },
+    {
+      "id": "WD-UI-SCALAR-COMPOSITE-V1",
+      "category": "ui",
+      "ownerCategory": "scalar-driver",
+      "primitiveIds": ["ui.phone", "ui.composite-date"],
+      "productionModules": ["src/interaction/drivers/registry.ts"],
+      "dependsOn": ["WD-PAGE-AUTH-ACTION-V1"]
+    },
+    {
+      "id": "WD-UI-SOURCE-SELECT-V1",
+      "category": "ui",
+      "ownerCategory": "search-select-driver",
+      "primitiveIds": ["ui.search-select", "ui.active-listbox"],
+      "productionModules": ["src/interaction/drivers/registry.ts"],
+      "dependsOn": ["WD-PAGE-AUTH-ACTION-V1"]
+    }
+  ]
+}

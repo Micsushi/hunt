@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "captureMode": "read-only-approved-page",
+  "fixtureId": "wd-page-external-state-v1",
+  "captureRevision": "legacy-v2-20260723",
+  "provingSlots": [
+    "WD40-001",
+    "WD40-003",
+    "WD40-005",
+    "WD40-007",
+    "WD40-014",
+    "WD40-022",
+    "WD40-026",
+    "WD40-028",
+    "WD40-033",
+    "WD40-035",
+    "WD40-037"
+  ],
+  "variantIds": [
+    "WD-PAGE-EXTERNAL-STATE-V1"
+  ],
+  "observation": {
+    "pageKind": "external-state",
+    "siteState": "maintenance",
+    "controls": [],
+    "questions": []
+  },
+  "semanticHash": "sha256.ae067b70ab976b95fe2c451e37ed494d8616fc6305fc3f8f3e2cfd882ff32cae"
+}

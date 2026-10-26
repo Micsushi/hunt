@@ -1,26 +1,40 @@
-import { useState, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { login } from '@/api/auth'
+import { useEffect, useRef, useState, FormEvent } from 'react'
 import styles from './Login.module.css'
 
-export function LoginPage() {
-  const navigate = useNavigate()
+interface Props {
+  onLogin: (username: string, password: string) => Promise<void>
+  loading: boolean
+}
+
+export function LoginPage({ onLogin, loading }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const submitting = useRef(false)
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    if (submitting.current || loading) return
+    if (!username.trim() || !password) {
+      setError('Enter your username and password.')
+      return
+    }
+    submitting.current = true
     setError(null)
-    setLoading(true)
     try {
-      await login(username, password)
-      navigate('/', { replace: true })
+      await onLogin(username, password)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed')
+      if (mounted.current)
+        setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
     } finally {
-      setLoading(false)
+      submitting.current = false
     }
   }
 
@@ -31,7 +45,7 @@ export function LoginPage() {
           <h1 className={styles.title}>Hunt</h1>
           <p className={styles.sub}>Job discovery and apply automation</p>
         </div>
-        <form className={styles.form} onSubmit={handleSubmit} noValidate>
+        <form className={styles.form} onSubmit={handleSubmit} noValidate aria-busy={loading}>
           <label className={styles.fieldLabel}>
             Username
             <input
@@ -42,7 +56,6 @@ export function LoginPage() {
               autoComplete="username"
               autoFocus
               required
-              disabled={loading}
             />
           </label>
           <label className={styles.fieldLabel}>
@@ -54,7 +67,6 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
               required
-              disabled={loading}
             />
           </label>
           {error && (
@@ -62,7 +74,7 @@ export function LoginPage() {
               {error}
             </p>
           )}
-          <button className={styles.submit} type="submit" disabled={loading}>
+          <button className={styles.submit} type="submit" aria-disabled={loading}>
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>

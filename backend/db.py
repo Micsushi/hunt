@@ -244,6 +244,7 @@ def get_review_queue_summary(*, source=None):
                 "linkedin_last_automation_flagged",
                 "discord_last_priority_notify_error",
                 "hunt_last_priority_job",
+                "hunt_last_scrape_end",
             ),
         )
 

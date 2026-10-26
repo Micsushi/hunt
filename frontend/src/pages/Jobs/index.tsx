@@ -166,11 +166,13 @@ export function JobsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState<JobsQuery>(() => initialJobsQuery(searchParams))
-  const { data, isLoading, isFetching } = useJobs(query)
+  const { data, isLoading, isFetching, isError, isPlaceholderData, refetch } = useJobs(query)
   const jobs = useMemo(() => data?.items ?? [], [data])
   const total = data?.total ?? 0
   const { data: summary } = useSummary(60_000)
   const { selectedIds, toggleSelect, selectAll, clearSelection } = useUiStore()
+  const selectionReady = !isLoading && !isError && !isPlaceholderData
+  const headingRef = useRef<HTMLHeadingElement>(null)
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
   const [localSort, setLocalSort] = useState<LocalSort | null>(null)
@@ -249,6 +251,7 @@ export function JobsPage() {
           <input
             type="checkbox"
             checked={checked}
+            disabled={!selectionReady}
             onChange={() => toggleSelect(job.id)}
             aria-label={`Select job ${job.id}`}
           />
@@ -328,8 +331,48 @@ export function JobsPage() {
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
-        <h1 className={styles.heroTitle}>Jobs</h1>
+        <h1 ref={headingRef} tabIndex={-1} className={styles.heroTitle}>
+          Jobs
+        </h1>
+        <p className="muted">
+          <span role="status">
+            {isLoading
+              ? 'Loading…'
+              : isPlaceholderData
+                ? 'Showing previous results while loading this view…'
+                : isError && !data
+                  ? 'Jobs unavailable'
+                  : `${jobs.length} of ${total} rows shown.`}
+          </span>
+          {isFetching && !isLoading && !isPlaceholderData && (
+            <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>
+          )}
+          <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: '0.83rem' }}>
+            Keyboard: <kbd className={styles.kbd}>j</kbd>/<kbd className={styles.kbd}>k</kbd> move ·{' '}
+            <kbd className={styles.kbd}>Enter</kbd> open
+          </span>
+        </p>
       </section>
+
+      {isError && (
+        <div className={styles.notice} role="alert">
+          <span>
+            {data
+              ? 'Could not refresh jobs. Showing the last loaded results. Retry before selecting jobs.'
+              : 'Could not load jobs. Your filters are unchanged.'}
+          </span>
+          <button
+            className={styles.exportBtn}
+            disabled={isFetching}
+            onClick={() => {
+              headingRef.current?.focus()
+              void refetch()
+            }}
+          >
+            {isFetching ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
 
       <Filters
         query={query}
@@ -381,6 +424,7 @@ export function JobsPage() {
                 <input
                   type="checkbox"
                   checked={allChecked}
+                  disabled={!selectionReady}
                   ref={(el) => {
                     if (el) el.indeterminate = someChecked && !allChecked
                   }}
@@ -410,7 +454,7 @@ export function JobsPage() {
             ) : displayJobs.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
-                  No jobs match this filter.
+                  {isError ? 'Jobs are unavailable. Retry above.' : 'No jobs match this filter.'}
                 </td>
               </tr>
             ) : (
@@ -427,7 +471,7 @@ export function JobsPage() {
         onChange={(page) => updateQuery({ page })}
       />
 
-      <BulkBar />
+      <BulkBar disabled={!selectionReady} />
     </div>
   )
 }

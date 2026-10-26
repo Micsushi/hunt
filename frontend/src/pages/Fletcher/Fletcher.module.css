@@ -646,6 +646,13 @@
 }
 
 .modalBackdrop {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  color: var(--ink);
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -818,6 +825,20 @@
   .historyMetaGrid span {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+  .queueHeader > div {
+    flex-basis: 100%;
+  }
+  .historyMetaGrid {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+  .historyMetaGrid span {
+    overflow: visible;
+    white-space: normal;
+  }
+  .workflowGrid {
+    grid-template-columns: 1fr;
   }
   .historyMetaGrid {
     flex-wrap: wrap;

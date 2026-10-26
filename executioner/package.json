@@ -1,0 +1,77 @@
+{
+  "name": "@hunt/executioner",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "docs/corpus-release.md",
+    "docs/corpus-acceptance-summary.md"
+  ],
+  "exports": {
+    "./mcp": {
+      "types": "./dist/control/mcp/index.d.ts",
+      "import": "./dist/control/mcp/index.js"
+    }
+  },
+  "scripts": {
+    "product": "node scripts/run-product.ts",
+    "test": "node tests/run.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "quality": "npm run typecheck && npm test && npm run corpus:verify",
+    "setup:s2-runtime": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/prepare-s2-runtime.ps1",
+    "provision:s2-account": "node scripts/provision-s2-account.ts",
+    "migrate:s2-v2-account": "node scripts/migrate-s2-v2-account.ts",
+    "migrate:s2-env-account": "node scripts/migrate-s2-env-account.ts",
+    "provision:s2-gmail": "node scripts/provision-s2-gmail-imap.ts",
+    "provision:s2-gmail-imap": "node scripts/provision-s2-gmail-imap.ts",
+    "provision:s2-gmail-oauth": "node scripts/provision-s2-gmail.ts",
+    "revoke:s2-gmail-grant": "node scripts/revoke-s2-gmail-grant.ts",
+    "forget:s2-gmail-grant": "node scripts/forget-s2-gmail-grant.ts",
+    "verify:dpapi-cross-user": "node scripts/verify-dpapi-cross-user.ts",
+    "live:s2": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/run-s2-acceptance.ts",
+    "mcp:s2": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/run-s2-mcp.ts",
+    "live:s2:slice": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/run-s2-isolated.ts",
+    "ack:s2-monitor": "node scripts/ack-s2-monitor.ts",
+    "audit:s2": "node scripts/audit-s2-run.ts",
+    "prepare:s2-run": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/prepare-s2-run.ts",
+    "readiness:s2": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/run-s2-readiness.ts",
+    "readiness:s2:verify": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/run-with-s2-runtime.ps1 scripts/verify-s2-readiness.ts",
+    "storage:s2": "node scripts/manage-s2-storage.ts",
+    "import:job-fill": "node scripts/import-job-fill-backup.ts",
+    "corpus:manifest:freeze": "node scripts/freeze-corpus-manifest.ts",
+    "corpus:validate": "node scripts/validate-corpus-manifest.ts",
+    "corpus:fixtures:freeze": "node scripts/freeze-corpus-fixtures.ts",
+    "corpus:fixtures:validate": "node scripts/validate-corpus-fixtures.ts",
+    "corpus:map:freeze": "node scripts/freeze-corpus-impact-map.ts",
+    "corpus:map:validate": "node scripts/validate-corpus-impact-map.ts",
+    "corpus:baseline": "node scripts/run-corpus-baseline.ts",
+    "corpus:impact:freeze": "node scripts/freeze-corpus-contract-impact.ts",
+    "corpus:impact:validate": "node scripts/validate-corpus-contract-impact.ts",
+    "corpus:page-ui:plan": "node scripts/validate-corpus-page-ui-plan.ts",
+    "corpus:variant": "node scripts/run-corpus-page-ui-variant.ts",
+    "corpus:page-ui:accept": "node scripts/accept-corpus-page-ui.ts",
+    "corpus:freeze": "node scripts/freeze-corpus.ts",
+    "corpus:accept": "node scripts/accept-corpus.ts",
+    "audit": "node scripts/audit-corpus.ts",
+    "audit:static": "node scripts/audit-corpus.ts --static",
+    "corpus:verify": "npm run corpus:validate && npm run corpus:fixtures:validate && npm run corpus:map:validate && npm run corpus:impact:validate && npm run corpus:page-ui:plan && npm run audit:static && npm run package:verify",
+    "package:build": "node scripts/package.ts",
+    "package:verify": "node scripts/package-verify.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1",
+    "ws": "^8.22.0"
+  }
+}

@@ -86,6 +86,17 @@ def _get_company_sites():
     return sites
 
 
+def _get_config_string_dict(name: str, default: dict[str, str]) -> dict[str, str]:
+    value = _config_value(name, default)
+    if not isinstance(value, dict):
+        return default
+    return {
+        str(key).strip(): str(item).strip()
+        for key, item in value.items()
+        if str(key).strip() and str(item).strip()
+    }
+
+
 def get_db_path():
     return _os.path.abspath(
         _os.path.expanduser(_get_str_env("HUNT_DB_PATH", _os.path.join(_ROOT, "hunt.db")))
@@ -251,3 +262,13 @@ def discovery_geography_limits():
         }
         for source in CANADA_ONLY_DISCOVERY_SOURCES
     ]
+
+
+# Explicit discovery preferences. Defaults retain the original admission policy.
+# Comma-separated country/region labels; '*' means no geographic restriction.
+DISCOVERY_ALLOWED_GEOGRAPHIES = _get_str_env(
+    "DISCOVERY_ALLOWED_GEOGRAPHIES",
+    str(_USER_CONFIG.get("discovery_allowed_geographies", "")),
+)
+DISCOVERY_ALLOW_EXPERIENCED = _get_config_bool("DISCOVERY_ALLOW_EXPERIENCED", False)
+DISCOVERY_ALLOW_ALL_LANES = _get_config_bool("DISCOVERY_ALLOW_ALL_LANES", False)

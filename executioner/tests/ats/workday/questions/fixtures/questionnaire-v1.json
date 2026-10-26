@@ -1,0 +1,57 @@
+{
+  "activeListbox": {
+    "control": {
+      "controlId": "country-control",
+      "expanded": true,
+      "relatedListboxIds": ["country-options"]
+    },
+    "candidates": [
+      {
+        "listboxId": "stale-options",
+        "visible": true,
+        "active": true,
+        "selectedItemList": false
+      },
+      {
+        "listboxId": "country-options",
+        "visible": true,
+        "active": true,
+        "selectedItemList": false
+      }
+    ]
+  },
+  "unknownQuestionObservation": {
+    "schemaVersion": 1,
+    "observationId": "structural_observation_questionnaire_unknown_1",
+    "layer": "question",
+    "sourceRevisionId": "classification_revision_questionnaire_fixture_1",
+    "parentLineage": [
+      { "layer": "ats_family", "classificationId": "classification_workday_fixture_1" },
+      { "layer": "workday_page_type", "classificationId": "classification_questionnaire_fixture_1" },
+      { "layer": "ui_behavior", "classificationId": "classification_select_fixture_1" }
+    ],
+    "traitIds": ["structural_trait_page_questionnaire_v1"],
+    "observedVariantId": null,
+    "controlCount": 1,
+    "requiredControlCount": 1,
+    "optionCount": 2
+  },
+  "ambiguousOptionObservation": {
+    "schemaVersion": 1,
+    "observationId": "structural_observation_questionnaire_option_1",
+    "layer": "visible_option",
+    "sourceRevisionId": "classification_revision_questionnaire_fixture_1",
+    "parentLineage": [
+      { "layer": "ats_family", "classificationId": "classification_workday_fixture_1" },
+      { "layer": "workday_page_type", "classificationId": "classification_questionnaire_fixture_1" },
+      { "layer": "ui_behavior", "classificationId": "classification_radio_fixture_01" },
+      { "layer": "question", "classificationId": "classification_authorization_fixture_1" },
+      { "layer": "answer_type", "classificationId": "classification_boolean_fixture_1" }
+    ],
+    "traitIds": ["structural_trait_page_questionnaire_v1"],
+    "observedVariantId": null,
+    "controlCount": 1,
+    "requiredControlCount": 1,
+    "optionCount": 2
+  }
+}

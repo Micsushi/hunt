@@ -1,0 +1,113 @@
+import { createHash } from "node:crypto";
+
+import { canonicalMonitorIdentityTitle } from "./external-monitor-runtime.ts";
+import {
+  observedStructurePage,
+  type ObservedOwnedControlStructure,
+} from "./external-monitor-page-identity.ts";
+
+export function normalizeObservedAddressHost(address: string): string {
+  const normalized = address.normalize("NFC").trim();
+  if (normalized.length < 1 || normalized.length > 2_048 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    denied();
+  }
+  const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(normalized)
+    ? normalized
+    : `https://${normalized}`);
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") denied();
+  return url.hostname.toLowerCase();
+}
+
+export const numberedQuestionnaireTitlePattern = "^Application Questions [1-9][0-9]* of [1-9][0-9]*$";
+
+export function observedNumberedQuestionnaireStages(value: unknown): {
+  readonly count: number; readonly repeatedTitles: readonly string[];
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) denied();
+  const entries = Object.entries(value);
+  if (entries.length > 8 || entries.some(([title, count]) =>
+    !new RegExp(numberedQuestionnaireTitlePattern, "u").test(title) ||
+    !Number.isSafeInteger(count) || count < 1 || count > 512)) denied();
+  return {
+    count: Math.max(0, ...entries.map(([, count]) => count as number)),
+    repeatedTitles: entries.filter(([, count]) => count >= 2).map(([title]) => title),
+  };
+}
+
+export function observedStructurePageFromIdentityTitle(title: string): string {
+  const normalized = normalizeObservedChromeTitle(title);
+  if (normalized === "My Information" || normalized === "My Experience") return "profile";
+  if (["Application Questions", "Voluntary Disclosures", "Self Identify"].includes(normalized) ||
+      new RegExp(numberedQuestionnaireTitlePattern, "u").test(normalized)) {
+    return "questionnaire";
+  }
+  if (normalized === "Review") return "review";
+  denied();
+}
+
+export function observedStructurePageWithIdentity(
+  flags: ReadonlySet<string>,
+  activeStageTitles: readonly string[],
+  title: string,
+  _expectedTitleSha256: string | undefined,
+  owned?: ObservedOwnedControlStructure,
+): string {
+  try {
+    return observedStructurePage(flags, activeStageTitles, owned);
+  } catch {
+    if (!owned?.actionFlags.has("Save and Continue")) denied();
+    const titlePage = observedStructurePageFromIdentityTitle(title);
+    if (titlePage !== "questionnaire") denied();
+    return titlePage;
+  }
+}
+
+export function normalizeObservedChromeTitle(windowTitle: string): string {
+  const suffix = " - Google Chrome for Testing";
+  const title = windowTitle.endsWith(suffix)
+    ? windowTitle.slice(0, -suffix.length)
+    : windowTitle;
+  const normalized = title.normalize("NFC").replace(/\s+/gu, " ").trim();
+  if (normalized.length < 1 || normalized.length > 256 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    denied();
+  }
+  return normalized;
+}
+
+export function selectObservedChromeIdentityTitle(
+  expectedTitleSha256: string | undefined,
+  windowTitle: string,
+  selectedTabTitles: readonly string[],
+): string {
+  const windowIdentity = normalizeObservedChromeTitle(windowTitle);
+  if (expectedTitleSha256 === undefined || !/^[0-9a-f]{64}$/u.test(expectedTitleSha256)) {
+    return windowIdentity;
+  }
+  if (selectedTabTitles.length > 8) denied();
+  const candidates = new Set([windowIdentity]);
+  for (const candidate of selectedTabTitles) {
+    candidates.add(normalizeObservedChromeTitle(candidate));
+  }
+  const matches = [...candidates].filter((candidate) =>
+    createHash("sha256").update(canonicalMonitorIdentityTitle(candidate), "utf8")
+      .digest("hex") === expectedTitleSha256);
+  return matches.length === 1 ? matches[0]! : windowIdentity;
+}
+
+export function observedChromeIdentityTitleSha256s(
+  windowTitle: string,
+  selectedTabTitles: readonly string[],
+): readonly string[] {
+  if (selectedTabTitles.length > 8) denied();
+  const candidates = new Set([normalizeObservedChromeTitle(windowTitle)]);
+  for (const candidate of selectedTabTitles) {
+    candidates.add(normalizeObservedChromeTitle(candidate));
+  }
+  return Object.freeze([...candidates].map((candidate) =>
+    createHash("sha256").update(canonicalMonitorIdentityTitle(candidate), "utf8")
+      .digest("hex")));
+}
+
+function denied(): never {
+  throw new Error("external monitor observer denied");
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   compileFletcherReviewVersion,
@@ -13,12 +13,6 @@ import {
   skillRowsForDoc,
   type ReviewBlock,
 } from './documentBlocks'
-import {
-  draftBaselineForEdit,
-  expectedRevisionForDraft,
-  selectDraft,
-  type DraftState,
-} from './draftState'
 import { humanizeLatex, latexInlineParts } from './latexInline'
 import type { KeywordScore, ResumeDocument, ResumeReviewPackage, ReviewVersionName } from './types'
 import styles from './ResumeReviewWorkspace.module.css'
@@ -26,6 +20,14 @@ import styles from './ResumeReviewWorkspace.module.css'
 interface WorkspaceSelection {
   block: ReviewBlock
   segment?: DiffSegment
+}
+
+interface DraftState {
+  doc: ResumeDocument
+  savedJson: string
+  savedRevision: number
+  undoStack: ResumeDocument[]
+  redoStack: ResumeDocument[]
 }
 
 function cloneDoc(doc: ResumeDocument): ResumeDocument {
@@ -37,15 +39,48 @@ function docJson(doc: ResumeDocument): string {
 }
 
 export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
+  return <ReviewWorkspace key={reviewId} reviewId={reviewId} />
+}
+
+function ReviewWorkspace({ reviewId }: { reviewId: string }) {
   const showToast = useUiStore((s) => s.showToast)
   const qc = useQueryClient()
-  const [versionName, setVersionName] = useState<ReviewVersionName>('no_summary')
-  const [selected, setSelected] = useState<WorkspaceSelection | null>(null)
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
-  const [editText, setEditText] = useState('')
-  const [drafts, setDrafts] = useState<Record<string, DraftState>>({})
+  const cacheKey = ['fletcher-review-draft', reviewId]
+  const [recovery] = useState(() =>
+    qc.getQueryData<{
+      drafts: Record<string, DraftState>
+      versionName: ReviewVersionName
+      editingBlockId: string | null
+      editText: string
+    }>(cacheKey),
+  )
+  const [versionName, setVersionName] = useState<ReviewVersionName>(
+    recovery?.versionName ?? 'no_summary',
+  )
+  const [selection, setSelected] = useState<WorkspaceSelection | null>(null)
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(
+    recovery?.editingBlockId ?? null,
+  )
+  const [editText, setEditText] = useState(recovery?.editText ?? '')
+  const [drafts, setDrafts] = useState<Record<string, DraftState>>(recovery?.drafts ?? {})
+  const saving = useRef(false)
+  const compiling = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [showSavedVersion, setShowSavedVersion] = useState(false)
+  useEffect(() => {
+    const key = ['fletcher-review-draft', reviewId]
+    qc.setQueryDefaults(key, { gcTime: Infinity })
+    qc.setQueryData(key, { drafts, versionName, editingBlockId, editText })
+  }, [qc, reviewId, drafts, versionName, editingBlockId, editText])
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['fletcher-review', reviewId],
     queryFn: () => fetchFletcherReview(reviewId),
   })
@@ -54,13 +89,14 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
     mutationFn: ({
       version,
       doc,
-      expectedRevision,
+      revision,
     }: {
       version: ReviewVersionName
       doc: ResumeDocument
-      expectedRevision: number
-    }) => saveFletcherReviewVersion(reviewId, version, doc, expectedRevision),
+      revision: number
+    }) => saveFletcherReviewVersion(reviewId, version, doc, revision),
     onSuccess: (review) => {
+      if (!mounted.current) return
       qc.setQueryData(['fletcher-review', reviewId], review)
       showToast('Resume edits saved')
     },
@@ -68,14 +104,10 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   })
 
   const compileMutation = useMutation({
-    mutationFn: ({
-      version,
-      expectedRevision,
-    }: {
-      version: ReviewVersionName
-      expectedRevision: number
-    }) => compileFletcherReviewVersion(reviewId, version, expectedRevision),
+    mutationFn: ({ version, revision }: { version: ReviewVersionName; revision: number }) =>
+      compileFletcherReviewVersion(reviewId, version, revision),
     onSuccess: (review, { version: compiledVersion }) => {
+      if (!mounted.current) return
       qc.setQueryData(['fletcher-review', reviewId], review)
       const status = review.versions[compiledVersion]?.compile_status
       if (status && status !== 'ok') {
@@ -95,7 +127,11 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   const draftKey = `${reviewId}:${activeVersionName}`
   const storedDraft = drafts[draftKey]
   const versionJson = version ? docJson(version.current) : ''
-  const draft = selectDraft(storedDraft, versionJson, version?.document_revision ?? 0)
+  const storedDraftDirty = storedDraft && docJson(storedDraft.doc) !== storedDraft.savedJson
+  const draft =
+    storedDraft && (storedDraftDirty || storedDraft.savedJson === versionJson)
+      ? storedDraft
+      : undefined
   const draftDoc = draft?.doc || version?.current
   const hasUnsavedDraft = !!draft && docJson(draft.doc) !== draft.savedJson
   const blocks = useMemo(
@@ -103,6 +139,16 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
       version && draftDoc ? buildReviewBlocks(version.original, version.generated, draftDoc) : [],
     [version, draftDoc],
   )
+  const selected =
+    selection &&
+    blocks.some(
+      (block) =>
+        block.blockId === selection.block.blockId &&
+        block.original === selection.block.original &&
+        block.current === selection.block.current,
+    )
+      ? selection
+      : null
   const changedCount = blocks.filter(
     (block) => block.original.trim() !== block.current.trim(),
   ).length
@@ -110,26 +156,29 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   useEffect(() => {
     function onBeforeUnload(event: BeforeUnloadEvent) {
       const dirty = Object.values(drafts).some((item) => docJson(item.doc) !== item.savedJson)
-      if (!dirty) return
+      if (!dirty && editingBlockId === null) return
       event.preventDefault()
       event.returnValue = ''
     }
 
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [drafts])
+  }, [drafts, editingBlockId])
 
   function pushDraft(doc: ResumeDocument) {
     setDrafts((current) => {
-      const previous = current[draftKey]
-      const serverDoc = version?.current || doc
-      const serverJson = docJson(serverDoc)
-      const base = draftBaselineForEdit(
-        draft && previous === draft ? draft : undefined,
-        serverDoc,
-        serverJson,
-        version?.document_revision ?? 0,
-      )
+      const cached = current[draftKey]
+      const previous =
+        cached && (docJson(cached.doc) !== cached.savedJson || cached.savedJson === versionJson)
+          ? cached
+          : undefined
+      const base = previous || {
+        doc: cloneDoc(version?.current || doc),
+        savedJson: docJson(version?.current || doc),
+        savedRevision: version?.edit_revision ?? 0,
+        undoStack: [],
+        redoStack: [],
+      }
       if (docJson(base.doc) === docJson(doc)) return current
       return {
         ...current,
@@ -144,48 +193,67 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   }
 
   async function saveDraft(): Promise<number | false> {
-    if (!draftDoc) return false
+    if (!draftDoc || saving.current || compileMutation.isPending || editingBlockId !== null)
+      return false
+    saving.current = true
+    setSaveError(null)
+    const submittedJson = docJson(draftDoc)
     try {
-      const expectedRevision = expectedRevisionForDraft(draft, version?.document_revision ?? 0)
       const review = await saveMutation.mutateAsync({
         version: activeVersionName,
         doc: draftDoc,
-        expectedRevision,
+        revision: draft?.savedRevision ?? version?.edit_revision ?? 0,
       })
       const savedDoc = review.versions[activeVersionName]?.current || draftDoc
+      if (!mounted.current) return review.versions[activeVersionName]?.edit_revision ?? 0
       setDrafts((current) => {
         const existing = current[draftKey]
         return {
           ...current,
           [draftKey]: {
-            doc: cloneDoc(savedDoc),
+            doc:
+              existing && docJson(existing.doc) !== submittedJson
+                ? existing.doc
+                : cloneDoc(savedDoc),
             savedJson: docJson(savedDoc),
-            baseRevision:
-              review.versions[activeVersionName]?.document_revision ?? expectedRevision + 1,
+            savedRevision: review.versions[activeVersionName]?.edit_revision ?? 0,
             undoStack: existing?.undoStack || [],
             redoStack: existing?.redoStack || [],
           },
         }
       })
-      return review.versions[activeVersionName]?.document_revision ?? expectedRevision + 1
-    } catch {
+      return review.versions[activeVersionName]?.edit_revision ?? 0
+    } catch (error) {
+      if (!mounted.current) return false
+      setSaveError(error instanceof Error ? error.message : 'Save failed. Your draft is preserved.')
       return false
+    } finally {
+      saving.current = false
     }
   }
 
   async function compileDraft() {
-    let expectedRevision = expectedRevisionForDraft(draft, version?.document_revision ?? 0)
-    if (hasUnsavedDraft) {
-      const saved = await saveDraft()
-      if (saved === false) return
-      expectedRevision = saved
+    if (saving.current || compiling.current || editingBlockId !== null) return
+    compiling.current = true
+    try {
+      let expectedRevision = draft?.savedRevision ?? version?.edit_revision ?? 0
+      if (hasUnsavedDraft) {
+        const saved = await saveDraft()
+        if (saved === false || !mounted.current) return
+        expectedRevision = saved
+      }
+      await compileMutation.mutateAsync({ version: activeVersionName, revision: expectedRevision })
+    } catch {
+      // The mutation reports the compilation failure; the draft remains available.
+    } finally {
+      compiling.current = false
     }
-    compileMutation.mutate({ version: activeVersionName, expectedRevision })
   }
 
   function updateBlock(block: ReviewBlock, value: string) {
     if (!draftDoc) return
     pushDraft(setBlockText(draftDoc, block.blockId, value))
+    setSelected(null)
   }
 
   function revertSelectedSegment() {
@@ -200,8 +268,12 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
   }
 
   function startEdit(block: ReviewBlock) {
+    if (editingBlockId !== null && editingBlockId !== block.blockId) {
+      setSaveError('Apply or cancel the current block edit before editing another block.')
+      return
+    }
     setEditingBlockId(block.blockId)
-    setEditText(block.current)
+    setEditText(blocks.find((item) => item.blockId === block.blockId)?.current ?? block.current)
   }
 
   function undoDraft() {
@@ -248,30 +320,130 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
 
   async function openPossiblyDirtyHref(href: string | undefined) {
     if (!href) return
+    if (editingBlockId !== null) {
+      setSaveError('Apply or cancel the current block edit before opening an artifact.')
+      return
+    }
     if (hasUnsavedDraft) {
       const shouldSave = window.confirm(
         'Save your resume edits before leaving? Press OK to save and continue, or Cancel to stay here.',
       )
       if (!shouldSave) return
       const saved = await saveDraft()
-      if (!saved) return
+      if (!saved || !mounted.current) return
     }
     window.location.href = href
   }
 
   function chooseVersion(nextVersion: ReviewVersionName) {
+    if (editingBlockId !== null) {
+      setSaveError('Apply or cancel the current block edit before switching versions.')
+      return
+    }
+    setShowSavedVersion(false)
+    setSaveError(null)
     setSelected(null)
     setEditingBlockId(null)
     setVersionName(nextVersion)
   }
 
   if (isLoading) return <div className={styles.meta}>Loading review...</div>
-  if (isError || !data || !version || !draftDoc) {
-    return <div className={styles.warning}>Review not found.</div>
+  if (!data || !version || !draftDoc) {
+    return (
+      <div className={styles.warning} role="alert">
+        The review could not be loaded. <button onClick={() => void refetch()}>Retry</button>
+      </div>
+    )
   }
 
   return (
     <div className={styles.workspace}>
+      {isError && (
+        <div className={styles.warning} role="alert">
+          Refresh failed. Your draft and the last loaded review are still available.{' '}
+          <button className={styles.button} onClick={() => void refetch()}>
+            Retry review
+          </button>
+        </div>
+      )}
+      {saveError && (
+        <div className={styles.warning} role="alert">
+          {saveError}
+          <button
+            className={styles.button}
+            disabled={saveMutation.isPending || compileMutation.isPending}
+            onClick={async () => {
+              const refreshed = await refetch()
+              if (refreshed.error) {
+                setSaveError('The saved resume could not be loaded. Your draft is preserved.')
+                return
+              }
+              setShowSavedVersion(true)
+            }}
+          >
+            Review saved version
+          </button>
+        </div>
+      )}
+      {showSavedVersion && (
+        <section className={styles.warning}>
+          <h2>Currently saved version</h2>
+          <p>Your draft is still in the editor below. Compare it before choosing what to keep.</p>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {buildReviewBlocks(version.original, version.generated, version.current)
+              .map((block) => humanizeLatex(block.current))
+              .join('\n\n')}
+          </pre>
+          <button
+            className={styles.button}
+            disabled={
+              editingBlockId !== null || saveMutation.isPending || compileMutation.isPending
+            }
+            onClick={() => {
+              setDrafts((current) => ({
+                ...current,
+                [draftKey]: {
+                  ...(current[draftKey] ?? {
+                    doc: cloneDoc(draftDoc),
+                    undoStack: [],
+                    redoStack: [],
+                  }),
+                  savedJson: docJson(version.current),
+                  savedRevision: version.edit_revision ?? 0,
+                },
+              }))
+              setShowSavedVersion(false)
+              setSaveError('Your draft is ready. Choose Save to replace the reviewed version.')
+            }}
+          >
+            Keep my draft for saving
+          </button>
+          <button
+            className={styles.button}
+            disabled={
+              editingBlockId !== null || saveMutation.isPending || compileMutation.isPending
+            }
+            onClick={() => {
+              setDrafts((current) => ({
+                ...current,
+                [draftKey]: {
+                  doc: cloneDoc(version.current),
+                  savedJson: docJson(version.current),
+                  savedRevision: version.edit_revision ?? 0,
+                  undoStack: [...(current[draftKey]?.undoStack ?? []), cloneDoc(draftDoc)].slice(
+                    -50,
+                  ),
+                  redoStack: [],
+                },
+              }))
+              setShowSavedVersion(false)
+              setSaveError(null)
+            }}
+          >
+            Use saved version
+          </button>
+        </section>
+      )}
       <ReviewToolbar
         review={data}
         versionName={activeVersionName}
@@ -282,6 +454,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
         canRedo={!!draft?.redoStack.length}
         saving={saveMutation.isPending}
         compiling={compileMutation.isPending}
+        editing={editingBlockId !== null}
         onVersion={chooseVersion}
         onUndo={undoDraft}
         onRedo={redoDraft}
@@ -307,7 +480,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
           onEdit={startEdit}
         />
         <aside className={styles.inspector}>
-          <h2>Edit resume</h2>
+          <h2>Inspector</h2>
           {selected ? (
             <div className={styles.smallStack}>
               <div className={styles.meta}>{selected.block.label}</div>
@@ -324,13 +497,12 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
               </button>
             </div>
           ) : (
-            <div className={styles.meta}>Select resume text to edit it.</div>
+            <div className={styles.meta}>Select a block, changed segment, or edit a block.</div>
           )}
           {editingBlockId ? (
             <div className={styles.smallStack}>
               <textarea
                 className={styles.textarea}
-                aria-label="Resume text"
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
               />
@@ -342,7 +514,7 @@ export function ResumeReviewWorkspace({ reviewId }: { reviewId: string }) {
                   setEditingBlockId(null)
                 }}
               >
-                Apply edit
+                Apply block edit
               </button>
               <button className={styles.button} onClick={() => setEditingBlockId(null)}>
                 Cancel
@@ -668,6 +840,7 @@ function ReviewToolbar({
   onRedo,
   onUndoAll,
   onSave,
+  editing,
   onCompile,
   onOpenLink,
 }: {
@@ -685,6 +858,7 @@ function ReviewToolbar({
   onRedo: () => void
   onUndoAll: () => void
   onSave: () => void
+  editing: boolean
   onCompile: () => void
   onOpenLink: (href: string | undefined) => void
 }) {
@@ -709,7 +883,6 @@ function ReviewToolbar({
               key={item}
               className={item === versionName ? styles.active : ''}
               onClick={() => onVersion(item)}
-              aria-pressed={item === versionName}
             >
               {item === 'starting'
                 ? 'Starting'
@@ -734,10 +907,18 @@ function ReviewToolbar({
         <button className={styles.button} onClick={onUndoAll}>
           Undo all
         </button>
-        <button className={styles.buttonPrimary} disabled={!dirty || saving} onClick={onSave}>
+        <button
+          className={styles.buttonPrimary}
+          disabled={!dirty || saving || compiling || editing}
+          onClick={onSave}
+        >
           {saving ? 'Saving...' : 'Save'}
         </button>
-        <button className={styles.buttonPrimary} disabled={compiling} onClick={onCompile}>
+        <button
+          className={styles.buttonPrimary}
+          disabled={compiling || saving || editing}
+          onClick={onCompile}
+        >
           {compiling ? 'Compiling...' : 'Compile'}
         </button>
         <button
@@ -901,6 +1082,15 @@ function DiffTextBlock({
   return (
     <span
       className={[styles.diffText, className, selectedBlock ? styles.selectedBlock : ''].join(' ')}
+      role="button"
+      tabIndex={0}
+      aria-label={`Edit ${block.label}`}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onEdit(block)
+        }
+      }}
       onClick={() => onSelect({ block })}
       onDoubleClick={() => onEdit(block)}
     >
