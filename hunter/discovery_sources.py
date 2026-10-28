@@ -331,12 +331,12 @@ def discover_vanhack(*, hours_old=336, fetcher=fetch_text, catalog_reader=None):
     jobs, seen = [], set()
     error = "posting_date_unknown"
     try:
-        html, catalog_error = catalog_reader()
-        error = catalog_error or error
+        html, catalog_read_error = catalog_reader()
+        error = catalog_read_error or error
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select('a.vh-card-link[href^="/job/"]')
         if not cards:
-            error = catalog_error or "search_results_not_verified"
+            error = catalog_read_error or "search_results_not_verified"
         for card in cards:
             target = urljoin(origin, card["href"])
             if target in seen:
@@ -371,7 +371,7 @@ def discover_vanhack(*, hours_old=336, fetcher=fetch_text, catalog_reader=None):
                     raise ValueError("detail_identity_mismatch")
                 description = body.get_text(" ", strip=True)
             except Exception as exc:
-                error = catalog_error or (catalog_error(exc))
+                error = catalog_read_error or catalog_error(exc)
             jobs.append(
                 _job(
                     title=title,
