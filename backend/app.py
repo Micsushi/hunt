@@ -95,6 +95,7 @@ from hunter.db import (  # noqa: E402
 )
 from hunter.db_compat import is_integrity_error  # noqa: E402
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
+from shared.paths import get_frontend_dist  # noqa: E402
 
 try:  # noqa: E402
     from fletcher.db import list_resume_attempts  # type: ignore
@@ -221,7 +222,7 @@ def review_ops_dependency(request: Request):
     assert_review_ops_allowed(request, None)
 
 
-FRONTEND_DIST = Path(REPO_ROOT) / "frontend" / "dist"
+FRONTEND_DIST = get_frontend_dist(Path(REPO_ROOT) / "frontend" / "dist")
 
 
 @asynccontextmanager

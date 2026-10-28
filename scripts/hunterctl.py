@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+from shared.paths import get_frontend_dist, get_state_root  # noqa: E402
+
 IS_WINDOWS = os.name == "nt"
 DEFAULT_REVIEW_APP_HOST = "127.0.0.1"
 DEFAULT_REVIEW_APP_PORT = 8004
@@ -81,9 +84,15 @@ def _get_default_runtime_env(
 
 
 def _run(command, *, env=None):
+    state_root = get_state_root(REPO_ROOT)
+    command = list(command)
+    if len(command) > 1 and command[1].endswith(".py") and not Path(command[1]).is_absolute():
+        command[1] = str(REPO_ROOT / command[1])
     final_env = os.environ.copy()
     if env:
         final_env.update(env)
+    if "HUNT_STATE_ROOT" in os.environ and len(command) > 1 and command[1] in ("-m", "-c"):
+        final_env["PYTHONSAFEPATH"] = "1"
     final_env["PYTHONPATH"] = os.pathsep.join(
         part for part in (str(REPO_ROOT), final_env.get("PYTHONPATH")) if part
     )
@@ -92,7 +101,7 @@ def _run(command, *, env=None):
 
     print("[hunterctl] Running:", " ".join(shlex.quote(str(part)) for part in command))
     try:
-        return_code = subprocess.run(command, cwd=REPO_ROOT, env=final_env).returncode
+        return_code = subprocess.run(command, cwd=state_root, env=final_env).returncode
     except KeyboardInterrupt:
         print("\n[hunterctl] Interrupted. Child process stopped.")
         raise SystemExit(130) from None
@@ -484,6 +493,12 @@ def _resolve_npm() -> str:
 
 def _run_npm_build():
     """Run npm install + npm run build in frontend/. Returns True on success."""
+    if "HUNT_STATE_ROOT" in os.environ:
+        print(
+            "[hunter] This separated release is immutable. Build in a source checkout, "
+            "then stage and qualify its frontend assets for a new release."
+        )
+        return False
     fe = _frontend_dir()
     if not os.path.isdir(fe):
         print("[hunter] frontend/ directory not found - skipping build.")
@@ -505,8 +520,14 @@ def cmd_ui_build(_args):
 
 
 def cmd_ui_serve(_args):
-    dist_index = os.path.join(_frontend_dir(), "dist", "index.html")
+    dist_index = get_frontend_dist(Path(_frontend_dir()) / "dist") / "index.html"
     if not os.path.isfile(dist_index):
+        if "HUNT_STATE_ROOT" in os.environ:
+            raise SystemExit(
+                "Qualified frontend assets are missing. Stage the matching prebuilt assets "
+                "and set HUNT_FRONTEND_DIST before starting this release; "
+                "build only in a source checkout."
+            )
         print("[hunter] frontend/dist not found - running build first.")
         if not _run_npm_build():
             print("[hunter] Build failed. Starting server anyway (will show 503 for UI).")
@@ -824,7 +845,7 @@ def build_parser():
     auth_save.add_argument("--channel", default="chrome")
     auth_save.add_argument(
         "--storage-state",
-        default=str(REPO_ROOT / ".state" / "linkedin_auth_state.json"),
+        default=str(get_state_root(REPO_ROOT) / ".state" / "linkedin_auth_state.json"),
     )
     auth_save.set_defaults(func=cmd_auth_save)
 
@@ -1329,6 +1350,8 @@ def build_parser():
 
 
 def main():
+    if "HUNT_STATE_ROOT" in os.environ:
+        os.chdir(get_state_root(REPO_ROOT))
     parser = build_parser()
     args = parser.parse_args()
     args.func(args)

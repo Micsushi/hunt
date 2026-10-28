@@ -628,3 +628,28 @@ A successful query cannot erase a failure from another query for the same source
 successful leads are still saved. Other discovery tools and the spreadsheet
 automation are not verified by this C1 status. A failed refresh preserves cached
 results with a warning and an explicit retry.
+
+## Separate local code and state
+
+For a commit-pinned local release, `HUNT_STATE_ROOT` selects an existing absolute
+state directory independently of the release code. It preserves `.env`, the
+default `hunt.db`, optional `hunt_user_config.json`, LinkedIn account/trace/session
+files, and C1 artifacts. Relative database, explicit config, and LinkedIn session
+paths resolve against that state directory. A missing local database or explicitly
+selected config file fails closed; an absent default user config still means defaults.
+
+The CLI runs Python script/module code from the release while child working
+directories remain at the state root. Use the established interpreter explicitly
+and a release-only `PYTHONPATH`. Before switching an existing installation, preserve
+its launcher bytes, make a private SQLite backup, and qualify the policy upgrade
+on a clone. Pin C2 resume/template/artifact paths with the existing `HUNT_*` path
+settings when retaining those inputs outside the release. This setting does not
+install a launcher, migrate a database, start a service, or schedule work by itself.
+
+Separated releases refuse `ui build` and `build-ui` before invoking npm. Build
+frontend assets in a source checkout and stage them outside the immutable code
+archive. Set `HUNT_FRONTEND_DIST` to their absolute directory; both the CLI and
+backend use it. `ui serve` and `review` require its `index.html` and fail clearly
+if assets are missing, without attempting a build. Release preparation must verify
+the matching frontend inputs and seal the complete asset inventory separately.
+Normal checkouts without `HUNT_STATE_ROOT` retain their existing build behavior.

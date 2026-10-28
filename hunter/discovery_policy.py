@@ -366,7 +366,6 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         viability += 15
 
     title = canonicalize_title_text(job.get("title"))
-    description = canonicalize_title_text(job.get("description"))
     lane = matching_search_lane(title)
     occupation_code_only = (
         bool(re.search(r"\bnoc(?:\s+code)?[\s:#()-]*\d{4,5}\b", title)) and not lane
@@ -375,7 +374,12 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         lane in _DEFAULT_SEARCH_TERMS
         and SEARCH_TERMS.get(lane) == _DEFAULT_SEARCH_TERMS[lane]
         and bool(re.search(r"\b(?:qa|quality assurance)\b", title))
-        and bool(re.search(r"\b(?:food safety|meat|seafood|fresh produce)\b", description))
+        and bool(
+            re.search(
+                r"\b(?:food safety|meat|seafood|fresh produce)\b",
+                description := canonicalize_title_text(job.get("description")),
+            )
+        )
         and not re.search(
             r"\b(?:software|hardware|firmware|embedded|electronics|electrical|robotics|sdet|selenium|playwright|cypress|api testing|test automation)\b",
             title + " " + description,
@@ -393,7 +397,7 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
             re.search(
                 r"\b(?:construction (?:projects?|sites?)|concrete (?:projects?|pours?)|"
                 r"mental health programs?|student counsel(?:l)?ing|student health (?:projects?|promotion))\b",
-                description,
+                description := canonicalize_title_text(job.get("description")),
             )
         )
         and not re.search(

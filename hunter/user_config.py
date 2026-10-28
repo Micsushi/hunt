@@ -14,8 +14,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from shared.paths import get_state_root, resolve_state_path
+
 _REPO_ROOT = Path(__file__).parent.parent
-_DEFAULT_PATH = _REPO_ROOT / "hunt_user_config.json"
 
 _lock = threading.RLock()
 
@@ -59,7 +60,12 @@ def validate(data):
 
 def get_path() -> Path:
     env = os.environ.get("HUNT_USER_CONFIG_PATH", "")
-    return Path(env) if env else _DEFAULT_PATH
+    if "HUNT_STATE_ROOT" not in os.environ:
+        return Path(env) if env else _REPO_ROOT / "hunt_user_config.json"
+    path = resolve_state_path(env) if env else get_state_root(_REPO_ROOT) / "hunt_user_config.json"
+    if env and "HUNT_STATE_ROOT" in os.environ and not path.is_file():
+        raise FileNotFoundError(f"Existing Hunt user config required: {path}")
+    return path
 
 
 def load() -> dict[str, Any]:

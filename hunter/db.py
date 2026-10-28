@@ -352,7 +352,7 @@ def _migrate_jobs_table(cursor):
             cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {column_def}")
 
 
-def _refresh_discovery_metadata(cursor, current):
+def _refresh_discovery_metadata(cursor, current, *, defer_version=False):
     annotated = annotate_job(current)
     fields = (
         "category",
@@ -365,6 +365,8 @@ def _refresh_discovery_metadata(cursor, current):
         "discovery_suppressed_reason",
         "priority",
     )
+    if defer_version and all(current.get(key) == annotated.get(key) for key in fields):
+        return annotated
     cursor.execute(
         "UPDATE jobs SET "
         + ", ".join(f"{key} = ?" for key in fields)
@@ -407,7 +409,16 @@ def _backfill_discovery_metadata(cursor):
         """,
         (changed, DISCOVERY_POLICY_VERSION),
     ).fetchall()
+    observations = {}
+    if rows:
+        for observation in cursor.execute(
+            "SELECT job_id, source, source_url FROM job_source_observations"
+        ).fetchall():
+            observations.setdefault(observation["job_id"], set()).add(
+                (observation["source"], observation["source_url"])
+            )
     employers = set()
+    observed_ids = []
     for row in rows:
         current = dict(row)
         if (
@@ -427,11 +438,32 @@ def _backfill_discovery_metadata(cursor):
             current.update(
                 enrichment_status="blocked", apply_type="unknown", auto_apply_eligible=False
             )
-        annotated = _refresh_discovery_metadata(cursor, current)
-        _record_source_observation(cursor, current["id"], current, refresh_seen=False)
+        annotated = _refresh_discovery_metadata(cursor, current, defer_version=True)
+        source_url = str(current.get("job_url") or current.get("apply_url") or "")
+        existing = observations.get(current["id"], set())
+        if (str(current.get("source") or "unknown"), source_url) not in existing:
+            _record_source_observation(cursor, current["id"], current, refresh_seen=False)
+        if source_url:
+            observed_ids.append(current["id"])
         employers.add(annotated.get("normalized_company"))
+    for offset in range(0, len(observed_ids), 500):
+        batch = observed_ids[offset : offset + 500]
+        placeholders = ",".join("?" for _ in batch)
+        cursor.execute(
+            "UPDATE jobs SET source_count = ("
+            "SELECT COUNT(*) FROM job_source_observations WHERE job_id = jobs.id"
+            f") WHERE id IN ({placeholders})",
+            batch,
+        )
     for company in employers:
         _enforce_employer_month_cap(cursor, company)
+    for offset in range(0, len(rows), 500):
+        ids = [row["id"] for row in rows[offset : offset + 500]]
+        placeholders = ",".join("?" for _ in ids)
+        cursor.execute(
+            f"UPDATE jobs SET discovery_policy_version = ? WHERE id IN ({placeholders})",
+            [DISCOVERY_POLICY_VERSION, *ids],
+        )
     _upsert_runtime_state(cursor, policy_key, policy)
 
 
@@ -1659,9 +1691,12 @@ def _enforce_employer_month_cap(cursor, normalized_company):
             reverse=True,
         )
         for index, row in enumerate(candidates):
+            reason = None if index < slots else "employer_month_cap"
+            if row["discovery_suppressed_reason"] == reason:
+                continue
             cursor.execute(
                 "UPDATE jobs SET discovery_suppressed_reason = ? WHERE id = ?",
-                (None if index < slots else "employer_month_cap", row["id"]),
+                (reason, row["id"]),
             )
 
 

@@ -4,13 +4,15 @@ import os as _os
 from shared.config_utils import get_bool_env as _get_bool_env
 from shared.config_utils import get_int_env as _get_int_env
 from shared.config_utils import get_str_env as _get_str_env
+from shared.paths import get_state_root as _get_state_root
+from shared.paths import resolve_state_path as _resolve_state_path
 
 try:
     from hunter.dotenv import load_dotenv as _load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
     _load_dotenv = None  # type: ignore
 
-_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_ROOT = str(_get_state_root())
 
 # Optional local/dev env file support. Environment variables (systemd/Ansible/Docker)
 # still take precedence; .env only fills missing values.
@@ -98,17 +100,20 @@ def _get_config_string_dict(name: str, default: dict[str, str]) -> dict[str, str
 
 
 def get_db_path():
-    return _os.path.abspath(
-        _os.path.expanduser(_get_str_env("HUNT_DB_PATH", _os.path.join(_ROOT, "hunt.db")))
-    )
+    value = _get_str_env("HUNT_DB_PATH", _os.path.join(_ROOT, "hunt.db"))
+    if "HUNT_STATE_ROOT" not in _os.environ:
+        return _os.path.abspath(_os.path.expanduser(value))
+    path = _resolve_state_path(value)
+    if not HUNT_DB_URL and not path.is_file():
+        raise FileNotFoundError(f"Existing local Hunt database required: {path}")
+    return str(path)
 
-
-# Backwards-compatible constant: prefer `get_db_path()` for runtime correctness.
-DB_PATH = get_db_path()
 
 # Postgres connection URL. When set, all components use Postgres instead of SQLite.
 # Format: postgresql://user:password@host:5432/dbname
 HUNT_DB_URL = _get_str_env("HUNT_DB_URL", "")
+# Backwards-compatible constant: prefer `get_db_path()` for runtime correctness.
+DB_PATH = get_db_path()
 
 # Fernet key for encrypting linkedin_accounts.password_encrypted.
 # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

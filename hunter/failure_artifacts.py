@@ -1,24 +1,23 @@
 import os
 import re
-from pathlib import Path
 
 from hunter.c1_logging import C1Logger
 from hunter.enrichment_policy import utc_now
 from shared.file_utils import write_text as _write_text
+from shared.paths import get_state_root, resolve_state_path
 from shared.storage import write_json_artifact
 
 
 def get_artifacts_root():
     configured = os.getenv("HUNT_ARTIFACTS_DIR")
     if configured and configured.strip():
-        return Path(os.path.abspath(os.path.expanduser(configured.strip())))
+        return resolve_state_path(configured.strip())
 
     db_path = os.getenv("HUNT_DB_PATH")
     if db_path and db_path.strip():
-        return Path(os.path.abspath(os.path.expanduser(db_path.strip()))).parent / "artifacts"
+        return resolve_state_path(db_path.strip()).parent / "artifacts"
 
-    repo_root = Path(__file__).resolve().parent.parent
-    return repo_root / "artifacts"
+    return get_state_root() / "artifacts"
 
 
 def resolve_artifact_path(relative_path):

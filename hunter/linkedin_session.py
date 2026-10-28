@@ -17,6 +17,7 @@ from hunter.config import get_db_path
 from hunter.db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
 from hunter.notifications import send_discord_webhook_message
 from shared.config_utils import get_bool_env as _get_bool_env
+from shared.paths import get_state_root, resolve_state_path
 
 try:
     from c1_logging import C1Logger  # type: ignore
@@ -31,7 +32,7 @@ except (ModuleNotFoundError, ImportError):
         pass
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = get_state_root()
 DEFAULT_STORAGE_STATE_PATH = ROOT / ".state" / "linkedin_auth_state.json"
 DEFAULT_AUTH_TRACE_PATH = ROOT / ".state" / "linkedin_auth_trace.jsonl"
 DEFAULT_SERVER_RUNTIME_DIR = Path.home() / "data" / "hunt"
@@ -259,7 +260,7 @@ def _normalize_text(value):
 def resolve_auth_trace_path():
     raw_path = os.getenv(AUTH_TRACE_PATH_ENV)
     if raw_path:
-        return Path(raw_path).expanduser().resolve()
+        return resolve_state_path(raw_path)
     return DEFAULT_AUTH_TRACE_PATH
 
 
@@ -527,7 +528,7 @@ def is_account_blocked(index):
 def resolve_storage_state_path(storage_state_path=None):
     raw_path = storage_state_path or os.getenv("LINKEDIN_STORAGE_STATE_PATH")
     if raw_path:
-        return Path(raw_path).expanduser().resolve()
+        return resolve_state_path(raw_path)
     # Multi-account mode: use the active account's dedicated file
     if (os.getenv(LINKEDIN_ACCOUNTS_ENV) or "").strip():
         index = get_active_account_index()
@@ -1267,7 +1268,7 @@ def attempt_auto_relogin(
 
     account = accounts[account_index]
     target_path = (
-        Path(storage_state_path).expanduser().resolve()
+        resolve_state_path(storage_state_path)
         if storage_state_path
         else get_storage_state_path_for_account(account_index)
     )
