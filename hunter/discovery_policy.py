@@ -9,7 +9,7 @@ from hunter import config
 from hunter.config import TITLE_BLACKLIST, WATCHLIST
 from hunter.search_lanes import canonicalize_title_text, matching_search_lane
 
-DISCOVERY_POLICY_VERSION = 13
+DISCOVERY_POLICY_VERSION = 14
 
 EMPLOYER_ALIASES = {
     "amazon web services": "amazon",
@@ -381,6 +381,27 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
             title + " " + description,
         )
     )
+    # The bundled product lane is technological; explicit role preferences take precedence.
+    nontechnical_coordinator = (
+        lane == "product"
+        and not config.TARGETING_CONFIGURED
+        and not config.DISCOVERY_ALLOW_ALL_LANES
+        and SEARCH_TERMS.get(lane) == _DEFAULT_SEARCH_TERMS[lane]
+        and bool(re.search(r"\bproject coordinator\b", title))
+        and not re.search(r"\b(?:it|technical) project coordinator\b", title)
+        and bool(
+            re.search(
+                r"\b(?:construction (?:projects?|sites?)|concrete (?:projects?|pours?)|"
+                r"mental health programs?|student counsel(?:l)?ing)\b",
+                description,
+            )
+        )
+        and not re.search(
+            r"\b(?:software|hardware|firmware|embedded|electronics|electrical|robotics|"
+            r"information technology|it implementation|digital transformation)\b",
+            title + " " + description,
+        )
+    )
     reason = None
     if any(word.lower() in str(job.get("title") or "").lower() for word in TITLE_BLACKLIST):
         reason = "title_blacklist"
@@ -406,6 +427,7 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         (job.get("category") == "other" and not config.DISCOVERY_ALLOW_ALL_LANES)
         or occupation_code_only
         or food_qa
+        or nontechnical_coordinator
     ):
         reason = "outside_search_lanes"
     elif job.get("apply_type") == "easy_apply":

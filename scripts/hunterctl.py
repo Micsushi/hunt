@@ -2,7 +2,7 @@
 """
 C1 (Hunter) operator CLI: paths, auth, queue, and related helpers.
 
-The active Hunt runtime scope is C0-C2. C3 v3 is planned but not implemented,
+This launcher covers C0-C2. C3 runs through its separate local service and extension,
 and retained C4 command names exit without starting coordinator code. Repo-root
 **`hunter`** launchers and this script are scoped to **C1 (Hunter)** and shared
 operator glue.
@@ -84,6 +84,9 @@ def _run(command, *, env=None):
     final_env = os.environ.copy()
     if env:
         final_env.update(env)
+    final_env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(REPO_ROOT), final_env.get("PYTHONPATH")) if part
+    )
     for key, value in _get_default_runtime_env(final_env).items():
         final_env.setdefault(key, value)
 
