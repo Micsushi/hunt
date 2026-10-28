@@ -86,8 +86,22 @@ Profiles explicitly marked as synthetic/non-submittable cannot use Submit.
 
 ## C1 and C2 handoff
 
-Run Hunt's C0 backend on the same computer as the local C3 service. The authenticated
-**Applications** navigation opens this same interface. From a job's details choose
+Hunt's C0 backend connects to C3 at `127.0.0.1:47831` in the backend's own network
+environment, using its local pairing-key file. The embedded **Applications**
+workspace and C1/C2 handoff require that backend and C3 service to run together.
+For a containerized backend, this address is inside the backend container, not
+the computer viewing Hunt in a browser.
+
+If Hunt is on a remote server and C3 runs on your Windows computer, starting C3
+locally does not connect the server's Applications page. Open the **Hunt C3**
+extension on your computer, connect it to your local service, then choose
+**Open workspace**. The extension opens the local workspace with its saved
+pairing key; a bare localhost link does not supply that key. Remote C1/C2 handoff
+to your computer is not supported by this local-only connection. For a local
+Hunt setup with C3 alongside its backend, **Retry connection** rechecks the
+embedded workspace after the service becomes available.
+
+With the backend and C3 connected locally, from a job's details choose
 **Fill application**, or select up to 30 jobs and choose the corresponding bulk
 action. C1 must have verified an external Workday destination and C2 must have a
 selected resume marked ready for C3. Each job receives that exact selected PDF.
