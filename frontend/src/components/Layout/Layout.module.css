@@ -100,7 +100,7 @@
 
 .navLink.active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--good);
 }
 
 .username {

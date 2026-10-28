@@ -448,11 +448,14 @@ export function JobDetailPage() {
 function JobDetail({ jobId }: { jobId: number }) {
   const navigate = useNavigate()
   const active = useRef(false)
+  const retryCleanups = useRef(new Set<() => void>())
   const openingReview = useRef(false)
   useEffect(() => {
     active.current = true
+    const cleanups = retryCleanups.current
     return () => {
       active.current = false
+      for (const cleanup of cleanups) cleanup()
     }
   }, [])
   const [searchParams] = useSearchParams()
@@ -473,12 +476,53 @@ function JobDetail({ jobId }: { jobId: number }) {
   const navigation = useAdjacentJobs(jobId, adjacentQuery)
   const adjacent = navigation.data
 
+  const backRef = useRef<HTMLButtonElement>(null)
+  const resumeRef = useRef<HTMLHeadingElement>(null)
+  const jobRetryRef = useRef<HTMLButtonElement>(null)
+  const navigationRetryRef = useRef<HTMLButtonElement>(null)
+  const historyRetryRef = useRef<HTMLButtonElement>(null)
+
+  async function retryRead(
+    read: () => Promise<unknown>,
+    target: { current: HTMLElement | null },
+    retry: { current: HTMLButtonElement | null },
+  ) {
+    const origin = document.activeElement
+    let moved = false
+    const trackFocus = (event: FocusEvent) => {
+      if (event.target !== origin) moved = true
+    }
+    const cleanup = () => {
+      document.removeEventListener('focusin', trackFocus)
+      retryCleanups.current.delete(cleanup)
+    }
+    retryCleanups.current.add(cleanup)
+    document.addEventListener('focusin', trackFocus)
+    try {
+      await read()
+    } finally {
+      requestAnimationFrame(() => {
+        cleanup()
+        if (active.current && !moved && document.activeElement === document.body) {
+          if (retry.current && !retry.current.disabled) retry.current.focus()
+          else if (origin instanceof HTMLElement && origin.isConnected) origin.focus()
+          else target.current?.focus()
+        }
+      })
+    }
+  }
+
   if (isLoading) return <div className={styles.loading}>Loading...</div>
   if (!job)
     return (
       <div className={styles.errorPage}>
         <p role="alert">{error?.message || 'Job could not be loaded.'}</p>
-        <button className={styles.backBtn} disabled={isFetching} onClick={() => void refetch()}>
+        <button
+          className={styles.backBtn}
+          disabled={isFetching}
+          ref={jobRetryRef}
+          onClick={() => void retryRead(refetch, backRef, jobRetryRef)}
+        >
           Retry job
         </button>
         <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
@@ -647,7 +691,12 @@ function JobDetail({ jobId }: { jobId: number }) {
       {error && (
         <p role="alert">
           Refresh failed. Showing the last loaded job.{' '}
-          <button className={styles.actionBtn} disabled={isFetching} onClick={() => void refetch()}>
+          <button
+            className={styles.actionBtn}
+            disabled={isFetching}
+            ref={jobRetryRef}
+            onClick={() => void retryRead(refetch, backRef, jobRetryRef)}
+          >
             Retry job
           </button>
         </p>
@@ -658,7 +707,8 @@ function JobDetail({ jobId }: { jobId: number }) {
           <button
             className={styles.actionBtn}
             disabled={navigation.isFetching}
-            onClick={() => void navigation.refetch()}
+            ref={navigationRetryRef}
+            onClick={() => void retryRead(navigation.refetch, backRef, navigationRetryRef)}
           >
             Retry navigation
           </button>
@@ -666,7 +716,7 @@ function JobDetail({ jobId }: { jobId: number }) {
       )}
       {/* Top menu card */}
       <div className={styles.menuCard}>
-        <button className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
+        <button ref={backRef} className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
           ← Back
         </button>
         <span className={styles.headerId}>#{job.id}</span>
@@ -953,7 +1003,9 @@ function JobDetail({ jobId }: { jobId: number }) {
 
           <div className={styles.panel}>
             <div className={styles.panelTitleRow}>
-              <h2 className={styles.panelTitle}>Resume</h2>
+              <h2 ref={resumeRef} tabIndex={-1} className={styles.panelTitle}>
+                Resume
+              </h2>
               <ServiceChip label="Fletcher" componentKey="c2" />
             </div>
             <div className={styles.fieldList}>
@@ -1021,7 +1073,8 @@ function JobDetail({ jobId }: { jobId: number }) {
                 <button
                   className={styles.actionBtn}
                   disabled={history.isFetching}
-                  onClick={() => void history.refetch()}
+                  ref={historyRetryRef}
+                  onClick={() => void retryRead(history.refetch, resumeRef, historyRetryRef)}
                 >
                   Retry resume history
                 </button>
@@ -1049,7 +1102,7 @@ function JobDetail({ jobId }: { jobId: number }) {
                           #{a.id} · {a.created_at}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', gap: 5 }}>
+                      <div className={styles.attemptActions}>
                         {a.pdf_path && (
                           <a
                             href={`/api/attempts/${a.id}/pdf`}
