@@ -598,7 +598,7 @@ def _fletcher_batch_stem(job: dict) -> str:
     job_input = job.get("input") or {}
     title = str(job_input.get("title") or "ad-hoc-resume").strip()
     company = str(job_input.get("company") or "").strip()
-    raw = " ".join(part for part in [title, company, str(job.get("queue_item_id", ""))[:8]] if part)
+    raw = " ".join(part for part in [str(job.get("queue_item_id", "")), title, company] if part)
     safe = "".join(ch if ch.isalnum() or ch in {" ", "-", "_"} else "_" for ch in raw)
     safe = "_".join(safe.split())
     return safe[:96] or f"fletcher_{str(job.get('queue_item_id', 'run'))[:8]}"
