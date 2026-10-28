@@ -490,10 +490,28 @@ def _ensure_postgres_delete_cascade_constraints(cursor):
             BEGIN
                 IF EXISTS (
                     SELECT 1
-                    FROM information_schema.table_constraints
-                    WHERE constraint_schema = current_schema()
-                      AND table_name = %s
-                      AND constraint_name = %s
+                    FROM pg_constraint c
+                    JOIN pg_class child ON child.oid = c.conrelid
+                    JOIN pg_namespace ns ON ns.oid = child.relnamespace
+                    WHERE ns.nspname = current_schema()
+                      AND child.relname = %s
+                      AND c.conname = %s
+                      AND NOT (
+                          c.contype = 'f'
+                          AND c.confrelid IS NOT DISTINCT FROM to_regclass(format('%%I.%%I', current_schema(), %s))
+                          AND c.conkey = ARRAY(
+                              SELECT attnum FROM pg_attribute
+                              WHERE attrelid = c.conrelid AND attname = %s AND NOT attisdropped
+                          )
+                          AND c.confkey = ARRAY(
+                              SELECT attnum FROM pg_attribute
+                              WHERE attrelid = c.confrelid AND attname = %s AND NOT attisdropped
+                          )
+                          AND c.confdeltype = 'c' AND c.confupdtype = 'a'
+                          AND c.confmatchtype = 's'
+                          AND NOT c.condeferrable AND NOT c.condeferred
+                          AND c.convalidated
+                      )
                 ) THEN
                     EXECUTE format('ALTER TABLE %%I DROP CONSTRAINT %%I', %s, %s);
                     EXECUTE format(
@@ -506,6 +524,9 @@ def _ensure_postgres_delete_cascade_constraints(cursor):
             (
                 table_name,
                 constraint_name,
+                parent_table,
+                column_name,
+                parent_column,
                 table_name,
                 constraint_name,
                 table_name,
