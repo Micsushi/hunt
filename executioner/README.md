@@ -97,29 +97,18 @@ historical proof runtime remains Workday-specific. The Applications product now
 has initial hosted Greenhouse, Lever, Ashby, and Workable support; see the product guide
 for its separate verification boundary.
 
-## Future Chrome extension delivery
+## Chrome extension delivery
 
-The current C3 v3 browser adapter owns a Playwright-launched Chrome session. A
-Chrome extension is not required for the accepted implementation, but it is a
-candidate future delivery surface when C3 must operate inside a user's existing
-desktop Chrome session or be controlled from another device.
+The historical Stage 1/Stage 2 proof adapter owns a Playwright-launched browser.
+The current Applications product instead pairs its local service with the
+included Chrome extension to operate selected tabs in the connected browser.
+It also offers a separate, reversible **Fill current page** action. See
+[C3 Applications](docs/product.md) for setup, supported actions, and limits.
 
-Two future modes are intentionally preserved for evaluation:
-
-- Replace the Playwright adapter with a Chrome extension that inspects and
-  acts on the user's current Workday tab.
-- Keep the C3 orchestration service and add a paired desktop extension as the
-  browser-side executor. The server would choose bounded actions, while the
-  extension would perform them in the current tab. A local service could retain
-  resumes, profile values, secret handles, and file-upload authority so raw
-  private data does not need to pass through the remote server.
-
-Either mode requires a separate threat model and acceptance contract covering
-device pairing, authenticated encrypted transport, origin and tab scoping,
-reconnection, extension permissions, private-data boundaries, file uploads,
-MFA and CAPTCHA handoff, and visible operator control. This is a future option,
-not implemented or activated by the current package. It does not change the
-existing prohibition on final Submit.
+Remote-device orchestration is not implemented by this local extension.
+It would require a separate pairing, encrypted-transport, and authorization
+design. The existing proof harness still forbids final Submit; the Applications
+product keeps submission as its separate, explicitly confirmed action.
 
 ## Stage 2 real-run preflight
 

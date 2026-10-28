@@ -8,4 +8,7 @@ export interface PartialFillResult {
 export function fillVisibleFields(input?: {
   facts?: readonly { factId: string; value: unknown }[];
   action?: 'fill' | 'undo' | 'redo' | 'status';
+  scope?: 'application' | 'page';
+  expectedUrl?: string;
+  expiresAt?: number;
 }): Promise<PartialFillResult>;

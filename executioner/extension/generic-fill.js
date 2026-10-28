@@ -1,5 +1,8 @@
 /** Runs in the extension's isolated world. Keep self-contained for executeScript. */
-export async function fillVisibleFields({ facts = [], action = 'fill', scope = 'application' } = {}) {
+export async function fillVisibleFields({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt } = {}) {
+  const checkDeadline = () => { if (expiresAt !== undefined && Date.now() >= expiresAt) throw new Error('Field changes expired. Check the page and reopen C3 before retrying.'); };
+  checkDeadline();
+  if (expectedUrl !== undefined && location.href !== expectedUrl) throw new Error('The page changed. Reopen C3 on the application.');
   const norm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
   const state = globalThis.__huntC3PartialFill ??= { undo: [], redo: [], busy: false };
   if (state.busy) throw new Error('A field fill is already running.');
@@ -21,7 +24,21 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       if (!changes) return result;
       const previous = action === 'undo' ? 'after' : 'before', next = action === 'undo' ? 'before' : 'after';
       if (changes.some(c => !c.element.isConnected || read(c.element) !== c[previous])) throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
-      for (const c of changes) write(c.element, c[next]);
+      let written = 0;
+      try {
+        for (const c of changes) { checkDeadline(); write(c.element, c[next]); written++; }
+      } catch (error) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        // Transfer only verified writes; the untouched remainder stays retryable.
+        const applied = changes.slice(0, written).filter(c => c.element.isConnected && read(c.element) === c[next]);
+        if (applied.length) {
+          const remaining = changes.filter(c => !applied.includes(c));
+          from.pop();
+          if (remaining.length) from.push(remaining);
+          to.push(applied);
+        }
+        throw error;
+      }
       await new Promise(resolve => setTimeout(resolve, 100));
       if (changes.some(c => read(c.element) !== c[next])) throw new Error('The website did not keep the restored values. Check the form.');
       from.pop(); to.push(changes); result.filled = changes.map(c => c.label); return result;
@@ -78,6 +95,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
         if (options.length !== 1) { skip('option_not_found'); continue; }
         value = options[0].value;
       }
+      checkDeadline();
       const before = e.value;
       write(e, value);
       await new Promise(resolve => setTimeout(resolve, 100));

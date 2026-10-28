@@ -16,6 +16,13 @@ browser access permission; inaccessible frames are not covered by this action.
 until reload. They refuse to overwrite subsequent edits. Reload the unpacked
 extension after upgrading to enable its active-tab and scripting permissions.
 
+Field actions are bound to the page documents selected when the action starts.
+Navigation or reload during a request cannot redirect a fill into the new page.
+If a frame changes, completed changes remain undoable and the popup reports
+partial completion. Requests have a deadline; an unconfirmed queue request tells
+you to check Applications before retrying. A rejected replacement pairing key
+leaves the previously saved key intact.
+
 ## Start locally
 
 Use Node 22.18 or later. From this checkout:
