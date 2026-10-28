@@ -188,7 +188,7 @@ export function JobsPage() {
   const jobs = useMemo(() => data?.items ?? [], [data])
   const total = data?.total ?? 0
   const { data: summary } = useSummary(60_000)
-  const { selectedIds, toggleSelect, selectAll, clearSelection } = useUiStore()
+  const { selectedIds, toggleSelect, selectAll, clearSelection, setSelectionQuery } = useUiStore()
   const selectionReady = !isLoading && !isError && !isPlaceholderData
   const headingRef = useRef<HTMLHeadingElement>(null)
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
@@ -205,10 +205,19 @@ export function JobsPage() {
     setSearchParams(nextParams, { replace: true })
     saveJobsQueryParams(nextParams)
     sessionStorage.setItem(REVIEW_QUERY_STORAGE_KEY, nextParams.toString())
-    clearSelection()
+    setSelectionQuery(nextParams.toString())
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect
     setLocalSort(null) // reset page-local sort when filters change
   }, [query]) // eslint-disable-line
+
+  useEffect(() => {
+    if (!data || isFetching || isError || isPlaceholderData) return
+    const selection = useUiStore.getState()
+    if (selection.selectedJobsQuery !== queryToParams(query).toString()) return
+    const visible = new Set(data.items.map((job) => job.id))
+    const retained = [...selection.selectedIds].filter((id) => visible.has(id))
+    if (retained.length !== selection.selectedIds.size) selection.selectAll(retained)
+  }, [data, isFetching, isError, isPlaceholderData, query, selectedIds])
 
   const updateQuery = useCallback((patch: Partial<JobsQuery>) => {
     setQuery((prev) => ({ ...prev, ...patch }))
@@ -507,7 +516,7 @@ export function JobsPage() {
         onChange={(page) => updateQuery({ page })}
       />
 
-      <BulkBar disabled={!selectionReady} />
+      <BulkBar disabled={!selectionReady || [...selectedIds].some((id) => !allIds.includes(id))} />
     </div>
   )
 }

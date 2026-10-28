@@ -14,6 +14,8 @@ interface UiStore {
 
   // Jobs table selection
   selectedIds: Set<number>
+  selectedJobsQuery: string | null
+  setSelectionQuery: (query: string) => void
   toggleSelect: (id: number) => void
   selectAll: (ids: number[]) => void
   clearSelection: () => void
@@ -39,6 +41,13 @@ export const useUiStore = create<UiStore>((set, get) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   selectedIds: new Set(),
+  selectedJobsQuery: null,
+  setSelectionQuery: (query) =>
+    set((state) =>
+      state.selectedJobsQuery === query
+        ? state
+        : { selectedJobsQuery: query, selectedIds: new Set() },
+    ),
   toggleSelect: (id) =>
     set((s) => {
       const next = new Set(s.selectedIds)
