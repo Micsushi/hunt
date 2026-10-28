@@ -623,9 +623,10 @@ def test_attempt_dirs_are_unique_for_same_label(monkeypatch, tmp_path):
     assert first.parent == second.parent
 
 
-def test_successful_recompile_selects_the_new_revision(tmp_path, monkeypatch):
+def test_successful_recompile_refreshes_the_selected_revision(tmp_path, monkeypatch):
     import sqlite3
 
+    from fletcher.db import RESUME_ATTEMPTS_TABLE_SQL, RESUME_VERSIONS_TABLE_SQL
     from fletcher.resume import review_store
 
     runtime = tmp_path / "runtime"
@@ -661,14 +662,41 @@ def test_successful_recompile_selects_the_new_revision(tmp_path, monkeypatch):
         conn.execute(
             "CREATE TABLE jobs (id INTEGER PRIMARY KEY, selected_resume_pdf_path TEXT, "
             "selected_resume_tex_path TEXT, selected_resume_selected_at TEXT, "
-            "selected_resume_ready_for_c3 INTEGER)"
+            "selected_resume_ready_for_c3 INTEGER, selected_resume_version_id TEXT, "
+            "enrichment_status TEXT, status TEXT, apply_type TEXT, auto_apply_eligible INTEGER, "
+            "priority INTEGER, apply_url TEXT)"
         )
-        conn.execute("INSERT INTO jobs (id) VALUES (7)")
-    monkeypatch.setattr(review_store, "get_connection", lambda _: sqlite3.connect(db))
+        conn.execute(RESUME_ATTEMPTS_TABLE_SQL)
+        conn.execute(RESUME_VERSIONS_TABLE_SQL)
+        paths = (str(previous / "output.pdf"), str(previous / "output.tex"))
+        conn.execute(
+            "INSERT INTO jobs VALUES (7, ?, ?, 'explicit-choice', 1, '1', "
+            "'done', 'new', 'external_apply', 1, 0, 'https://example.invalid/apply')",
+            paths,
+        )
+        conn.execute(
+            "INSERT INTO resume_attempts (id, job_id, status, latest_result_kind, pdf_path, tex_path) "
+            "VALUES (1, 7, 'done', 'latest_useful', ?, ?)",
+            paths,
+        )
+        conn.execute(
+            "INSERT INTO resume_versions "
+            "(id, job_id, resume_attempt_id, pdf_path, tex_path, content_hash, is_selected_for_c3) "
+            "VALUES (1, 7, 1, ?, ?, 'previous', TRUE)",
+            paths,
+        )
+    conn.close()
+
+    def connect(_):
+        connection = sqlite3.connect(db)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(review_store, "get_connection", connect)
 
     def compile_fixture(path):
         path.with_suffix(".pdf").write_bytes(b"%PDF synthetic new revision")
-        return {"compile_status": "ok"}
+        return {"compile_status": "ok", "fits_one_page": True}
 
     monkeypatch.setattr(review_store, "compile_tex", compile_fixture)
     result = compile_current_document(rid, "no_summary")
@@ -680,6 +708,7 @@ def test_successful_recompile_selects_the_new_revision(tmp_path, monkeypatch):
         ).fetchone()
     expected = attempt / "versions" / "no_summary" / "revisions" / "0002"
     assert selected == (str(expected / "output.pdf"), str(expected / "output.tex"), 1)
+    conn.close()
 
 
 def test_compile_completion_preserves_newer_saved_edit(tmp_path, monkeypatch):

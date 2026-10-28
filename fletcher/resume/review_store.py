@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tempfile
@@ -7,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import resolve_runtime_root
-from ..db import get_connection
+from ..db import _job_is_ready_for_c3, get_connection
 from .compiler import compile_tex
 from .models import ResumeDocument
 from .renderer import render_resume_tex
@@ -195,9 +196,12 @@ def compile_current_document(
                 state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
                 state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
             atomic_json(attempt / "review_package.json", model_to_dict(current))
-            if state.compile_status == "ok":
+            if state.compile_status == "ok" and result.get("fits_one_page"):
                 _update_job_selected_resume(
-                    current, vname, published / "output.pdf", published / "output.tex"
+                    current,
+                    vname,
+                    published / "output.pdf",
+                    published / "output.tex",
                 )
             return current
 
@@ -216,13 +220,88 @@ def _update_job_selected_resume(
     try:
         conn = get_connection(None)
         try:
+            # Match record_resume_attempt's version-before-job lock order.
+            conn.execute(
+                "UPDATE resume_versions SET is_selected_for_c3 = is_selected_for_c3 WHERE job_id = ?",
+                (job_id,),
+            )
+            conn.execute(
+                "UPDATE jobs SET selected_resume_version_id = selected_resume_version_id WHERE id = ?",
+                (job_id,),
+            )
+            job = dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone() or {})
+            if not job.get("selected_resume_ready_for_c3") or not _job_is_ready_for_c3(job):
+                return
+            selected = conn.execute(
+                """
+                SELECT v.*, a.pdf_path AS attempt_pdf_path, a.tex_path AS attempt_tex_path
+                FROM resume_versions v JOIN resume_attempts a ON a.id = v.resume_attempt_id
+                WHERE v.id = ? AND v.job_id = ? AND a.job_id = ?
+                  AND v.is_selected_for_c3 = TRUE
+                  AND a.status IN ('done', 'done_with_flags')
+                  AND a.latest_result_kind = 'latest_useful'
+                """,
+                (job.get("selected_resume_version_id"), job_id, job_id),
+            ).fetchone()
+            if selected is None:
+                return
+            if (
+                package.job.attempt_id is not None
+                and package.job.attempt_id != selected["resume_attempt_id"]
+            ):
+                return
+            attempt = attempt_dir_for_review(package.review_id).resolve()
+            stem = "output_summary" if version == ResumeReviewVersionName.WITH_SUMMARY else "output"
+            previous_pdf = Path(job.get("selected_resume_pdf_path") or "").resolve()
+            initial_pdf = attempt / f"{stem}.pdf"
+            if previous_pdf != initial_pdf:
+                # A skipped refresh may leave an earlier revision selected in this same variant.
+                revision = previous_pdf.parent.name
+                if (
+                    not revision.isdecimal()
+                    or not 0 < int(revision) < package.versions[version].compiled_revision
+                ):
+                    return
+                expected = (
+                    attempt
+                    / "versions"
+                    / version.value
+                    / "revisions"
+                    / f"{int(revision):04d}"
+                    / "output.pdf"
+                )
+                if previous_pdf != expected:
+                    return
+            for kind in ("pdf", "tex"):
+                previous = previous_pdf.with_suffix(f".{kind}")
+                paths = (
+                    job.get(f"selected_resume_{kind}_path"),
+                    selected[f"{kind}_path"],
+                    selected[f"attempt_{kind}_path"],
+                )
+                if not previous.is_file() or any(
+                    not path or Path(path).resolve() != previous for path in paths
+                ):
+                    return
+            # Refresh the existing choice and its provenance, never create a selection.
+            conn.execute(
+                "UPDATE resume_versions SET pdf_path = ?, tex_path = ?, content_hash = ? WHERE id = ?",
+                (
+                    str(pdf_path),
+                    str(tex_path),
+                    hashlib.sha256(tex_path.read_bytes()).hexdigest(),
+                    selected["id"],
+                ),
+            )
+            conn.execute(
+                "UPDATE resume_attempts SET pdf_path = ?, tex_path = ? WHERE id = ?",
+                (str(pdf_path), str(tex_path), selected["resume_attempt_id"]),
+            )
             conn.execute(
                 """
                 UPDATE jobs
                 SET selected_resume_pdf_path = ?,
-                    selected_resume_tex_path = ?,
-                    selected_resume_selected_at = CURRENT_TIMESTAMP,
-                    selected_resume_ready_for_c3 = 1
+                    selected_resume_tex_path = ?
                 WHERE id = ?
                 """,
                 (str(pdf_path), str(tex_path), job_id),
