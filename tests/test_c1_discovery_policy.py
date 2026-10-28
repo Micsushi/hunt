@@ -101,6 +101,86 @@ def test_unknown_employers_do_not_merge_equal_requisition_ids_across_sites(monke
     assert len(db.get_all_jobs()) == 2
 
 
+@pytest.mark.parametrize(
+    "setting,initial,replacement,title,location,reason",
+    [
+        (
+            "DISCOVERY_ALLOW_ALL_LANES",
+            False,
+            True,
+            "Garden Planner",
+            "Canada",
+            "outside_search_lanes",
+        ),
+        (
+            "DISCOVERY_ALLOW_EXPERIENCED",
+            False,
+            True,
+            "Senior Software Engineer",
+            "Canada",
+            "experienced_title",
+        ),
+        (
+            "DISCOVERY_ALLOWED_GEOGRAPHIES",
+            "Canada",
+            "United States",
+            "Software Engineer",
+            "Seattle, WA, United States",
+            "outside_canada",
+        ),
+    ],
+)
+def test_discovery_override_changes_refresh_retained_jobs(
+    monkeypatch, tmp_path, setting, initial, replacement, title, location, reason
+):
+    from hunter import config
+
+    monkeypatch.setenv("HUNT_DB_URL", "")
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "override.db"))
+    monkeypatch.setattr(config, "CAREER_STAGES", [])
+    monkeypatch.setattr(config, "INCLUDE_EXPERIENCED_ROLES", False)
+    monkeypatch.setattr(config, "DISCOVERY_ALLOWED_GEOGRAPHIES", "Canada")
+    monkeypatch.setattr(discovery_policy, "TITLE_BLACKLIST", [])
+    monkeypatch.setattr(config, setting, initial)
+    db.init_db(maintenance=False)
+    _, job_id = db.add_job(
+        {
+            **job("https://example.test/override", "https://example.test/override", title=title),
+            "location": location,
+        }
+    )
+    assert db.get_job_by_id(job_id)["discovery_suppressed_reason"] == reason
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET status='applied', enrichment_attempts=7 WHERE id=?", (job_id,)
+        )
+        conn.execute(
+            "UPDATE job_source_observations SET last_seen_at='2000-01-01 00:00:00' WHERE job_id=?",
+            (job_id,),
+        )
+    monkeypatch.setattr(config, setting, replacement)
+    db.init_db(maintenance=False)
+    retained = db.get_job_by_id(job_id)
+    assert retained["discovery_suppressed_reason"] is None
+    assert retained["status"] == "applied"
+    assert retained["enrichment_attempts"] == 7
+    with db.get_connection() as conn:
+        assert (
+            conn.execute(
+                "SELECT last_seen_at FROM job_source_observations WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
+            == "2000-01-01 00:00:00"
+        )
+    db.add_job(retained)
+    with db.get_connection() as conn:
+        assert (
+            conn.execute(
+                "SELECT last_seen_at FROM job_source_observations WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
+            != "2000-01-01 00:00:00"
+        )
+
+
 def test_custom_roles_do_not_inherit_technology_only_or_early_career_exclusions(monkeypatch):
     from hunter import config
     from hunter.discovery_sources import _job

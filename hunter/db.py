@@ -387,6 +387,9 @@ def _backfill_discovery_metadata(cursor):
                 "CAREER_STAGES",
                 "INCLUDE_EXPERIENCED_ROLES",
                 "DISCOVERY_COUNTRIES",
+                "DISCOVERY_ALLOWED_GEOGRAPHIES",
+                "DISCOVERY_ALLOW_EXPERIENCED",
+                "DISCOVERY_ALLOW_ALL_LANES",
                 "EMPLOYMENT_TYPES",
                 "REMOTE_ONLY",
                 "WATCHLIST",
@@ -425,7 +428,7 @@ def _backfill_discovery_metadata(cursor):
                 enrichment_status="blocked", apply_type="unknown", auto_apply_eligible=False
             )
         annotated = _refresh_discovery_metadata(cursor, current)
-        _record_source_observation(cursor, current["id"], current)
+        _record_source_observation(cursor, current["id"], current, refresh_seen=False)
         employers.add(annotated.get("normalized_company"))
     for company in employers:
         _enforce_employer_month_cap(cursor, company)
@@ -1514,7 +1517,7 @@ def count_jobs_for_review(**kwargs):
     return backend_db.count_jobs_for_review(**kwargs)
 
 
-def _record_source_observation(cursor, job_id, job_data):
+def _record_source_observation(cursor, job_id, job_data, *, refresh_seen=True):
     source = str(job_data.get("source") or "unknown")
     source_url = str(job_data.get("job_url") or job_data.get("apply_url") or "")
     if not source_url:
@@ -1525,8 +1528,9 @@ def _record_source_observation(cursor, job_id, job_data):
         VALUES (?, ?, ?)
         ON CONFLICT(job_id, source, source_url) DO UPDATE SET
             last_seen_at = CURRENT_TIMESTAMP
+        WHERE ?
         """,
-        (job_id, source, source_url),
+        (job_id, source, source_url, refresh_seen),
     )
     cursor.execute(
         """
