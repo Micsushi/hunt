@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { ResumeReviewWorkspace } from './review/ResumeReviewWorkspace'
 import styles from './Fletcher.module.css'
 
@@ -13,9 +13,9 @@ export function FletcherReviewPage() {
         <div>
           <h1 className={styles.heroTitle}>Resume workspace</h1>
         </div>
-        <a className={styles.btn} href="/fletcher">
+        <Link className={styles.btn} to="/fletcher">
           Back to Fletcher
-        </a>
+        </Link>
       </div>
       <ResumeReviewWorkspace reviewId={reviewId} />
     </div>

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   batchDownloadFletcherJobs,
   cancelFletcherJob,
@@ -1239,9 +1240,9 @@ function FletcherQueuePanel({
                       Cancel
                     </button>
                     {job.result.review_id ? (
-                      <a className={styles.btn} href={`/fletcher/reviews/${job.result.review_id}`}>
+                      <Link className={styles.btn} to={`/fletcher/reviews/${job.result.review_id}`}>
                         Open workspace
-                      </a>
+                      </Link>
                     ) : null}
                     <a
                       className={styles.btn}
@@ -1461,9 +1462,9 @@ function FletcherQueuePanel({
                   </div>
                   <div className={`${styles.queueActions} ${styles.historyActions}`}>
                     {reviewId ? (
-                      <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
+                      <Link className={styles.btn} to={`/fletcher/reviews/${reviewId}`}>
                         Open workspace
-                      </a>
+                      </Link>
                     ) : null}
                     <a
                       className={styles.btn}
@@ -1608,9 +1609,9 @@ function FletcherJobDetailModal({
             </>
           ) : null}
           {reviewId ? (
-            <a className={styles.btn} href={`/fletcher/reviews/${reviewId}`}>
+            <Link className={styles.btn} to={`/fletcher/reviews/${reviewId}`}>
               Open workspace
-            </a>
+            </Link>
           ) : null}
           {startingPdfUrl ? (
             <a className={styles.btn} href={startingPdfUrl}>
