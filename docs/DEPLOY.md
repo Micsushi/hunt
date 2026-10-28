@@ -1,6 +1,6 @@
 # Hunt : Repo-Native Deploy
 
-Purpose: start the active C0 through C2 Hunt stack or a selected service bundle on Windows or Linux. C3 v3 is not implemented and C4 is on hold.
+Purpose: start the active C0 through C2 Hunt stack or a selected service bundle on Windows or Linux. C3 runs separately as a local service and browser extension; see [C3 Applications](../executioner/docs/product.md). C4 remains on hold.
 
 ## Standard command
 

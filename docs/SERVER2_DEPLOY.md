@@ -29,8 +29,10 @@ Useful variants:
 - `6`: C0 + C1 + Postgres base Hunt runtime
 - `7`: C2 Fletcher
 
-The Hunt wrapper rejects every other stage. C3 v3 is not implemented and C4 is
-on hold, so neither has a deploy stage.
+The Hunt wrapper rejects every other stage. C3 runs separately on the user's
+computer as a local service and browser extension, described in
+[C3 Applications](../executioner/docs/product.md). It has no server deploy stage;
+the remote server cannot reach a user's local C3 service. C4 remains on hold.
 
 ## Prerequisites
 
