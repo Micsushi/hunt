@@ -154,7 +154,7 @@ $('account-form').onsubmit = e => { e.preventDefault(); void perform(async () =>
   await api('account', { email:$('email').value, password:$('password').value, gmailAppPassword:$('gmail').value });
   $('password').value=''; $('gmail').value=''; $('notice').textContent='Account available for this service session'; $('email').focus();
 }); };
-function button(text, action, jobId) { const b=document.createElement('button'); b.type='button'; b.className='secondary'; b.textContent=text; b.disabled=busy||historyBusy||!stateFresh; b.onclick=()=>perform(action,jobId,`${text} in progress…`); return b; }
+function button(text, action, jobId, blocked=false) { const b=document.createElement('button'); b.type='button'; b.className='secondary'; b.textContent=text; b.disabled=busy||historyBusy||!stateFresh||blocked; b.onclick=()=>perform(action,jobId,`${text} in progress…`); return b; }
 const ownerReview = job => job.status==='review' && job.stage.startsWith('Owner review needed:');
 const needsAttention = job => ownerReview(job) || ['paused','submission_uncertain'].includes(job.status);
 async function refresh() {
@@ -195,11 +195,11 @@ function renderJobs() {
   $('filter-summary').textContent=`${jobs.length} of ${state.jobs.length} applications`;
   $('no-matches').hidden=jobs.length>0||state.jobs.length===0;
   const signature=JSON.stringify([state.jobs,query,filter,stateFresh,busy,historyBusy,pendingJob,[...jobErrors]]); if(signature===rendered)return; rendered=signature;
-  const active=document.activeElement, focusJob=active?.closest('[data-job]')?.dataset.job, focusText=active?.textContent;
+  const active=document.activeElement, focusJob=active?.closest('[data-job]')?.dataset.job, focusText=active?.dataset.focusAction||active?.textContent;
   const rows=jobs.map(job=>{
-    const li=document.createElement('li'); li.dataset.job=job.id;
+    const li=document.createElement('li'); li.dataset.job=job.id;li.tabIndex=-1;
     const content=document.createElement('div'), title=document.createElement('a'); title.className='job-title';title.textContent=job.title;title.href=job.url;title.target='_blank';title.rel='noopener noreferrer'; content.append(title);
-    const status=document.createElement('p');status.className='job-status';status.textContent=ownerReview(job)?'Owner review needed':({queued:'Queued',running:'Running',paused:'Paused',review:'At review',submitting:'Submitting',submitted:'Submitted',submission_uncertain:'Submission uncertain'}[job.status]||job.status);status.dataset.attention=String(needsAttention(job));content.append(status);
+    const status=document.createElement('p');status.className='job-status';status.textContent=job.status==='paused'&&job.actionPending?'Pausing…':ownerReview(job)?'Owner review needed':({queued:'Queued',running:'Running',paused:'Paused',review:'At review',submitting:'Submitting',submitted:'Submitted',submission_uncertain:'Submission uncertain'}[job.status]||job.status);status.dataset.attention=String(needsAttention(job));content.append(status);
     if(job.stage!==status.textContent){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
     if(job.resumeName){const resume=document.createElement('p');resume.className='job-stage';resume.textContent=`Resume: ${job.resumeName}${job.resumeVersion ? ' · '+job.resumeVersion : ''}`;content.append(resume);}
     if(proxied && job.sourceJobId){const source=document.createElement('a');source.href=`/jobs/${job.sourceJobId}`;source.target='_top';source.textContent='View Hunt job';content.append(source);}
@@ -210,16 +210,16 @@ function renderJobs() {
     const act=action=>api(`jobs/${job.id}/action`,{action});
     if(job.tabId)actions.append(button('Open application',()=>act('open'),job.id));
     if(['running','queued'].includes(job.status))actions.append(button('Pause',()=>act('pause'),job.id));
-    if(['paused','review'].includes(job.status))actions.append(button('Retry',()=>act('retry'),job.id));
-    if(['paused','queued'].includes(job.status))actions.append(button('Remove',async()=>{await act('remove');remember({undo:()=>act('restore'),redo:()=>act('remove')});},job.id));
-    if(job.status==='review'||job.status==='paused'&&job.reviewUrl)actions.append(button('Refresh review',()=>act('refresh_review'),job.id));
+    if(['paused','review'].includes(job.status))actions.append(button('Retry',()=>act('retry'),job.id,job.actionPending));
+    if(['paused','queued'].includes(job.status))actions.append(button('Remove',async()=>{await act('remove');remember({undo:()=>act('restore'),redo:()=>act('remove')});},job.id,job.actionPending));
+    if(job.status==='review'||job.status==='paused'&&job.reviewUrl)actions.append(button('Refresh review',()=>act('refresh_review'),job.id,job.actionPending));
     if(job.status==='review'){
-      if(job.submissionAllowed)actions.append(button('Submit…',async()=>{pendingSubmit=job;$('submit-title').textContent=job.title;$('reviewed').checked=false;$('submit-dialog').returnValue='';$('submit-dialog').showModal();},job.id));
+      if(job.submissionAllowed)actions.append(button('Submit…',async()=>{pendingSubmit=job;$('submit-title').textContent=job.title;$('reviewed').checked=false;$('submit-dialog').returnValue='';$('submit-dialog').showModal();},job.id,job.actionPending));
     }
     li.append(content,actions);return li;
   });
   $('jobs').replaceChildren(...rows);
-  if(focusJob && !active.isConnected){const row=rows.find(r=>r.dataset.job===focusJob);const next=[...(row?.querySelectorAll('button:not(:disabled)')||[])].find(b=>b.textContent===focusText)||row?.querySelector('a')||$('queue-title');next.focus();}
+  if(focusJob && !active.isConnected){const row=rows.find(r=>r.dataset.job===focusJob), buttons=[...(row?.querySelectorAll('button:not(:disabled)')||[])];const next=buttons.find(b=>b.textContent===focusText)||(!busy&&!historyBusy&&(buttons.find(b=>b.textContent!=='Open application')||buttons[0]))||row||$('queue-title');if(next===row)row.dataset.focusAction=focusText;next.focus();}
 }
 $('submit-dialog').addEventListener('close',()=>{if($('submit-dialog').returnValue!=='submit')return; const job=pendingSubmit;
   void perform(()=>api(`jobs/${job.id}/action`,{action:'submit',confirmed:$('reviewed').checked,reviewDigest:job.reviewDigest}));

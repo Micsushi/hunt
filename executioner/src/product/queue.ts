@@ -73,7 +73,7 @@ export class ApplicationQueue {
   private save() { this.persist(join(this.root, "jobs.json"), { jobs: this.jobs, concurrency: this.concurrency }); }
   private safePump() { try { this.pump(); } catch { /* save() exposes the failure and pauses active work. */ } }
   private changed(job: ProductJob) { job.updatedAt = new Date().toISOString(); this.save(); }
-  snapshot() { return { jobs: this.jobs.filter(j => j.status !== "removed"), connected: this.bridge.connected,
+  snapshot() { return { jobs: this.jobs.filter(j => j.status !== "removed").map(job => ({ ...job, actionPending: this.running.has(job.id) || this.reviewActions.has(job.id) })), connected: this.bridge.connected,
     configured: !!this.settings, accountConfigured: !!this.credentials, emailConfigured: !!this.verifyEmail, concurrency: this.concurrency, storageError: this.storageError }; }
   getSettings() { return this.settings ?? null; }
   recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
