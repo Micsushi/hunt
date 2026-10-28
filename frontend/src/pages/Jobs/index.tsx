@@ -26,8 +26,8 @@ function queryFromParams(p: URLSearchParams): JobsQuery {
     ats_type: p.get('ats_type') || '',
     sort: (p.get('sort') || 'date_scraped') as SortField,
     direction: (p.get('direction') || 'desc') as SortDirection,
-    limit: parseInt(p.get('limit') || '50', 10),
-    page: parseInt(p.get('page') || '1', 10),
+    limit: Math.max(1, parseInt(p.get('limit') || '50', 10) || 50),
+    page: Math.max(1, parseInt(p.get('page') || '1', 10) || 1),
   }
 }
 
@@ -154,10 +154,28 @@ function Th({
     <th
       className={sortKey ? styles.sortable : ''}
       title={COL_TIPS[label] ?? label}
-      onClick={sortKey ? () => onLocalSort({ field: sortKey, dir: nextDir }) : undefined}
+      aria-sort={
+        sortKey
+          ? active
+            ? localSort?.dir === 'asc'
+              ? 'ascending'
+              : 'descending'
+            : 'none'
+          : undefined
+      }
     >
-      {label}
-      {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
+      {sortKey ? (
+        <button
+          type="button"
+          className={styles.sortButton}
+          onClick={() => onLocalSort({ field: sortKey, dir: nextDir })}
+        >
+          {label}
+          {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
+        </button>
+      ) : (
+        label
+      )}
     </th>
   )
 }
@@ -196,6 +214,11 @@ export function JobsPage() {
     setQuery((prev) => ({ ...prev, ...patch }))
   }, [])
 
+  if (data && !isFetching && !isError && !isPlaceholderData) {
+    const lastPage = Math.max(1, Math.ceil(total / (query.limit ?? 50)))
+    if ((query.page ?? 1) > lastPage) setQuery({ ...query, page: lastPage })
+  }
+
   // Client-side sorted display jobs (only sorts current page)
   const displayJobs = useMemo(() => {
     if (!localSort) return jobs
@@ -205,8 +228,18 @@ export function JobsPage() {
   // Keyboard j/k/Enter navigation
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const target = e.target as HTMLElement | null
+      if (
+        e.defaultPrevented ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.metaKey ||
+        target?.closest(
+          'input, textarea, select, [role="dialog"], [contenteditable]:not([contenteditable="false"])',
+        )
+      )
+        return
+      if (e.key === 'Enter' && target?.closest('button, a, [role="button"]')) return
       const rows = tbodyRef.current?.querySelectorAll('tr[data-job-id]') ?? []
       if (!rows.length) return
       if (e.key === 'j') {
@@ -219,8 +252,11 @@ export function JobsPage() {
       }
       if (e.key === 'Enter' && focusIdx >= 0) {
         const row = rows[focusIdx] as HTMLElement
-        const id = row.dataset.jobId
-        if (id) navigate(`/jobs/${id}${detailSearch}`)
+        const id = row?.dataset.jobId
+        if (id) {
+          e.preventDefault()
+          navigate(`/jobs/${id}${detailSearch}`)
+        }
       }
     }
     window.addEventListener('keydown', onKey)

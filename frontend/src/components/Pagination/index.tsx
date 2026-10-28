@@ -19,7 +19,7 @@ export function Pagination({ page, total, limit, onChange }: Props) {
 
   function goTo(p: number) {
     const clamped = Math.max(1, Math.min(p, totalPages))
-    if (clamped !== current) onChange(clamped)
+    if (clamped !== page) onChange(clamped)
   }
 
   function handleJumpSubmit(e: React.FormEvent) {

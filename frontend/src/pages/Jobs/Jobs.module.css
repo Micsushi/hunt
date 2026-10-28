@@ -120,6 +120,19 @@
   background: var(--accent-soft);
 }
 
+.sortButton {
+  min-height: 44px;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+
 .jobRow {
   cursor: pointer;
   transition: background var(--ease);
