@@ -641,7 +641,11 @@ def _discover_company_queue(
                 ),
             )
             if run:
-                run.saved(f"company:{company}:{sites[company]}", len(found))
+                run.saved(
+                    f"company:{company}:{sites[company]}",
+                    len(found),
+                    complete=health["status"] in {"ok", "partial"},
+                )
     return jobs
 
 
