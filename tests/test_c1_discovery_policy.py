@@ -76,6 +76,31 @@ def test_policy_normalizes_identity_stage_and_priority():
     )
 
 
+def test_unknown_employers_do_not_merge_equal_requisition_ids_across_sites(monkeypatch, tmp_path):
+    monkeypatch.setenv("HUNT_DB_URL", "")
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "unknown-employers.db"))
+    db.init_db(maintenance=False)
+    first = "https://first.example/careers?job_id=42"
+    second = "https://second.example/careers?job_id=42"
+    _, first_id = db.add_job({**job(first, first), "company": ""})
+    result, second_id = db.add_job({**job(second, second), "company": ""})
+    assert result == "inserted"
+    assert first_id != second_id
+    assert canonical_job_key(first + "&utm_source=feed") == canonical_job_key(first)
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET canonical_job_key='requisition::42', discovery_policy_version=12, "
+            "status='applied', enrichment_attempts=7 WHERE id=?",
+            (first_id,),
+        )
+    db.init_db(maintenance=False)
+    retained = db.get_job_by_id(first_id)
+    assert retained["canonical_job_key"] == canonical_job_key(first)
+    assert retained["status"] == "applied"
+    assert retained["enrichment_attempts"] == 7
+    assert len(db.get_all_jobs()) == 2
+
+
 def test_custom_roles_do_not_inherit_technology_only_or_early_career_exclusions(monkeypatch):
     from hunter import config
     from hunter.discovery_sources import _job

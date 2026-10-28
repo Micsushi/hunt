@@ -9,7 +9,7 @@ from hunter import config
 from hunter.config import TITLE_BLACKLIST, WATCHLIST
 from hunter.search_lanes import canonicalize_title_text, matching_search_lane
 
-DISCOVERY_POLICY_VERSION = 12
+DISCOVERY_POLICY_VERSION = 13
 
 EMPLOYER_ALIASES = {
     "amazon web services": "amazon",
@@ -176,7 +176,7 @@ def canonical_job_key(url: object, company: object = "") -> str:
 
     for field in ("gh_jid", "job_id", "jobId", "jid"):
         if query.get(field):
-            return f"requisition:{employer}:{query[field].lower()}"
+            return f"requisition:{employer or host}:{query[field].lower()}"
     if "myworkdayjobs.com" in host:
         match = re.search(r"_([A-Z]+[A-Z0-9_-]*\d)(?:/|$)", path, re.IGNORECASE)
         if match:
