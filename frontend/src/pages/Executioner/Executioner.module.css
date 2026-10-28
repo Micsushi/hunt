@@ -9,3 +9,22 @@
   gap: 16px;
   justify-items: start;
 }
+
+.retryButton {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.retryButton:hover:not([aria-disabled='true']) {
+  border-color: var(--accent);
+}
+
+.retryButton[aria-disabled='true'] {
+  cursor: progress;
+}

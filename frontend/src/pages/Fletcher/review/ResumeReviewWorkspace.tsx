@@ -315,6 +315,7 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
   }
 
   function startEdit(block: ReviewBlock) {
+    if (editingBlockId === block.blockId) return
     if (editingBlockId !== null && editingBlockId !== block.blockId) {
       setSaveError('Apply or cancel the current block edit before editing another block.')
       return

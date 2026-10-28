@@ -9,12 +9,17 @@ export function ExecutionerPage() {
     retry: false,
     refetchOnWindowFocus: false,
   })
-  if (connection.isPending) return <p role="status">Connecting to C3…</p>
-  if (connection.isError)
+  if (connection.isPending && !connection.isFetched)
+    return <p role="status">Connecting to C3…</p>
+  if (connection.isError || !connection.data)
     return (
       <section className={styles.unavailable}>
         <h1>Applications</h1>
-        <p role="alert">Hunt cannot reach its local C3 service.</p>
+        <p role={connection.isFetching ? 'status' : 'alert'}>
+          {connection.isFetching
+            ? 'Connecting to Hunt’s local C3 service…'
+            : 'Hunt cannot reach its local C3 service.'}
+        </p>
         <p>
           On your computer, open the <strong>Hunt C3</strong> extension, connect it to your local C3
           service, and choose <strong>Open workspace</strong>.
@@ -24,8 +29,16 @@ export function ExecutionerPage() {
           computer does not connect it to a remote Hunt server. For a local Hunt setup, start C3
           alongside the backend, then retry.
         </p>
-        <button type="button" disabled={connection.isFetching} onClick={() => connection.refetch()}>
-          Retry connection
+        <button
+          className={styles.retryButton}
+          type="button"
+          aria-disabled={connection.isFetching}
+          aria-busy={connection.isFetching}
+          onClick={() => {
+            if (!connection.isFetching) void connection.refetch({ cancelRefetch: false })
+          }}
+        >
+          {connection.isFetching ? 'Connecting…' : 'Retry connection'}
         </button>
       </section>
     )

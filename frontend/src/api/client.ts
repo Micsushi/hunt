@@ -17,8 +17,8 @@ export class ApiError extends Error {
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (res.status === 401) {
-    // Session expired or not logged in - redirect to login
-    window.location.href = '/login'
+    // Recheck auth on this route so AuthGuard preserves the sign-in return location.
+    window.location.reload()
     throw new ApiError(401, 'Not authenticated')
   }
   if (!res.ok) {
