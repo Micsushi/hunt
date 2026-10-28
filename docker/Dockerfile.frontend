@@ -13,6 +13,7 @@ FROM nginx:1.27-alpine
 
 # Copy built SPA assets
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
+RUN chmod -R a+rX /usr/share/nginx/html
 
 # nginx templates dir: entrypoint runs envsubst before nginx starts
 COPY docker/nginx.frontend.conf /etc/nginx/templates/default.conf.template
