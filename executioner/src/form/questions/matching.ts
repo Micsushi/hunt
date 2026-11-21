@@ -6,6 +6,7 @@ export interface EmploymentQuestion {
   employer: string | null;
   negated: boolean;
   qualified: boolean;
+  includesAnotherEmployer?: true;
 }
 
 /** Capture the company instead of adding one alias per employer. Keep qualifiers. */
@@ -22,12 +23,15 @@ export function employmentQuestion(text: string): EmploymentQuestion | undefined
   if (/\b(?:a staffing agency|an employment agency|armed forces customers)\b/u.test(value)) return;
   const match = /\b(?:employee|associate|contractor|intern|employed|worked|working|work)\s+(?:of|by|for|at|with)\s+(.+?)(?=\s+(?:if|including|excluding|this does|please|as a|as an|either|in any|within|during|over the|in the last|for any length of time)\b|$)/u.exec(value);
   const embedded = /\b(?:current or former|former or current|current|former)\s+(.+?)\s+(?:employee|associate|contractor|intern)\b/u.exec(value)?.[1];
-  const name = match?.[1] ?? (embedded && !/^(?:or former|or current)$/u.test(embedded) ? embedded : undefined);
+  const groupEmployer = /^have you been previously employed by (.+?) or one of its subsidiaries$/u.exec(value)?.[1] ??
+    /^are you currently employed by (.+?) or have you previously been employed by \1 or [\p{L}\p{N}]+$/u.exec(value)?.[1];
+  const name = groupEmployer ?? match?.[1] ?? (embedded && !/^(?:or former|or current)$/u.test(embedded) ? embedded : undefined);
   const employer = !name || /^(?:us|here|our company|the company|this company|this organization|our organization|the organization)$/u.test(name) ? null : name;
   return {family:'employment_relationship',period:current && past || /\bever\b/u.test(value) ||
     !past && /^have you (?:worked|been employed)/u.test(value) ? 'ever' : current ? 'current' : 'past',
-    employer,negated:/\b(?:not|never|no longer)\b/u.test(value.split(/\b(?:if|including|excluding|this does|please)\b/u)[0]??''),
-    qualified:/\b(?:contract|contractor|contingent|intern|internship|subsidiar|affiliate|excluding|except|within|years|months|directly)\w*\b/u.test(original)};
+    employer,...(groupEmployer && employer ? {includesAnotherEmployer:true as const} : {}),
+    negated:/\b(?:not|never|no longer)\b/u.test(value.split(/\b(?:if|including|excluding|this does|please)\b/u)[0]??''),
+    qualified:!!groupEmployer || /\b(?:contract|contractor|contingent|intern|internship|subsidiar|affiliate|excluding|except|within|years|months|directly)\w*\b/u.test(original)};
 }
 
 export function applicantRefersSomeone(text: string): boolean {

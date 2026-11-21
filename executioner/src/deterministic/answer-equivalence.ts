@@ -6,7 +6,7 @@ const groups: Readonly<Record<string,readonly (readonly string[])[]>> = {
   education_field_of_study: [['computer science','computer and information science']],
   education_degree: [['bachelor of science','bachelor of science bs','bsc','b sc','bs','b s'],['bachelor of arts','ba','b a'],['master of science','msc','m sc','ms','m s'],['doctor of philosophy','phd','ph d']],
   phone_device_type: [['mobile','cell','cellular','mobile phone','cell phone']],
-  application_source: [['linkedin','linkedin corporate page'],['recruiter','recruiter outreach']],
+  application_source: [['linkedin','linkedin corporate page','linkedin job posting'],['recruiter','recruiter outreach']],
 };
 const factAliases: Readonly<Record<string,string>> = {
   'owner-question-phone-country-code':'phone_country_code','owner-question-current-location':'current_location',

@@ -46,9 +46,9 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
       // Account credentials never belong in the question-review backlog.
       if (/\b(?:password|passcode|verification code|one time code)\b/iu.test(value.question)) return;
       if (/^https?:\/\//iu.test(value.pageId)) value={...value,pageId:matchingContext(value.pageId).url!};
-      const match=inspectQuestionMatch(value.question);
+      const match=inspectQuestionMatch(value.question, context.company ? [context.company] : []);
       const scopeMatched=!match.context?.employer || context.company!==null && sameEmployer(context.company,match.context.employer);
-      const applicable=scopeMatched && !match.context?.negated && !/\b(?:subsidiar|affiliate)\w*/iu.test(value.question);
+      const applicable=scopeMatched && !match.context?.negated && !(match.context && 'includesAnotherEmployer' in match.context) && !/\b(?:subsidiar|affiliate)\w*/iu.test(value.question);
       const factId=match.factId??(match.context?.family==='employment_relationship'?
         match.context.period==='current'?'current_associate':'previously_worked_for_organization':null);
       let fact=applicable?facts.find(fact=>fact.factId===factId):undefined;

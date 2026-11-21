@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Page, Locator } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from './application-contract.ts';
+import { ApplicationPause, AttachmentPreviewUnavailable, type ResumeUploadReceipt } from './application-contract.ts';
 import { recordComponentFailure } from './component-diagnostics.ts';
 import { applicationTarget } from './target.ts';
 
@@ -38,26 +38,75 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
       const attempt=(window as any).__huntWorkableResumeAttempt;
       if(!group.isConnected || attempt?.group!==group || attempt.token!==token)return null;
       const links=group.querySelectorAll<HTMLAnchorElement>('a[data-action=view]');
-      return links.length===1 && links[0]!.getClientRects().length && links[0]!.href || null;
+      if (links.length !== 1 || !links[0]!.getClientRects().length || !links[0]!.href) return null;
+      attempt.link = links[0];
+      return links[0]!.href;
     },{group,token:receipt.token},{timeout:20000}).catch(()=>null);
     const href=preview?await preview.jsonValue():null;
     await preview?.dispose();
     if(typeof href!=='string' || !/^https:\/\//.test(href))throw new ApplicationPause('The employer has not confirmed the selected resume upload. Check its resume preview before retrying.');
-    // The owned preview URL is self-contained. A browser-bound request also
-    // reads all browser cookies, which the selected-tab extension cannot do.
     operation = 'verify_preview_bytes';
-    try {
-      const response=await fetch(href,{signal:AbortSignal.timeout(15000),credentials:'omit'});
-      if(!response.ok)throw new ApplicationPause('The resume preview is unavailable or expired. Refresh its preview before retrying.');
-      if(createHash('sha256').update(Buffer.from(await response.arrayBuffer())).digest('hex')!==receipt.selectedSha256)throw new ApplicationPause('The resume preview does not confirm the PDF selected for this job.');
-    } catch(error) {
-      if(error instanceof ApplicationPause)throw error;
-      throw new ApplicationPause('The resume preview could not be read. Inspect the uploaded file before retrying.');
+    const url = new URL(href);
+    if (url.username || url.password) throw new ApplicationPause('The resume preview address is not supported.');
+    let digest: string | null = null;
+    if (url.origin === new URL(page.url()).origin) {
+      // Read a direct PDF from the selected document. Never follow it to a login or another origin.
+      if (/\.pdf$/i.test(url.pathname)) {
+        digest = await group.evaluate(async (element, {href, token, size}) => {
+          const attempt = (window as any).__huntWorkableResumeAttempt;
+          const links = element.querySelectorAll<HTMLAnchorElement>('a[data-action=view]');
+          if (!element.isConnected || attempt?.token !== token || attempt.group !== element ||
+              links.length !== 1 || links[0] !== attempt.link || links[0]!.href !== href ||
+              new URL(href).origin !== location.origin) throw new Error('The resume changed during verification.');
+          try {
+            const response = await fetch(href, {mode:'same-origin', credentials:'same-origin', redirect:'error', signal:AbortSignal.timeout(15000)});
+            if (!response.ok || !response.body || !/^(application\/pdf|application\/octet-stream)(?:;|$)/i.test(response.headers.get('content-type') ?? '')) return null;
+            const reader = response.body.getReader();
+            const bytes = new Uint8Array(size);
+            let offset = 0;
+            for (;;) {
+              const {value, done} = await reader.read();
+              if (done) break;
+              if (offset + value.length > size) { await reader.cancel(); return 'size_mismatch'; }
+              bytes.set(value, offset);
+              offset += value.length;
+            }
+            if (offset !== size) return 'size_mismatch';
+            return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2,'0')).join('');
+          } catch { return null; }
+        }, {href, token:receipt.token, size:file.buffer.length});
+      }
+    } else {
+      // Existing signed external previews are anonymous. No browser session or credential retry.
+      try {
+        const response = await fetch(href, {signal:AbortSignal.timeout(15000), credentials:'omit', redirect:'error'});
+        if (response.ok && response.body && !/text\/html/i.test(response.headers.get('content-type') ?? '')) {
+          const reader = response.body.getReader();
+          const hash = createHash('sha256');
+          let size = 0;
+          for (;;) {
+            const {done, value} = await reader.read();
+            if (done) { digest = hash.digest('hex'); break; }
+            size += value.byteLength;
+            if (size > file.buffer.length) {
+              digest = 'size_mismatch';
+              await reader.cancel();
+              break;
+            }
+            hash.update(value);
+          }
+        } else {
+          await response.body?.cancel();
+        }
+      } catch { /* Leave the original upload pending. */ }
     }
+    if (digest === null) throw new AttachmentPreviewUnavailable('The resume preview could not be verified. Inspect the uploaded file before retrying.');
+    if (digest !== receipt.selectedSha256) throw new ApplicationPause('The resume preview does not confirm the PDF selected for this job.');
     operation = 'bind_verified_preview';
     await group.evaluate((element,{receipt,href})=>{
       const attempt=(window as any).__huntWorkableResumeAttempt;
-      if(!element.isConnected || attempt?.token!==receipt.token || attempt.group!==element || element.querySelector<HTMLAnchorElement>('a[data-action=view]')?.href!==href)throw new Error('The resume changed during verification.');
+      const links = element.querySelectorAll<HTMLAnchorElement>('a[data-action=view]');
+      if(!element.isConnected || attempt?.token!==receipt.token || attempt.group!==element || links.length!==1 || links[0]!==attempt.link || links[0]!.href!==href)throw new Error('The resume changed during verification.');
       attempt.href=href;
       let valid=true;
       const observer=new MutationObserver(()=>{valid=false;});
@@ -83,4 +132,14 @@ export async function verifiedWorkableResume(page:Page,receipt:ResumeUploadRecei
     if(links.length!==1 || links[0].href!==proof.href || !links[0].getClientRects().length)return false;
     return fieldKey===undefined || [...proof.group.querySelectorAll('input[type=file]')].some((e:any)=>e.getAttribute('data-c3-hosted')===fieldKey);
   },{receipt,fieldKey});
+}
+
+export function unverifiedWorkablePreview(page: Page, requiredKeys: string[], expected: boolean, selectedDigestKnown: boolean) {
+  return page.evaluate(({requiredKeys, expected, selectedDigestKnown}) => {
+    const attempt = (window as any).__huntWorkableResumeAttempt;
+    if (attempt) return !attempt.check?.() || selectedDigestKnown;
+    return [...document.querySelectorAll('div[data-role=dropzone] input[type=file][data-ui=resume]')].some(
+      input => expected || requiredKeys.includes(input.getAttribute('data-c3-hosted') ?? '')
+    );
+  }, {requiredKeys, expected, selectedDigestKnown});
 }

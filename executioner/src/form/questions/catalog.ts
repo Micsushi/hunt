@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 
 import type { UiBehaviorId } from "../../contracts/index.ts";
-import { applicantRefersSomeone, employmentQuestion, referralQuestion, rankQuestionCandidates } from './matching.ts';
+import { applicantRefersSomeone, employmentQuestion, referralQuestion, rankQuestionCandidates, sameEmployer } from './matching.ts';
 import type {
   ApplicationProfileFactId,
   DiscoveredIntakeField,
 } from "../answers/application-types.ts";
 import {
   assertCatalogHasNoCollisions,
+  normalizeCatalogText,
   resolveCatalogKeywords,
   resolveCatalogText,
   type ReviewedCatalogEntry,
@@ -417,9 +418,15 @@ export function generatedLearningDefaultFor(
   return generatedLearningDefaults[id as keyof typeof generatedLearningDefaults];
 }
 
-export function resolveQuestion(text: string) {
+export function resolveQuestion(text: string, employerNames?: readonly string[]) {
   const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
   if(exact.kind!=='unknown') return exact;
+  const sourceEmployer = /^how did you hear about (.+)$/u.exec(normalizeCatalogText(text))?.[1];
+  if (sourceEmployer && employerNames !== undefined &&
+      !/^(?:(?:the|this|our) (?:company|organization|job|position|opening|opportunity|role|job posting|job opening)|us)$/u.test(sourceEmployer) &&
+      !employerNames.some(name=>sameEmployer(name,sourceEmployer))) {
+    return {kind:'unknown' as const};
+  }
   if (applicantRefersSomeone(text)) return {kind:'unknown' as const};
   const referral=referralQuestion(text);
   if(referral) return referral.negated?{kind:'unknown' as const}:{kind:'resolved' as const,id:'workday-placeholder-associate-referral' as const,provenance:'reviewed_catalog' as const};
@@ -451,8 +458,8 @@ export function resolveQuestion(text: string) {
 }
 
 /** Stable IDs bind wording to profile facts; uncertain suggestions never edit the catalog. */
-export function inspectQuestionMatch(text: string) {
-  const resolution = resolveQuestion(text);
+export function inspectQuestionMatch(text: string, employerNames?: readonly string[]) {
+  const resolution = resolveQuestion(text, employerNames);
   const employment = employmentQuestion(text) ?? referralQuestion(text);
   const entries = [...questionCatalog,...questionAliasCatalog];
   const exact = resolveCatalogText(entries,text);

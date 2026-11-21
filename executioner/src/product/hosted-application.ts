@@ -12,7 +12,7 @@ import type { ApplicationFieldObservation } from '../form/answers/application-ty
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
 import { applicationTarget } from './target.ts';
-import { ApplicationPause, type ProductInput, type ResumeUploadReceipt } from './application-contract.ts';
+import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt } from './application-contract.ts';
 import { hasHostedResume, prepareHostedResume, verifyHostedAttachments } from './uploads/hosted.ts';
 import { createMatchingBacklog, type MatchingObservation } from './matching-backlog.ts';
 
@@ -32,7 +32,7 @@ function requireHostedApplication(observation: Awaited<ReturnType<typeof observe
 
 export async function inspectHostedFields(page: Page) {
   await page.evaluate(annotateQuestionContext);
-  return page.locator(controls).evaluateAll(elements => {
+  const fields = await page.locator(controls).evaluateAll(elements => {
     const visible = (e: Element) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none';
     const clean = (s: string) => s.replace(/[✱*]/g, '').replace(/\s+/g, ' ').trim();
     const labelContent = (e: Element, includeAsterisk = false) => {
@@ -99,6 +99,22 @@ export async function inspectHostedFields(page: Page) {
       }
       const precedingLabel = e.closest('.application-field')?.previousElementSibling;
       const ashbyButtons = e.matches('.ashby-application-form-input-yesno');
+      let ambiguousTitles: Element[] | undefined;
+      const ashbyEntry = e.closest('.ashby-application-form-field-entry[data-field-entry-id][data-field-path]');
+      if (ashbyEntry && (ashbyButtons || e.matches('input[role=combobox]'))) {
+        // Ashby titles can refer to an ID that is absent from the rendered entry.
+        const activeInEntry = (node: Element) => node.closest('.ashby-application-form-field-entry') === ashbyEntry &&
+          visible(node) && !node.closest('[hidden],[inert],[aria-hidden=true]');
+        const titles = [...ashbyEntry.querySelectorAll<HTMLLabelElement>('label.ashby-application-form-question-title')].filter(activeInEntry);
+        const widgets = [...ashbyEntry.querySelectorAll('.ashby-application-form-input-yesno,input[role=combobox]')].filter(activeInEntry);
+        if (widgets.includes(e)) {
+          const orphans = titles.filter(title=>title.htmlFor && !document.getElementById(title.htmlFor));
+          if (titles.length === 1 && widgets.length === 1 && orphans[0]) {
+            labelOwners = [...new Set([...labelOwners, orphans[0]])];
+            if (!label) label = labelText(orphans[0]);
+          } else ambiguousTitles = orphans;
+        }
+      }
       const ownsLabel = (candidate: Element) => candidate instanceof HTMLLabelElement
         ? candidate.control === e || (ashbyButtons && group?.matches('.ashby-application-form-field-entry') &&
           candidate === group.firstElementChild && !candidate.hasAttribute('for') && !candidate.control &&
@@ -128,7 +144,7 @@ export async function inspectHostedFields(page: Page) {
       const groupRequired = oneOf && !sectionInputs.some(t => t.value.trim()) && (sectionInputs[0] as Element) === e;
       const multiChecks=e.matches('[role=group][data-ui],.application-field:has(>ul[data-qa=checkboxes])')?[...e.querySelectorAll<HTMLInputElement>('input[type=checkbox]')]:[];
       const requiredMarker = '[data-required=true],.required,.ashby-application-form-field-required,[class*=_required_]';
-      const markedLabel = labelOwners.some(owner=>owner.matches(requiredMarker) ||
+      const hasRequiredMarker = (owner: Element) => owner.matches(requiredMarker) ||
         !!owner.querySelector(requiredMarker) || /[✱*]\s*$/.test(labelContent(owner, true)) || (()=>{
           const original=clean(labelContent(owner));
           for(let cluster=owner.parentElement,depth=0;cluster && depth<2;cluster=cluster.parentElement,depth++) {
@@ -137,7 +153,9 @@ export async function inspectHostedFields(page: Page) {
             if(clean(text)===original && /(?:^[✱*]|[✱*]$)/.test(text))return true;
           }
           return false;
-        })());
+        })();
+      if (ambiguousTitles?.some(hasRequiredMarker)) return null;
+      const markedLabel = labelOwners.some(hasRequiredMarker);
       const ashbyMarker = group?.matches('.ashby-application-form-field-entry') &&
         !!group.querySelector(':scope > .ashby-application-form-field-required');
       const uploadWrapper=e.type==='file'?e.closest('.ashby-application-form-field-entry,.application-question,.application-field,.field'):null;
@@ -153,15 +171,29 @@ export async function inspectHostedFields(page: Page) {
       const key = `hosted-${index}`;
       e.setAttribute('data-c3-hosted', key);
       const options = kind==='multicheck'?multiChecks.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind==='radio'?radios.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind === 'select' ? [...(raw as HTMLSelectElement).options].filter(o => !o.disabled && o.value).map(o => o.textContent?.trim() ?? '') : kind === 'buttons' ? [...e.querySelectorAll('button[data-option]')].map(o => o.textContent?.trim() ?? '') : [];
-      const value = kind==='select'?[...(raw as HTMLSelectElement).selectedOptions].filter(o=>!o.disabled&&o.value).map(o=>o.textContent?.trim()??'').join('; '):kind==='multicheck'?multiChecks.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join('; '):kind==='radio'?radios.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join(''):kind === 'buttons' ? e.querySelector('[aria-pressed=true]')?.textContent?.trim() ?? '' : kind === 'combobox' ? committedChoice(e) : e.value ?? '';
+      let buttonValue = '';
+      let buttonConflict = false;
+      if (ashbyButtons) {
+        const pressed = e.querySelectorAll<HTMLButtonElement>('button[data-option][aria-pressed=true]');
+        const backers = e.querySelectorAll<HTMLInputElement>('input[type=checkbox]');
+        const choice = pressed.length === 1 ? pressed[0] : undefined;
+        if (choice && (backers.length === 0 || backers.length === 1 &&
+          ['yes', 'no'].includes(choice.dataset.option ?? '') && backers[0]!.checked === (choice.dataset.option === 'yes'))) {
+          buttonValue = choice.textContent?.trim() ?? '';
+        }
+        buttonConflict = !buttonValue && (pressed.length > 0 || [...backers].some(input=>input.checked));
+      }
+      const value = kind==='select'?[...(raw as HTMLSelectElement).selectedOptions].filter(o=>!o.disabled&&o.value).map(o=>o.textContent?.trim()??'').join('; '):kind==='multicheck'?multiChecks.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join('; '):kind==='radio'?radios.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join(''):kind === 'buttons' ? buttonValue : kind === 'combobox' ? committedChoice(e) : e.value ?? '';
       const owner = e.form ?? (e.hasAttribute('form') ? null : e.closest('form,[role=form]'));
       const formId = owner ? forms.indexOf(owner) : -1;
       out.push({ key, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
-        valid: e.getAttribute('aria-invalid') !== 'true' && (!e.validity || e.validity.valid), name: e.name ?? '',
+        ...(buttonConflict && {buttonConflict: true}), valid: !buttonConflict && e.getAttribute('aria-invalid') !== 'true' && (!e.validity || e.validity.valid), name: e.name ?? '',
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
     return out;
   });
+  if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
+  return fields;
 }
 
 export async function hostedReviewDigest(page: Page, expectedResumeSha256?: string): Promise<string> {
@@ -176,7 +208,7 @@ export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: st
   const upload = await verifyHostedAttachments(page, fields, resumeExpected, resumeUpload, expectedResumeSha256);
   for (const f of fields) {
     const filled = f.kind === 'file' ? upload.filledKeys.has(f.key) : f.kind === 'checkbox' || f.kind === 'radio' ? f.checked : !!f.value.trim();
-    if (f.required && !filled || !f.valid && filled) throw new ApplicationPause('Required or invalid fields remain. Inspect the application.');
+    if (f.required && !filled || !f.valid) throw new ApplicationPause('Required or invalid fields remain. Inspect the application.');
   }
   const invalidProxy = await page.locator('input[aria-hidden=true][required]').evaluateAll(es=>es.some(raw=>{const e=raw as HTMLInputElement;return !e.disabled && !e.validity.valid && e.closest('[class*=select],[data-input-type=select]')?.getClientRects().length}));
   if(invalidProxy)throw new ApplicationPause('A required dropdown has not committed its backing value.');
@@ -210,6 +242,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   const resumeSha256 = createHash('sha256').update(input.resume).digest('hex');
   let resumeExpected = input.resumeExpected;
   let resumeUpload=input.resumeUpload;
+  let pendingPreview: {error: AttachmentPreviewUnavailable; documentKey: string} | undefined;
   const history: {label:string;kind:string;required:boolean;options:string[];result:string;question:ReturnType<typeof resolveQuestion>;answerKind?:string;lane?:string}[] = [];
   const planAnswer = createPageAnswerPlanner(sources, facts, matching.company);
   const fact = (id: string) => facts.find(f => f.factId === id)?.value;
@@ -220,9 +253,10 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
     let lastState='',unchanged=0;
     for (let pass = 0; pass < 32; pass++) {
       assertTarget();
-      const observation=await observeHostedPage(page);
-      if(input.learningRoot) {mkdirSync(input.learningRoot,{recursive:true});writeFileSync(join(input.learningRoot,'page-observation.json'),JSON.stringify(observation));}
-      requireHostedApplication(observation);
+      const pageObservation=await observeHostedPage(page);
+      if(input.learningRoot) {mkdirSync(input.learningRoot,{recursive:true});writeFileSync(join(input.learningRoot,'page-observation.json'),JSON.stringify(pageObservation));}
+      requireHostedApplication(pageObservation);
+      if (pendingPreview && pendingPreview.documentKey !== pageObservation.documentKey) throw pendingPreview.error;
       progress('Filling application');
       const fields = (await inspectHostedFields(page)).sort((a,b)=>Number(b.kind==='file')-Number(a.kind==='file'));
       if (!resumeExpected && await hasHostedResume(page, fields)) {
@@ -247,6 +281,11 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         const current = currentFields.find(x => x.key === f.key);
         if (!current || current.label !== f.label || current.kind !== f.kind) { changed = true; break; }
         f = current;
+        if (pendingPreview && f.required && f.kind !== 'file') {
+          const freshPage = await observeHostedPage(page);
+          requireHostedApplication(freshPage);
+          if (freshPage.documentKey !== pendingPreview.documentKey) throw pendingPreview.error;
+        }
         const matchObservation:MatchingObservation={pageId:page.url(),fieldId:f.key,question:f.label,control:f.kind,
           options:f.options,required:f.required,outcome:'observed',constraints:{inputType:f.inputType,
             min:f.min,max:f.max,step:f.step,minLength:f.minLength,maxLength:f.maxLength,pattern:f.pattern,readOnly:f.readOnly}};
@@ -257,13 +296,21 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           if(sources.executionPolicy.answerFallbackPolicy!=='deterministic_site_valid_editable')throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
         }
         if (!f.required) { known.set(identity,'optional'); continue; }
+        if (f.buttonConflict) throw new ApplicationPause('The employer shows an inconsistent choice. Inspect it before retrying.');
         if (f.kind === 'file') {
-          const upload = await prepareHostedResume(page, loc, f, input.resume, resumeSha256, resumeUpload, receipt => {
-            resumeUpload = receipt;
-            input.onResumeUpload?.(receipt);
-          });
-          known.set(identity, 'file');
-          if (upload === 'existing') continue;
+          if (pendingPreview) continue;
+          try {
+            const upload = await prepareHostedResume(page, loc, f, input.resume, resumeSha256, resumeUpload, receipt => {
+              resumeUpload = receipt;
+              input.onResumeUpload?.(receipt);
+            });
+            known.set(identity, 'file');
+            if (upload === 'existing') continue;
+          } catch (error) {
+            if (!(error instanceof AttachmentPreviewUnavailable)) throw error;
+            pendingPreview = {error, documentKey:pageObservation.documentKey};
+          }
+          // Upload parsers can remount other controls. Start with a fresh page observation.
           changed = true;
           break;
         }
@@ -379,7 +426,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         matching.record(pendingMatch);
         if(f.kind==='radio') {const radios=page.locator(`input[type=radio][name=${JSON.stringify(f.name)}]`);const index=options.indexOf(String(expected));if(index<0||options.lastIndexOf(String(expected))!==index)throw new ApplicationPause('Radio choice is ambiguous.');const radio=radios.nth(index);if(await radio.getAttribute('aria-hidden')==='true')await radio.locator('xpath=ancestor::label[1]').click();else await radio.check();if(!await radios.nth(index).evaluate((e:HTMLInputElement)=>e.closest('[role=radio]')?e.closest('[role=radio]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('The radio answer did not persist.');}
         else if(f.kind==='multicheck'){const index=options.indexOf(String(expected));if(index<0)throw new ApplicationPause('Checkbox group answer is missing.');const boxes=loc.locator('input[type=checkbox]');const box=boxes.nth(index);if(await box.getAttribute('aria-hidden')==='true')await box.locator('xpath=ancestor::*[@role="checkbox"][1]').click();else await box.setChecked(true);if(!await box.evaluate((e:HTMLInputElement)=>e.closest('[role=checkbox]')?e.closest('[role=checkbox]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('Checkbox group answer did not persist.');}
-        else if(f.kind==='buttons') { await loc.getByRole('button',{name:String(expected),exact:true}).click(); if(await loc.locator('[aria-pressed=true]').innerText()!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
+        else if(f.kind==='buttons') { await loc.getByRole('button',{name:String(expected),exact:true}).click(); if((await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label)?.value!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
         else if(f.kind==='select') { await loc.selectOption({label:String(expected)}); if(await loc.locator('option:checked').textContent()!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
         else if(f.kind==='combobox') { const choice=popup!.filter({hasText:new RegExp('^'+String(expected).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$')});if(await choice.count()!==1)throw new ApplicationPause('Dropdown choice is ambiguous.');await choice.click();await loc.blur();const after=(await inspectHostedFields(page)).find(x=>x.key===f.key);if(after?.value!==expected){await loc.click();const selected=popup!.locator('xpath=self::*[@aria-selected="true"]');if(await selected.count()!==1||(await selected.innerText()).trim()!==expected)throw new ApplicationPause('The selected dropdown answer could not be verified.');await loc.press('Escape');await loc.blur();} }
         else if(f.kind==='checkbox') { await loc.setChecked(expected===true);if(await loc.isChecked()!==(expected===true))throw new ApplicationPause('The checkbox answer did not persist.'); }
@@ -390,6 +437,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         matching.record({...pendingMatch,outcome:'verified',reason:'product_readback_confirmed'});pendingMatch=undefined;
         known.set(identity,String(f.kind==='checkbox'?committed?.checked:committed?.value??expected)); changed = true;
       }
+      if (!changed && pendingPreview) throw pendingPreview.error;
       if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
       await page.waitForTimeout(300);
     }

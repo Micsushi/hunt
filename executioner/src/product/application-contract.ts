@@ -19,3 +19,4 @@ export interface ProductInput {
   onResumeUpload?: (receipt: ResumeUploadReceipt | undefined) => void;
 }
 export class ApplicationPause extends Error {}
+export class AttachmentPreviewUnavailable extends ApplicationPause {}

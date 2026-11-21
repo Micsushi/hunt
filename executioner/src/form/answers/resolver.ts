@@ -362,7 +362,7 @@ export function createApplicationAnswerResolver(
     // independent.
     const fieldKey = String(field.fieldId);
     const classKey = [
-      normalizeCatalogText(field.label),
+      normalizeCatalogText(field.rawQuestion ?? field.label),
       field.behavior,
       field.selectionMode ?? "single",
       JSON.stringify({
@@ -464,7 +464,7 @@ export function createApplicationAnswerResolver(
         if (committed) return success({kind: 'readback_only', fieldId: field.fieldId});
       }
       const questionText = field.rawQuestion ?? field.label;
-      const questionResolution = resolveQuestion(questionText);
+      const questionResolution = resolveQuestion(questionText, request.employerNames);
       const protectedCategory = protectedQuestionCategory(questionText,
         questionResolution.kind === 'resolved' ? questionResolution.id : undefined);
       if ((field.rawQuestion !== undefined || field.rawOptions !== undefined) && field.behavior === 'file_upload') {
@@ -520,7 +520,8 @@ export function createApplicationAnswerResolver(
           !((employment && !employment.negated) || (referral && !referral.negated))) return provisionalAnswer();
       const ownerDefaults = (profileQuery as ApplicationProfileQuery).ownerDefaults;
       const employerMatches = !employment?.employer || request.employerNames?.some(name=>sameEmployer(name,employment.employer!)) === true;
-      if (employment && !employment.negated && employerMatches && ownerDefaults && !/\b(?:subsidiar|affiliate)\w*/iu.test(questionText)) {
+      if (employment && !employment.negated && employerMatches && ownerDefaults &&
+          (employment.includesAnotherEmployer || !/\b(?:subsidiar|affiliate)\w*/iu.test(questionText))) {
         const ids = employment.period==='ever' ? ['current_associate','previously_worked_for_organization'] as const :
           employment.period==='current' ? ['current_associate'] as const : ['previously_worked_for_organization'] as const;
         const answers = [];
@@ -530,6 +531,14 @@ export function createApplicationAnswerResolver(
           answers.push(result.value);
         }
         const positive = answers.some(answer=>answer.kind==='answered' && answer.value===true);
+        if (employment.includesAnotherEmployer) {
+          // Employment by the hiring company proves Yes. Its No default leaves the other employer unknown.
+          const verified = answers.find(answer=>answer.kind==='answered' && answer.value===true && answer.provenance!=='configured_template');
+          if (!verified && !fallbackAllowed) return failure('question_unknown');
+          const intended = intentFor(field, undefined, positive, verified?.kind==='answered' ? verified.provenance : 'reviewed_catalog',
+            verified ? 'live_owner_fact' : 'synthetic_test_default');
+          return intended.kind==='resolved' || !fallbackAllowed ? success(intended) : provisionalAnswer();
+        }
         // Broad owner defaults cover contract/internship and current/former wording;
         // a positive saved fact does not prove a qualified relationship.
         if (!employment.qualified || !positive) {
@@ -563,7 +572,7 @@ export function createApplicationAnswerResolver(
           questionResolution.id === "s1-question-sponsorship-required");
       const employmentLabel = employmentScope ? normalizeCatalogText(field.label) : "";
       const canadianSponsoringEmployer = /^(?:do you now or will you in the future require (?:immigration )?sponsorship to work for (.+)|will you(?: now or in the future)? require (?:immigration )?sponsorship from (.+) to work) in canada$/u.exec(employmentLabel)?.slice(1).find(Boolean);
-      const canadaScope = /^(?:are you (?:legally )?(?:authorized|authorised|entitled) to work(?: (?:legally|lawfully))? in (?:the )?canada|(?:will you(?: now or in the future)? require|do you (?:require|need)) (?:employment |visa |employer )?sponsorship(?: to work(?: legally)?)? in (?:the )?canada)$/u.test(employmentLabel) ||
+      const canadaScope = /^(?:are you (?:legally )?(?:authorized|authorised|entitled) to work(?: (?:legally|lawfully))? in (?:the )?canada|(?:will you(?: now or in the future)? require|do you(?: now or in the future)? (?:require|need)) (?:employment |visa |employer )?sponsorship(?: to work(?: legally)?)? in (?:the )?canada)$/u.test(employmentLabel) ||
         canadianSponsoringEmployer!==undefined && request.employerNames?.some(name=>sameEmployer(name,canadianSponsoringEmployer))===true;
       const generalScope = /^(?:are you (?:legally )?(?:authorized|authorised) to work in this (?:location|country)|(?:will you(?: now or in the future)? require|do you require) (?:employment |visa |employer )?sponsorship(?: now or in the future)?)$/u.test(employmentLabel);
       if (questionResolution.kind === "resolved" &&

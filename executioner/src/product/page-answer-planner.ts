@@ -14,6 +14,16 @@ const handsOnCloudQuestion = normalizeCatalogText('Do you have any hands-on expe
 const northAmericanLocationQuestion = normalizeCatalogText('This role requires employees to be based in the United States or Canada. Are you currently located in the U.S. or Canada?');
 const averageGpaQuestion = normalizeCatalogText('What is your average GPA?');
 
+function provinceResidenceAnswer(question: string, canadianRegion: string | undefined): 'yes' | 'no' | undefined {
+  if (!canadianRegion) return;
+  const wording = question.normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/gu, ' ').trim();
+  const list = /^do you (?:currently )?(?:reside|live) in ([\p{L}, ]+)\?$/iu.exec(wording)?.[1];
+  if (!list) return;
+  const provinces = list.split(/\s*,\s*(?:or\s+)?|\s+or\s+/iu).map(canonicalCanadianRegion);
+  if (provinces.some(province => !province || ['Yukon','Northwest Territories','Nunavut'].includes(province))) return;
+  return provinces.includes(canadianRegion) ? 'yes' : 'no';
+}
+
 export interface PageQuestion extends MatchingObservation {
   state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
@@ -56,8 +66,10 @@ export function createPageAnswerPlanner(
       field.answer.kind === 'answered' && field.answer.lane === 'live_owner_fact' &&
       ['owner_provided','resume_verified'].includes(field.answer.provenance) &&
       /(?:^|[.!?\n])\s*(?:[-•]\s*)?(?:deployed|automated|configured|ran|maintained|migrated|standardized)\b(?:(?!\b(?:without|never|instead of|planned|proposed)\b)[^.!?\n]){0,110}\b(?:kubernetes|docker|aws|azure|gcp)\b/i.test(field.answer.value))));
-  const hasNorthAmericanLocation = ['canada','ca','can','united states','united states of america','us','usa'].includes(
-    normalizeCatalogText(String(ownerFact('country') ?? '')));
+  const country = normalizeCatalogText(String(ownerFact('country') ?? ''));
+  const hasNorthAmericanLocation = ['canada','ca','can','united states','united states of america','us','usa'].includes(country);
+  const canadianRegion = ['canada','ca','can'].includes(country)
+    ? canonicalCanadianRegion(String(ownerFact('region') ?? '').normalize('NFD').replace(/\p{M}/gu, '')) : undefined;
 
 
   async function planAnswer(
@@ -68,9 +80,11 @@ export function createPageAnswerPlanner(
       return {...binding, answer: null, provisional: false, reason: 'optional_field'};
     }
     const constraints = row.constraints as ApplicationFieldObservation['constraints'];
+    const populated = row.selected === true || typeof row.selected === 'string' && !!row.selected.trim();
+    const state = row.state ?? (populated ? 'populated' : 'empty');
     if (constraints?.readOnly || row.state === 'hidden' || row.state === 'ambiguous') {
-      const populated = constraints?.readOnly && row.state === 'populated';
-      return {...binding, answer: null, provisional: !populated, reason: populated ? 'readback_only' : 'unsupported'};
+      const readback = constraints?.readOnly && state === 'populated';
+      return {...binding, answer: null, provisional: !readback, reason: readback ? 'readback_only' : 'unsupported'};
     }
     const isLong = (value: string) => [...value].length > MAX_BROWSER_READBACK_CODE_POINTS;
     const longQuestion = isLong(row.question);
@@ -99,7 +113,7 @@ export function createPageAnswerPlanner(
       return {...binding, answer: number, phoneCountry: country, ...(numericDial && {phoneDial: numericDial}), provisional: inferred,
         reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
     }
-    const questionFact=inspectQuestionMatch(row.question).factId;
+    const questionFact=inspectQuestionMatch(row.question, company ? [company] : []).factId;
     let addressCountryConflict=false;
     if (questionFact==='postal_code' && row.formId) {
       const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
@@ -117,7 +131,7 @@ export function createPageAnswerPlanner(
       behavior:row.control as ApplicationFieldObservation['behavior'],required:row.required,
       options:row.options.map((label,index)=>({id:optionId(String(index)),label:boundedText(isLong(label) ? `Unclassified option ${index}` : label)})),
       ...(longOptions && {rawOptions:row.options}), constraints, readOnly:constraints?.readOnly,
-      queryable:row.queryable,searchQuery:row.searchQuery,state:row.state ?? 'empty', populatedValueValid:row.valid};
+      queryable:row.queryable,searchQuery:row.searchQuery,state, populatedValueValid:row.valid};
     const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
       answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
@@ -140,15 +154,16 @@ export function createPageAnswerPlanner(
       : undefined;
     const positive = (hasCloudExperience && label === handsOnCloudQuestion) ||
       (hasNorthAmericanLocation && label === northAmericanLocationQuestion);
-    const positives = positive && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
-      ? row.options.filter(option => option.toLowerCase() === 'yes') : [];
+    const binary = positive ? 'yes' : provinceResidenceAnswer(row.question, canadianRegion);
+    const binaryChoices = binary && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
+      ? row.options.filter(option => option.toLowerCase() === binary) : [];
     const city = facts.find(fact => fact.factId === 'city')?.value;
     const locationIndex = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox' &&
       typeof city === 'string'
       ? matchLocationOption(row.options, city, facts.find(fact => fact.factId === 'region')?.value,
           facts.find(fact => fact.factId === 'country')?.value)
       : -1;
-    const direct = text ?? row.options[locationIndex] ?? (positives.length === 1 ? positives[0] : undefined);
+    const direct = text ?? row.options[locationIndex] ?? (binaryChoices.length === 1 ? binaryChoices[0] : undefined);
     let provisional = addressCountryConflict || direct === undefined && (!resolved || resolved.lane === 'synthetic_test_default');
     let answer = direct ?? (resolved ? intentAnswer(resolved.intent) : null);
     let reason = addressCountryConflict ? 'address_country_conflict' : direct !== undefined ? 'profile_answer' :

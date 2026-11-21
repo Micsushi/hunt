@@ -151,14 +151,61 @@ test('restored Workable optional attachments are preserved and required uploads 
       e.required=true;e.parentElement!.querySelector('[data-action=view]')!.remove();
       e.onchange=()=>{const link=document.createElement('a');link.dataset.action='view';link.href='/first-upload.pdf';link.textContent='View resume';e.parentElement!.append(link);};
     });
-    t.mock.method(globalThis,'fetch',async()=>new Response(resume));
+    let previewReads=0;
+    let previewStatus=200;
+    let redirect=false;
+    let contentType='application/pdf';
+    let replaceLink=false;
+    await p.route('**/first-upload.pdf',async route=>{
+      previewReads++;
+      if(replaceLink)await p.locator('[data-action=view]').evaluate(e=>e.replaceWith(e.cloneNode(true)));
+      if(redirect)await route.fulfill({status:302,headers:{location:'/login'}});
+      else await route.fulfill({status:previewStatus,contentType,body:contentType==='text/html'?'Sign in':resume});
+    });
+    let loginReads=0;
+    await p.route('**/login',route=>{loginReads++;return route.fulfill({contentType:'text/html',body:'Login'});});
+    const anonymous=t.mock.method(globalThis,'fetch',async()=>new Response(null,{status:403}));
+    let uploadChanges=0;
+    await p.exposeFunction('recordUpload',()=>{uploadChanges++;});
+    await p.locator('[name=attachment]').evaluate(e=>e.addEventListener('change',()=>(window as any).recordUpload()));
+
     const initial=await fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{});
     assert.equal(initial.resumeExpected,true);
     assert.equal(await p.locator('[name=attachment]').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),resume.toString());
     assert.equal(await p.locator('[name=attachment]').evaluate((e:HTMLInputElement)=>e.files![0]!.name),`Resume-${createHash('sha256').update(resume).digest('hex').slice(0,12)}.pdf`);
     assert.equal(await p.locator('[data-action=view]').getAttribute('href'),'/first-upload.pdf');
+    assert.equal(previewReads,1);
+    assert.equal(uploadChanges,1);
+    await p.locator('[type=email]').fill('');
     await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-another-selection')},AbortSignal.timeout(15000),()=>{}),/preview does not confirm/i);
+    assert.equal(await p.locator('[type=email]').inputValue(),'');
     assert.equal(await p.locator('[name=attachment]').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),resume.toString());
+    for(const status of [403,503]) {
+      previewStatus=status;
+      await p.locator('[type=email]').fill('');
+      const before:number=previewReads;
+      let observed=false,verified=false;
+      await assert.rejects(fillApplication(p,{url,profile,resume,onResumeObserved:()=>{observed=true;},onResumeUpload:()=>{verified=true;}},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+      assert.equal(observed,true);
+      assert.equal(verified,false);
+      await assert.rejects(hostedReviewSnapshot(p, createHash('sha256').update(resume).digest('hex'), true), /preview has not been verified/);
+      await assert.rejects(reviewDigest(p), /preview has not been verified/);
+      assert.equal(previewReads,before+1);
+      assert.equal(await p.locator('[type=email]').inputValue(),'fixture@example.invalid');
+    }
+    previewStatus=200; contentType='text/html';
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+    contentType='application/pdf';
+    redirect=true;
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+    assert.equal(loginReads,0);
+    assert.equal(anonymous.mock.callCount(),0);
+    redirect=false; replaceLink=true;
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/resume changed during verification/);
+    await p.locator('[data-action=view]').evaluate((a:HTMLAnchorElement)=>a.href='https://fixture-cdn.invalid/selected.pdf');
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+    assert.equal(anonymous.mock.callCount(),1);
+    assert.equal(uploadChanges,1);
     assert.equal(await p.evaluate('submits'),0);
   } finally {await b.close();}
 });
@@ -271,6 +318,59 @@ test('custom required buttons and one-of questions must be answered before revie
     assert.equal(await p.evaluate('submits'),0);
     await p.locator('[aria-pressed=true]').evaluate(e=>e.setAttribute('aria-pressed','false'));
     await assert.rejects(reviewDigest(p),/Required/);
+    // Ashby can render a single title with a generated for-attribute that has no DOM target.
+    await p.setContent(`<label>Email<input name=email type=email value="fixture@example.invalid" required></label>
+      <div class="ashby-application-form-field-entry" data-field-path="fixture.binary" data-field-entry-id="binary">
+        <label class="ashby-application-form-question-title _required_fixture" for="unmounted-binary">Will you require sponsorship?</label>
+        <div class="ashby-application-form-input-yesno">
+          <button type=button data-option=yes aria-pressed=false>Yes</button><button type=button data-option=no aria-pressed=false>No</button>
+          <input name=question type=checkbox hidden></div><input role=combobox hidden></div>
+      <div class="ashby-application-form-field-entry" data-field-path="fixture.source" data-field-entry-id="source">
+        <fieldset><label class="ashby-application-form-question-title _required_fixture" for="unmounted-source">How did you hear about us?</label>
+          <input role=combobox aria-expanded=false aria-controls=choices><button type=button>Options</button>
+          <div id=choices role=listbox hidden><div role=option>Job board</div></div><input id=source-copy role=combobox hidden><label id=title-copy class="ashby-application-form-question-title" for="missing-copy" hidden>Other question</label></fieldset></div>
+      <div class="ashby-application-form-field-entry" data-field-path="fixture.optional" data-field-entry-id="optional">
+        <label class="ashby-application-form-question-title" for="unmounted-optional">Optional preference</label>
+        <input role=combobox></div>
+      <button type=button onclick="window.submits++">Submit Application</button>
+      <script>window.submits=0;const q=document.querySelector('input[aria-controls=choices]'),options=document.querySelector('#choices');
+      q.onclick=()=>{options.hidden=false;q.setAttribute('aria-expanded','true')};
+      options.onclick=()=>{q.value='Job board';options.firstElementChild.setAttribute('aria-selected','true');q.setAttribute('aria-expanded','false');options.hidden=true};
+      document.querySelectorAll('[data-option]').forEach(b=>b.onclick=()=>{b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));b.parentElement.querySelector('input').checked=b.dataset.option==='yes'});</script>`);
+    await assert.rejects(reviewDigest(p),/Required/);
+    const observed = await inspectHostedFields(p);
+    assert.deepEqual(observed.filter(f=>['buttons','combobox'].includes(f.kind)).map(f=>[f.label,f.required]),
+      [['Will you require sponsorship?',true],['How did you hear about us?',true],['Optional preference',false]]);
+    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',sponsorship_required:'false',application_source:'Job board'});
+    await fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    assert.equal(await p.locator('button[data-option=no]').getAttribute('aria-pressed'),'true');
+    assert.equal(await p.locator('input[type=checkbox]').isChecked(),false);
+    await p.locator('#source-copy').evaluate(e=>e.removeAttribute('hidden'));
+    await assert.rejects(reviewDigest(p),/ambiguous/i);
+    await p.locator('#source-copy').evaluate(e=>e.setAttribute('hidden',''));
+    await p.locator('#title-copy').evaluate(e=>e.removeAttribute('hidden'));
+    await assert.rejects(reviewDigest(p),/ambiguous/i);
+    await p.locator('#title-copy').evaluate(e=>e.setAttribute('hidden',''));
+    await p.locator('[data-field-entry-id=optional]').evaluate(e=>document.querySelector('[data-field-entry-id=source]')!.append(e));
+    const optional = p.locator('[data-field-entry-id=optional] input');
+    assert.equal(await optional.inputValue(),'');
+    await reviewDigest(p);
+    await optional.evaluate(e=>e.setAttribute('aria-invalid','true'));
+    await assert.rejects(reviewDigest(p),/invalid/);
+    await optional.evaluate((e:HTMLInputElement)=>{e.removeAttribute('aria-invalid');e.setCustomValidity('Invalid answer')});
+    await assert.rejects(reviewDigest(p),/invalid/);
+    await optional.evaluate((e:HTMLInputElement)=>e.setCustomValidity(''));
+    await reviewDigest(p);
+    await p.locator('input[aria-controls=choices]').evaluate((e:HTMLInputElement)=>{e.value='Job board';document.querySelector('#choices [role=option]')!.removeAttribute('aria-selected')});
+    await assert.rejects(reviewDigest(p),/Required/);
+    await p.locator('#choices [role=option]').evaluate(e=>e.setAttribute('aria-selected','true'));
+    await p.locator('input[type=checkbox]').evaluate((e:HTMLInputElement)=>{e.checked=true});
+    await assert.rejects(reviewDigest(p),/Required/);
+    await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(5000),()=>{}),/inconsistent choice/);
+    assert.equal(await p.locator('input[type=checkbox]').isChecked(),true);
+    await p.locator('[data-field-entry-id=binary] label').evaluate(label=>label.classList.remove('_required_fixture'));
+    await assert.rejects(reviewDigest(p),/invalid/);
+    assert.equal(await p.evaluate('submits'),0);
   }finally{await b.close();}
 });
 

@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { fillApplication } from '../../src/product/engine.ts';
-import { applicantProfile } from '../../src/product/sources.ts';
+import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
+import { createPageAnswerPlanner } from '../../src/product/page-answer-planner.ts';
+import { disposeResumeArtifact } from '../../src/contracts/resume-artifact.ts';
 import type { ProfilePagePlan } from '../../src/ats/workday/application/profile/types.ts';
 
 const cloud = 'Do you have any hands-on experience with Kubernetes, Docker, or cloud platforms (e.g., AWS, Azure, GCP)?';
@@ -29,7 +31,34 @@ test('hosted campaign questions fill from saved profile authority and flag requi
       <button onclick="window.submitted=true">Submit application</button>`}));
     const profile = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       address_line1:'123 Fixture St', city:'Edmonton', region:'Alberta', postal_code:'T5A 0A1', country:'Canada',
-      education_gpa:'3.7', education_gpa_scale:'4.0', official_coop_program:'true', salary_expectations:'CAD 80,000 per year'}) as {profilePlan:ProfilePagePlan};
+      education_gpa:'3.7', education_gpa_scale:'4.0', official_coop_program:'true', sponsorship_required_canada:'false', application_source:'Job board', salary_expectations:'CAD 80,000 per year'}) as {profilePlan:ProfilePagePlan};
+    const employer = 'Northwind Labs';
+    const choices = ['Community event', 'LinkedIn Job Posting', 'Other'];
+    const yesNo = ['Yes', 'No'];
+    const cases = [
+      ['Have you been previously employed by Northwind Labs or one of its subsidiaries?', yesNo, '', false, ['No', true, 'synthetic_test_default']],
+      ['Are you currently employed by Northwind Labs, or have you previously been employed by Northwind Labs or Contoso?', yesNo, '', false, ['No', true, 'synthetic_test_default']],
+      ['Do you reside in Manitoba or Nova Scotia?', yesNo, '', false, ['No', false, 'profile_fact']],
+      ['Do you plan to relocate to Manitoba or Nova Scotia?', yesNo, '', false, ['Yes', true, 'synthetic_test_default']],
+      ['Do you, now or in the future, require sponsorship to work in Canada?', yesNo, 'Yes', false, ['No', false, 'live_owner_fact']],
+      ['Do you, now or in the future, require sponsorship to work in the United States?', yesNo, '', false, ['Yes', true, 'synthetic_test_default']],
+      ['How did you hear about Northwind Labs?', choices, '', false, ['LinkedIn Job Posting', false, 'live_owner_fact']],
+      ['How did you hear about Northwind Labs?', choices, 'LinkedIn Job Posting', false, ['LinkedIn Job Posting', false, 'live_owner_fact']],
+      ['How did you hear about another employer?', choices, '', false, ['Community event', true, 'synthetic_test_default']],
+      ['How did you hear about Northwind Labs?', choices, 'Community event', true, [null, false, undefined]],
+    ] as const;
+    const sources = productSources(profile, Buffer.from('%PDF-fixture'));
+    try {
+      const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), employer);
+      const results = [];
+      for (const [question, options, selected, readOnly] of cases) {
+        const row = {pageId:'page', fieldId:'choice', signature:'fixture', question, options, selected,
+          required:true, control:'radio', valid:Boolean(selected), constraints:{readOnly}};
+        const result = await plan(row, [row], AbortSignal.timeout(5000));
+        results.push([question, result.answer, result.provisional, result.lane]);
+      }
+      assert.deepEqual(results, cases.map(([question, , , , expected]) => [question, ...expected]));
+    } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
     const withExperience = (value: string) => ({...profile, profilePlan:{...profile.profilePlan,repeatables:[
       {section:'experience',rows:[{rowKey:'fixture',fields:[{fieldId:'experience.description',questionType:'experience',
         answerType:'text',allowedOptions:[],answer:{kind:'answered',value,provenance:'resume_verified',lane:'live_owner_fact'}}]}]},

@@ -46,6 +46,8 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     assert.equal(fields.find(field=>field.label==='Disability status')?.required,false);
     assert.equal(fields.find(field=>field.label==='Race')?.required,false);
     assert.equal(fields.find(field=>field.label==='Wrapping asterisk only')?.required,true);
+    await page.locator('label:has(#asterisk) [aria-hidden=true]').evaluate(marker=>{marker.textContent='✱'});
+    assert.equal((await inspectHostedFields(page)).find(field=>field.label==='Wrapping asterisk only')?.required,true);
     assert.equal(fields.find(field=>field.label==='Are you legally entitled to work in Canada?')?.required,true);
     const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       preferred_name:'Saved',work_authorization_canada:'true',region:'Alberta',application_source:'Job board'});

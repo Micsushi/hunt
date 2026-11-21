@@ -3,7 +3,7 @@ import { ApplicationPause, type ResumeUploadReceipt } from '../application-contr
 import { recordComponentFailure } from '../component-diagnostics.ts';
 import { selectClientResume, verifiedClientResume } from '../client-resume.ts';
 import { uploadGreenhouseResume, verifiedGreenhouseResume } from '../greenhouse-resume.ts';
-import { uploadWorkableResume, verifiedWorkableResume } from '../workable-resume.ts';
+import { uploadWorkableResume, verifiedWorkableResume, unverifiedWorkablePreview } from '../workable-resume.ts';
 import { applicationTarget } from '../target.ts';
 
 interface UploadField {
@@ -73,6 +73,12 @@ export async function verifyHostedAttachments(
     const resumeExpected = expected || await hasGreenhouseAttachment(page);
     const workableProof = await verifiedWorkableResume(page, receipt, expectedSha256);
     const fileFields = fields.filter(field => field.kind === 'file');
+    if (!workableProof && applicationTarget(page.url()).ats === 'workable') {
+      const requiredKeys = fileFields.filter(field => isResume(field) && field.required).map(field => field.key);
+      if (await unverifiedWorkablePreview(page, requiredKeys, !!resumeExpected, expectedSha256 !== undefined)) {
+        throw new ApplicationPause('The employer resume preview has not been verified. Inspect the uploaded file before reviewing.');
+      }
+    }
     const filledKeys = new Set(fileFields.filter(field => field.files > 0).map(field => field.key));
     const acknowledgedKeys = new Set<string>();
     if (workableProof) {
