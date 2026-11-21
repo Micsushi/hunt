@@ -140,7 +140,7 @@ export function assertReleaseContractProvenance(repository: string, roots: reado
   // Two executable files subsequently changed for full question text and explicit module ownership.
   const amended = new Map([
     ["executioner/src/contracts/types.ts", "909dfb91c4e14f60a70d42311725bbca3e6f13f3"],
-    ["executioner/src/contracts/ownership.ts", "f430078f5b8b49fa3f00b92511db7e7dccdbf0ba"],
+    ["executioner/src/contracts/ownership.ts", "4f38b286a0e3efdefc25bc96c0b2d14a797271b6"],
   ]);
   for (const root of roots.filter((path) => !path.startsWith("executioner/tests/"))) {
     const changed = git(repository, "diff", "--no-renames", "--name-only", release.integrationRevision, "--", root).trim();
