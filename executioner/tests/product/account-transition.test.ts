@@ -3,6 +3,9 @@ import test from "node:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { journeyId } from "../../src/contracts/index.ts";
+import { PlaywrightWorkdayApplicationPage } from "../../src/ats/workday/application/playwright-page.ts";
+import { observeWorkdayPage } from "../../src/ats/workday/page-observation.ts";
 import { chromium } from "playwright";
 import { ApplicationPause, fillApplication } from "../../src/product/engine.ts";
 import { fixtureApplicantProfile, accountFixture, applicationFixture } from "./fixture.ts";
@@ -139,7 +142,7 @@ test("employer error recovery waits for delayed readiness and stops at its reloa
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
-    for (const scenario of ["entry", "mid-fill", "delayed", "second-reload", "reopen", "persistent", "aborted", "moved"]) {
+    for (const scenario of ["coded", "entry", "mid-fill", "delayed", "second-reload", "reopen", "persistent", "aborted", "moved"]) {
       const persistent = scenario === "persistent";
       const page = await browser.newPage();
       let loads = 0;
@@ -154,6 +157,78 @@ test("employer error recovery waits for delayed readiness and stops at its reloa
       });
       const url = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1";
       await page.goto(url);
+      if (scenario === "coded") {
+        const form = '<main data-automation-id="applyFlowMyInfoPage"><input required value="saved"><button type="button" id="next">Next</button><button type="button" id="submit">Submit</button></main>';
+        const code = "Error Page Error - Error Code: VPS|SYNTHETIC-CODE";
+        for (const [markup, blocked] of [
+          ['<div data-automation-id="errorMessage">'+code+'</div>', true],
+          ['<div data-automation-id="inputAlert">'+code+'</div>', true],
+          ['<aside role="alert">'+code+'</aside>', true],
+          ['<div class="error-summary">'+code+'</div>', true],
+          ['<div role="alert">'+code+'<span hidden>ignored</span></div>', true],
+          ['<div data-automation-id="inputAlert">This field is required.</div>', false],
+          ['<p>'+code+'</p>', false],
+          ['<div role="alert" hidden>'+code+'</div>', false],
+          ['<div role="alert"><span hidden>'+code+'</span></div>', false],
+          ['<div style="opacity:0"><aside role="alert">'+code+'</aside></div>', false],
+          ['<div role="alert"><span contenteditable>'+code+'</span></div>', false],
+          ['<div role="alert"><textarea>'+code+'</textarea></div>', false],
+          ['<div role="alert"><div role="option">'+code+'</div></div>', false],
+          ['<div role="alert">Previous example: '+code+'</div>', false],
+          ['<div role="alert">Error Page Error - Error Code:</div>', false],
+        ] as const) {
+          await page.setContent(form+markup);
+          const observed = await observeWorkdayPage(page);
+          assert.equal(observed.kind, blocked ? "employer_coded_error" : "application", markup);
+          assert.equal(observed.signals.includes("coded_page_error"), blocked);
+          assert.doesNotMatch(JSON.stringify(observed), /SYNTHETIC-CODE|VPS\|/);
+        }
+        await page.setContent(form+'<aside role="alert">'+code+'</aside>');
+        await page.evaluate(() => {
+          document.body.dataset.effects = "0";
+          for (const name of ["click", "input", "change", "submit"]) {
+            document.addEventListener(name, () => { document.body.dataset.effects = "changed"; }, true);
+          }
+        });
+        const initial = await observeWorkdayPage(page);
+        await assert.rejects(fillApplication(page, {url,profile:{},resume:Buffer.from("fixture")}, AbortSignal.timeout(5000),()=>{}), /coded page error/);
+        assert.equal(await page.locator("body").getAttribute("data-effects"), "0");
+        assert.equal((await observeWorkdayPage(page)).documentKey, initial.documentKey);
+        assert.equal(loads, 1);
+        for (const phase of ["focus", "after-click", "loading-after-click"] as const) {
+          await page.setContent(form);
+          await page.evaluate(({phase, code}) => {
+            const next = document.querySelector<HTMLButtonElement>("#next")!;
+            document.body.dataset.next = "0";
+            document.body.dataset.submit = "0";
+            document.querySelector<HTMLButtonElement>("#submit")!.onclick = () => { document.body.dataset.submit = "1"; };
+            const showNotice = () => document.body.insertAdjacentHTML("beforeend", '<aside role="alert">'+code+'</aside>');
+            if (phase === "focus") next.onfocus = showNotice;
+            next.onclick = () => {
+              document.body.dataset.next = "1";
+              showNotice();
+              if (phase === "loading-after-click") {
+                document.querySelector("main")!.remove();
+                document.body.insertAdjacentHTML("beforeend", '<div data-automation-id="applyFlowPage"><div data-automation-id="applyFlowLoadingPage">Loading</div></div>');
+              }
+            };
+          }, {phase, code});
+          const adapter = new PlaywrightWorkdayApplicationPage(page, {timeoutMs: 100, navigationSettleTimeoutMs: 120});
+          const start = await adapter.observe(AbortSignal.timeout(5000));
+          assert.ok(start.ok && start.value.page === "profile");
+          const result = await adapter.next({
+            journeyId: journeyId("journey_coded_error_probe_01"), from: start.value.page,
+            fromPageId: start.value.pageId, allowed: ["profile", "questionnaire"],
+          }, AbortSignal.timeout(5000));
+          assert.ok(!result.ok);
+          assert.equal(result.error.code, "page_incomplete", phase);
+          assert.equal(await page.locator("body").getAttribute("data-next"), phase === "focus" ? "0" : "1");
+          assert.equal(await page.locator("body").getAttribute("data-submit"), "0");
+          assert.equal(loads, 1);
+        }
+        await page.close();
+        continue;
+      }
       const stages: string[] = [];
       let interruptProfile = false;
       const evaluate = page.evaluate.bind(page);

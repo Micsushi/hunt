@@ -13,6 +13,8 @@ import {
 } from "../src/corpus/package/index.ts";
 
 const executioner = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pageRuntime = spawnSync(process.execPath, ["scripts/build-page-runtime.mjs", "--check"], {cwd: executioner, stdio: "inherit"});
+if (pageRuntime.status !== 0) throw new Error("Extension page runtime differs from its component sources");
 // Extension entrypoints run directly in Chrome and are outside the TypeScript build.
 for (const file of await readdir(resolve(executioner, "extension"))) {
   if (!file.endsWith(".js")) continue;

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Page, Request } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from './engine.ts';
+import { ApplicationPause, type ResumeUploadReceipt } from './application-contract.ts';
 import { applicationTarget } from './target.ts';
 
 const groupSelector='[role=group][aria-labelledby=upload-label-resume]';

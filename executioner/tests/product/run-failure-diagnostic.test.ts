@@ -34,6 +34,8 @@ test('attachment failures retain only fixed categories before opening any applic
       assert.equal(job!.status,'paused');
       const dir=join(root,'learning',job!.id),[run]=await readdir(dir);
       const receipt=await readFile(join(dir,run!,'run-failure.json'),'utf8'),report=JSON.parse(receipt);
+      assert.deepEqual(report.componentFailure,{component:'browser_interaction',operation:'open_tab'});
+      assert.deepEqual(job!.componentFailure,report.componentFailure);
       assert.equal(report.stage,'Opening application');assert.equal(report.operation,'browser.attach');assert.equal(report.category,category);
       assert.doesNotMatch(receipt,/fixture secret|tab with id|fixture@example/);
     }finally{await queue.close();await rm(root,{recursive:true,force:true});}

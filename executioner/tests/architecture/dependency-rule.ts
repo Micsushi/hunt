@@ -114,6 +114,7 @@ function owner(path: string): string | undefined {
   // Chrome executes .js modules and TypeScript reads their adjacent declarations.
   const productOwner = productOwners.get(path.replace(/\.d\.ts$/, ".js"));
   if (productOwner !== undefined) return productOwner;
+  if (path.startsWith("src/browser/page-runtime/")) return undefined;
 
   return componentSourceOwners.find(({ pattern }) => {
     const directory = pattern.endsWith("/**")

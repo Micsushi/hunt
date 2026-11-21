@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Locator, Page } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from './engine.ts';
+import { ApplicationPause, type ResumeUploadReceipt } from './application-contract.ts';
 import { applicationTarget } from './target.ts';
 
 /** A client-held attachment is ready for the draft, not proof of a server upload. */

@@ -24,6 +24,8 @@ function transportEvent(event: string, tabId?: number, details: Record<string,bo
 }
 
 /** Only attach failures are classified here; arbitrary CDP errors may contain entered values. */
+const legacyViewportCleanupPending = "Hunt could not restore this tab's page size. Retry the job or page action to finish cleanup before filling.";
+
 export class AttachmentFailure extends Error {
   readonly code: string;
   constructor(error: unknown) {
@@ -44,6 +46,7 @@ export class AttachmentFailure extends Error {
       'Cannot attach to this target.':'debugger_access_denied',
       'Cannot access a chrome-extension:// URL of different extension':'debugger_protected_extension',
       'This tab has no usable page area. Resize or restore its browser window, then retry.':'attachment_viewport_unavailable',
+      [legacyViewportCleanupPending]:'attachment_viewport_cleanup_pending',
       [viewportCleanupPending]:'attachment_viewport_cleanup_pending',
     };
     const code = Object.hasOwn(known,message) ? known[message]!
@@ -257,7 +260,7 @@ export class ExtensionBridge {
   async release(tabId: number): Promise<void> {
     transportEvent('release_requested',tabId,{recentCommands:this.tabs.get(tabId)?.commands.join(',') ?? ''});
     this.tabs.get(tabId)?.resolveFrame(); this.tabs.get(tabId)?.socket?.close(); this.tabs.delete(tabId);
-    await this.call("detach", { tabId }).catch(error => {if(error instanceof Error && error.message===viewportCleanupPending)throw error;});
+    await this.call("detach", { tabId }).catch(error => {if(error instanceof Error && [viewportCleanupPending,legacyViewportCleanupPending].includes(error.message))throw new Error(viewportCleanupPending);});
     if(this.viewportCleanup.has(tabId))throw new Error(viewportCleanupPending);
   }
   private async cdp(tabId: number, message: Message, socket: WebSocket): Promise<unknown> {

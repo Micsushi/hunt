@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
-  componentSourceOwners,
   dependencyViolations,
   sourceFiles,
   type SourceFile,
 } from "./dependency-rule.ts";
-import { componentBoundaries } from "../../src/contracts/ownership.ts";
+import { productBoundary } from "../../src/contracts/ownership.ts";
 import type { AccountLifecycleObservation } from "../../src/account/lifecycle/index.ts";
 import type { ClassifiedAccountObservation } from "../../src/ats/workday/live/index.ts";
 
@@ -42,5 +40,28 @@ test("production, live, and composition owners cannot import synthetic evidence 
 });
 
 test("executioner source follows the dependency rule", () => {
+  const assigned = Object.values(productBoundary.sourceOwners).flat();
+  assert.equal(new Set(assigned).size, assigned.length);
+  for (const path of [
+    "src/browser/page-runtime/unassigned.js",
+    "extension/page-runtime/unassigned.js",
+    "extension/page-adapters/unassigned.js",
+  ]) {
+    assert.deepEqual(dependencyViolations([{ path, source: "" }]), [`${path} has no component owner`]);
+  }
+  const path = "extension/page-actions.js";
+  assert.deepEqual(dependencyViolations([{
+    path,
+    source: [
+      'import "./popup.d.ts";',
+      'import { annotateQuestionContext } from "./question-context.js";',
+      'import { submitReviewedApplication } from "../src/product/application-submission.ts";',
+      'import { loadAccount } from "../src/product/account-storage.ts";',
+    ].join("\n"),
+  }]), [
+    path + " imports non-extension module extension/popup.d.ts",
+    path + " imports non-extension module src/product/application-submission.ts",
+    path + " imports non-extension module src/product/account-storage.ts",
+  ]);
   assert.deepEqual(dependencyViolations([...sourceFiles("src"), ...sourceFiles("extension")]), []);
 });

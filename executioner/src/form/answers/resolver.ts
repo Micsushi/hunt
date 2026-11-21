@@ -240,7 +240,7 @@ function generatedLearningIntent(
   selectRandomIndex: (length: number) => number,
 ): ApplicationAnswerResolutionResult | undefined {
   if (field.behavior === "text" || field.behavior === "textarea") {
-    const generated = generateSyntheticTextValue(field.constraints, field.label);
+    const generated = generateSyntheticTextValue(field.constraints, field.rawQuestion ?? field.label);
     if (generated.kind === "unsupported_constraint") {
       return { kind: "unsupported_constraint", fieldId: field.fieldId };
     }
@@ -280,7 +280,7 @@ function generatedLearningIntent(
         behavior: "date",
         fieldId: field.fieldId,
         target: field.target,
-        isoDate: syntheticTestDate(field.label, generatedDate),
+        isoDate: syntheticTestDate(field.rawQuestion ?? field.label, generatedDate),
         provenance: "reviewed_catalog",
       },
     };
@@ -325,34 +325,6 @@ function generatedLearningIntent(
         provenance: "resume_verified",
       },
     };
-  }
-  return undefined;
-}
-
-/** Draft-only fallback for complete labels/options that exceed the structural contract.
- * Callers must retain the raw observation and mark this answer provisional in the backlog.
- * No shortened text is treated as a saved profile fact or approved consent.
- */
-export function provisionalUnboundedFieldAnswer(input: {
-  required: boolean;
-  behavior: string;
-  question: string;
-  options: readonly string[];
-  constraints?: ApplicationFieldObservation["constraints"];
-}): { answer: string | boolean; optionIndex?: number } | undefined {
-  if (!input.required || input.constraints?.readOnly) return undefined;
-  if (['select', 'listbox', 'radio', 'combobox', 'buttons', 'multicheck'].includes(input.behavior)) {
-    const options = input.options.map((label, optionIndex) => ({label, optionIndex})).filter(({label}) =>
-      label.trim() !== '' && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label));
-    const negatives = options.filter(({label}) => /^(?:no|n|false)$/u.test(normalizeCatalogText(label)));
-    const selected = negatives.length === 1 ? negatives[0] : options[0];
-    return selected === undefined ? undefined : {answer: selected.label, optionIndex: selected.optionIndex};
-  }
-  if (input.behavior === 'checkbox') return {answer: true};
-  if (input.behavior === 'date') return {answer: syntheticTestDate(input.question, localIsoDate(new Date()))};
-  if (input.behavior === 'text' || input.behavior === 'textarea') {
-    const generated = generateSyntheticTextValue(input.constraints, input.question);
-    return generated.kind === 'unsupported_constraint' ? undefined : {answer: generated.value};
   }
   return undefined;
 }
@@ -470,7 +442,7 @@ export function createApplicationAnswerResolver(
         );
         return generated === undefined ? unsupported(field) : generatedSuccess(field, generated);
       };
-      if (field.readOnly === true) {
+      if (field.readOnly === true || field.constraints?.readOnly === true) {
         return field.state === "populated"
           ? success({ kind: "readback_only", fieldId: field.fieldId })
           : unsupported(field);
@@ -492,15 +464,34 @@ export function createApplicationAnswerResolver(
             !placeholderOption.test(normalizeCatalogText(current.option)) && !isEmptyCatalogMessage(current.option);
         if (committed) return success({kind: 'readback_only', fieldId: field.fieldId});
       }
+      const questionText = field.rawQuestion ?? field.label;
+      const questionResolution = resolveQuestion(questionText);
+      const protectedCategory = protectedQuestionCategory(questionText,
+        questionResolution.kind === 'resolved' ? questionResolution.id : undefined);
+      if ((field.rawQuestion !== undefined || field.rawOptions !== undefined) && field.behavior === 'file_upload') {
+        return unsupported(field);
+      }
+      if (protectedCategory === "consent") {
+        if (field.state === "populated") return success({kind:'readback_only',fieldId:field.fieldId});
+        if (isRecruitmentTermsConsent(questionText)) {
+          const consent = await query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal);
+          if (!consent.ok) return consent;
+          if (consent.value.kind==='answered' && consent.value.provenance==='owner_provided' && typeof consent.value.value==='boolean') {
+            return success(intentFor(field, undefined, consent.value.value, consent.value.provenance, 'live_owner_fact'));
+          }
+        }
+        if (!field.rawOptions) return provisionalAnswer();
+      }
       if (field.rawOptions !== undefined) {
         if (!fallbackAllowed) return failure('protected_answer_denied');
-        const fallback = provisionalUnboundedFieldAnswer({required: field.required, behavior: field.behavior,
-          question: field.rawQuestion ?? field.label, options: field.rawOptions, constraints: field.constraints});
-        const option = fallback?.optionIndex === undefined ? undefined : field.options[fallback.optionIndex];
-        if (option === undefined || !['select', 'radio', 'listbox'].includes(field.behavior)) return unsupported(field);
-        return resolved({kind: 'choice', behavior: field.behavior as 'select' | 'radio' | 'listbox',
-          fieldId: field.fieldId, target: field.target, optionId: option.id, expectedOption: option.label,
-          provenance: 'visible_option'}, 'synthetic_test_default');
+        if (field.behavior !== 'select' && field.behavior !== 'radio' && field.behavior !== 'listbox') return unsupported(field);
+        const choices = field.rawOptions.map((label, i) => ({label, option: field.options[i]}))
+          .filter(({label}) => label.trim() && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label));
+        const negatives = choices.filter(({label}) => /^(?:no|n|false)$/u.test(normalizeCatalogText(label)));
+        const option = (negatives.length === 1 ? negatives[0] : choices[0])?.option;
+        if (!option) return unsupported(field);
+        return resolved({kind: 'choice', behavior: field.behavior, fieldId: field.fieldId,
+          target: field.target, optionId: option.id, expectedOption: option.label, provenance: 'visible_option'}, 'synthetic_test_default');
       }
       if (!syntheticMode && field.state === "populated" &&
           hasSafeCommittedValue(field, request.committedReadback)) {
@@ -522,8 +513,6 @@ export function createApplicationAnswerResolver(
           }
         }
       }
-      const questionText = field.rawQuestion ?? field.label;
-      const questionResolution = resolveQuestion(questionText);
       const employment = employmentQuestion(questionText);
       const referral=referralQuestion(questionText);
       // Complete long employment/referral wording can still apply the scoped owner
@@ -581,23 +570,6 @@ export function createApplicationAnswerResolver(
       if (questionResolution.kind === "resolved" &&
           questionResolution.id === "s1-question-work-authorization" &&
           /\b(?:any employer|without restrictions?|no restrictions?|unrestricted|(?:provide|show|present) proof|proof of|open work permit)\b/iu.test(field.label)) {
-        return provisionalAnswer();
-      }
-      const protectedCategory = protectedQuestionCategory(
-        field.label,
-        questionResolution.kind === "resolved" ? questionResolution.id : undefined,
-      );
-      // Apply only the owner's terms/privacy decision, never a signature or accuracy declaration.
-      if (protectedCategory === "consent") {
-        if (field.state === "populated") return success({kind:'readback_only',fieldId:field.fieldId});
-        if (isRecruitmentTermsConsent(field.label)) {
-          const consent = await query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal);
-          if (!consent.ok) return consent;
-          if (consent.value.kind==='answered' && consent.value.provenance==='owner_provided' && typeof consent.value.value==='boolean') {
-            const intended = intentFor(field, undefined, consent.value.value, consent.value.provenance, 'live_owner_fact');
-            if (intended.kind === 'resolved' || !fallbackAllowed) return success(intended);
-          }
-        }
         return provisionalAnswer();
       }
       if (employmentScope && !canadaScope && !generalScope) {

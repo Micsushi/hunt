@@ -13,16 +13,30 @@ const profileDigest=(queue:ApplicationQueue)=>createHash('sha256').update(JSON.s
 
 test('successive refreshes undo in order and equal revisions cannot disguise a changed profile',async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-profile-refresh-history-'));
-  const queue=new ApplicationQueue(root,{connected:false,open:async()=>{throw new Error('unused')},release:async()=>{}});
+  let opens=0;
+  const queue=new ApplicationQueue(root,{connected:false,open:async()=>{opens++;throw new Error('unused')},release:async()=>{}});
   const values={given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',city:'A'};
   try {
     queue.configure(applicantProfile(values),Buffer.from('%PDF-original').toString('base64'));
     const originalSettings=structuredClone(queue.getSettings()!);
-    const job=queue.add([{url:'https://jobs.lever.co/fixture/12345678-abcd-1234-abcd-123456789abc'}],{paused:true})[0]!;
+    const job=queue.add([{url:'https://jobs.lever.co/fixture/12345678-abcd-1234-abcd-123456789abc',resumeBase64:Buffer.from('%PDF-selected').toString('base64'),resumeVersion:'v17'}],{paused:true})[0]!;
     const path=join(root,job.id+'.input.json'),a=readFileSync(path,'utf8');
+    const originalJob=JSON.stringify(job);
+    const journal=join(root, job.id+'.account-journal.json');
+    writeFileSync(journal,'fixture journal');
+    assert.equal(queue.snapshot().jobs[0]!.profileUpdateAvailable,false);
     const current=()=>({expectedProfileRevision:(queue.getSettings()!.profile as any).profile.revision,expectedProfileDigest:profileDigest(queue)});
+    const initialIdentity=current();
     queue.configureApplicant({...values,city:'B'});const bIdentity=current();
+    assert.equal(queue.snapshot().jobs[0]!.profileUpdateAvailable,true);
+    await assert.rejects(queue.action(job.id,'refresh_profile',undefined,undefined,initialIdentity),/Saved profile changed/);
+    assert.equal(readFileSync(path,'utf8'),a);
     const b=await queue.action(job.id,'refresh_profile',undefined,undefined,bIdentity) as any;const bInput=readFileSync(path,'utf8');
+    assert.ok(b.inputDigest);
+    assert.deepEqual(JSON.parse(bInput).profile,queue.getSettings()!.profile);
+    assert.equal(JSON.parse(bInput).resume,JSON.parse(a).resume);
+    assert.equal(JSON.stringify(job),originalJob);
+    assert.equal(queue.snapshot().jobs[0]!.profileUpdateAvailable,false);
     queue.configureApplicant({...values,city:'C'});
     let c=await queue.action(job.id,'refresh_profile',undefined,undefined,current()) as any;
     for(let cycle=0;cycle<25;cycle++) {
@@ -37,6 +51,24 @@ test('successive refreshes undo in order and equal revisions cannot disguise a c
     assert.equal(current().expectedProfileRevision,bIdentity.expectedProfileRevision);
     await assert.rejects(queue.action(job.id,'refresh_profile',undefined,undefined,bIdentity),/Saved profile changed/);
     assert.equal(readFileSync(path,'utf8'),a);
+    const latest=await queue.action(job.id,'refresh_profile',undefined,undefined,current()) as any;
+    const newer={...JSON.parse(readFileSync(path,'utf8')),newer:true};
+    writeFileSync(path,JSON.stringify(newer));
+    await assert.rejects(queue.action(job.id,'undo_profile_refresh',undefined,undefined,latest),/newer details were kept/);
+    assert.deepEqual(JSON.parse(readFileSync(path,'utf8')),newer);
+    for(const status of ['running','queued','review','submitting','removed'] as const) {
+      job.status=status;
+      await assert.rejects(queue.action(job.id,'refresh_profile',undefined,undefined,current()),/Wait for this application to pause/);
+    }
+    job.status='paused';
+    for(const active of [(queue as any).running,(queue as any).reviewActions]){
+      if(active instanceof Map) active.set(job.id,{}); else active.add(job.id);
+      try {
+        await assert.rejects(queue.action(job.id,'refresh_profile',undefined,undefined,current()),/Wait for this application to pause/);
+      } finally {active.delete(job.id);}
+    }
+    assert.equal(readFileSync(journal,'utf8'),'fixture journal');
+    assert.equal(opens,0);
   } finally {await queue.close();}
 });
 

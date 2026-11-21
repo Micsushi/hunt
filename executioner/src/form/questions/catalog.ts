@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { UiBehaviorId } from "../../contracts/index.ts";
-import { employmentQuestion, referralQuestion, rankQuestionCandidates } from './matching.ts';
+import { applicantRefersSomeone, employmentQuestion, referralQuestion, rankQuestionCandidates } from './matching.ts';
 import type {
   ApplicationProfileFactId,
   DiscoveredIntakeField,
@@ -420,7 +420,7 @@ export function generatedLearningDefaultFor(
 export function resolveQuestion(text: string) {
   const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
   if(exact.kind!=='unknown') return exact;
-  if (/\b(?:have you(?: ever)?|did you) referred? (?:an?|any|other)\b/iu.test(text)) return {kind:'unknown' as const};
+  if (applicantRefersSomeone(text)) return {kind:'unknown' as const};
   const referral=referralQuestion(text);
   if(referral) return referral.negated?{kind:'unknown' as const}:{kind:'resolved' as const,id:'workday-placeholder-associate-referral' as const,provenance:'reviewed_catalog' as const};
   const employment = employmentQuestion(text);

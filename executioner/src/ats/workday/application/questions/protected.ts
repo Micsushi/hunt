@@ -1,4 +1,3 @@
-import type { BoundedText } from "../../../../contracts/index.ts";
 import {
   type CanonicalQuestionId,
 } from "../../../../form/questions/catalog.ts";
@@ -74,7 +73,7 @@ const legalQuestionIds = new Set<CanonicalQuestionId>([
 ]);
 
 export function protectedQuestionCategory(
-  label: BoundedText,
+  label: string,
   question: CanonicalQuestionId | undefined,
 ): ProtectedQuestionCategory | null {
   const normalized = normalizeCatalogText(label);

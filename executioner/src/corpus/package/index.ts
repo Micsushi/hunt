@@ -61,6 +61,10 @@ export function verifyPackageFileList(files: readonly string[]): readonly string
         (normalized !== "package.json" &&
         normalized !== "README.md" &&
         normalized !== "extension/workday-account.js" &&
+        normalized !== "extension/workday-page.js" &&
+        normalized !== "extension/form-page.js" &&
+        normalized !== "extension/form-page.d.ts" &&
+        normalized !== "extension/workday-page.d.ts" &&
         normalized !== "extension/workday-account.d.ts" &&
         normalized !== "docs/corpus-release.md" &&
         normalized !== "docs/corpus-acceptance-summary.md" &&

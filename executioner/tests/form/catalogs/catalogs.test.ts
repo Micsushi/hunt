@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { referralQuestion } from "../../../src/form/questions/matching.ts";
 
 import {
   assertCatalogHasNoCollisions,
@@ -109,6 +110,13 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
     "Please provide your previous employment history",
     "Have you previously worked for a staffing agency?",
   ]) assert.deepEqual(resolveQuestion(label), { kind: "unknown" }, label);
+
+  assert.equal(referralQuestion("Were you referred by an employee?")?.employer, null);
+  assert.equal(referralQuestion("Have you been referred by an associate?")?.employer, null);
+  assert.equal(referralQuestion("Were you referred by an Acme employee?")?.employer, "acme");
+  assert.equal(referralQuestion("Did an employee of Acme refer you?")?.employer, "acme");
+  assert.equal(referralQuestion("Were you not referred by an employee?")?.negated, true);
+  assert.equal(referralQuestion("Did you refer an employee?"), undefined);
 
   assert.equal(questionFor("workday-question-highest-education")?.id, "workday-question-highest-education");
   assert.deepEqual(questionForField("Highest Level of Education", "select"), {

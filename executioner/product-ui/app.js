@@ -352,6 +352,13 @@ function renderJobs() {
     if(job.stage!==status.textContent&&!(job.stage==='Needs attention'&&job.error)){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
     if(job.resumeName){const resume=document.createElement('p');resume.className='job-stage';resume.textContent=`Resume: ${job.resumeName}${job.resumeVersion ? ' · '+job.resumeVersion : ''}`;content.append(resume);}
     if(proxied && job.sourceJobId){const source=document.createElement('a');source.href=`/jobs/${job.sourceJobId}`;source.target='_top';source.textContent='View Hunt job';content.append(source);}
+    if (job.status === 'paused' && job.componentFailure) {
+      const detail = document.createElement('p');
+      detail.className = 'job-stage';
+      detail.textContent = [job.componentFailure.component, job.componentFailure.operation]
+        .map(part => part.replaceAll('_', ' ')).join(' / ');
+      content.append(detail);
+    }
     if(job.error){const p=document.createElement('p');p.className='job-error';p.setAttribute('role','alert');p.textContent=job.error;content.append(p);}
     if(jobErrors.has(job.id)&&jobErrors.get(job.id).message!==job.error){const p=document.createElement('p');p.className='job-action-error';p.setAttribute('role','alert');p.textContent=jobErrors.get(job.id).message;content.append(p);}
     if(pendingJob?.id===job.id){const p=document.createElement('p');p.className='job-pending';p.setAttribute('role','status');p.textContent=pendingJob.label;content.append(p);}

@@ -1,10 +1,10 @@
 import type { Page } from 'playwright';
-import { workdayAccountPage, type WorkdayPageObservation } from '../../../extension/workday-account.js';
-export type { WorkdayPageObservation } from '../../../extension/workday-account.js';
+import { observeWorkdayDocument, type WorkdayPageObservation } from '../../../extension/workday-page.js';
+export type { WorkdayPageObservation } from '../../../extension/workday-page.js';
 
 /** Shared evidence only. Each caller retains its own action and target guards. */
 export function observeWorkdayPage(page: Pick<Page, 'evaluate'>): Promise<WorkdayPageObservation> {
-  return page.evaluate(workdayAccountPage, {operation:'observe' as const});
+  return page.evaluate(observeWorkdayDocument);
 }
 
 export function workdayObservationMessage(observation: WorkdayPageObservation): string | undefined {

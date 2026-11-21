@@ -69,7 +69,16 @@ test('phone and associated country form one reversible change with conflict prot
     const phone = page.locator('#phone');
     const trigger = page.getByRole('combobox', { name: 'Selected country' });
     const current = async () => [await trigger.getAttribute('title'), await page.locator('.iti__selected-dial-code').textContent(), await phone.inputValue()];
-    const result = await page.evaluate(fillVisibleFields, { facts });
+    const inspection = await page.evaluate(fillVisibleFields, {facts, action:'status' as const});
+    const row = inspection.matching?.find(field => field.widget === 'international-phone');
+    assert.ok(row, 'the shared planner can identify this composite widget');
+    const binding = {fieldId:row.fieldId, signature:row.signature, provisional:false, reason:'test_fact'};
+    const declined = await page.evaluate(fillVisibleFields, {facts, matchingPlans:[{...binding, answer:null}]});
+    assert.ok(!declined.filled.includes('Phone'), 'explicit null plan preserves this field even with saved facts');
+    const result = await page.evaluate(fillVisibleFields, {
+      facts:facts.filter(fact => fact.factId !== 'region' && fact.factId !== 'country' && fact.factId !== 'phone_number'),
+      matchingPlans:[{...binding, answer:'6135550100', phoneCountry:'Canada'}],
+    });
     assert.ok(result.filled.includes('Phone'));
     assert.deepEqual(await current(), ['Canada', '+1', '6135550100']);
     assert.deepEqual(await page.evaluate('window.phoneCountryAtWrite'), ['Canada']);

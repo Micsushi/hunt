@@ -7,6 +7,12 @@ saved profile answers are available. Existing optional values are preserved. Fie
 become required are reconsidered from the current page. Optional attachments are
 not uploaded automatically.
 
+## Diagnosing a paused draft
+
+A paused job can show the component and operation that observed the failure. For example, an upload failure during preview verification means C3 could not confirm the attachment. An employer error reported by the workflow means C3 recognized the page and stopped. Compare the recorded operation with the employer page before changing the reader, matcher, or browser action.
+
+The service decides which answer to use. Browser readers describe the question, options and current selection. Browser interactions apply the answer and read the resulting control state. The full workflow also handles accounts, navigation and final Review. The current-page action stays on the selected document.
+
 ## Question matching and review backlog
 
 Both workflows use the service’s shared resolver for approved question wording, employer-name patterns and question keywords

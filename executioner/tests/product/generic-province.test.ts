@@ -33,7 +33,22 @@ test('Bamboo data-menu-id portal selects saved province and Clear Selection rest
     const page=await browser.newPage();await fixture(page);
     await page.locator('#province').evaluate((e:HTMLButtonElement)=>e.click());
     assert.equal(await page.locator('#province').getAttribute('aria-expanded'),'false','Fabric ignores a zero-detail programmatic click');
-    const result=await page.evaluate(fillVisibleFields,{facts});assert.ok(result.filled.includes('Province'));
+    const province = page.locator('#province');
+    await province.evaluate(element => element.removeAttribute('aria-required'));
+    const optional = await page.evaluate(fillVisibleFields, {facts});
+    assert.ok(optional.skipped.some(row => row.label === 'Province' && row.reason === 'optional_field'));
+    await province.evaluate(element => element.setAttribute('aria-required','true'));
+    const inspection = await page.evaluate(fillVisibleFields, {facts, action:'status' as const});
+    const row = inspection.matching?.find(field => field.widget === 'province-menu');
+    assert.ok(row, 'the shared planner can identify this composite widget');
+    const binding = {fieldId:row.fieldId, signature:row.signature, provisional:false, reason:'test_fact'};
+    const declined = await page.evaluate(fillVisibleFields, {facts, matchingPlans:[{...binding, answer:null}]});
+    assert.ok(!declined.filled.includes('Province'), 'explicit null plan preserves this field even with saved facts');
+    const result = await page.evaluate(fillVisibleFields, {
+      facts:facts.filter(fact => fact.factId !== 'region' && fact.factId !== 'country' && fact.factId !== 'phone_number'),
+      matchingPlans:[{...binding, answer:'Alberta'}],
+    });
+    assert.ok(result.filled.includes('Province'));
     assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province Alberta');
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province –Select–');assert.equal(await page.evaluate('clears'),1);

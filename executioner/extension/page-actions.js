@@ -1,9 +1,15 @@
+import { observeFormDocument, currentPageInterruption } from './form-page.js';
 import { inspectChoiceWidget } from './shared-choice-widget.js';
-import { workdayAccountPage } from './workday-account.js';
+import { observeWorkdayDocument } from './workday-page.js';
 import { fillVisibleFields, bambooResumeControl } from './generic-fill.js';
 import { annotateQuestionContext } from './question-context.js';
 import { proveJobviteResumeInput } from './jobvite-resume.js';
 import { preparePageViewport, viewportOwnership, viewportUnavailable, viewportCleanupPending } from './page-viewport.js';
+
+// These declarations are injected into the exact isolated execution context bound below.
+const observeCurrentDocument = `(/\\.(myworkdayjobs|myworkdaysite)\\.com$/.test(location.hostname)
+  ? (${observeWorkdayDocument.toString()})() : (${observeFormDocument.toString()})())`;
+const interruption = `(${currentPageInterruption.toString()})`;
 
 export const pageActionTabs = new Set();
 const worldName = 'Hunt C3 page fill v1';
@@ -86,7 +92,7 @@ async function proveBambooResumeInput(send, tabId, frame, executionContextId, bi
     await send('Page.setInterceptFileChooserDialog',{enabled:true}); intercepting = true;
     checkDeadline();
     const clicked = await send('Runtime.callFunctionOn', {
-      objectId, functionDeclaration:`function() { if (location.href!==${JSON.stringify(frame.url)} || /\\.(myworkdayjobs|myworkdaysite)\\.com$/.test(location.hostname) && !['application','review'].includes((${workdayAccountPage.toString()})({operation:'observe'}).kind)) return false; const current=(${bambooResumeControl.toString()})(); if (!current || current.input!==this.input || current.button!==this.button || current.form!==this.form || current.group!==this.group) return false; this.button.click(); return true; }`,
+      objectId, functionDeclaration:`function() { if (location.href!==${JSON.stringify(frame.url)} || ${interruption}(${observeCurrentDocument},'fill')) return false; const current=(${bambooResumeControl.toString()})(); if (!current || current.input!==this.input || current.button!==this.button || current.form!==this.form || current.group!==this.group) return false; this.button.click(); return true; }`,
       userGesture:true, returnByValue:true,
     });
     if (clicked.exceptionDetails || clicked.result?.value !== true) return;
@@ -157,35 +163,37 @@ export async function pageAction(params, attached) {
         checkDeadline();
         if (operation === 'fill' && params.resume && frame.id === root.id) {
           const admission=await send('Runtime.callFunctionOn',{executionContextId,returnByValue:true,
-            functionDeclaration:`function() { return /\\.(myworkdayjobs|myworkdaysite)\\.com$/.test(location.hostname) ? (${workdayAccountPage.toString()})({operation:'observe'}) : null; }`});
+            functionDeclaration:`function() { return ${interruption}(${observeCurrentDocument},'fill') ?? null; }`});
           if(admission.exceptionDetails)throw new Error('This frame could not complete the page action. Inspect the draft before retrying.');
-          const observation=admission.result?.value;
-          if(observation && !['application','review'].includes(observation.kind)) {
-            results.push({frameId:frame.id,status:'partial',observation,filled:[],skipped:[{label:'Employer page',reason:observation.kind}],canUndo:false,canRedo:false});
+          if (admission.result?.value) {
+            results.push({frameId:frame.id,...admission.result.value});
             break;
           }
           await proveBambooResumeInput(send,tabId,frame,executionContextId,binding,checkDeadline,expiresAt);
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { let observation; if (/\\.(myworkdayjobs|myworkdaysite)\\.com$/.test(location.hostname)) { observation=(${workdayAccountPage.toString()})({operation:'observe'}); if (!['application','review'].includes(observation.kind)) return {status:'partial',observation,filled:[],skipped:[{label:'Employer page',reason:observation.kind}],canUndo:false,canRedo:false}; } globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input); return {...await (${fillVisibleFields.toString()})(input),...(observation?{observation}:{})}; }`,
+          functionDeclaration: `async function(input) { const observation=${observeCurrentDocument}; const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input); return {observation,...await (${fillVisibleFields.toString()})(input)}; }`,
           arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
           awaitPromise:true,returnByValue:true,
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');
         results.push({frameId:frame.id,status:'complete',...response.result.value});
-        if(frame.id===root.id && response.result.value.observation && !['application','review'].includes(response.result.value.observation.kind))break;
+        if(frame.id===root.id && response.result.value.componentFailure?.component==='page_state')break;
       } catch (error) {
         results.push({frameId:frame.id,status:'unavailable',error:pageErrors.has(error.message) ? error.message : 'This frame could not complete the page action. Inspect the draft before retrying.'});
+        if (frame.id === root.id) break;
       }
     }
     const completed = results.filter(result => !['unavailable','ignored_security_widget','ignored_empty_frame'].includes(result.status));
     if (!completed.length) throw new Error(results[0]?.error || 'This page could not be read. Inspect the application before retrying.');
     const observation = completed.find(result=>result.frameId===root.id)?.observation;
+    const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
     const resume = completed.find(result=>result.frameId === root.id)?.resume;
     return {tabId,url:expectedUrl,documentId:binding,operation,...(observation?{observation}:{}),
+      ...(componentFailure ? {componentFailure} : {}),
       ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
-      incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true) || !!observation && !['application','review'].includes(observation.kind),
+      incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),
       matching:completed.flatMap(result=>(result.matching??[]).map(row=>({...row,frameId:result.frameId}))),
       ...(operation==='inspect'?{navigationDiagnostics:completed.filter(result=>result.navigationDiagnostics).map(result=>({frameId:result.frameId,...result.navigationDiagnostics}))}:{}),
       filled:completed.flatMap(result=>result.filled || []),skipped:completed.flatMap(result=>(result.skipped || []).map(row=>row.fieldId?{...row,frameId:result.frameId}:row)),

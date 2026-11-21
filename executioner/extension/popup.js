@@ -87,7 +87,18 @@ async function partial(action){
   if(conflicts){$('status').dataset.error='true';$('status').textContent+=` ${conflicts} ${conflicts===1?'field differs':'fields differ'} from saved answers or changed after filling. Check them before continuing.`;}
   if((result.skipped||[]).some(item=>item.reason==='resume_attachment_not_verified')){$('status').dataset.error='true';$('status').textContent+=' The resume attachment was not confirmed.';}
   if(result.needsOwnerReview)$('status').textContent+=' Suggested answers and uncertain matches need review.';
-  if(result.incomplete){$('status').dataset.error='true';$('status').textContent+=' Some frames changed or could not be reached. Check the page before retrying.';}
+  if (result.componentFailure) {
+    const {component, operation} = result.componentFailure;
+    $('status').dataset.error = 'true';
+    $('status').textContent += ' Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').';
+  }
+  if (result.frames?.some(frame => frame.status === 'unavailable')) {
+    $('status').dataset.error = 'true';
+    $('status').textContent += ' A frame could not be reached. Check it before retrying.';
+  } else if (result.incomplete && !result.componentFailure) {
+    $('status').dataset.error = 'true';
+    $('status').textContent += ' Check the incomplete fields before retrying.';
+  }
 }
 $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
 $('undo').onclick=()=>run(()=>partial('undo'));

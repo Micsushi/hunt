@@ -107,11 +107,23 @@ test("a highlighted source leaf without backing selection is never a commit", as
   }
 });
 
-test("real adapter and handler reconcile every profile section without owned duplicates", async () => {
+test("profile reconciliation stops on new required controls, then completes every section without duplicate rows", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.setContent(fixture.replace('data-automation-id="skillsSection"', 'data-automation-id="skillsSection" aria-required="true"'));
+    await page.evaluate(() => {
+      const form = document.querySelector("main")!;
+      form.insertAdjacentHTML("beforebegin", '<aside><input required data-automation-id="outsideRequired"></aside>');
+      form.insertAdjacentHTML("beforeend", `
+        <input required disabled data-automation-id="conditionalRequired">
+        <input required aria-disabled="true" data-automation-id="ariaDisabledRequired">
+        <input required readonly value="existing" data-automation-id="preferredNameSection_preferredName">
+      `);
+      form.querySelector('[data-automation-id="legalNameSection_firstName"]')!.addEventListener("input", () => {
+        form.querySelector('[data-automation-id="conditionalRequired"]')!.removeAttribute("disabled");
+      }, { once: true });
+    });
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const experience = [
       field("experience.company", "experience", "text", "Analytical Engines"),
@@ -119,7 +131,7 @@ test("real adapter and handler reconcile every profile section without owned dup
       field("experience.start_date", "experience", "date", "2021-03-01"),
     ];
     const portErrors: string[] = [];
-    const result = await completeWorkdayProfilePage({
+    const finish = () => completeWorkdayProfilePage({
       mode: "live",
       pageType: "profile",
 fields: [
@@ -145,6 +157,17 @@ fields: [
       ],
     }, traced(adapter, portErrors), AbortSignal.any([]));
 
+    assert.deepEqual(await finish(), {
+      kind: "blocked", code: "answer_type_unknown", fieldId: "unknown.required.1",
+      uiBehavior: "text", uiVariant: "workday_unknown_required_v1",
+    });
+    assert.equal(await page.locator('[data-automation-id="legalNameSection_firstName"]').inputValue(), "Ada");
+    assert.equal(await page.locator('[data-automation-id="legalNameSection_lastName"]').inputValue(), "");
+    await page.locator('[data-automation-id="conditionalRequired"]').evaluate(el => el.setAttribute("disabled", ""));
+    const result = await finish();
+    assert.equal(await page.locator('[data-automation-id="outsideRequired"]').inputValue(), "");
+    assert.equal(await page.locator('[data-automation-id="ariaDisabledRequired"]').inputValue(), "");
+    assert.equal(await page.locator('[data-automation-id="preferredNameSection_preferredName"]').inputValue(), "existing");
     assert.equal(result.kind, "verified", JSON.stringify({ result, portErrors }));
     if (result.kind === "verified") assert.equal(result.ownedDuplicateRows, 0);
     const snapshot = await adapter.inspect(AbortSignal.any([]));

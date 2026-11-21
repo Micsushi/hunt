@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Page, Locator } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from './engine.ts';
+import { ApplicationPause, type ResumeUploadReceipt } from './application-contract.ts';
+import { recordComponentFailure } from './component-diagnostics.ts';
 import { applicationTarget } from './target.ts';
 
 /** Workable replaces the file input after upload. Its owned preview is the receipt. */
@@ -10,6 +11,7 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
   const selectedInput=await input.elementHandle();
   if(!selectedInput){await group.dispose();throw new ApplicationPause('The resume input changed. Inspect it before retrying.');}
   const receipt={token:randomUUID(),selectedSha256:createHash('sha256').update(file.buffer).digest('hex'),filename:file.name,applicationKey:applicationTarget(page.url()).key};
+  let operation = 'inspect_existing_attachment';
   try {
     const existing=await group.evaluate((element,{receipt,selectedInput})=>{
       const host=window as any;
@@ -27,7 +29,11 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
     },{receipt,selectedInput});
     // A saved draft may already contain exactly the selected document. Verify
     // its bytes without replacing it or relying on its displayed filename.
-    if(!existing)await selectedInput.setInputFiles(file);
+    if (!existing) {
+      operation = 'select_resume_file';
+      await selectedInput.setInputFiles(file);
+    }
+    operation = 'observe_preview';
     const preview=await page.waitForFunction(({group,token})=>{
       const attempt=(window as any).__huntWorkableResumeAttempt;
       if(!group.isConnected || attempt?.group!==group || attempt.token!==token)return null;
@@ -39,6 +45,7 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
     if(typeof href!=='string' || !/^https:\/\//.test(href))throw new ApplicationPause('The employer has not confirmed the selected resume upload. Check its resume preview before retrying.');
     // The owned preview URL is self-contained. A browser-bound request also
     // reads all browser cookies, which the selected-tab extension cannot do.
+    operation = 'verify_preview_bytes';
     try {
       const response=await fetch(href,{signal:AbortSignal.timeout(15000),credentials:'omit'});
       if(!response.ok)throw new ApplicationPause('The resume preview is unavailable or expired. Refresh its preview before retrying.');
@@ -47,6 +54,7 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
       if(error instanceof ApplicationPause)throw error;
       throw new ApplicationPause('The resume preview could not be read. Inspect the uploaded file before retrying.');
     }
+    operation = 'bind_verified_preview';
     await group.evaluate((element,{receipt,href})=>{
       const attempt=(window as any).__huntWorkableResumeAttempt;
       if(!element.isConnected || attempt?.token!==receipt.token || attempt.group!==element || element.querySelector<HTMLAnchorElement>('a[data-action=view]')?.href!==href)throw new Error('The resume changed during verification.');
@@ -60,6 +68,9 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
       attempt.dispose=()=>{observer.disconnect();element.removeEventListener('change',invalidate,true);};
     },{receipt,href});
     return receipt;
+  } catch (error) {
+    recordComponentFailure(error, 'uploads', operation);
+    throw error;
   } finally {await selectedInput.dispose();await group.dispose();}
 }
 

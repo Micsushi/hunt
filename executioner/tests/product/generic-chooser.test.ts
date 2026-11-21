@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
-import {proveBambooResumeInput} from '../../src/product/generic-application.ts';
+import {fillGenericApplication,proveBambooResumeInput} from '../../src/product/generic-application.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
 
 const url='https://fixture.bamboohr.com/careers/123';
@@ -23,6 +23,15 @@ test('Bamboo asynchronous chooser proves only binding; shared fill owns exact by
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();await fixture(page,"setTimeout(()=>document.getElementById('file').click(),40);");
+    await page.evaluate(() => {
+      const code = document.createElement('input'); code.autocomplete='one-time-code';
+      document.body.append(code);
+    });
+    const blocked = await fillGenericApplication(page,url,{},selected,AbortSignal.timeout(5000));
+    assert.equal(blocked.componentFailure?.operation,'blocked_by_account_or_code_control');
+    assert.deepEqual(blocked.filled,[]);
+    assert.equal(await page.evaluate('activations'),0);
+    await page.locator('input[autocomplete=one-time-code]').evaluate(e=>e.remove());
     await proveBambooResumeInput(page,url,AbortSignal.timeout(5000),Date.now()+5000);
     assert.equal(await page.locator('#file').evaluate((e:HTMLInputElement)=>e.files!.length),0,'proof has no payload');
     assert.equal(chooserListeners(page),0);

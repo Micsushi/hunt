@@ -1,7 +1,7 @@
 import { workdayObservationMessage, type WorkdayPageObservation } from '../ats/workday/page-observation.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ApplicationPause, type ProductInput } from './engine.ts';
+import { ApplicationPause, type ProductInput } from './application-contract.ts';
 import type { AccountEvent } from './account-journal.ts';
 import type { Page } from 'playwright';
 

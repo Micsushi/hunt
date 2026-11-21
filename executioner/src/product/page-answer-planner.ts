@@ -1,0 +1,178 @@
+import { boundedText, browserTargetToken, fieldId, optionId, MAX_BROWSER_READBACK_CODE_POINTS } from '../contracts/index.ts';
+import { createApplicationAnswerResolver } from '../form/answers/resolver.ts';
+import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
+import { inspectQuestionMatch } from '../form/questions/catalog.ts';
+import { normalizeCatalogText } from '../form/questions/normalize.ts';
+import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
+import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
+import { recordComponentFailure } from './component-diagnostics.ts';
+import { profileFieldValue } from './profile-field.ts';
+import { intentAnswer, matchingContext, type MatchingObservation } from './matching-backlog.ts';
+import type { productSources, effectiveProfileFacts } from './sources.ts';
+
+const handsOnCloudQuestion = normalizeCatalogText('Do you have any hands-on experience with Kubernetes, Docker, or cloud platforms (e.g., AWS, Azure, GCP)?');
+const northAmericanLocationQuestion = normalizeCatalogText('This role requires employees to be based in the United States or Canada. Are you currently located in the U.S. or Canada?');
+const averageGpaQuestion = normalizeCatalogText('What is your average GPA?');
+
+export interface PageQuestion extends MatchingObservation {
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string;
+}
+export interface PageAnswerPlan {
+  fieldId:string; frameId?:string; signature:string; answer:string|boolean|null; query?:string; phoneCountry?:string; phoneDial?:string; provisional:boolean; reason:string; answerKind?:string; lane?:string;
+}
+
+export function matchLocationOption(labels: readonly string[], city: string, region: unknown, country: unknown): number {
+  const normalize = (value: string) => value.normalize('NFKC').trim().toLowerCase();
+  const matches = labels.map((label, index) => ({parts: label.split(',').map(normalize), index})).filter(({parts}) => {
+    if (parts.length === 1) return parts[0] === normalize(city);
+    if (parts.length !== 3 || parts[0] !== normalize(city) || typeof region !== 'string' || typeof country !== 'string') return false;
+    const canadian = ['ca', 'can', 'canada'];
+    if (canadian.includes(normalize(country)) && canadian.includes(parts[2]!)) {
+      const expectedRegion = canonicalCanadianRegion(region);
+      return !!expectedRegion && canonicalCanadianRegion(parts[1]!) === expectedRegion;
+    }
+    return parts[1] === normalize(region) && parts[2] === normalize(country);
+  });
+  // Some providers repeat the same city result. Identical full labels
+  // still identify the saved city, province and country unambiguously.
+  return matches.length === 1 || matches.length > 1 && matches.every(match => match.parts.length === 3 && normalize(labels[match.index]!) === normalize(labels[matches[0]!.index]!)) ? matches[0]!.index : -1;
+}
+
+export function createPageAnswerPlanner(
+  sources: ReturnType<typeof productSources>,
+  facts: ReturnType<typeof effectiveProfileFacts>,
+  url: string,
+) {
+  const narrative = facts.find(fact => fact.factId === 'configured_narrative')?.value;
+  const resolver = createApplicationAnswerResolver(sources.profileQuery, typeof narrative === 'string' ? narrative : undefined);
+  const {company} = matchingContext(url);
+  const ownerFact = (id: string) => facts.find(f=>f.factId===id&&f.provenance==='owner_provided'&&f.lane==='live_owner_fact')?.value;
+  const [gpa, scale] = [ownerFact('education_gpa'),ownerFact('education_gpa_scale')];
+  const scaledGpa = typeof gpa==='string' && typeof scale==='string' &&
+    [gpa,scale].every(value=>/^\d+(?:\.\d+)?$/.test(value)) && Number(scale)>0 && Number(gpa)<=Number(scale)
+    ? `${gpa}/${scale}` : undefined;
+  const hasCloudExperience = sources.profilePlan.repeatables.some(section => section.section === 'experience' &&
+    section.rows.some(row => row.fields.some(field => field.fieldId === 'experience.description' &&
+      field.answer.kind === 'answered' && field.answer.lane === 'live_owner_fact' &&
+      ['owner_provided','resume_verified'].includes(field.answer.provenance) &&
+      /(?:^|[.!?\n])\s*(?:[-•]\s*)?(?:deployed|automated|configured|ran|maintained|migrated|standardized)\b(?:(?!\b(?:without|never|instead of|planned|proposed)\b)[^.!?\n]){0,110}\b(?:kubernetes|docker|aws|azure|gcp)\b/i.test(field.answer.value))));
+  const hasNorthAmericanLocation = ['canada','ca','can','united states','united states of america','us','usa'].includes(
+    normalizeCatalogText(String(ownerFact('country') ?? '')));
+
+
+  async function planAnswer(
+    row: PageQuestion, observations: readonly PageQuestion[], signal: AbortSignal,
+  ): Promise<PageAnswerPlan> {
+    const binding = {fieldId: row.fieldId, frameId: row.frameId, signature: row.signature};
+    if (!row.required) {
+      return {...binding, answer: null, provisional: false, reason: 'optional_field'};
+    }
+    const constraints = row.constraints as ApplicationFieldObservation['constraints'];
+    if (constraints?.readOnly || row.state === 'hidden' || row.state === 'ambiguous') {
+      const populated = constraints?.readOnly && row.state === 'populated';
+      return {...binding, answer: null, provisional: !populated, reason: populated ? 'readback_only' : 'unsupported'};
+    }
+    const isLong = (value: string) => [...value].length > MAX_BROWSER_READBACK_CODE_POINTS;
+    const longQuestion = isLong(row.question);
+    const longOptions = row.options.some(isLong);
+    const unbounded = longQuestion || longOptions;
+    if (!unbounded && row.widget === 'province-menu') {
+      const country = facts.find(fact => fact.factId === 'country')?.value;
+      const region = facts.find(fact => fact.factId === 'region')?.value;
+      const applicable = typeof country === 'string' && normalizeCatalogText(country) === 'canada' &&
+        typeof region === 'string' && Boolean(region.trim());
+      return {...binding, answer: applicable ? region : null, provisional: !applicable,
+        reason: applicable ? 'profile_answer' : 'province_requires_review'};
+    }
+    if (!unbounded && row.widget === 'international-phone') {
+      const savedPhoneCountry = facts.find(fact => fact.factId === 'phone_country_code')?.value;
+      const residence = facts.find(fact => fact.factId === 'country')?.value;
+      const numericDial = typeof savedPhoneCountry === 'string' && /^\+\d{1,3}$/.test(savedPhoneCountry.trim()) ? savedPhoneCountry.trim().slice(1) : undefined;
+      const country = typeof savedPhoneCountry === 'string' && !numericDial
+        ? phoneCountryName(savedPhoneCountry) ?? savedPhoneCountry
+        : residence;
+      const number = facts.find(fact => fact.factId === 'phone_number')?.value;
+      if (typeof country !== 'string' || !country.trim() || typeof number !== 'string' || !number.trim()) {
+        return {...binding, answer: null, provisional: true, reason: 'phone_country_requires_review'};
+      }
+      const inferred = typeof savedPhoneCountry !== 'string' || numericDial !== undefined;
+      return {...binding, answer: number, phoneCountry: country, ...(numericDial && {phoneDial: numericDial}), provisional: inferred,
+        reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
+    }
+    const questionFact=inspectQuestionMatch(row.question).factId;
+    let addressCountryConflict=false;
+    if (questionFact==='postal_code') {
+      const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
+      const countries=observations.filter(other=>other.frameId===row.frameId &&
+        inspectQuestionMatch(other.question).factId==='country' && typeof other.selected==='string' && other.selected.trim());
+      if (typeof savedCountry==='string' && countries.length===1 &&
+          normalizeCatalogText(String(countries[0]!.selected))!==normalizeCatalogText(savedCountry)) {
+        addressCountryConflict=true;
+      }
+    }
+    // Opaque structural labels never match a truncated question. The resolver receives the full wording.
+    const field:ApplicationFieldObservation={fieldId:fieldId(row.fieldId),target:browserTargetToken(row.fieldId),
+      label:boundedText(longQuestion ? 'Unclassified question' : row.question), ...(longQuestion && {rawQuestion:row.question}),
+      behavior:row.control as ApplicationFieldObservation['behavior'],required:row.required,
+      options:row.options.map((label,index)=>({id:optionId(String(index)),label:boundedText(isLong(label) ? `Unclassified option ${index}` : label)})),
+      ...(longOptions && {rawOptions:row.options}), constraints, readOnly:constraints?.readOnly,
+      queryable:row.queryable,searchQuery:row.searchQuery,state:row.state ?? 'empty', populatedValueValid:row.valid};
+    const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
+      answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
+      resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
+      employerNames:[company??'']},signal);
+    const resolved=resolution.ok&&resolution.value.kind==='resolved'?resolution.value:undefined;
+    if (unbounded) {
+      const intent = resolved?.intent;
+      const answer = intent?.kind === 'choice'
+        ? row.options[field.options.findIndex(option => option.id === intent.optionId)] ?? null
+        : intent ? intentAnswer(intent) : null;
+      return {...binding, answer, provisional: !resolved || resolved.lane === 'synthetic_test_default',
+        reason: resolved ? 'answer_resolved' : resolution.ok ? resolution.value.kind : resolution.error.code,
+        answerKind: intent?.kind, lane: resolved?.lane};
+    }
+    const label = normalizeCatalogText(row.question);
+    const fitsGpa = label === averageGpaQuestion && constraints?.inputType === 'text' && !constraints.pattern &&
+      scaledGpa && (constraints.maxLength == null || scaledGpa.length <= constraints.maxLength);
+    const text = ['text', 'textarea'].includes(row.control)
+      ? fitsGpa ? scaledGpa : profileFieldValue(row.question, facts)
+      : undefined;
+    const positive = (hasCloudExperience && label === handsOnCloudQuestion) ||
+      (hasNorthAmericanLocation && label === northAmericanLocationQuestion);
+    const positives = positive && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
+      ? row.options.filter(option => option.toLowerCase() === 'yes') : [];
+    const city = facts.find(fact => fact.factId === 'city')?.value;
+    const locationIndex = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox' &&
+      typeof city === 'string'
+      ? matchLocationOption(row.options, city, facts.find(fact => fact.factId === 'region')?.value,
+          facts.find(fact => fact.factId === 'country')?.value)
+      : -1;
+    const direct = text ?? row.options[locationIndex] ?? (positives.length === 1 ? positives[0] : undefined);
+    let provisional = addressCountryConflict || direct === undefined && (!resolved || resolved.lane === 'synthetic_test_default');
+    let answer = direct ?? (resolved ? intentAnswer(resolved.intent) : null);
+    let reason = addressCountryConflict ? 'address_country_conflict' : direct !== undefined ? 'profile_answer' :
+      resolved ? 'answer_resolved' : resolution.ok ? resolution.value.kind : resolution.error.code;
+    if(sources.executionPolicy.answerFallbackPolicy==='deterministic_site_valid_editable' &&
+        questionFact==='phone_country_code' && !facts.some(fact=>fact.factId==='phone_country_code')) {
+      const country=facts.find(fact=>fact.factId==='country')?.value;
+      const options=typeof country==='string'?row.options.filter(option=>phoneCountryName(option)===normalizeCatalogText(country)):[];
+      if(options.length===1){answer=options[0]!;provisional=true;reason='phone_country_inferred_from_residence';}
+    }
+    // Preserve the employer's equivalent spelling, without treating a typed choice as committed.
+    if(row.valid && ['text','textarea'].includes(row.control) && typeof row.selected==='string' && row.selected.trim() &&
+        typeof answer==='string' && questionFact && equivalentAnswer(row.selected,answer,questionFact)) answer=row.selected;
+    const query=direct===undefined && resolved?.intent.kind==='choice' && resolved.intent.optionId==='deferred-search' ? String(resolved.intent.expectedOption) : undefined;
+    if(query!==undefined){answer=null;reason='choice_options_query';}
+    return {...binding,answer,...(query===undefined?{}:{query}),provisional,reason,
+      answerKind: resolved?.intent.kind, lane: direct !== undefined ? 'profile_fact' : resolved?.lane};
+  }
+
+  return async (row: PageQuestion, observations: readonly PageQuestion[], signal: AbortSignal) => {
+    try {
+      return await planAnswer(row, observations, signal);
+    } catch (error) {
+      if (!signal.aborted) recordComponentFailure(error, 'answer_matching', 'plan_answer');
+      throw error;
+    }
+  };
+}

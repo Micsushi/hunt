@@ -11,6 +11,8 @@ import { disposeResumeArtifact } from "../contracts/index.ts";
 import { AttachmentFailure } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
+import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
+
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
 
 const safeFailureStages = new Set(["Opening application", "Opening existing account sign-in", "Signing in",
@@ -18,7 +20,10 @@ const safeFailureStages = new Set(["Opening application", "Opening existing acco
   "Checking application page", "Moving to the next page", "Checking application review",
   "Filling profile", "Uploading resume", "Answering questions"]);
 const safeFailureFiles = new Set(["engine.ts", "queue.ts", "hosted-application.ts", "generic-application.ts",
-  "extension-bridge.ts", "playwright-account-page.ts", "playwright-posting-navigation.ts"]);
+  "extension-bridge.ts", "playwright-account-page.ts", "playwright-posting-navigation.ts",
+  "application-authentication.ts", "application-review.ts", "current-page-workflow.ts",
+  "workday-workflow.ts", "workday-walk-diagnostics.ts", "page-answer-planner.ts",
+  "page-matching.ts", "workable-resume.ts", "greenhouse-resume.ts"]);
 
 function runFailure(error: unknown, stage: string) {
   const message = error instanceof Error ? error.message : "";
@@ -39,6 +44,7 @@ function runFailure(error: unknown, stage: string) {
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
   tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
@@ -250,19 +256,29 @@ export class ApplicationQueue {
     if (action === "refresh_review") {
       if (job.status !== "review" && !(job.status === "paused" && job.reviewUrl) || this.running.has(id)) throw new Error("Wait for this job to pause before refreshing its review.");
       try {
-        const session = await this.reviewSession(job);
-        await restoreSavedReview(session.page, job.reviewUrl ?? job.url);
+        const session = await this.reviewSession(job).catch(error => {
+          recordComponentFailure(error, "browser_interaction", "open_review_tab");
+          throw error;
+        });
+        await restoreSavedReview(session.page, job.reviewUrl ?? job.url).catch(error => {
+          recordComponentFailure(error, "review", "restore_saved_review");
+          throw error;
+        });
         const resumeSha256 = job.resumeSha256 ?? createHash("sha256").update(Buffer.from(
           JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8")).resume, "base64")).digest("hex");
-        const verified = await reviewSnapshot(session.page, resumeSha256, job.resumeExpected, job.resumeUpload);
+        const verified = await reviewSnapshot(session.page, resumeSha256, job.resumeExpected, job.resumeUpload).catch(error => {
+          recordComponentFailure(error, "review", "inspect_saved_review");
+          throw error;
+        });
         const digest = verified.digest;
         if (this.closed) throw new Error("The application service is stopping.");
         if (job.status === "paused") job.stage = "Owner review needed: Check every answer and the attached resume.";
         job.resumeExpected = job.resumeExpected === true || verified.resumeExpected;
-        job.status = "review"; job.reviewDigest = digest; delete job.error; this.changed(job); return;
+        job.status = "review"; job.reviewDigest = digest; delete job.error; delete job.componentFailure; this.changed(job); return;
       } catch (error) {
         if (!this.closed) {
           job.status = "paused"; job.stage = "Review needs attention"; delete job.reviewDigest;
+          job.componentFailure = componentFailure(error);
           job.error = error instanceof ApplicationPause ? error.message : "C3 could not verify this review. Inspect the tab, then refresh its review or retry.";
           this.changed(job);
         }
@@ -277,7 +293,7 @@ export class ApplicationQueue {
     }
     if (action === "retry") {
       if (!["paused", "review"].includes(job.status) || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for this job to pause before retrying.");
-      job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.reviewDigest; this.changed(job); this.safePump(); return;
+      job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
       if (action === "restore" && this.jobs.some(other => other.id !== id && other.key === job.key && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
@@ -334,9 +350,15 @@ export class ApplicationQueue {
         await this.bridge.prepareAccount({ url: job.url, tabId: job.tabId, credentials: this.credentials,
           preferCreate:policy?.preferCreate,verificationSince:policy?.verificationSince,verifyEmail:this.verifyEmail,
           acceptCreationTerms:effectiveProfileFacts(input.profile).some(f=>f.factId==='terms_consent' && f.value===true),
-          signal: controller.signal, record:(event,trace,observation)=>{journal(event,trace,observation);policy?.record(event);}, onTab: tabId => { job.tabId = tabId; this.changed(job); } });
+          signal: controller.signal, record:(event,trace,observation)=>{journal(event,trace,observation);policy?.record(event);}, onTab: tabId => { job.tabId = tabId; this.changed(job); } }).catch(error => {
+          recordComponentFailure(error, "authentication", "prepare_account");
+          throw error;
+        });
       }
-      const session = await this.bridge.open(job.url, job.tabId, productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount);
+      const session = await this.bridge.open(job.url, job.tabId, productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount).catch(error => {
+        recordComponentFailure(error, "browser_interaction", "open_tab");
+        throw error;
+      });
       this.sessions.set(job.id, session); job.tabId = session.tabId;
       controller.signal.throwIfAborted();
       this.changed(job);
@@ -354,15 +376,16 @@ export class ApplicationQueue {
       job.status = "review";
       job.stage = result.needsOwnerReview ? "Owner review needed: suggested or unverified answers. Check every answer in the draft." : "Ready to review";
       job.resumeExpected = job.resumeExpected === true || result.resumeExpected;
-      job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error;
+      job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error; delete job.componentFailure;
       this.changed(job);
     } catch (error) {
-      if (!controller.signal.aborted && !(error instanceof ApplicationPause)) {
+      job.componentFailure = controller.signal.aborted ? undefined : componentFailure(error);
+      if (!controller.signal.aborted && (job.componentFailure || !(error instanceof ApplicationPause))) {
         try {
           const directory = join(this.root, "learning", job.id, runId);
           mkdirSync(directory, {recursive:true,mode:0o700});
           writePrivateFileAtomic(join(directory,"run-failure.json"),
-            Buffer.from(JSON.stringify({schemaVersion:1,...runFailure(error,job.stage)})));
+            Buffer.from(JSON.stringify({schemaVersion:1,...runFailure(error,job.stage),componentFailure:job.componentFailure})));
         } catch { /* Diagnostics do not affect the paused job or release its tab. */ }
       }
       job.status = "paused"; job.stage = controller.signal.aborted ? "Paused" : "Needs attention";

@@ -30,13 +30,22 @@ export function employmentQuestion(text: string): EmploymentQuestion | undefined
     qualified:/\b(?:contract|contractor|contingent|intern|internship|subsidiar|affiliate|excluding|except|within|years|months|directly)\w*\b/u.test(original)};
 }
 
+export function applicantRefersSomeone(text: string): boolean {
+  return /\b(?:did|have|do) you (?:ever |previously |personally |already |not |never )*(?:refer(?:red)?|recommend(?:ed)?)\b/u.test(normalizeCatalogText(text));
+}
+
 export function referralQuestion(text:string) {
   const value=normalizeCatalogText(text);
-  if(!/\b(?:referred|referral|recommended)\b/u.test(value) || !/\b(?:you|employee|associate|staff)\b/u.test(value) ||
-    /\b(?:name|email|number|who|which|describe|hear about|application source)\b/u.test(value))return;
-  const name=/\b(?:employee|associate|staff member) (?:of|at|from) (.+?)(?=\s+(?:if|including|excluding|please|this does)\b|$)/u.exec(value)?.[1] ??
-    /\bby (?:an? )?(.+?) (?:employee|associate|staff member)\b/u.exec(value)?.[1];
-  return {family:'employee_referral',period:null,employer:!name || /^(?:our|a current|current|one of our|this company|the company)$/u.test(name)?null:name,
+  if (applicantRefersSomeone(value) ||
+      !/\b(?:refer|referred|referral|recommend|recommended)\b/u.test(value) ||
+      !/\b(?:employees?|associates?|staff|referrals?)\b/u.test(value) ||
+      /\b(?:name|email|number|who|which|describe|hear about|application source)\b/u.test(value)) return;
+  const following = /\b(?:employees?|associates?|staff members?) (?:of|at|from) (.+?)(?=\s+(?:if|including|excluding|please|this does|refer(?:red)? you|recommend(?:ed)? you)\b|$)/u.exec(value)?.[1];
+  const preceding = /\b(?:by|did|has) (.*?)\b(?:employees?|associates?|staff members?)\b/u.exec(value)?.[1];
+  const alternative = preceding?.replace(/^.*?\b(?:friend|relative) or\b\s*/u, '');
+  const employerPrefix = alternative && !/\b(?:friend|relative|or)\b/u.test(alternative) ? alternative : undefined;
+  const name = following ?? employerPrefix?.trim().replace(/^(?:any of our|one of our|any|a|an|the|our)(?: |$)/u, '').replace(/^current(?: |$)/u, '').trim();
+  return {family:'employee_referral',period:null,employer:!name || /^(?:our|this company|the company)$/u.test(name)?null:name,
     negated:/\b(?:not|never|without)\b/u.test(value),qualified:false};
 }
 

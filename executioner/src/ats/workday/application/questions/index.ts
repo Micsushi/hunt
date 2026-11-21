@@ -275,8 +275,9 @@ export function createQuestionnairePageHandler(
         if (field.state === "hidden") continue;
         if (await dependencies.fieldPresent?.(field, signal) === false) continue;
         const question = resolveQuestion(field.label);
+        const fullQuestion = field.rawQuestion ?? field.label;
         const category = protectedQuestionCategory(
-          field.label,
+          fullQuestion,
           question.kind === "resolved" ? question.id : undefined,
         );
         const definition = question.kind === "resolved" &&
@@ -303,7 +304,7 @@ export function createQuestionnairePageHandler(
         let consentDecision: boolean | undefined;
         if (category === "consent") {
           if (field.state === 'populated') continue;
-          const decision = isRecruitmentTermsConsent(field.label)
+          const decision = isRecruitmentTermsConsent(fullQuestion)
             ? await (dependencies.profileQuery as ApplicationProfileQuery).query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal)
             : undefined;
           if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && typeof decision.value.value === 'boolean') {
@@ -377,14 +378,14 @@ export function createQuestionnairePageHandler(
         const rawEmployment = field.rawQuestion === undefined ? undefined :
           employmentQuestion(field.rawQuestion) ?? referralQuestion(field.rawQuestion);
         if ((field.rawOptions !== undefined || field.rawQuestion !== undefined &&
-            (rawEmployment === undefined || rawEmployment.negated)) && !syntheticLearningDefault) {
+            (rawEmployment === undefined || rawEmployment.negated)) && !syntheticLearningDefault && consentDecision === undefined) {
           recordUnset();
           return blocked("protected_answer_denied", field.fieldId, category);
         }
-        if (category === "consent" && !syntheticLearningDefault) {
+        if (category === "consent" && (!syntheticLearningDefault || consentDecision !== undefined)) {
           const intent = answer.value.intent;
           const choice = consentDecision === undefined ? undefined : mapVisibleOption(consentDecision, field.options);
-          const matches = consentDecision !== undefined && (
+          const matches = !syntheticLearningDefault && consentDecision !== undefined && (
             intent.kind === 'toggle' && intent.checked === consentDecision ||
             intent.kind === 'choice' && choice?.kind === 'matched' && intent.optionId === choice.optionId && intent.expectedOption === choice.expectedOption ||
             intent.kind === 'text' && normalizeCatalogText(intent.value) === (consentDecision ? 'yes' : 'no')

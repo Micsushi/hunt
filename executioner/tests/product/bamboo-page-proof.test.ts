@@ -7,7 +7,7 @@ import {chromium} from 'playwright';
 
 test('manual Bamboo chooser proof binds the exact native input, preserves undo, and rejects a different chooser', {timeout:60000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-bamboo-proof-'));
-  for(const file of ['page-actions.js','generic-fill.js','jobvite-resume.js','page-viewport.js','workday-account.js','question-context.js','shared-choice-widget.js'])copyFileSync(resolve('extension',file),join(root,file));
+  for(const file of ['page-actions.js','generic-fill.js','jobvite-resume.js','page-viewport.js','workday-account.js','workday-page.js','form-page.js','question-context.js','shared-choice-widget.js'])copyFileSync(resolve('extension',file),join(root,file));
   writeFileSync(join(root,'manifest.json'),JSON.stringify({manifest_version:3,name:'Isolated chooser proof',version:'1.0',permissions:['debugger','tabs','storage'],background:{service_worker:'background.js',type:'module'}}));
   writeFileSync(join(root,'background.js'),"import {pageAction} from './page-actions.js'; globalThis.runAction = params => pageAction(params,new Set());");
   const context=await chromium.launchPersistentContext(join(root,'browser'),{headless:true,channel:'chromium',...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${root}`,`--load-extension=${root}`]});
@@ -20,6 +20,17 @@ test('manual Bamboo chooser proof binds the exact native input, preserves undo, 
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((tab:any)=>tab.url===url).id,url);
     const action=(operation:string,documentId?:string)=>worker.evaluate(params=>(globalThis as any).runAction(params),{tabId,expectedUrl:url,operation,documentId,expiresAt:Date.now()+12000,facts:[{factId:'given_name',value:'Fixture'}],resume:{name:'Resume.pdf',base64:Buffer.from('%PDF-1.4\nFixture').toString('base64')}});
     const inspected=await action('inspect');
+    // A login overlay can appear after inspecting the same document.
+    await page.evaluate(() => {
+      const password = document.createElement('input'); password.type='password';
+      document.body.append(password);
+      document.querySelector('button[type=button]')!.addEventListener('click',()=>document.body.setAttribute('data-chooser-opened','yes'));
+    });
+    const blocked=await action('fill',inspected.documentId);
+    assert.equal(blocked.componentFailure?.operation,'blocked_by_account_or_code_control');
+    assert.deepEqual(blocked.filled,[]);
+    assert.equal(await page.locator('body').getAttribute('data-chooser-opened'),null);
+    await page.locator('input[type=password]').evaluate(e=>e.remove());
     const filled=await action('fill',inspected.documentId);
     assert.ok(filled.filled.includes('Resume'),JSON.stringify(filled));
     assert.equal(filled.resume,'verified');
