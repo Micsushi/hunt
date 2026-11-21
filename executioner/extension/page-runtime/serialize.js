@@ -1,4 +1,4 @@
-import { applicationAttachmentControls, observeCurrentDocument, workdayNoticeMarkers } from '../page-adapters/document.js';
+import { applicationAttachmentControls, observeCurrentDocument, smartRecruitersForm, workdayNoticeMarkers } from '../page-adapters/document.js';
 import { createUploadReader } from './upload-reader.js';
 import { createLegacyAnswerReader } from './legacy-page-answers.js';
 import { createFabricControl } from '../page-adapters/fabric-control.js';
@@ -20,14 +20,15 @@ import { clientAttachmentState, verifiedClientAttachment } from '../page-adapter
 import { markedRequired, smartRecruitersUploadHeading } from '../page-adapters/required-markers.js';
 import { createSearchChoiceReader } from '../page-adapters/workday-choice.js';
 import { isPortalResumeBinding } from '../jobvite-resume.js';
+import { jobviteResumeAcknowledgment, jobviteScreeningPanel, watchJobviteScreening } from '../page-adapters/jobvite-screening.js';
 import { createUploadStatusReader } from '../page-adapters/upload-status.js';
 import { runPageFill } from './fill.js';
 
 // Bind site-owned readers here, before serializing into the selected browser document.
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader,
-    createFabricControl, createProvinceMenu, isPortalResumeBinding, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
-    uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
+    createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, watchJobviteScreening, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
+    customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
 }
 
 // Only shipped module functions enter the serialized program. Applicant data travels as a separate argument.
@@ -42,6 +43,7 @@ function isolatedFunction(entry, dependencies) {
 export const pageFillSource = isolatedFunction(fillPageDocument, [
   runPageFill,
   observeCurrentDocument,
+  smartRecruitersForm,
   createUploadReader,
   createLegacyAnswerReader,
   createFabricControl,
@@ -63,6 +65,9 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   clientAttachmentState,
   verifiedClientAttachment,
   isPortalResumeBinding,
+  jobviteResumeAcknowledgment,
+  jobviteScreeningPanel,
+  watchJobviteScreening,
   createUploadStatusReader,
   createSearchChoiceReader,
 ]);

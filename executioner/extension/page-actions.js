@@ -177,7 +177,7 @@ export async function pageAction(params, attached) {
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');
         results.push({frameId:frame.id,status:'complete',...response.result.value});
-        if(frame.id===root.id && response.result.value.componentFailure?.component==='page_state')break;
+        if(frame.id===root.id && (response.result.value.frameScope==='document' || response.result.value.componentFailure?.component==='page_state'))break;
       } catch (error) {
         results.push({frameId:frame.id,status:'unavailable',error:pageErrors.has(error.message) ? error.message : 'This frame could not complete the page action. Inspect the draft before retrying.'});
         if (frame.id === root.id) break;

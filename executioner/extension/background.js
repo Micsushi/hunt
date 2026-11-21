@@ -102,6 +102,9 @@ async function executeCommand(method, params, connection) {
     const genericUrl=params.generic===true?exactGenericUrl(params.url):null;
     if (params.generic===true?!genericUrl:!supported(params.url)) throw new Error('Use a supported job posting link.');
     const matches=value=>genericUrl?exactGenericUrl(value)===genericUrl:supported(value)&&new URL(value).hostname===new URL(params.url).hostname;
+    // Report only the identity of a newly opened tab. Redirects still need service verification before attachment.
+    const reportRedirect = genericUrl && !tabId && !params.existingOnly && params.reportRedirect === true;
+    const loadable = value => matches(value) || reportRedirect && exactGenericUrl(value) && new URL(value).origin === new URL(genericUrl).origin;
     if (!tabId && !params.existingOnly) tabId = retryTabs.get(params.url);
     let tab, created = false;
     if (tabId) {
@@ -115,17 +118,19 @@ async function executeCommand(method, params, connection) {
       // Keep failed opens recoverable without closing a tab the user may inspect.
       retryTabs.set(params.url, tab.id);
     }
-    if (!matches(tab.url || tab.pendingUrl)) throw new Error('The selected tab does not match this job.');
+    if (!loadable(tab.url || tab.pendingUrl)) throw new Error('The selected tab does not match this job.');
     tabId = tab.id;
     const waking = tab.discarded;
     if (waking) await chrome.tabs.reload(tabId);
     const deadline = Date.now() + 30_000;
     if (waking) tab = await chrome.tabs.get(tabId);
-    while ((!matches(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete')) && Date.now() < deadline) {
+    const ready = () => loadable(tab.url) && (!(waking || created || reportRedirect) || !tab.discarded && tab.status === 'complete' && !tab.pendingUrl);
+    while (!ready() && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 100));
       tab = await chrome.tabs.get(tabId);
     }
-    if (!matches(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete')) throw new Error('The job page did not load. Retry when the site is available.');
+    if (!ready()) throw new Error('The job page did not load. Retry when the site is available.');
+    if (!matches(tab.url)) return {redirectedTabId:tabId};
     if (attached.has(tabId)) throw new Error('This tab is already running.');
     if (connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
     await chrome.debugger.attach({ tabId }, '1.3');

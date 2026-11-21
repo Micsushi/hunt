@@ -146,7 +146,7 @@ export class ExtensionBridge {
     const target = url === undefined ? undefined : await this.existingTarget(productApplicationTarget(url), tabId);
     await this.call("focus", { tabId, ...(target ? {url:target.url, generic:target.ats === 'generic'} : {}) });
   }
-  private async existingTarget(target: ReturnType<typeof productApplicationTarget>, tabId?: number) {
+  private async existingTarget(target: ReturnType<typeof productApplicationTarget>, tabId?: number, requirePublication = false) {
     if (target.ats !== 'generic' || tabId === undefined) return target;
     const tabs = await this.call('pageTabs');
     const tab = Array.isArray(tabs) ? tabs.find(tab => tab.tabId === tabId) : undefined;
@@ -154,7 +154,7 @@ export class ExtensionBridge {
     let current: ReturnType<typeof productApplicationTarget>;
     try { current = productApplicationTarget(tab.url); }
     catch { throw new Error('The selected tab cannot be verified as this posting. Open its recognized application form before retrying.'); }
-    if (current.key !== target.key && !await verifySmartRecruitersApplication(target.url,current.url)) throw new Error('The selected tab cannot be verified as this exact posting. Its application address has a different identity.');
+    if ((requirePublication || current.key !== target.key) && !await verifySmartRecruitersApplication(target.url,current.url)) throw new Error('The selected tab cannot be verified as this exact posting. Its application address has a different identity.');
     return current;
   }
   private connect(ws: WebSocket) {
@@ -225,10 +225,21 @@ export class ExtensionBridge {
     });
   }
   async open(url: string, existingTabId?: number, existingOnly = false): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
-    const target = await this.existingTarget(productApplicationTarget(url), existingTabId);
+    let target = await this.existingTarget(productApplicationTarget(url), existingTabId);
+    const reportRedirect = existingTabId === undefined && !existingOnly && target.ats === 'generic' &&
+      target.host === 'jobs.smartrecruiters.com' && !target.posting.startsWith('/oneclick-ui/');
     let result;
     transportEvent('attachment_requested',existingTabId);
-    try { result = await this.call("attach", { url: target.url, tabId: existingTabId, existingOnly, generic: target.ats === 'generic' }); }
+    try {
+      result = await this.call("attach", { url: target.url, tabId: existingTabId, existingOnly, generic: target.ats === 'generic',
+        ...(reportRedirect && {reportRedirect:true}) });
+      if (result.redirectedTabId !== undefined) {
+        const redirected = result.redirectedTabId;
+        if (!reportRedirect || !Number.isSafeInteger(redirected) || redirected < 1) throw new Error('The selected tab does not match this job.');
+        target = await this.existingTarget(target,redirected,true);
+        result = await this.call('attach',{url:target.url,tabId:redirected,existingOnly:true,generic:true});
+      }
+    }
     catch (error) { transportEvent('attachment_failed',existingTabId);throw new AttachmentFailure(error); }
     const tabId = Number(result.tabId);
     this.viewportCleanup.delete(tabId);

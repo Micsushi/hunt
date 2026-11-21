@@ -48,6 +48,22 @@ test('explicit generic attachment binds the exact URL and document and refuses n
   tab.url=original;loader='document-two';
   await assert.rejects(command('info',{tabId:7}),/document changed/);
   await command('detach',{tabId:7});
+  const source='https://jobs.smartrecruiters.com/Fixture/744000123456789-analyst?oga=true';
+  const destination='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+  let opens=0, attaches=0;
+  const redirectedChrome={...chrome,tabs:{
+    create:async()=>{opens++;return {id:7,url:source,status:'loading'};},
+    get:async()=>({id:7,url:destination,status:'complete'})
+  },debugger:{...chrome.debugger,attach:async()=>{attaches++;}}};
+  const redirect=runInNewContext(backgroundSource+'\nsocket={readyState:1}; command',{chrome:redirectedChrome,URL,WebSocket:{OPEN:1},...timers});
+  const found=await redirect('attach',{url:source,generic:true,reportRedirect:true});
+  assert.equal(found.redirectedTabId,7);
+  assert.equal(attaches,0);
+  await assert.rejects(redirect('attach',{url:destination+'-other',tabId:7,existingOnly:true,generic:true}),/does not match/);
+  assert.equal(attaches,0);
+  await redirect('attach',{url:destination,tabId:found.redirectedTabId,existingOnly:true,generic:true});
+  assert.equal(attaches,1);
+  assert.equal(opens,1);
 });
 
 test("naturally discarded tabs wake before attachment and completed tabs stay loaded", async () => {

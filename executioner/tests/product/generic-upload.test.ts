@@ -143,6 +143,41 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
     assert.deepEqual(await bytes(page,'#resume input[type=file]'),[...selected]);assert.deepEqual(await bytes(page,'#easy input[type=file]'),[]);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});assert.deepEqual(await bytes(page,'#resume input[type=file]'),[]);
     await page.evaluate(fillVisibleFields,{action:'redo' as const});assert.deepEqual(await bytes(page,'#resume input[type=file]'),[...selected]);
+    const app='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+    await page.route(app,route=>route.fulfill({contentType:'text/html',body:'<main><oc-oneclick-form></oc-oneclick-form></main><label>First name<input id="outside"></label><label>Email<input id="outside-mail"></label>'}));
+    await page.goto(app);
+    await page.evaluate(()=>{
+      const host=document.querySelector('oc-oneclick-form')!;
+      host.innerHTML='<h2>Personal information</h2><oc-easy-apply><spl-dropzone id="parser"></spl-dropzone></oc-easy-apply><oc-resume-upload><div class="form-section" data-test="resume-upload-container"><spl-typography-title data-test="section-title">Resume <span data-test="section-required-mark">*</span></spl-typography-title><spl-form-field><spl-dropzone id="bound" data-test="resume-upload"></spl-dropzone></spl-form-field></div></oc-resume-upload><label>Profile image<input id="photo" type="file"></label><button type="button">Next</button>';
+      for(const [id,label,autofill] of [['first-name-input','First name','given-name'],['last-name-input','Last name','family-name'],['email-input','Email','email'],['confirm-email-input','Confirm your email','email']]){
+        const input=document.createElement('spl-input');input.id=id!;host.prepend(input);
+        input.attachShadow({mode:'open'}).innerHTML='<label for="'+id+'">'+label+'*</label><input required id="'+id+'" autocomplete="'+autofill+'">';
+      }
+      for(const id of ['parser','bound']) document.getElementById(id)!.attachShadow({mode:'open'}).innerHTML='<label for="file">Choose a file</label><input hidden id="file" type="file">';
+    });
+    const clean=await page.evaluate(fillVisibleFields,{facts:[...facts,{factId:'family_name',value:'Surname'}],resume:{name:'Resume.pdf',base64:selected.toString('base64')}});
+    assert.equal(clean.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[...selected]);
+    assert.deepEqual(await bytes(page,'#parser input'),[]);
+    assert.deepEqual(await bytes(page,'#photo'),[]);
+    assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),'Fixture');
+    assert.equal(await page.locator('spl-input#last-name-input input').inputValue(),'Surname');
+    assert.equal(await page.locator('spl-input#email-input input').inputValue(),'fixture@example.invalid');
+    assert.equal(await page.locator('spl-input#confirm-email-input input').inputValue(),'fixture@example.invalid');
+    assert.equal(await page.locator('#outside').inputValue(),'');
+    assert.equal(await page.locator('#outside-mail').inputValue(),'');
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    await page.locator('main').evaluate(main=>main.append(document.createElement('oc-oneclick-form')));
+    const ambiguous=await fill(page);
+    assert.notEqual(ambiguous.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[]);
+    assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),'');
+    await page.locator('oc-oneclick-form').last().evaluate(node=>node.remove());
+    await page.locator('#bound').evaluate(node=>node.removeAttribute('data-test'));
+    const unowned=await fill(page);
+    assert.notEqual(unowned.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[]);
+    assert.deepEqual(await bytes(page,'#parser input'),[]);
   }finally{await browser.close();}
 });
 

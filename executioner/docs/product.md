@@ -203,7 +203,15 @@ draft whose field disappeared before it was observed.
 
 Workable resume confirmation reads the PDF from the upload control's own preview
 and compares its bytes with the selected PDF. A matching existing preview can be
-verified without uploading again. An unconfirmed attempt is preserved for inspection.
+verified without uploading again. If Workable is still processing a selected file,
+C3 waits for its preview. The failure details distinguish a pending upload, an
+unavailable preview and a file that differs from the selected PDF.
+
+On a Jobvite application, use **Fill** while the first step is open. After Jobvite
+acknowledges the selected résumé, use the employer's **Next** button and run
+**Fill** again on the screening step. C3 checks that the same application owns
+both steps. A displayed filename still needs your review when Jobvite does not
+expose the uploaded bytes.
 
 Workday summary Review checks repeated education and employment answers within
 their own rows. Finding the right words elsewhere on the page is not sufficient.
