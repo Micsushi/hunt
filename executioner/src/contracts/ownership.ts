@@ -512,6 +512,7 @@ export const productBoundary = {
     field_recognition: [
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-location.js",
       "extension/page-adapters/rippling-phone.js",
       "extension/page-adapters/smartrecruiters-city.js",
       "extension/page-adapters/workday-choice.js",
@@ -564,6 +565,7 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/application-wait.ts",
       "src/product/current-page-workflow.ts",
+      "src/product/smartrecruiters-workflow.ts",
       "src/product/engine.ts",
       "src/product/generic-application.ts",
       "src/product/bamboo-application-entry.ts",
@@ -598,6 +600,7 @@ export const productBoundary = {
       "extension/page-adapters/fabric-control.js",
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-location.js",
       "extension/page-adapters/rippling-phone.js",
       "extension/page-adapters/smartrecruiters-city.js",
       "extension/page-adapters/workday-choice.js",

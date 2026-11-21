@@ -34,6 +34,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ ('missing') };
   const screening = adapters.jobviteScreeningPanel(), firstStep = adapters.jobviteScreeningPanel(1);
   const applicationStep = screening ?? firstStep;
+  if (action === 'status' && firstStep && screening === undefined && adapters.jobviteScreeningPanel(1,true) === firstStep) result.jobviteFirstStep = true;
   if (screening !== undefined || firstStep !== undefined) result.frameScope = 'document';
   const addSkip = (label, reason, component, operation, fieldId) => {
     const row = {label, reason};
@@ -61,8 +62,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
   const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
-  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.smartRecruitersCityChoices(
-    createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
+  const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
+  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -612,7 +613,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         }
         state.choiceDrafts??=new WeakMap();
         const draft=state.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
-        if(searchChoice.query && !ownedDraft) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
+        const resumeSameCity = searchChoice.kind==='rippling_location' && searchChoice.query===plan.query && !searchChoice.query.includes(',');
+        if(searchChoice.query && !ownedDraft && !resumeSameCity) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
         const querying=typeof plan.query==='string' && plan.query.length>0 && plan.answer==null;
         if(!querying && (typeof plan.answer!=='string' || !row.options.includes(plan.answer))) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
         const reusable=ownedDraft && (changes.includes(draft.change) || state.undo.at(-1)?.includes(draft.change));
@@ -621,7 +623,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         try {
           if(querying) {
             change.searchQuery=plan.query;const current=await queryChoice(change,plan.query);
-            if(current.labels.length && (current.labels.length!==1 || current.pills.length!==1 || !current.pills[0].remove))throw new Error('The search committed an item without a confirmed reset.');
+            if(current.labels.length && (current.labels.length!==1 || !current.clear && !current.pills[0]?.remove))throw new Error('The search committed an item without a confirmed reset.');
             const options=current.options.filter(option=>!option.disabled).map(option=>option.label);
             closeChoice(change);await choicePause();change.after=choiceState(boundChoice(change));
             if(!change.after)throw new Error('The search owner changed.');

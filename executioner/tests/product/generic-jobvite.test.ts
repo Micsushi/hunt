@@ -142,6 +142,8 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
           form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
         };
       },mode);
+      const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
+      assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
       const attempt=()=>fillApplication(page,input,AbortSignal.timeout(15000),()=>{});
       const stop = mode==='advance'?/Review the screening step/:mode==='stall'?/clicked Next once/:/has not advanced/;
       await assert.rejects(attempt(),stop);

@@ -143,8 +143,9 @@ async function executeCommand(method, params, connection) {
       if (connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
       const documentId=genericUrl?(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame?.loaderId:undefined;
       if(genericUrl&&!documentId)throw new Error('The application document could not be verified.');
+      if(params.selectedDocument && (!params.existingOnly || !genericUrl || documentId!==params.selectedDocument)) throw new Error('The selected application document changed. Inspect it again.');
       attached.set(tabId, { targetId: target.id, host: new URL(params.url).hostname, genericUrl, documentId, connection, restoreViewport, viewportOwner });
-      return { tabId, targetId: target.id };
+      return { tabId, targetId: target.id, ...(params.selectedDocument && {selectedDocument:documentId}) };
     } catch (error) {
       let cleanupFailed=false;
       await restoreViewport().catch(() => {cleanupFailed=true;});

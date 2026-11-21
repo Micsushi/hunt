@@ -43,14 +43,14 @@ function runFailure(error: unknown, stage: string) {
 }
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
-  tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  selectedDocument?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
 export interface BrowserConnection {
   connected: boolean;
-  open(url: string, tabId?: number, existingOnly?: boolean): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
+  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
   release(tabId: number): Promise<void>;
   focus?(tabId: number, url?: string): Promise<void>;
   prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
@@ -136,7 +136,7 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean } = {}) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; selectedDocument?: string } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
@@ -175,12 +175,14 @@ export class ApplicationQueue {
           existing.resumeName ??= input.resumeName;
           existing.resumeVersion ??= input.resumeVersion;
         }
+        if (options.selectedDocument) existing.selectedDocument = options.selectedDocument;
         added.push(existing); continue;
       }
       const id = randomUUID();
       pendingInputs.set(id, { profile: this.settings.profile, resume });
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
-        status: options.paused ? "paused" : "queued", stage: options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
+        ...(options.selectedDocument && {selectedDocument:options.selectedDocument}),
+        status: options.paused ? "paused" : "queued", stage: options.selectedDocument ? "Selected application ready. Choose Run in Applications" : options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
         resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
         resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -355,7 +357,8 @@ export class ApplicationQueue {
           throw error;
         });
       }
-      const session = await this.bridge.open(job.url, job.tabId, productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount).catch(error => {
+      if (job.selectedDocument && !job.tabId) throw new ApplicationPause('Reopen Prepare on the selected Jobvite application before retrying.');
+      const session = await this.bridge.open(job.url, job.tabId, !!job.selectedDocument || productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount, job.selectedDocument).catch(error => {
         recordComponentFailure(error, "browser_interaction", "open_tab");
         throw error;
       });

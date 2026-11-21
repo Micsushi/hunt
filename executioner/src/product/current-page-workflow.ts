@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { createHash } from 'node:crypto';
+import { advanceSmartRecruiters } from './smartrecruiters-workflow.ts';
 import { pause } from './application-wait.ts';
 import { fillGenericApplication } from './generic-application.ts';
 import { ApplicationPause, type ProductInput } from './application-contract.ts';
@@ -13,6 +14,11 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     const url = page.url();
     let report = await fill();
     signal.throwIfAborted();
+    const smartRecruitersStop = await advanceSmartRecruiters(page,url,report,signal);
+    if (smartRecruitersStop) {
+      const resume = report.resume === 'verified' ? 'Selected résumé verified.' : 'Selected résumé contents unverified.';
+      throw new ApplicationPause(smartRecruitersStop+' '+resume);
+    }
     if (new URL(url).hostname === 'jobs.jobvite.com' && page.url() === url && report.componentFailure?.component !== 'page_state') {
       const hash = createHash('sha256').update(input.resume).digest('hex');
       advanced = await page.evaluate(({url,hash}) => location.href === url &&
@@ -34,7 +40,7 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     const reasons:Record<string,string>={saved_value_conflict:'saved profile differs',value_changed_after_fill:'site changed the filled value',existing_attachment_preserved:'existing attachment needs review',resume_attachment_not_verified:'attachment could not be verified',choice_requires_mapping:'no matching saved option',no_stored_mapping:'no saved answer',value_not_accepted:'site rejected the value',ambiguous_duplicate:'more than one matching field'};
     Object.assign(reasons,{
       uploaded_attachment_requires_review:'check the uploaded attachment on the page',
-      resume_filename_visible_contents_unverified:'the employer shows the matching filename. PDF contents unverified.',
+      resume_filename_visible_contents_unverified:'the employer shows the matching filename. PDF contents unverified',
       resume_upload_already_attempted_review_attachment:'upload already attempted; check the attachment before retrying',
       resume_parsing_pending_profile_not_filled:'waiting for upload or parsing confirmation; profile fields were left unchanged',
       resume_parser_value_conflict:'resume parsing produced a value that differs from your saved profile',
@@ -63,8 +69,9 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     };
     const unresolved=report.skipped.filter(item=>!['saved_value_already_present','selected_resume_already_present','optional_field'].includes(item.reason));
     const warnings=unresolved.slice(0,4).map(item=>`${label(item.label)}: ${reasons[item.reason] ?? 'needs review'}`);
+    if (unresolved.length > 4) warnings.push(`${unresolved.length - 4} more fields need review`);
     const resumeVerified=report.resume === 'verified';
-    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeVerified ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.'} ${warnings.join('; ')}${unresolved.length>4 ? `; ${unresolved.length-4} more fields need review` : ''} ${advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.'}`);
+    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeVerified ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.'}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.'}`);
     if (report.componentFailure) {
       recordComponentFailure(paused, report.componentFailure.component, report.componentFailure.operation);
     }

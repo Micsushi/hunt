@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
+import { advanceSmartRecruiters } from '../../src/product/smartrecruiters-workflow.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
 import { disposeResumeArtifact } from '../../src/contracts/resume-artifact.ts';
@@ -84,4 +85,36 @@ test('OneClick city search verifies the selected location and supports Undo and 
     await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/changed/i);
     assert.equal(await page.locator('input[role=combobox]').inputValue(),'Owner edit');
   } finally { disposeResumeArtifact(sources.resumeIntent.artifact); await browser.close(); }
+});
+
+test('only the queued OneClick personal footer advances and the final action remains untouched', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/abcd1234-1111-2222-3333-111111111111';
+    await page.route(url,route=>route.fulfill({contentType:'text/html',body:
+      '<main><oc-oneclick-form><oc-personal-information></oc-personal-information><oc-nav-first-page>' +
+      '<footer data-test=footer><oc-button data-test=footer-next><spl-button>Next</spl-button></oc-button></footer></oc-nav-first-page></oc-oneclick-form></main>'}));
+    await page.goto(url);
+    await page.evaluate(() => {
+      const host = document.querySelector('spl-button')!;
+      host.attachShadow({mode:'open'}).innerHTML = '<button type=button><slot></slot></button>';
+      (globalThis as any).__huntC3PartialFill = {busy:false};
+      (globalThis as any).submissions = 0;
+      host.addEventListener('click', () => {
+        document.querySelector('oc-oneclick-form')!.innerHTML = '<h2>Review your application</h2><button type=submit>Submit application</button>';
+        document.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
+      });
+    });
+    const report = {skipped:[{reason:'resume_filename_visible_contents_unverified'}],resume:'unverified'};
+    const signal = new AbortController().signal;
+    const next = page.locator('spl-button button');
+    await next.evaluate((e:HTMLButtonElement)=>{ e.type='submit'; });
+    assert.equal(await advanceSmartRecruiters(page,url,report,signal),undefined);
+    await next.evaluate((e:HTMLButtonElement)=>{ e.type='button'; });
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[{reason:'value_not_accepted'}]},signal),undefined);
+    assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
+    assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
+    assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
+  } finally { await browser.close(); }
 });

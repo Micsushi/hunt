@@ -223,6 +223,28 @@ export async function startProductServer(options: { root?: string; port?: number
       } else if (path === '/handoff/preview' || path === '/handoff/import' || path === '/handoff/import-paused') {
         const bundle = inspectHandoffBundle(body, queue.jobs);
         result = path === '/handoff/preview' ? {jobs:bundle.preview} : queue.add(bundle.jobs, {paused:path === "/handoff/import-paused"});
+      } else if (path === "/jobs" && Object.hasOwn(body,'documentId')) {
+        const job = Array.isArray(body.jobs) && body.jobs.length === 1 && body.jobs[0];
+        if (!job || Object.keys(body).some(key=>!['jobs','documentId'].includes(key)) ||
+            Object.keys(job).some(key=>!['url','tabId'].includes(key)) || !Number.isSafeInteger(job.tabId) || job.tabId < 1 ||
+            typeof job.url !== 'string' || !/^https:\/\/jobs\.jobvite\.com\/[\w-]+\/job\/[\w-]+\/apply\/?$/.test(job.url) ||
+            typeof body.documentId !== 'string' || !/^[a-f0-9]{64}$/.test(body.documentId)) {
+          throw new Error('Inspect one selected Jobvite application before preparing it.');
+        }
+        if (pageActions.has(job.tabId)) throw new Error('C3 is already operating this page.');
+        pageActions.add(job.tabId);
+        try {
+          const page = await bridge.call('pageAction',{operation:'inspect',tabId:job.tabId,expectedUrl:job.url});
+          if (page.tabId!==job.tabId || page.url!==job.url || page.documentId!==body.documentId ||
+              page.jobviteFirstStep!==true || typeof page.mainDocumentId!=='string' || !page.mainDocumentId || page.componentFailure) {
+            throw new Error('The selected Jobvite application changed. Inspect its first step again.');
+          }
+          const key = productApplicationTarget(job.url).key;
+          if (queue.snapshot().jobs.some(other=>other.status!=='removed' &&
+              (other.key===key && (other.sourceJobId!==undefined || other.tabId!==undefined && other.tabId!==job.tabId) ||
+               other.key!==key && other.tabId===job.tabId))) throw new Error('This application or tab already belongs to another draft. Open Applications.');
+          result = queue.add([job],{paused:true,selectedDocument:page.mainDocumentId});
+        } finally {pageActions.delete(job.tabId);}
       } else if (path === "/jobs") result = queue.add(body.jobs);
       else if (path === "/recover-storage") queue.recoverStorage();
       else if (path === "/concurrency") queue.setConcurrency(body.value);

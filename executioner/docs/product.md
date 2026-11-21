@@ -207,11 +207,15 @@ verified without uploading again. If Workable is still processing a selected fil
 C3 waits for its preview. The failure details distinguish a pending upload, an
 unavailable preview and a file that differs from the selected PDF.
 
-On a Jobvite application, use **Fill** while the first step is open. After Jobvite
-acknowledges the selected résumé, use the employer's **Next** button and run
-**Fill** again on the screening step. C3 checks that the same application owns
-both steps. A displayed filename still needs your review when Jobvite does not
-expose the uploaded bytes.
+On a recognized two-step Jobvite form, **Prepare this job** adds the selected application
+to Applications with the saved default résumé. Choose **Run** there. Once Jobvite
+acknowledges the selected file and the first step is valid, C3 clicks **Next** once,
+fills the screening step and stops before submission. Use the existing queue entry
+for a job imported from C1 to preserve its selected résumé.
+
+**Fill current page** stays on the current Jobvite step. To continue manually, choose
+**Next** on the employer form and then **Fill current page** again. A displayed filename
+still needs your review when Jobvite does not expose the uploaded bytes.
 
 Workday summary Review checks repeated education and employment answers within
 their own rows. Finding the right words elsewhere on the page is not sufficient.

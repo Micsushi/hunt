@@ -1,12 +1,20 @@
 /** The employer destroys its upload controls when the operator advances to screening. */
-export function jobviteScreeningPanel(number = 2) {
+export function jobviteScreeningPanel(number = 2, forPreparation = false) {
   if (location.hostname !== 'jobs.jobvite.com' || !/^\/[^/]+\/job\/[^/]+\/apply\/?$/.test(location.pathname)) return;
   const panels = [...document.querySelectorAll(`[ng-form="scopeData.step${number}"][ng-if="showStep(${number})"]`)]
     .filter(panel => panel.getClientRects().length && getComputedStyle(panel).visibility === 'visible' && !panel.closest('[hidden],[inert],[aria-hidden=true]'));
   if (!panels.length) return;
   const form = panels.length === 1 && panels[0].closest('form[name="scopeData.applyForm"][ng-submit="submitApplication()"]');
   const article = form && form.closest('article[ng-controller="JVApply"]');
-  return article && article.querySelectorAll('form[name="scopeData.applyForm"]').length === 1 ? panels[0] : null;
+  if (!article || article.querySelectorAll('form[name="scopeData.applyForm"]').length !== 1) return null;
+  if (forPreparation) {
+    const next = form.querySelectorAll('[ng-click="nextStep()"]');
+    const resume = panels[0].querySelectorAll('#attachResume[ng-controller="JVApplyWith"] button[jv-add-attachment][attachment-label="Resume"][on-success="sendResume(type, res)"]');
+    if (number !== 1 || resume.length !== 1 || next.length !== 1 || next[0].type !== 'button' ||
+        next[0].form !== form || !(next[0].getClientRects().length) || next[0].closest('[hidden],[inert],[aria-hidden=true]') ||
+        (next[0].getAttribute('aria-label') || next[0].textContent).trim().toLowerCase() !== 'next') return null;
+  }
+  return panels[0];
 }
 
 export function jobviteResumeAcknowledgment(panel, fileName, detached = false) {

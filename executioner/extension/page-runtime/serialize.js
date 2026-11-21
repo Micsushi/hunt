@@ -12,6 +12,7 @@ import { createFieldRecognition } from './field-recognition.js';
 import { createUploadVerification } from './upload-verification.js';
 import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
+import { ripplingLocationChoices } from '../page-adapters/rippling-location.js';
 import { revealRipplingPhoneSelection } from '../page-adapters/rippling-phone.js';
 
 import { observeWorkdayDocument } from '../workday-page.js';
@@ -30,7 +31,7 @@ import { runPageFill } from './fill.js';
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices,
     createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, watchJobviteScreening, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
-    revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
+    ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
 }
 
 // Only shipped module functions enter the serialized program. Applicant data travels as a separate argument.
@@ -60,6 +61,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   createControlInteraction,
   createPhoneReader,
   revealRipplingPhoneSelection,
+  ripplingLocationChoices,
   observeWorkdayDocument,
   observeFormDocument,
   currentPageInterruption,

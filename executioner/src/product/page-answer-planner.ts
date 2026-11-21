@@ -26,7 +26,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 }
 
 export interface PageQuestion extends MatchingObservation {
-  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
 type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
@@ -163,7 +163,7 @@ export function createPageAnswerPlanner(
       ? row.options.filter(option => option.toLowerCase() === binary) : [];
     const city = facts.find(fact => fact.factId === 'city')?.value;
     const locationChoice = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox';
-    if (locationChoice && row.queryable && !populated && !row.searchQuery && !row.options.length &&
+    if (locationChoice && row.queryable && !populated && (!row.searchQuery || row.widget==='rippling-location' && row.searchQuery===city) && !row.options.length &&
         typeof city === 'string' && city.trim() && [...city].length <= MAX_BROWSER_READBACK_CODE_POINTS) {
       return {...binding, answer:null, query:city, provisional:false, reason:'choice_options_query', lane:'profile_fact'};
     }

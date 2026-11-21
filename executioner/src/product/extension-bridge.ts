@@ -224,15 +224,16 @@ export class ExtensionBridge {
       this.extension!.send(JSON.stringify({ id, method, params }));
     });
   }
-  async open(url: string, existingTabId?: number, existingOnly = false): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
+  async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
     let target = await this.existingTarget(productApplicationTarget(url), existingTabId);
+    if (selectedDocument && target.url!==url) throw new Error('The selected application address changed. Inspect the draft again.');
     const reportRedirect = existingTabId === undefined && !existingOnly && target.ats === 'generic' &&
       target.host === 'jobs.smartrecruiters.com' && !target.posting.startsWith('/oneclick-ui/');
     let result;
     transportEvent('attachment_requested',existingTabId);
     try {
       result = await this.call("attach", { url: target.url, tabId: existingTabId, existingOnly, generic: target.ats === 'generic',
-        ...(reportRedirect && {reportRedirect:true}) });
+        ...(selectedDocument && {selectedDocument}), ...(reportRedirect && {reportRedirect:true}) });
       if (result.redirectedTabId !== undefined) {
         const redirected = result.redirectedTabId;
         if (!reportRedirect || !Number.isSafeInteger(redirected) || redirected < 1) throw new Error('The selected tab does not match this job.');
@@ -250,6 +251,7 @@ export class ExtensionBridge {
     const tab = { secret: randomBytes(32).toString("hex"), targetId: String(result.targetId), sessionId: `c3-${tabId}`, commands:[] as string[], frameReady, resolveFrame };
     this.tabs.set(tabId, tab);
     try {
+      if (selectedDocument && (tabId!==existingTabId || result.selectedDocument!==selectedDocument)) throw new Error('The extension could not confirm the selected application document. Inspect the draft again.');
       const browser = await chromium.connectOverCDP(`${this.origin.replace("http:", "ws:")}/cdp/${tabId}?token=${tab.secret}`, { timeout: 45_000 });
       if (this.tabs.get(tabId) !== tab) {
         await browser.close();

@@ -43,7 +43,7 @@ export function createFieldObserver({
       control==='listbox'?choice?.selected??e.closest('.select__control')?.querySelector('[class*=single-value]')?.textContent?.trim()??'':e.value;
     const number = name => e.getAttribute(name) && Number.isFinite(Number(e.getAttribute(name))) ? Number(e.getAttribute(name)) : null;
     const phone = phoneWidget(e);
-    const widgetType = e.type === 'select-multiple' ? {widget:'native-multiple'} : province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
+    const widgetType = searchChoice?.kind==='rippling_location' ? {widget:'rippling-location'} : e.type === 'select-multiple' ? {widget:'native-multiple'} : province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
       ? {widget:'international-phone', backing:phone ? phoneState(phone) : null} : {};
     const form = e.hasAttribute('form') ? e.form : e.form ?? composedClosest(e,'form,[role=form]');
     if (form && !state.matchingIds.has(form)) state.matchingIds.set(form,crypto.randomUUID());
