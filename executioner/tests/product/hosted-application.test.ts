@@ -490,6 +490,25 @@ test('hosted fill uses saved numeric salary, start date and exact radio after re
     assert.equal(await page.locator('#start').inputValue(), '2027-01-04');
     assert.equal(await page.getByRole('radio', { name: 'LinkedIn' }).isChecked(), true);
     assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
+    await page.locator('#range').evaluate(textarea=>{
+      const label=textarea.parentElement!;
+      label.firstChild!.textContent='Salary expectations';
+      const amount=document.createElement('input');
+      amount.id='pay';
+      amount.required=true;
+      amount.oninput=()=>{ amount.value=amount.value.replace(/[^\d,]/g,''); };
+      textarea.replaceWith(amount);
+    });
+    const savedSingle=applicantProfile({ given_name:'Saved', family_name:'Applicant', email_address:'saved@example.invalid',
+      desired_salary:'90000', salary_expectations:'CAD $90,000 per year', earliest_start_date:'2027-01-04', application_source:'LinkedIn' });
+    const rerun=()=>fillApplication(page,{url,profile:savedSingle,resume:bytes},AbortSignal.timeout(15000),()=>{});
+    assert.equal((await rerun()).needsOwnerReview,true);
+    assert.equal(await page.locator('#pay').inputValue(),'90,000');
+    await page.locator('#pay').evaluate(el=>el.addEventListener('input',()=>el.setAttribute('data-rewritten','true')));
+    assert.equal((await rerun()).needsOwnerReview,true);
+    assert.equal(await page.locator('#pay').getAttribute('data-rewritten'),null);
+    await page.locator('#pay').evaluate((el:HTMLInputElement)=>{ el.value='';el.oninput=()=>{el.value='9,000';}; });
+    await assert.rejects(rerun(),/text answer did not persist/);
     assert.equal(await page.evaluate('window.submitted'), undefined);
   } finally {
     await browser.close();

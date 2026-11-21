@@ -20,6 +20,14 @@ import { createMatchingBacklog, type MatchingObservation } from './matching-back
 export { inspectHostedFields };
 
 const submitName = /^(submit application|submit|send application|envoyer la candidature)$/i;
+
+// A numeric-only display loses the currency and period, even when the amount survives.
+function displaysSavedSalary(label: string, displayed: string, saved: unknown): boolean {
+  if (!/^(?:salary expectations?|desired salary)\s*[?*]?$/i.test(label.trim()) || typeof saved !== 'string') return false;
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(displayed)) return false;
+  const amount = /^(?:CAD|USD)\s*\$?\s*(\d+|\d{1,3}(?:,\d{3})+)\s+per (?:year|hour)$/i.exec(saved.trim());
+  return amount?.[1]?.replaceAll(',', '') === displayed.replaceAll(',', '');
+}
 /** Hosted routes require a current application form, not merely an email input at an /apply URL. */
 export async function observeHostedPage(page: Page) {
   return page.evaluate(observeFormDocument, applicationAttachmentControls);
@@ -328,6 +336,13 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         }
         pendingMatch = {...matchObservation, options, chosenAnswer: expected, provisional: plan.provisional,
           outcome: 'attempted', reason: plan.reason};
+        const salary = f.kind === 'text' && expected === fact('salary_expectations') ? expected : undefined;
+        if (f.valid && displaysSavedSalary(f.label, f.value, salary)) {
+          matching.record({...pendingMatch, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'salary_units_need_review'});
+          pendingMatch=undefined;
+          known.set(identity, `existing:${f.value}`);
+          continue;
+        }
         if (f.valid && ((f.kind === 'checkbox' && f.checked === expected) ||
           (f.kind !== 'checkbox' && f.kind !== 'combobox' && f.value === expected))) {
           matching.record({...pendingMatch,outcome:'verified',reason:'existing_value_confirmed'});pendingMatch=undefined;
@@ -345,7 +360,22 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         else if(f.kind==='checkbox') { await loc.setChecked(expected===true);if(await loc.isChecked()!==(expected===true))throw new ApplicationPause('The checkbox answer did not persist.'); }
         else if(f.kind==='date' && f.inputType==='date') {await loc.fill(String(expected));await loc.blur();if(await loc.inputValue()!==expected)throw new ApplicationPause('The selected date did not persist.');}
         else if(f.kind==='date') {const [year,month,day]=String(expected).split('-');const display=`${month}/${day}/${year}`;await loc.fill('');await loc.pressSequentially(`${month}${day}${year}`);await loc.blur();if(await loc.inputValue()!==display)throw new ApplicationPause('The selected date did not persist.');}
-        else {await loc.fill(String(expected));await loc.blur();const readback=await loc.inputValue();const same=readback===String(expected)||(/phone/i.test(f.label)&&readback.replace(/\D/g,'')===String(expected).replace(/\D/g,''));if(!same)throw new ApplicationPause('The text answer did not persist.');}
+        else {
+          await loc.fill(String(expected));
+          await loc.blur();
+          const readback = await loc.inputValue();
+          if (displaysSavedSalary(f.label, readback, salary)) {
+            const current = (await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label && field.kind===f.kind);
+            if (!current?.valid || current.value!==readback) throw new ApplicationPause('The salary amount did not persist.');
+            matching.record({...pendingMatch, observedAnswer:readback, provisional:true, outcome:'unconfirmed', reason:'salary_units_need_review'});
+            pendingMatch=undefined;
+            known.set(identity,`existing:${readback}`);
+            changed=true;
+            continue;
+          }
+          const same = readback===String(expected) || (/phone/i.test(f.label) && readback.replace(/\D/g,'')===String(expected).replace(/\D/g,''));
+          if (!same) throw new ApplicationPause('The text answer did not persist.');
+        }
         const committed=(await inspectHostedFields(page)).find(x=>x.key===f.key&&x.label===f.label);
         matching.record({...pendingMatch,outcome:'verified',reason:'product_readback_confirmed'});pendingMatch=undefined;
         known.set(identity,String(f.kind==='checkbox'?committed?.checked:committed?.value??expected)); changed = true;
